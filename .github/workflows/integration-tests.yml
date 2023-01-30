@@ -17,9 +17,9 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A10"], ["self-hosted", "V100"], "macos-10.15"]'
+            echo '::set-output name=matrix::[["self-hosted", "A10"], ["self-hosted", "V100"], "macos-10.15"]' >> $GITHUB_OUTPUT
           else
-            echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]'
+            echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]' >> $GITHUB_OUTPUT
           fi
 
   Integration-Tests:
@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Clear cache
         run: |
