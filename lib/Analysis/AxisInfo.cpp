@@ -212,7 +212,6 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   }
   // Broadcast
   if (llvm::isa<triton::BroadcastOp>(op)) {
-    llvm::outs() << *op << "\n";
     Type _retTy = *op->result_type_begin();
     Type _opTy = *op->operand_type_begin();
     TensorType retTy = _retTy.cast<TensorType>();
