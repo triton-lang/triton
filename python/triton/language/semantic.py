@@ -809,7 +809,7 @@ def store(ptr: tl.tensor,
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
     if ptr.type.is_block():
         val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
-    if mask:
+    if mask and ptr.type.is_block():
         mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
     ptr_ty = ptr.type.scalar
     elt_ty = ptr_ty.element_ty
