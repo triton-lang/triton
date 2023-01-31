@@ -1545,7 +1545,7 @@ def compile(fn, **kwargs):
                  lambda src: ast_to_ttir(src, signature, configs[0], constants)),
         "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
                   lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
-        "llir": (lambda path: Path(path).read_bytes(),
+        "llir": (lambda path: Path(path).read_text(),
                  lambda src: ttgir_to_llir(src, extern_libs, capability)),
         "ptx": (lambda path: Path(path).read_text(),
                 lambda src: llir_to_ptx(src, capability)),
