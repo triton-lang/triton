@@ -29,8 +29,8 @@ void MembarAnalysis::dfsOperation(Operation *operation,
         // Copy the parent info as the current info.
         RegionInfo regionInfo = *parentRegionInfo;
         for (auto &block : region.getBlocks()) {
-          assert(region.getBlocks().size() == 1 &&
-                 "Multiple blocks in a region is not supported");
+          // assert(region.getBlocks().size() == 1 &&
+          //        "Multiple blocks in a region is not supported");
           for (auto &op : block.getOperations()) {
             // Traverse the nested operation.
             dfsOperation(&op, &regionInfo, builder);
