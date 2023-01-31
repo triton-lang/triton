@@ -31,7 +31,7 @@ def _to_tensor(x, builder):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
-    assert False, f'cannot convert {x} to tensor'
+    assert False, f"cannot convert {x} of type {type(x)} to tensor"
 
 
 class dtype:
@@ -424,6 +424,18 @@ class constexpr:
     def __invert__(self):
         return constexpr(~self.value)
 
+    def __pow__(self, other):
+        return constexpr(self.value ** other.value)
+
+    def __rshift__(self, other):
+        return constexpr(self.value >> other.value)
+
+    def __lshift__(self, other):
+        return constexpr(self.value << other.value)
+
+    def __not__(self):
+        return constexpr(not self.value)
+
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
@@ -605,6 +617,12 @@ class tensor:
     def logical_or(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.logical_or(self, other, _builder)
+
+    # note: __not__ isn't actually a magic method in python
+    # but it's ok because our ASTVisitor handles it
+    @builtin
+    def __not__(self, _builder=None):
+        return semantic.not_(self, _builder)
 
     @builtin
     def __getitem__(self, slices, _builder=None):

@@ -197,7 +197,8 @@ void init_triton_ir(py::module &&m) {
       .def("replace_all_uses_with",
            [](mlir::Value &self, mlir::Value &newValue) {
              self.replaceAllUsesWith(newValue);
-           });
+           })
+      .def("get_type", &mlir::Value::getType);
 
   py::class_<mlir::BlockArgument, mlir::Value>(m, "block_argument");
 
@@ -210,6 +211,11 @@ void init_triton_ir(py::module &&m) {
       .def("arg",
            [](mlir::Block &self, int index) -> mlir::BlockArgument {
              return self.getArgument(index);
+           })
+      .def("add_argument",
+           [](mlir::Block &self, mlir::Type ty) {
+             auto loc = mlir::UnknownLoc::get(ty.getContext());
+             self.addArgument(ty, loc);
            })
       .def("get_num_arguments", &mlir::Block::getNumArguments)
       .def("dump", &mlir::Block::dump)
@@ -226,20 +232,34 @@ void init_triton_ir(py::module &&m) {
              self.dropAllUses();
              self.erase();
            })
-      .def("replace_use_in_block_with", [](mlir::Block &self, mlir::Value &v,
-                                           mlir::Value &newVal) {
-        v.replaceUsesWithIf(newVal, [&](mlir::OpOperand &operand) {
-          mlir::Operation *user = operand.getOwner();
-          mlir::Block *currentBlock = user->getBlock();
-          while (currentBlock) {
-            if (currentBlock == &self)
-              return true;
-            // Move up one level
-            currentBlock = currentBlock->getParent()->getParentOp()->getBlock();
-          }
-          return false;
-        });
-      });
+      .def("replace_use_in_block_with",
+           [](mlir::Block &self, mlir::Value &v, mlir::Value &newVal) {
+             v.replaceUsesWithIf(newVal, [&](mlir::OpOperand &operand) {
+               mlir::Operation *user = operand.getOwner();
+               mlir::Block *currentBlock = user->getBlock();
+               while (currentBlock) {
+                 if (currentBlock == &self)
+                   return true;
+                 // Move up one level
+                 currentBlock =
+                     currentBlock->getParent()->getParentOp()->getBlock();
+               }
+               return false;
+             });
+           })
+      .def("__str__",
+           [](mlir::Block &self) {
+             std::string str;
+             llvm::raw_string_ostream os(str);
+             self.print(os);
+             return str;
+           })
+      .def("has_terminator",
+           [](mlir::Block &self) {
+             return !self.empty() &&
+                    self.back().hasTrait<mlir::OpTrait::IsTerminator>();
+           })
+      .def("erase", [](mlir::Block &self) { self.erase(); });
 
   // using eattr = ir::attribute_kind_t;
   // py::enum_<eattr>(m, "attribute_kind")
@@ -435,6 +455,10 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Block &block) {
              self.setInsertionPointToEnd(&block);
            })
+      .def("set_insertion_point_after",
+           [](mlir::OpBuilder &self, mlir::Operation &op) {
+             self.setInsertionPointAfter(&op);
+           })
       .def(
           "get_insertion_block",
           [](mlir::OpBuilder &self) -> mlir::Block * {
@@ -622,6 +646,22 @@ void init_triton_ir(py::module &&m) {
             return new mlir::Block();
           },
           ret::reference)
+      // Unstructured control flow
+      .def("create_cond_branch",
+           [](mlir::OpBuilder &self, mlir::Value condition,
+              mlir::Block *trueDest, mlir::Block *falseDest) {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::CondBranchOp>(loc, condition, trueDest,
+                                             falseDest);
+             return;
+           })
+      .def("create_branch",
+           [](mlir::OpBuilder &self, mlir::Block *dest,
+              std::vector<mlir::Value> &args) {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::BranchOp>(loc, dest, args);
+             return;
+           })
       // Structured control flow
       .def("create_for_op",
            [](mlir::OpBuilder &self, mlir::Value &lb, mlir::Value &ub,
@@ -1453,7 +1493,9 @@ void init_triton_translation(py::module &m) {
           std::string cmd;
           int err;
           cmd = ptxasPath + " -v --gpu-name=sm_" + std::to_string(capability) +
-                " " + _fsrc + " -o " + _fsrc + ".o 2> " + _flog;
+                (capability == 90 ? "a " : " ") + _fsrc + " -o " + _fsrc +
+                ".o 2> " + _flog;
+
           err = system(cmd.c_str());
           if (err != 0) {
             std::ifstream _log(_flog);
