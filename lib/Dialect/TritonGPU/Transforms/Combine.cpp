@@ -416,14 +416,15 @@ public:
     for (size_t i = 0; i < numOps; i++) {
       // Handle then
       if (auto thenCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(
-              thenYield.getOperand(i).getDefiningOp()))
+              thenYield.getOperand(i).getDefiningOp())) {
         if (std::distance(thenCvt->user_begin(), thenCvt->user_end()) == 1) {
           mapping.map(thenCvt.getResult(), thenCvt.getOperand());
           thenCvts.insert((Operation *)thenCvt);
           newRetTypes.push_back(thenCvt.getOperand().getType());
-        } else
+        } else {
           newRetTypes.push_back(thenYield.getOperand(i).getType());
-
+        }
+      }
       // Handle else
       if (!hasElse)
         continue;
