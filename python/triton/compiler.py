@@ -379,6 +379,7 @@ class CodeGenerator(ast.NodeVisitor):
         names = []
         ret_types = []
         ir_ret_types = []
+        # variables in livein whose value is updated in `if`
         for name in liveins:
             # check type
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
@@ -390,10 +391,25 @@ class CodeGenerator(ast.NodeVisitor):
                 names.append(name)
                 ret_types.append(then_defs[name].type if name in then_defs else else_defs[name].type)
                 ir_ret_types.append(then_defs[name].handle.get_type() if name in then_defs else else_defs[name].handle.get_type())
+            # variable defined in then but not in else
             if name in then_defs and name not in else_defs:
                 else_defs[name] = liveins[name]
+            # variable defined in else but not in then
             if name in else_defs and name not in then_defs:
                 then_defs[name] = liveins[name]
+        # variables that are both in then and else but not in liveins
+        # TODO: could probably be cleaned up
+        for name in then_defs.keys() & else_defs.keys():
+            if name in names:
+                continue
+            then_ty = then_defs[name].type
+            else_ty = else_defs[name].type
+            assert then_ty == else_ty,\
+                   f'mismatched type for {name} between then block ({then_ty}) '\
+                   f'and else block ({else_ty})'
+            names.append(name)
+            ret_types.append(then_ty)
+            ir_ret_types.append(then_defs[name].handle.get_type())
 
         return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
 
