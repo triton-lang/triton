@@ -1661,7 +1661,7 @@ def compile(fn, **kwargs):
                     lambda src: ast_to_ttir(src, signature, configs[0], constants)),
             "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
                     lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
-            "llir": (lambda path: Path(path).read_bytes(),
+            "llir": (lambda path: Path(path).read_text(),
                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
             "amdgcn": (lambda path: Path(path).read_text(),
                     lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch)),
@@ -1673,7 +1673,7 @@ def compile(fn, **kwargs):
                     lambda src: ast_to_ttir(src, signature, configs[0], constants)),
             "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
                     lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
-            "llir": (lambda path: Path(path).read_bytes(),
+            "llir": (lambda path: Path(path).read_text(),
                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
             "ptx": (lambda path: Path(path).read_text(),
                     lambda src: llir_to_ptx(src, capability)),
@@ -1753,7 +1753,12 @@ def compile(fn, **kwargs):
                 fn_cache_manager.put(next_module, f"{name}.{ir}")
         if os.path.exists(path):
             metadata["ctime"][ir] = os.path.getctime(path)
-        asm[ir] = next_module if ir == "cubin" else str(next_module)
+        if ir == "cubin":
+            asm[ir] = next_module
+        elif ir == "amdgcn":
+            asm[ir] = str(next_module[0])
+        else:
+            asm[ir] = str(next_module)
         if ir == "llir" and "shared" not in metadata:
             metadata["shared"] = _triton.get_shared_memory_size(module)
         if ir == "ptx":
