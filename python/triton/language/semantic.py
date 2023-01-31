@@ -311,10 +311,12 @@ def logical_or(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.te
         other = bitcast(other, tl.dtype("int1"), builder)
     return or_(input, other, builder)
 
+
 def not_(input: tl.tensor, builder: ir.builder):
     if not input.type.is_int1():
         input = bitcast(input, tl.dtype("int1"), builder)
     return invera(input, builder)
+
 
 def lshr(input: tl.tensor,
          other: tl.tensor,

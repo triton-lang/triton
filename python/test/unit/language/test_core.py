@@ -1740,16 +1740,17 @@ def test_libdevice_scalar(dtype_str, expr, lib_path):
 # test control flow
 # -----------------------
 
+
 def test_if_else():
-      
+
     @triton.jit
     def kernel(Cond, TrueVal, FalseVal, Out):
         if tl.load(Cond):
-          val = tl.load(TrueVal)
+            val = tl.load(TrueVal)
         else:
-          val = tl.load(FalseVal)
+            val = tl.load(FalseVal)
         tl.store(Out, val)
-  
+
     out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
     true_val = to_triton(np.full((1,), 1, dtype=np.int32), device='cuda')
     false_val = to_triton(np.full((1,), 2, dtype=np.int32), device='cuda')
@@ -1762,6 +1763,7 @@ def test_if_else():
     cond[0] = False
     kernel[(1,)](cond, true_val, false_val, out)
     assert to_numpy(out)[0] == false_val[0]
+
 
 def test_if_return():
 
@@ -1783,26 +1785,26 @@ def test_if_return():
     kernel[(1,)](exit_early, out)
     assert to_numpy(out)[0] == 1
 
+
 @pytest.mark.parametrize("_cond1", [True, False])
 @pytest.mark.parametrize("_cond2", [True, False])
 @pytest.mark.parametrize("_cond3", [True, False])
 def test_nested_if_else_return(_cond1, _cond2, _cond3):
-    
+
     @triton.jit
     def kernel(Cond1, Cond2, Cond3, Val1, Val2, Val3, Out):
         val = 0
         if tl.load(Cond1):
-          if tl.load(Cond2):
-            val = tl.load(Val1)
-          else:
-            return
+            if tl.load(Cond2):
+                val = tl.load(Val1)
+            else:
+                return
         else:
-          if tl.load(Cond3):
-            val = tl.load(Val2)
-          else:
-            val = tl.load(Val3)
+            if tl.load(Cond3):
+                val = tl.load(Val2)
+            else:
+                val = tl.load(Val3)
         tl.store(Out, val)
-    
 
     out = to_triton(np.full((1,), -1, dtype=np.int32), device='cuda')
     cond1 = to_triton(np.full((1,), _cond1, dtype=np.int32), device='cuda')
@@ -1813,16 +1815,17 @@ def test_nested_if_else_return(_cond1, _cond2, _cond3):
     val3 = to_triton(np.full((1,), 3, dtype=np.int32), device='cuda')
     kernel[(1,)](cond1, cond2, cond3, val1, val2, val3, out)
     targets = {
-      (True, True, True): val1[0],
-      (True, True, False): val1[0],
-      (True, False, True): out[0],
-      (True, False, False): out[0],
-      (False, True, True): val2[0],
-      (False, True, False): val3[0],
-      (False, False, True): val2[0],
-      (False, False, False): val3[0],
+        (True, True, True): val1[0],
+        (True, True, False): val1[0],
+        (True, False, True): out[0],
+        (True, False, False): out[0],
+        (False, True, True): val2[0],
+        (False, True, False): val3[0],
+        (False, False, True): val2[0],
+        (False, False, False): val3[0],
     }
     assert out[0] == targets[(_cond1, _cond2, _cond3)]
+
 
 def test_while():
 
@@ -1865,8 +1868,6 @@ def test_while():
 #     kernel[(1,)](10, 7, m, n)
 #     print(m[0])
 #     print(n[0])
-    
-            
 
 
 # -----------------------

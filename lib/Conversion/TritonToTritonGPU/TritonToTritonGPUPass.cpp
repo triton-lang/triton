@@ -589,7 +589,7 @@ public:
       return failure();
 
     auto newOp = rewriter.create<scf::WhileOp>(op.getLoc(), newResultTypes,
-                                          adaptor.getOperands());
+                                               adaptor.getOperands());
     for (auto i : {0u, 1u}) {
       auto &dstRegion = newOp.getRegion(i);
       rewriter.inlineRegionBefore(op.getRegion(i), dstRegion, dstRegion.end());
@@ -616,8 +616,7 @@ public:
 void populateSCFPatterns(TritonGPUTypeConverter &typeConverter,
                          RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<SCFYieldPattern, SCFForPattern, 
-               SCFIfPattern, SCFWhilePattern,
+  patterns.add<SCFYieldPattern, SCFForPattern, SCFIfPattern, SCFWhilePattern,
                SCFConditionPattern>(typeConverter, context);
 }
 
@@ -629,10 +628,10 @@ public:
 
   LogicalResult
   matchAndRewrite(BranchOp op, BranchOp::Adaptor adaptor,
-               ConversionPatternRewriter &rewriter) const override {
+                  ConversionPatternRewriter &rewriter) const override {
     auto converter = getTypeConverter();
     auto newOp = rewriter.replaceOpWithNewOp<BranchOp>(op, op.getSuccessor(),
-                                              adaptor.getOperands());
+                                                       adaptor.getOperands());
     return success();
   }
 };
@@ -643,22 +642,22 @@ public:
 
   LogicalResult
   matchAndRewrite(CondBranchOp op, CondBranchOp::Adaptor adaptor,
-               ConversionPatternRewriter &rewriter) const override {
+                  ConversionPatternRewriter &rewriter) const override {
     auto converter = getTypeConverter();
-    auto newOp = rewriter.replaceOpWithNewOp<CondBranchOp>(op, adaptor.getCondition(),
-                                                  op.getTrueDest(),
-                                                  adaptor.getTrueDestOperands(),
-                                                  op.getFalseDest(),
-                                                  adaptor.getFalseDestOperands());
+    auto newOp = rewriter.replaceOpWithNewOp<CondBranchOp>(
+        op, adaptor.getCondition(), op.getTrueDest(),
+        adaptor.getTrueDestOperands(), op.getFalseDest(),
+        adaptor.getFalseDestOperands());
 
-    if (failed(rewriter.convertRegionTypes(newOp.getTrueDest()->getParent(), *converter)))
+    if (failed(rewriter.convertRegionTypes(newOp.getTrueDest()->getParent(),
+                                           *converter)))
       return failure();
-    if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(), *converter)))
+    if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(),
+                                           *converter)))
       return failure();
     return success();
   }
 };
-
 
 void populateCFPatterns(TritonGPUTypeConverter &typeConverter,
                         RewritePatternSet &patterns) {
@@ -666,7 +665,6 @@ void populateCFPatterns(TritonGPUTypeConverter &typeConverter,
   patterns.add<CFBranchPattern, CFCondBranchPattern>(typeConverter, context);
 }
 //
-
 
 class ConvertTritonToTritonGPU
     : public ConvertTritonToTritonGPUBase<ConvertTritonToTritonGPU> {

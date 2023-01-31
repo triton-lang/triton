@@ -164,7 +164,6 @@ bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
          dotOperandLayout.getParent() == mmaLayout;
 }
 
-
 namespace {
 /// DFS post-order implementation that maintains a global count to work across
 /// multiple invocations, to help implement topological sort on multi-root DAGs.

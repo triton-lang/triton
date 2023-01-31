@@ -384,8 +384,8 @@ class CodeGenerator(ast.NodeVisitor):
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
                 if name in defs:
                     assert defs[name].type == liveins[name].type,\
-                            f'initial value for `{name}` is of type {liveins[name].type}, '\
-                            f'but the {block_name} block redefines it as {defs[name].type}'
+                        f'initial value for `{name}` is of type {liveins[name].type}, '\
+                        f'but the {block_name} block redefines it as {defs[name].type}'
             if name in then_defs or name in else_defs:
                 names.append(name)
                 ret_types.append(then_defs[name].type if name in then_defs else else_defs[name].type)
@@ -394,7 +394,7 @@ class CodeGenerator(ast.NodeVisitor):
                 else_defs[name] = liveins[name]
             if name in else_defs and name not in then_defs:
                 then_defs[name] = liveins[name]
-        
+
         return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
 
     def visit_if_top_level(self, cond, node):
@@ -413,13 +413,13 @@ class CodeGenerator(ast.NodeVisitor):
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
             if not then_block.has_terminator():
-              self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
+                self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
             # else terminator
             self.builder.set_insertion_point_to_end(else_block)
             if not else_block.has_terminator():
-              self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+                self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
             for ty in ir_ret_types:
-              endif_block.add_argument(ty)
+                endif_block.add_argument(ty)
         # change block
         self.builder.set_insertion_point_to_start(endif_block)
         # update value
@@ -455,15 +455,14 @@ class CodeGenerator(ast.NodeVisitor):
             new_tensor = triton.language.core.tensor(if_op.get_result(i), ret_types[i])
             self.set_value(name, new_tensor)
 
-
     def visit_If(self, node):
         cond = self.visit(node.test)
         if isinstance(cond, triton.language.tensor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
             if self.scf_stack:
-              self.visit_if_scf(cond, node)
+                self.visit_if_scf(cond, node)
             else:
-              self.visit_if_top_level(cond, node)
+                self.visit_if_top_level(cond, node)
         else:
             if isinstance(cond, triton.language.constexpr):
                 cond = cond.value
@@ -568,7 +567,7 @@ class CodeGenerator(ast.NodeVisitor):
             # merge the loop body
             after_block = self.builder.create_block_with_parent(while_op.get_after(),
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
-            
+
             # generate loop body
             self.builder.set_insertion_point_to_start(after_block)
             for i, name in enumerate(names):
@@ -581,7 +580,7 @@ class CodeGenerator(ast.NodeVisitor):
             yields = []
             for name in loop_defs:
                 if name in liveins:
-                    yields.append(loop_defs[name])            
+                    yields.append(loop_defs[name])
             self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
@@ -674,9 +673,9 @@ class CodeGenerator(ast.NodeVisitor):
                     assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert self.is_triton_tensor(liveins[name])
                     assert self.local_defs[name].type == liveins[name].type,\
-                            f'Loop-carried variable {name} has initial type {liveins[name].type} '\
-                            f'but is re-assigned to {self.local_defs[name].type} in loop! '\
-                            f'Please make sure that the type stays consistent.'
+                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
+                        f'but is re-assigned to {self.local_defs[name].type} in loop! '\
+                        f'Please make sure that the type stays consistent.'
 
                     names.append(name)
                     init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
@@ -689,7 +688,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
             for i, name in enumerate(names):
-                self.set_value(name, triton.language.core.tensor(for_op.get_body(0).arg(i+1), yields[i].type))
+                self.set_value(name, triton.language.core.tensor(for_op.get_body(0).arg(i + 1), yields[i].type))
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
             yields = []

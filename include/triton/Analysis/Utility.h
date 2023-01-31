@@ -80,7 +80,6 @@ SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
 bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
                         triton::gpu::DotOperandEncodingAttr &dotOperandLayout);
 
-
 /// Multi-root DAG topological sort.
 /// Performs a topological sort of the Operation in the `toSort` SetVector.
 /// Returns a topologically sorted SetVector.

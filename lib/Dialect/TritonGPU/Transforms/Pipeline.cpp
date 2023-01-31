@@ -1,9 +1,9 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Analysis/AxisInfo.h"
 
 //===----------------------------------------------------------------------===//
 //
@@ -166,12 +166,14 @@ LogicalResult LoopPipeliner::initialize() {
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> allLoads;
   for (Operation &op : *loop)
-    if (auto loadOp = dyn_cast<triton::LoadOp>(&op)){
+    if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.ptr();
       unsigned vec = axisInfoAnalysis.getPtrVectorSize(ptr);
-      auto ty = getElementTypeOrSelf(ptr.getType()).cast<triton::PointerType>().getPointeeType();
+      auto ty = getElementTypeOrSelf(ptr.getType())
+                    .cast<triton::PointerType>()
+                    .getPointeeType();
       unsigned width = vec * ty.getIntOrFloatBitWidth();
-      if(width >= 32)
+      if (width >= 32)
         allLoads.push_back(loadOp);
     }
 

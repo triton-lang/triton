@@ -302,8 +302,8 @@ inline bool expensive_to_remat(Operation *op) {
           triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
           triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
     return true;
-  if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, 
-          scf::WhileOp, scf::ConditionOp>(op))
+  if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
+          op))
     return true;
   return false;
 }
@@ -621,7 +621,7 @@ public:
           return mlir::failure();
         //
         Operation *opArgI = argI.getDefiningOp();
-        if(expensive_to_remat(opArgI))
+        if (expensive_to_remat(opArgI))
           return mlir::failure();
         toConvert.insert({argI, newEncoding});
         if (!opArgI || processed.contains(opArgI) ||

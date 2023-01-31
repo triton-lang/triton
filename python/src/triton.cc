@@ -209,13 +209,14 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<mlir::Block>(m, "block")
       .def("arg",
-         [](mlir::Block &self, int index) -> mlir::BlockArgument {
-           return self.getArgument(index);
-      })
-      .def("add_argument", [](mlir::Block &self, mlir::Type ty) {
-         auto loc = mlir::UnknownLoc::get(ty.getContext());
-         self.addArgument(ty, loc);
-      })
+           [](mlir::Block &self, int index) -> mlir::BlockArgument {
+             return self.getArgument(index);
+           })
+      .def("add_argument",
+           [](mlir::Block &self, mlir::Type ty) {
+             auto loc = mlir::UnknownLoc::get(ty.getContext());
+             self.addArgument(ty, loc);
+           })
       .def("get_num_arguments", &mlir::Block::getNumArguments)
       .def("dump", &mlir::Block::dump)
       .def("move_before", &mlir::Block::moveBefore)
@@ -231,33 +232,34 @@ void init_triton_ir(py::module &&m) {
              self.dropAllUses();
              self.erase();
            })
-      .def("replace_use_in_block_with", [](mlir::Block &self, mlir::Value &v,
-                                           mlir::Value &newVal) {
-        v.replaceUsesWithIf(newVal, [&](mlir::OpOperand &operand) {
-          mlir::Operation *user = operand.getOwner();
-          mlir::Block *currentBlock = user->getBlock();
-          while (currentBlock) {
-            if (currentBlock == &self)
-              return true;
-            // Move up one level
-            currentBlock = currentBlock->getParent()->getParentOp()->getBlock();
-          }
-          return false;
-        });
-      })
-      .def("__str__",  [](mlir::Block &self) {
-         std::string str;
-         llvm::raw_string_ostream os(str);
-         self.print(os);
-         return str;
-      })
-      .def("has_terminator", [](mlir::Block &self) {
-        return !self.empty() && 
-               self.back().hasTrait<mlir::OpTrait::IsTerminator>();
-      })
-      .def("erase", [](mlir::Block &self) {
-        self.erase();
-      });
+      .def("replace_use_in_block_with",
+           [](mlir::Block &self, mlir::Value &v, mlir::Value &newVal) {
+             v.replaceUsesWithIf(newVal, [&](mlir::OpOperand &operand) {
+               mlir::Operation *user = operand.getOwner();
+               mlir::Block *currentBlock = user->getBlock();
+               while (currentBlock) {
+                 if (currentBlock == &self)
+                   return true;
+                 // Move up one level
+                 currentBlock =
+                     currentBlock->getParent()->getParentOp()->getBlock();
+               }
+               return false;
+             });
+           })
+      .def("__str__",
+           [](mlir::Block &self) {
+             std::string str;
+             llvm::raw_string_ostream os(str);
+             self.print(os);
+             return str;
+           })
+      .def("has_terminator",
+           [](mlir::Block &self) {
+             return !self.empty() &&
+                    self.back().hasTrait<mlir::OpTrait::IsTerminator>();
+           })
+      .def("erase", [](mlir::Block &self) { self.erase(); });
 
   // using eattr = ir::attribute_kind_t;
   // py::enum_<eattr>(m, "attribute_kind")
@@ -646,13 +648,13 @@ void init_triton_ir(py::module &&m) {
           ret::reference)
       // Unstructured control flow
       .def("create_cond_branch",
-            [](mlir::OpBuilder &self, mlir::Value condition, mlir::Block *trueDest,
-                mlir::Block *falseDest) {
-              auto loc = self.getUnknownLoc();
-              self.create<mlir::CondBranchOp>(loc, condition, trueDest,
-                                              falseDest);
-              return;
-            })
+           [](mlir::OpBuilder &self, mlir::Value condition,
+              mlir::Block *trueDest, mlir::Block *falseDest) {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::CondBranchOp>(loc, condition, trueDest,
+                                             falseDest);
+             return;
+           })
       .def("create_branch",
            [](mlir::OpBuilder &self, mlir::Block *dest,
               std::vector<mlir::Value> &args) {
