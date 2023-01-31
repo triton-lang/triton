@@ -644,7 +644,7 @@ public:
           return mlir::failure();
         //
         Operation *opArgI = argI.getDefiningOp();
-        if (expensive_to_remat(opArgI))
+        if (expensiveToRemat(opArgI, newEncoding))
           return mlir::failure();
         toConvert.insert({argI, newEncoding});
         if (!opArgI || processed.contains(opArgI) ||
