@@ -67,12 +67,12 @@ public:
 
   /// Returns the offset of the given buffer in the shared memory.
   size_t getOffset(BufferId bufferId) const {
-    return bufferSet.lookup(bufferId).offset;
+    return bufferSet.at(bufferId).offset;
   }
 
   /// Returns the size of the given buffer in the shared memory.
   size_t getAllocatedSize(BufferId bufferId) const {
-    return bufferSet.lookup(bufferId).size;
+    return bufferSet.at(bufferId).size;
   }
 
   /// Returns the buffer id of the given value.
@@ -115,8 +115,8 @@ public:
   bool isIntersected(BufferId lhsId, BufferId rhsId) const {
     if (lhsId == InvalidBufferId || rhsId == InvalidBufferId)
       return false;
-    auto lhsBuffer = bufferSet.lookup(lhsId);
-    auto rhsBuffer = bufferSet.lookup(rhsId);
+    auto lhsBuffer = bufferSet.at(lhsId);
+    auto rhsBuffer = bufferSet.at(rhsId);
     return lhsBuffer.intersects(rhsBuffer);
   }
 
@@ -137,7 +137,8 @@ private:
     bool operator<(const BufferT &other) const { return id < other.id; }
 
     BufferT() : BufferT(BufferKind::Explicit) {}
-    BufferT(BufferKind kind) : BufferT(kind, 0, 0) {}
+    BufferT(BufferKind kind)
+        : kind(kind), id(InvalidBufferId), size(0), offset(0) {}
     BufferT(BufferKind kind, size_t size) : BufferT(kind, size, 0) {}
     BufferT(BufferKind kind, size_t size, size_t offset)
         : kind(kind), id(nextId++), size(size), offset(offset) {}
@@ -156,7 +157,7 @@ private:
   /// Value -> Alias Buffer
   using AliasBufferMapT = llvm::MapVector<Value, llvm::SetVector<BufferT *>>;
   /// BufferId -> Buffer
-  using BufferSetT = DenseMap<BufferId, BufferT>;
+  using BufferSetT = std::map<BufferId, BufferT>;
   /// Runs allocation analysis on the given top-level operation.
   void run();
 

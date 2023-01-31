@@ -508,7 +508,7 @@ def view(input: tl.tensor,
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    dst_shape = [s for s in input.type.shape]
+    dst_shape = list(input.type.shape)
     dst_shape.insert(axis, 1)
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_expand_dims(input.handle, axis), ret_ty)
