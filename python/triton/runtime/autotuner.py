@@ -69,7 +69,7 @@ class Autotuner(KernelInterface):
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         if len(self.configs) > 1:
-            key = tuple([args[i] for i in self.key_idx])
+            key = tuple(args[i] for i in self.key_idx)
             if key not in self.cache:
                 # prune configs
                 pruned_configs = self.prune_configs(kwargs)
