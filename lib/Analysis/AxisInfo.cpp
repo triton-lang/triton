@@ -206,14 +206,16 @@ private:
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
+        rhs.getConstantValue().has_value()) {
       if constexpr (std::is_same_v<OpTy, arith::AddIOp> ||
-                    std::is_same_v<OpTy, triton::AddPtrOp>)
+                    std::is_same_v<OpTy, triton::AddPtrOp>) {
         return {lhs.getConstantValue().value() +
                 rhs.getConstantValue().value()};
-      else
+      } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
         return {lhs.getConstantValue().value() -
                 rhs.getConstantValue().value()};
+      }
+    }
     return {};
   }
 };
@@ -634,16 +636,18 @@ private:
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      if constexpr (std::is_same<OpTy, arith::AndIOp>::value)
+        rhs.getConstantValue().has_value()) {
+      if constexpr (std::is_same<OpTy, arith::AndIOp>::value) {
         return {lhs.getConstantValue().value() &
                 rhs.getConstantValue().value()};
-      else if constexpr (std::is_same<OpTy, arith::OrIOp>::value)
+      } else if constexpr (std::is_same<OpTy, arith::OrIOp>::value) {
         return {lhs.getConstantValue().value() |
                 rhs.getConstantValue().value()};
-      else if constexpr (std::is_same<OpTy, arith::XOrIOp>::value)
+      } else if constexpr (std::is_same<OpTy, arith::XOrIOp>::value) {
         return {lhs.getConstantValue().value() ^
                 rhs.getConstantValue().value()};
+      }
+    }
     return {};
   }
 };
@@ -741,13 +745,14 @@ public:
     if (lhsInfo.getConstantValue().has_value() &&
         rhsInfo.getConstantValue().has_value()) {
       if constexpr (std::is_same_v<OpTy, arith::MaxSIOp> ||
-                    std::is_same_v<OpTy, arith::MaxUIOp>)
+                    std::is_same_v<OpTy, arith::MaxUIOp>) {
         constantValue = {std::max(lhsInfo.getConstantValue().value(),
                                   rhsInfo.getConstantValue().value())};
-      else if constexpr (std::is_same_v<OpTy, arith::MinSIOp> ||
-                         std::is_same_v<OpTy, arith::MinUIOp>)
+      } else if constexpr (std::is_same_v<OpTy, arith::MinSIOp> ||
+                           std::is_same_v<OpTy, arith::MinUIOp>) {
         constantValue = {std::min(lhsInfo.getConstantValue().value(),
                                   rhsInfo.getConstantValue().value())};
+      }
     }
     auto rank = lhsInfo.getRank();
     return AxisInfo(/*knownContiguity=*/AxisInfo::DimVectorT(rank, 1),
