@@ -405,8 +405,8 @@ class CodeGenerator(ast.NodeVisitor):
             then_ty = then_defs[name].type
             else_ty = else_defs[name].type
             assert then_ty == else_ty,\
-                   f'mismatched type for {name} between then block ({then_ty}) '\
-                   f'and else block ({else_ty})'
+                f'mismatched type for {name} between then block ({then_ty}) '\
+                f'and else block ({else_ty})'
             names.append(name)
             ret_types.append(then_ty)
             ir_ret_types.append(then_defs[name].handle.get_type())
