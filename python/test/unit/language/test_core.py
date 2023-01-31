@@ -1827,3 +1827,16 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
     assert torch.equal(z, x)
+
+
+def test_load_scalar_with_mask():
+    @triton.jit
+    def kernel(Input, Index, Out, N: int):
+        index = tl.load(Index)
+        scalar = tl.load(Input + index, mask=index < N, other=0)
+        tl.store(Out, scalar, mask=index < N)
+    Index = torch.tensor([0], dtype=torch.int32, device='cuda')
+    Input = torch.tensor([0], dtype=torch.int32, device='cuda')
+    Out = torch.empty_like(Index, device='cuda')
+    kernel[(1,)](Input, Index, Out, Index.numel())
+    assert Out.data[0] == 0
