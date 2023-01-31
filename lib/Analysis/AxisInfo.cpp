@@ -34,6 +34,10 @@ static int64_t gcd(int64_t a, int64_t b) {
   return gcdImpl(a, b, &x, &y);
 }
 
+static constexpr int log2Int(int64_t num) {
+  return (num > 1) ? 1 + log2Int(num / 2) : 0;
+}
+
 //===----------------------------------------------------------------------===//
 // AxisInfo
 //===----------------------------------------------------------------------===//
@@ -174,7 +178,7 @@ public:
 };
 
 template <typename OpTy>
-class AddOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
+class AddSubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
@@ -203,42 +207,13 @@ private:
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() + rhs.getConstantValue().value()};
-    return {};
-  }
-};
-
-template <typename OpTy>
-class SubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
-public:
-  using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
-
-private:
-  int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                        int dim) override {
-    return std::max(gcd(lhs.getConstancy(dim), rhs.getContiguity(dim)),
-                    gcd(lhs.getContiguity(dim), rhs.getConstancy(dim)));
-  }
-
-  int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                          int dim) override {
-    // lhs = k * d_lhs = k * k' * gcd(d_lhs, d_rhs)
-    // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
-    // lhs + rhs = k * d_lhs + p * d_rhs = (k * d_lhs + p * d_rhs) *
-    // gcd(d_lhs, d_rhs)
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
-  }
-
-  int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                       int dim) override {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
-  }
-
-  std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
-                                          const AxisInfo &rhs) override {
-    if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() - rhs.getConstantValue().value()};
+      if constexpr (std::is_same_v<OpTy, arith::AddIOp> ||
+                    std::is_same_v<OpTy, triton::AddPtrOp>)
+        return {lhs.getConstantValue().value() +
+                rhs.getConstantValue().value()};
+      else
+        return {lhs.getConstantValue().value() -
+                rhs.getConstantValue().value()};
     return {};
   }
 };
@@ -645,60 +620,140 @@ public:
   }
 };
 
-class AndIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::AndIOp> {
+template <typename OpTy>
+class LogicalOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
-  using BinaryOpVisitorImpl<arith::AndIOp>::BinaryOpVisitorImpl;
+  using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getConstancy(arith::AndIOp op, const AxisInfo &lhs,
-                       const AxisInfo &rhs, int dim) override {
+  int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                       int dim) override {
     return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
-  std::optional<int64_t> getConstantValue(arith::AndIOp op, const AxisInfo &lhs,
+  std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() & rhs.getConstantValue().value()};
+      if constexpr (std::is_same<OpTy, arith::AndIOp>::value)
+        return {lhs.getConstantValue().value() &
+                rhs.getConstantValue().value()};
+      else if constexpr (std::is_same<OpTy, arith::OrIOp>::value)
+        return {lhs.getConstantValue().value() |
+                rhs.getConstantValue().value()};
+      else if constexpr (std::is_same<OpTy, arith::XOrIOp>::value)
+        return {lhs.getConstantValue().value() ^
+                rhs.getConstantValue().value()};
     return {};
   }
 };
 
-class OrIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::OrIOp> {
+class ShLIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::ShLIOp> {
 public:
-  using BinaryOpVisitorImpl<arith::OrIOp>::BinaryOpVisitorImpl;
+  using BinaryOpVisitorImpl<arith::ShLIOp>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getConstancy(arith::OrIOp op, const AxisInfo &lhs,
+  int64_t getContiguity(arith::ShLIOp op, const AxisInfo &lhs,
+                        const AxisInfo &rhs, int dim) override {
+    if (rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() == 0)
+      return lhs.getContiguity(dim);
+    else
+      return 1;
+  }
+
+  int64_t getDivisibility(arith::ShLIOp op, const AxisInfo &lhs,
+                          const AxisInfo &rhs, int dim) override {
+    auto shift = rhs.getConstantValue().has_value()
+                     ? rhs.getConstantValue().value()
+                     : rhs.getDivisibility(dim);
+    auto numBits = log2Int(lhs.getDivisibility(dim));
+    auto maxBits = log2Int(highestPowOf2Divisor<int64_t>(0));
+    // Make sure the return value doesn't exceed highestPowOf2Divisor<int64>(0)
+    if (shift + numBits > maxBits)
+      return highestPowOf2Divisor<int64_t>(0);
+    return lhs.getDivisibility(dim) << shift;
+  }
+
+  int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
                        const AxisInfo &rhs, int dim) override {
     return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
-  std::optional<int64_t> getConstantValue(arith::OrIOp op, const AxisInfo &lhs,
+  std::optional<int64_t> getConstantValue(arith::ShLIOp op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() | rhs.getConstantValue().value()};
+      return {lhs.getConstantValue().value() << rhs.getConstantValue().value()};
     return {};
   }
 };
 
-class XorIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::XOrIOp> {
+template <typename OpTy>
+class ShROpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
-  using BinaryOpVisitorImpl<arith::XOrIOp>::BinaryOpVisitorImpl;
+  using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getConstancy(arith::XOrIOp op, const AxisInfo &lhs,
-                       const AxisInfo &rhs, int dim) override {
+  int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                        int dim) override {
+    if (rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() == 0)
+      return lhs.getContiguity(dim);
+    else
+      return 1;
+  }
+
+  int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                          int dim) override {
+    if (rhs.getConstantValue().has_value())
+      return std::max<int64_t>(1, lhs.getDivisibility(dim) /
+                                      (1 << rhs.getConstantValue().value()));
+    else
+      return std::max<int64_t>(1, lhs.getDivisibility(dim) /
+                                      (1 << rhs.getDivisibility(dim)));
+  }
+
+  int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                       int dim) override {
     return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
-  std::optional<int64_t> getConstantValue(arith::XOrIOp op, const AxisInfo &lhs,
+  std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() ^ rhs.getConstantValue().value()};
+      return {lhs.getConstantValue().value() >> rhs.getConstantValue().value()};
     return {};
+  }
+};
+
+template <typename OpTy>
+class MaxMinOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo getAxisInfo(OpTy op,
+                       ArrayRef<LatticeElement<AxisInfo> *> operands) override {
+    auto lhsInfo = operands[0]->getValue();
+    auto rhsInfo = operands[1]->getValue();
+    std::optional<int64_t> constantValue;
+    if (lhsInfo.getConstantValue().has_value() &&
+        rhsInfo.getConstantValue().has_value()) {
+      if constexpr (std::is_same_v<OpTy, arith::MaxSIOp> ||
+                    std::is_same_v<OpTy, arith::MaxUIOp>)
+        constantValue = {std::max(lhsInfo.getConstantValue().value(),
+                                  rhsInfo.getConstantValue().value())};
+      else if constexpr (std::is_same_v<OpTy, arith::MinSIOp> ||
+                         std::is_same_v<OpTy, arith::MinUIOp>)
+        constantValue = {std::min(lhsInfo.getConstantValue().value(),
+                                  rhsInfo.getConstantValue().value())};
+    }
+    auto rank = lhsInfo.getRank();
+    return AxisInfo(/*knownContiguity=*/AxisInfo::DimVectorT(rank, 1),
+                    /*knownDivisibility=*/AxisInfo::DimVectorT(rank, 1),
+                    /*knownConstancy=*/AxisInfo::DimVectorT(rank, 1),
+                    /*constantValue=*/constantValue);
   }
 };
 
@@ -723,9 +778,9 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
-  visitors.append<AddOpAxisInfoVisitor<triton::AddPtrOp>,
-                  AddOpAxisInfoVisitor<arith::AddIOp>>();
-  visitors.append<SubOpAxisInfoVisitor<arith::SubIOp>>();
+  visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
+                  AddSubOpAxisInfoVisitor<arith::AddIOp>,
+                  AddSubOpAxisInfoVisitor<arith::SubIOp>>();
   visitors.append<MulIOpAxisInfoVisitor>();
   visitors.append<DivOpAxisInfoVisitor<arith::DivSIOp>,
                   DivOpAxisInfoVisitor<arith::DivUIOp>>();
@@ -736,13 +791,17 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
   visitors.append<ExpandDimsOpAxisInfoVisitor>();
   visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>,
                   CmpOpAxisInfoVisitor<triton::gpu::CmpIOp>>();
-  visitors.append<AndIOpAxisInfoVisitor, OrIOpAxisInfoVisitor,
-                  XorIOpAxisInfoVisitor>();
+  visitors.append<LogicalOpAxisInfoVisitor<arith::AndIOp>,
+                  LogicalOpAxisInfoVisitor<arith::OrIOp>,
+                  LogicalOpAxisInfoVisitor<arith::XOrIOp>>();
   visitors.append<SelectOpAxisInfoVisitor<mlir::SelectOp>,
                   SelectOpAxisInfoVisitor<triton::gpu::SelectOp>>();
-  // TODO: Add more visitors
-  // max/min
-  // bitwise ops
+  visitors.append<ShLIOpAxisInfoVisitor, ShROpAxisInfoVisitor<arith::ShRUIOp>,
+                  ShROpAxisInfoVisitor<arith::ShRSIOp>>();
+  visitors.append<MaxMinOpAxisInfoVisitor<arith::MaxSIOp>,
+                  MaxMinOpAxisInfoVisitor<arith::MaxUIOp>,
+                  MaxMinOpAxisInfoVisitor<arith::MinSIOp>,
+                  MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
 }
 
 ChangeResult AxisInfoAnalysis::visitOperation(

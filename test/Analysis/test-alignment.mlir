@@ -219,6 +219,44 @@ func @select() {
 
 // -----
 
+func @shift() {
+  // CHECK: Contiguity: [128] ; Divisibility: [1073741824] ; Constancy: [1] ; ConstantValue: [None]
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [8] ; Constancy: [128] ; ConstantValue: [8]
+  %1 = arith.constant dense<8> : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [4] ; Constancy: [128] ; ConstantValue: [4]
+  %2 = arith.constant dense<4> : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [274877906944] ; Constancy: [1] ; ConstantValue: [None]
+  %3 = arith.shli %0, %1 : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [67108864] ; Constancy: [1] ; ConstantValue: [None]
+  %4 = arith.shrsi %0, %2 : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [128] ; Constancy: [128] ; ConstantValue: [128]
+  %5 = arith.shli %1, %2 : tensor<128xi32>
+  return
+}
+
+// -----
+
+func @max_min() {
+  // CHECK: Contiguity: [128] ; Divisibility: [1073741824] ; Constancy: [1] ; ConstantValue: [None]
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [128] ; Divisibility: [64] ; Constancy: [1] ; ConstantValue: [None]
+  %1 = tt.make_range {end = 192 : i32, start = 64 : i32} : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [1] ; Constancy: [1] ; ConstantValue: [None]
+  %2 = arith.maxsi %0, %1 : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [1] ; Constancy: [1] ; ConstantValue: [None]
+  %3 = arith.minsi %0, %1 : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [8] ; Constancy: [128] ; ConstantValue: [8]
+  %4 = arith.constant dense<8> : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [4] ; Constancy: [128] ; ConstantValue: [4]
+  %5 = arith.constant dense<4> : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [1] ; Constancy: [1] ; ConstantValue: [8]
+  %6 = arith.maxsi %4, %5 : tensor<128xi32>
+  return
+}
+
+// -----
+
 // CHECK-LABEL: for
 func @for() {
   // CHECK: Contiguity: [1, 1] ; Divisibility: [4611686018427387904, 4611686018427387904] ; Constancy: [128, 32] ; ConstantValue: [0]
