@@ -29,7 +29,8 @@ struct TestAxisInfoPass
   void runOnOperation() override {
     Operation *operation = getOperation();
     auto &os = llvm::errs();
-    os << "Testing: " << operation->getName() << "\n";
+    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
+    os << opName << "\n";
     AxisInfoAnalysis analysis(&getContext());
     analysis.run(operation);
     operation->walk([&](Operation *op) {

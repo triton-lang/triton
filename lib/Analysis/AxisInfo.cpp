@@ -3,7 +3,6 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -60,13 +59,27 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
       if (attr)
         divHint = attr.cast<IntegerAttr>().getValue().getZExtValue();
     } else {
-      // By default, if a block argument is from the entry block,
-      // we first call AxisInfo::getPessimisticValueState
-      // and assign it with dummy values, then immedidately call
-      // AxisInfo::join to assign the hint with the init block argument.
-      contiHint = highestPowOf2Divisor<int64_t>(0);
-      divHint = highestPowOf2Divisor<int64_t>(0);
-      constHint = highestPowOf2Divisor<int64_t>(0);
+      // Derive the divisibility of the induction variable only when
+      // the step and the lower bound are both constants
+      if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+        if (blockArg == forOp.getInductionVar()) {
+          if (auto lowerBound =
+                  forOp.getLowerBound().getDefiningOp<arith::ConstantOp>()) {
+            if (auto step =
+                    forOp.getStep().getDefiningOp<arith::ConstantOp>()) {
+              auto lowerBoundVal = lowerBound.getValue()
+                                       .cast<IntegerAttr>()
+                                       .getValue()
+                                       .getZExtValue();
+              auto stepVal =
+                  step.getValue().cast<IntegerAttr>().getValue().getZExtValue();
+              auto k = gcd(lowerBoundVal, stepVal);
+              if (k != 0)
+                divHint = k;
+            }
+          }
+        }
+      }
     }
   }
 
@@ -319,11 +332,12 @@ private:
     // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
     // lhs / rhs = k * k' * gcd(d_lhs, d_rhs) / (p * p' * gcd(d_lhs, d_rhs))
     //           = k / p * k' / p'
-    // gcd(k', p') = gcd(d_lhs / gcd(d_lhs, d_rhs), d_rhs / gcd(d_lhs, d_rhs))
+    // gcd(k', p') = divisibility(d_lhs / gcd(d_lhs, d_rhs), d_rhs / gcd(d_lhs,
+    // d_rhs))
     auto lhsDivisibility = lhs.getDivisibility(dim);
     auto rhsDivisibility = rhs.getDivisibility(dim);
     auto initGcd = gcd(lhsDivisibility, rhsDivisibility);
-    return gcd(lhsDivisibility / initGcd, rhsDivisibility / initGcd);
+    return std::max(lhsDivisibility / initGcd, rhsDivisibility / initGcd);
   };
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
@@ -377,7 +391,15 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
+    auto resTy = op.getResult().getType().template dyn_cast<RankedTensorType>();
+    if (!resTy)
+      return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
+    auto shape = resTy.getShape();
+    // lhs % 1 = 0
+    return rhs.getConstantValue().has_value() &&
+                   rhs.getConstantValue().value() == 1
+               ? shape[dim]
+               : gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
@@ -385,6 +407,9 @@ private:
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value())
       return {lhs.getConstantValue().value() % rhs.getConstantValue().value()};
+    else if (rhs.getConstantValue().has_value() &&
+             rhs.getConstantValue().value() == 1)
+      return {0};
     return {};
   }
 };
@@ -499,13 +524,13 @@ public:
         // lhs: 4 5 6 7
         // rhs: 4 4 4 4
         // lhs sle rhs: 1, 0, 0, 0
-        if (/*Case 2=*/(notGePredicate(getPredicate(op)) &&
-                        (AxisInfoVisitor::isContiguousDim(lhsInfo, shape, d) &&
-                         AxisInfoVisitor::isConstantDim(rhsInfo, shape, d))) ||
-            /*Case 3=*/(
-                notSePredicate(getPredicate(op)) &&
+        if (/*Case 2=*/(
+                notGePredicate(getPredicate(op)) &&
                 (AxisInfoVisitor::isConstantDim(lhsInfo, shape, d) &&
-                 AxisInfoVisitor::isContiguousDim(rhsInfo, shape, d)))) {
+                 AxisInfoVisitor::isContiguousDim(rhsInfo, shape, d))) ||
+            /*Case 3=*/(notLePredicate(getPredicate(op)) &&
+                        (AxisInfoVisitor::isContiguousDim(lhsInfo, shape, d) &&
+                         AxisInfoVisitor::isConstantDim(rhsInfo, shape, d)))) {
           constHint = std::max(constHint, gcd(lhsInfo.getContiguity(d),
                                               gcd(lhsInfo.getDivisibility(d),
                                                   rhsInfo.getDivisibility(d))));
@@ -534,7 +559,7 @@ private:
            predicate != arith::CmpIPredicate::uge;
   }
 
-  static bool notSePredicate(arith::CmpIPredicate predicate) {
+  static bool notLePredicate(arith::CmpIPredicate predicate) {
     return predicate != arith::CmpIPredicate::sle &&
            predicate != arith::CmpIPredicate::ule;
   }
@@ -695,11 +720,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
                   CastOpAxisInfoVisitor<triton::IntToPtrOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>,
-                  CastOpAxisInfoVisitor<arith::SIToFPOp>,
-                  CastOpAxisInfoVisitor<arith::UIToFPOp>,
-                  CastOpAxisInfoVisitor<arith::FPToSIOp>,
-                  CastOpAxisInfoVisitor<arith::FPToUIOp>>();
+                  CastOpAxisInfoVisitor<triton::BitcastOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
   visitors.append<AddOpAxisInfoVisitor<triton::AddPtrOp>,
@@ -719,6 +740,9 @@ AxisInfoAnalysis::AxisInfoAnalysis(MLIRContext *context)
                   XorIOpAxisInfoVisitor>();
   visitors.append<SelectOpAxisInfoVisitor<mlir::SelectOp>,
                   SelectOpAxisInfoVisitor<triton::gpu::SelectOp>>();
+  // TODO: Add more visitors
+  // max/min
+  // bitwise ops
 }
 
 ChangeResult AxisInfoAnalysis::visitOperation(
@@ -748,19 +772,9 @@ unsigned AxisInfoAnalysis::getPtrVectorSize(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
-  unsigned numElemBits = 0;
-  if (auto ptrTy = tensorTy.getElementType().cast<triton::PointerType>()) {
-    auto pointeeType = ptrTy.getPointeeType();
-    numElemBits = pointeeType.isa<triton::Float8Type>()
-                      ? 8
-                      : pointeeType.getIntOrFloatBitWidth();
-  } else {
-    numElemBits = tensorTy.getElementTypeBitWidth();
-  }
   unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
   unsigned vec = std::min(align, contigPerThread);
   vec = std::min<unsigned>(shape[order[0]], vec);
-  vec = std::min<unsigned>(128 / numElemBits, vec);
 
   return vec;
 }

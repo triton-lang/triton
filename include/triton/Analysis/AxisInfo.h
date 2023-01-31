@@ -4,6 +4,7 @@
 #include "mlir/Analysis/DataFlowAnalysis.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -56,7 +57,8 @@ public:
   bool operator==(const AxisInfo &other) const {
     return (contiguity == other.contiguity) &&
            (divisibility == other.divisibility) &&
-           (constancy == other.constancy);
+           (constancy == other.constancy) &&
+           (constantValue == other.constantValue) && (rank == other.rank);
   }
 
   /// The pessimistic value state of the contiguity is unknown.
@@ -183,13 +185,16 @@ public:
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
+    auto constantValue = getConstantValue(op, lhsInfo, rhsInfo);
     for (auto d = 0; d < rank; ++d) {
       contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
-      divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
       constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
+      if (constantValue.has_value())
+        divisibility.push_back(highestPowOf2Divisor(constantValue.value()));
+      else
+        divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
     }
-    return AxisInfo(contiguity, divisibility, constancy,
-                    getConstantValue(op, lhsInfo, rhsInfo));
+    return AxisInfo(contiguity, divisibility, constancy, constantValue);
   }
 
 protected:

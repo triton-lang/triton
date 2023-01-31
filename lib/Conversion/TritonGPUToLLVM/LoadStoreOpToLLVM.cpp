@@ -32,7 +32,18 @@ struct LoadStoreConversionBase {
   }
 
   unsigned getVectorSize(Value ptr) const {
-    return axisAnalysisPass.getPtrVectorSize(ptr);
+    auto vecSize = axisAnalysisPass.getPtrVectorSize(ptr);
+    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    if (!tensorTy)
+      return vecSize;
+    unsigned numElemBits = 0;
+    auto ptrTy = tensorTy.getElementType().cast<triton::PointerType>();
+    auto pointeeType = ptrTy.getPointeeType();
+    numElemBits = pointeeType.isa<triton::Float8Type>()
+                      ? 8
+                      : pointeeType.getIntOrFloatBitWidth();
+    // The maximum vector size is 128 bits on NVIDIA GPUs.
+    return std::min<unsigned>(128 / numElemBits, vecSize);
   }
 
   unsigned getMaskAlignment(Value mask) const {

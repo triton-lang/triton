@@ -19,9 +19,9 @@ struct TestAllocationPass
   void runOnOperation() override {
     Operation *operation = getOperation();
     auto &os = llvm::errs();
-    // Convert to std::string can remove quotes from op_name
-    auto op_name = SymbolTable::getSymbolName(operation).getValue().str();
-    os << op_name << "\n";
+    // Convert to std::string can remove quotes from opName
+    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
+    os << opName << "\n";
     Allocation allocation(operation);
     operation->walk([&](Operation *op) {
       auto scratchBufferId = allocation.getBufferId(op);
