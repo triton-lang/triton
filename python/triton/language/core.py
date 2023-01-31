@@ -31,7 +31,7 @@ def _to_tensor(x, builder):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
-    assert False, f'cannot convert {x} to tensor'
+    assert False, f"cannot convert {x} of type {type(x)} to tensor"
 
 
 class dtype:
