@@ -16,7 +16,7 @@ import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-from sysconfig import .
+from sysconfig import get_paths
 from typing import Any, Callable, Dict, Tuple, Union
 
 import setuptools
