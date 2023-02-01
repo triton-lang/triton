@@ -445,9 +445,8 @@ public:
     if (mapping.getValueMap().empty())
       return mlir::failure();
 
-    rewriter.setInsertionPoint(op);
     auto newIfOp = rewriter.create<scf::IfOp>(ifOp.getLoc(), newRetTypes,
-                                              ifOp.getCondition(), true);
+                                              ifOp.getCondition(), hasElse);
     auto rematerialize = [&](Block *block, SetVector<Operation *> &cvts) {
       for (Operation &op : block->getOperations()) {
         if (cvts.contains(&op)) {
@@ -460,8 +459,10 @@ public:
     };
     rewriter.setInsertionPointToEnd(newIfOp.thenBlock());
     rematerialize(ifOp.thenBlock(), thenCvts);
-    rewriter.setInsertionPointToEnd(newIfOp.elseBlock());
-    rematerialize(ifOp.elseBlock(), elseCvts);
+    if (hasElse) {
+      rewriter.setInsertionPointToEnd(newIfOp.elseBlock());
+      rematerialize(ifOp.elseBlock(), elseCvts);
+    }
 
     rewriter.setInsertionPointAfter(newIfOp);
     SmallVector<Value> newRetValues = newIfOp.getResults();
