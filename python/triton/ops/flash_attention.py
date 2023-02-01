@@ -191,9 +191,6 @@ def _bwd_kernel(
         tl.store(dk_ptrs, dk)
 
 
-empty = torch.empty(128, device="cuda")
-
-
 class _attention(torch.autograd.Function):
 
     @staticmethod
