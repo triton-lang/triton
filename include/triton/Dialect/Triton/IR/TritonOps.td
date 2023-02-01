@@ -228,7 +228,8 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
 // Shape Manipulation Ops
 //
 def TT_SplatOp : TT_Op<"splat", [NoSideEffect,
-                                 SameOperandsAndResultElementType]> {
+                                 SameOperandsAndResultElementType,
+                                 SameOperandsAndResultEncoding]> {
     let summary = "splat";
 
     let arguments = (ins TT_Type:$src);
@@ -253,7 +254,8 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect,
 }
 
 def TT_ViewOp : TT_Op<"view", [NoSideEffect,
-                               SameOperandsAndResultElementType]> {
+                               SameOperandsAndResultElementType,
+                               SameOperandsAndResultEncoding]> {
     let summary = "view";
 
     let arguments = (ins TT_Tensor:$src);
@@ -265,7 +267,8 @@ def TT_ViewOp : TT_Op<"view", [NoSideEffect,
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
-                                         SameOperandsAndResultElementType]> {
+                                         SameOperandsAndResultElementType,
+                                         SameOperandsAndResultEncoding]> {
     let summary = "broadcast. No left-padding as of now.";
 
     let arguments = (ins TT_Type:$src);
@@ -278,7 +281,8 @@ def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
 }
 
 def TT_CatOp : TT_Op<"cat", [NoSideEffect,
-                             SameOperandsAndResultElementType]> {
+                             SameOperandsAndResultElementType,
+                             SameOperandsAndResultEncoding]> {
     let summary = "concatenate 2 tensors";
 
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
@@ -289,7 +293,9 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
 }
 
 def TT_TransOp : TT_Op<"trans", [NoSideEffect,
-                                 DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+                                 DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                 SameOperandsAndResultElementType,
+                                 SameOperandsAndResultEncoding]> {
 
     let summary = "transpose a tensor";
 
