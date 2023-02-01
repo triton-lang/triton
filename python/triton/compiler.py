@@ -625,10 +625,10 @@ class CodeGenerator(ast.NodeVisitor):
         return [self.visit(dim) for dim in node.dims]
 
     def visit_For(self, node):
-        Iterator = self.visit(node.iter.func)
+        IteratorClass = self.visit(node.iter.func)
         iter_args = [self.visit(arg) for arg in node.iter.args]
-        if Iterator == triton.language.static_range:
-            iterator = Iterator(*iter_args)
+        if IteratorClass == triton.language.static_range:
+            iterator = IteratorClass(*iter_args)
             static_range = range(iterator.start.value, 
                                  iterator.end.value, 
                                  iterator.step.value)
@@ -639,8 +639,8 @@ class CodeGenerator(ast.NodeVisitor):
                     ast.NodeVisitor.generic_visit(self, stmt)
             return
 
-        if Iterator != self.builtins['range']:
-            raise RuntimeError('Only `range` iterator currently supported')
+        if IteratorClass != self.builtins['range']:
+            raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
 
         # visit iterator arguments
         # note: only `range` iterator is supported now
