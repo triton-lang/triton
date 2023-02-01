@@ -28,8 +28,7 @@ jobs:
         run: |
           export CIBW_MANYLINUX_X86_64_IMAGE="manylinux_2_24"
           export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="manylinux_2_24"
-          export CIBW_BEFORE_BUILD="pip install cmake;\
-                                    yum install -y zlib-devel;"
+          export CIBW_BEFORE_BUILD="pip install cmake;"
           export CIBW_SKIP="{cp,pp}35-*"
           export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
