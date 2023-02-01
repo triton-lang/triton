@@ -187,12 +187,15 @@ public:
     AxisInfo::DimVectorT constancy;
     auto constantValue = getConstantValue(op, lhsInfo, rhsInfo);
     for (auto d = 0; d < rank; ++d) {
-      contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
-      constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
-      if (constantValue.has_value())
+      if (constantValue.has_value()) {
+        contiguity.push_back(1);
+        constancy.push_back(lhsInfo.getConstancy(d));
         divisibility.push_back(highestPowOf2Divisor(constantValue.value()));
-      else
+      } else {
+        contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
+        constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
         divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
+      }
     }
     return AxisInfo(contiguity, divisibility, constancy, constantValue);
   }
