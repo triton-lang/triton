@@ -144,8 +144,10 @@ class CMakeBuild(build_ext):
             "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
             "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
             "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
-            "-DLLVM_EXTERNAL_LIT=" + lit_dir,
-        ] + thirdparty_cmake_args
+        ]
+        if lit_dir is not None:
+            cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
+        cmake_args.extend(thirdparty_cmake_args)
 
         # configuration
         cfg = get_build_type()
