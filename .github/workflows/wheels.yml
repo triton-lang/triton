@@ -8,17 +8,13 @@ jobs:
 
   Build-Wheels:
     
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, V100]
 
     steps:
 
-      - name: Install dependencies
-        run: |
-          pip install cibuildwheel
-
       - name: Checkout
         uses: actions/checkout@v2
-      
+
       - name: Patch setup.py
         run: |
           #sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
