@@ -12,6 +12,10 @@ jobs:
 
     steps:
 
+      - name: Install dependencies
+        run: |
+          pip install cibuildwheel
+
       - name: Checkout
         uses: actions/checkout@v2
 
