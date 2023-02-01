@@ -11,6 +11,7 @@ N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
 # randint
 # -------------------
 
+
 @triton.jit
 def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """

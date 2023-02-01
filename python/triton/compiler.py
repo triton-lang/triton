@@ -629,8 +629,8 @@ class CodeGenerator(ast.NodeVisitor):
         iter_args = [self.visit(arg) for arg in node.iter.args]
         if IteratorClass == triton.language.static_range:
             iterator = IteratorClass(*iter_args)
-            static_range = range(iterator.start.value, 
-                                 iterator.end.value, 
+            static_range = range(iterator.start.value,
+                                 iterator.end.value,
                                  iterator.step.value)
             for i in static_range:
                 self.lscope[node.target.id] = triton.language.constexpr(i)
