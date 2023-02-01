@@ -1,6 +1,8 @@
-import torch
 import pytest
+import torch
+
 import triton
+
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
