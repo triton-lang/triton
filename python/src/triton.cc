@@ -1433,6 +1433,7 @@ void init_triton_translation(py::module &m) {
   m.def(
       "translate_triton_gpu_to_llvmir",
       [](mlir::ModuleOp op, int computeCapability) {
+        py::gil_scoped_release allow_threads;
         llvm::LLVMContext llvmContext;
         auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(
             &llvmContext, op, computeCapability);
@@ -1450,6 +1451,7 @@ void init_triton_translation(py::module &m) {
   m.def(
       "translate_llvmir_to_ptx",
       [](const std::string llvmIR, int capability, int version) -> std::string {
+        py::gil_scoped_release allow_threads;
         // create LLVM module from C++
         llvm::LLVMContext context;
         std::unique_ptr<llvm::MemoryBuffer> buffer =
