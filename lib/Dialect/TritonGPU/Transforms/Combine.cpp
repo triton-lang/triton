@@ -421,26 +421,41 @@ public:
 
     BlockAndValueMapping mapping;
     for (size_t i = 0; i < numOps; i++) {
-      // Handle then
-      if (auto thenCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(
-              thenYield.getOperand(i).getDefiningOp())) {
-        if (std::distance(thenCvt->user_begin(), thenCvt->user_end()) == 1) {
+      auto thenCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(
+          thenYield.getOperand(i).getDefiningOp());
+      if (hasElse) {
+        auto elseYield = ifOp.elseYield();
+        auto elseCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(
+            elseYield.getOperand(i).getDefiningOp());
+        if (thenCvt && elseCvt &&
+            std::distance(elseCvt->user_begin(), elseCvt->user_end()) == 1 &&
+            std::distance(thenCvt->user_begin(), thenCvt->user_end()) == 1 &&
+            thenCvt.getOperand().getType() == elseCvt.getOperand().getType()) {
+          // If thenCvt and elseCvt's type are the same, it means a single
+          // conversion is enough to replace both of them. We can move the
+          // conversion out of scf.if and replace both thenCvt and elseCvt with
+          // the new conversion.
           mapping.map(thenCvt.getResult(), thenCvt.getOperand());
           thenCvts.insert((Operation *)thenCvt);
           newRetTypes.push_back(thenCvt.getOperand().getType());
-        } else {
-          newRetTypes.push_back(thenYield.getOperand(i).getType());
-        }
-      }
-      // Handle else
-      if (!hasElse)
-        continue;
-      if (auto elseCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(
-              elseYield.getOperand(i).getDefiningOp()))
-        if (std::distance(elseCvt->user_begin(), elseCvt->user_end()) == 1) {
           mapping.map(elseCvt.getResult(), elseCvt.getOperand());
           elseCvts.insert((Operation *)elseCvt);
-        }
+        } else
+          // Cannot move out of scf.if because thenCvt != elseCvt
+          // Moving it out of scf.if will introduce a new conversion
+          newRetTypes.push_back(thenYield.getOperand(i).getType());
+      } else {
+        if (thenCvt &&
+            std::distance(thenCvt->user_begin(), thenCvt->user_end()) == 1) {
+          // If there's only a single use of the conversion then we can move it
+          mapping.map(thenCvt.getResult(), thenCvt.getOperand());
+          thenCvts.insert((Operation *)thenCvt);
+          newRetTypes.push_back(thenCvt.getOperand().getType());
+        } else
+          // Cannot move out of scf.if because either there's another use of
+          // the conversion or there's no conversion at all
+          newRetTypes.push_back(thenYield.getOperand(i).getType());
+      }
     }
     if (mapping.getValueMap().empty())
       return mlir::failure();
