@@ -8,13 +8,9 @@ jobs:
 
   Build-Wheels:
     
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, V100]
 
     steps:
-
-      - name: Install dependencies
-        run: |
-          pip install cibuildwheel
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -30,8 +26,8 @@ jobs:
 
       - name: Build wheels
         run: |
-          export CIBW_MANYLINUX_X86_64_IMAGE="manylinux2020"
-          export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="manylinux2020"
+          export CIBW_MANYLINUX_X86_64_IMAGE="manylinux_2_24"
+          export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="manylinux_2_24"
           export CIBW_BEFORE_BUILD="pip install cmake;\
                                     yum install -y zlib-devel;"
           export CIBW_SKIP="{cp,pp}35-*"
