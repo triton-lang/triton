@@ -281,20 +281,6 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
   return success();
 }
 
-// TODO: Interface
-LogicalResult getForwardEncoding(Attribute sourceEncoding, Operation *op,
-                                 Attribute &ret) {
-  if (op->hasTrait<mlir::OpTrait::Elementwise>()) {
-    ret = sourceEncoding;
-    return success();
-  }
-  if (isa<triton::ReduceOp>(op)) {
-    ret = Attribute();
-    return success();
-  }
-  return failure();
-}
-
 inline bool expensiveLoadOrStore(Operation *op,
                                  const Attribute &targetEncoding) {
   // Case 1: A size 1 tensor is not expensive since all threads will load the
@@ -347,7 +333,7 @@ LogicalResult simulateBackwardRematerialization(
     // If the current operation is expensive to rematerialize,
     // we stop everything
     if (expensiveToRemat(currOp, currLayout))
-      break;
+      return mlir::failure();
     // A conversion will be removed here (i.e. transferred to operands)
     numCvts -= 1;
     // Done processing
