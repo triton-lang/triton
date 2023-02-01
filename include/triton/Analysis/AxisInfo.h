@@ -189,7 +189,8 @@ public:
     for (auto d = 0; d < rank; ++d) {
       if (constantValue.has_value()) {
         contiguity.push_back(1);
-        constancy.push_back(lhsInfo.getConstancy(d));
+        constancy.push_back(
+            std::max(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
         divisibility.push_back(highestPowOf2Divisor(constantValue.value()));
       } else {
         contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
