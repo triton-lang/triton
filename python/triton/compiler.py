@@ -905,6 +905,13 @@ def kernel_suffix(signature, specialization):
 # ------------------------------------------------------------------------------
 
 
+def parse_mlir_module(path, context):
+    module = _triton.ir.parse_mlir_module(path, context)
+    # module takes ownership of the context
+    module.context = context
+    return module
+
+
 def build_triton_ir(fn, signature, specialization, constants):
     # canonicalize signature
     if isinstance(signature, str):
@@ -1541,9 +1548,9 @@ def compile(fn, **kwargs):
     # build compilation stages
     stages = {
         "ast": (lambda path: fn, None),
-        "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+        "ttir": (lambda path: parse_mlir_module(path, context),
                  lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-        "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+        "ttgir": (lambda path: parse_mlir_module(path, context),
                   lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
         "llir": (lambda path: Path(path).read_bytes(),
                  lambda src: ttgir_to_llir(src, extern_libs, capability)),

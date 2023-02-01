@@ -376,12 +376,12 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
   newOp->getResult(0).setType(newType);
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
-    SmallVector<Type, 1> newType;
+    SmallVector<Type, 1> newTypes;
     auto success = typeInfer.inferReturnTypes(
         newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
-        newOp->getAttrDictionary(), newOp->getRegions(), newType);
+        newOp->getAttrDictionary(), newOp->getRegions(), newTypes);
     if (succeeded(success))
-      newOp->getResult(0).setType(newType.front());
+      newOp->getResult(0).setType(newTypes.front());
   }
   return newOp;
 }
