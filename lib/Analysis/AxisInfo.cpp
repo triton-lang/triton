@@ -491,12 +491,12 @@ public:
       } else {
         // Case 1: lhs and rhs are both partial constants
         constHint = gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d));
-        // Case 2: lhs all contiguous, rhs all constants
+        // Case 2: lhs all constant, rhs all contiguous
         // NOTE:
         // lhs: 4 4 4 4
         // rhs: 4 5 6 7
         // lhs ge rhs: 1, 0, 0, 0
-        // Case 3: lhs all constants, rhs all contiguous
+        // Case 3: lhs all contiguous, rhs all constant
         // NOTE
         // lhs: 4 5 6 7
         // rhs: 4 4 4 4
