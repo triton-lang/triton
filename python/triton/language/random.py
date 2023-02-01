@@ -11,13 +11,12 @@ N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
 # randint
 # -------------------
 
-
 @triton.jit
 def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
     """
-    for _ in range(n_rounds):
+    for _ in tl.static_range(n_rounds):
         # update random state
         A = PHILOX_ROUND_A
         B = PHILOX_ROUND_B

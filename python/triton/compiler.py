@@ -625,29 +625,29 @@ class CodeGenerator(ast.NodeVisitor):
         return [self.visit(dim) for dim in node.dims]
 
     def visit_For(self, node):
-        iterator = self.visit(node.iter.func)
-        if iterator != self.builtins['range']:
+        Iterator = self.visit(node.iter.func)
+        iter_args = [self.visit(arg) for arg in node.iter.args]
+        if Iterator == triton.language.static_range:
+            iterator = Iterator(*iter_args)
+            static_range = range(iterator.start.value, 
+                                 iterator.end.value, 
+                                 iterator.step.value)
+            for i in static_range:
+                self.lscope[node.target.id] = triton.language.constexpr(i)
+                self.visit_compound_statement(node.body)
+                for stmt in node.orelse:
+                    ast.NodeVisitor.generic_visit(self, stmt)
+            return
+
+        if Iterator != self.builtins['range']:
             raise RuntimeError('Only `range` iterator currently supported')
+
         # visit iterator arguments
         # note: only `range` iterator is supported now
-        iter_args = [self.visit(arg) for arg in node.iter.args]
         # collect lower bound (lb), upper bound (ub), and step
         lb = iter_args[0] if len(iter_args) > 1 else self.visit(ast.Num(0))
         ub = iter_args[1] if len(iter_args) > 1 else self.visit(node.iter.args[0])
         step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Num(1))
-        # static for loops: all iterator arguments are constexpr
-        if isinstance(lb, triton.language.constexpr) and \
-           isinstance(ub, triton.language.constexpr) and \
-           isinstance(step, triton.language.constexpr):
-            sta_range = iterator(lb.value, ub.value, step.value)
-            static_unrolling = os.environ.get('TRITON_STATIC_LOOP_UNROLLING', False)
-            if static_unrolling and len(sta_range) <= 10:
-                for i in sta_range:
-                    self.lscope[node.target.id] = triton.language.constexpr(i)
-                    self.visit_compound_statement(node.body)
-                    for stmt in node.orelse:
-                        ast.NodeVisitor.generic_visit(self, stmt)
-                return
         # handle negative constant step (not supported by scf.for in MLIR)
         negative_step = False
         if isinstance(step, triton.language.constexpr) and step.value < 0:
