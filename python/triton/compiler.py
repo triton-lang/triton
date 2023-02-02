@@ -111,14 +111,6 @@ class enter_sub_region:
         self.generator.lscope = self.liveins
         self.generator.local_defs = self.prev_defs
 
-    def __enter__(self):
-        # record lscope & local_defs in the parent scope
-        self.liveins = self.generator.lscope.copy()
-        self.prev_defs = self.generator.local_defs.copy()
-        self.generator.local_defs = {}
-        self.insert_block = self.generator.builder.get_insertion_block()
-        return self.liveins, self.insert_block
-
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, function_name, module=None, is_kernel=False, function_types=dict()):
         self.builder = _triton.ir.builder(context)
