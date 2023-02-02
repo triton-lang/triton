@@ -30,7 +30,6 @@ def get_build_type():
         # TODO: change to release when stable enough
         return "TritonRelBuildWithAsserts"
 
-
 # --- third party packages -----
 
 class Package(NamedTuple):
@@ -42,7 +41,6 @@ class Package(NamedTuple):
     lib_flag: str
     syspath_var_name: str
 
-
 def get_pybind11_package_info():
     name = "pybind11-2.10.0"
     url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
@@ -52,14 +50,11 @@ def get_pybind11_package_info():
 def get_llvm_package_info():
     # download if nothing is installed
     system = platform.system()
-    system_suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
+    system_suffix = {"Linux": "linux-gnu-centos7", "Darwin": "apple-darwin"}[system]
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
-    if use_assert_enabled_llvm:
-        name = 'llvm+mlir-14.0.0-x86_64-{}-assert'.format(system_suffix)
-        url = "https://github.com/shintaro-iwasaki/llvm-releases/releases/download/llvm-14.0.0-329fda39c507/{}.tar.xz".format(name)
-    else:
-        name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
+    release_suffix = "assert" if use_assert_enabled_llvm else "release"
+    name = 'llvm+mlir-14.0.6-x86_64-{}-{}'.format(system_suffix, release_suffix)
+    url = "https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-14.0.6-f28c006a5895/{}.tar.xz".format(name)
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
