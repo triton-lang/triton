@@ -16,10 +16,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_load
   func @basic_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
-    // CHECK: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $1, off offset:0
-    // CHECK: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $1, off offset:0
+    // CHECK-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     return
   }
@@ -31,11 +30,15 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: vectorized_load
   func @vectorized_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
-    // CHECK: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $1, off offset:0
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32)>
+    // PTX: llvm.inline_asm
     // PTX-SAME: ld.global.b32
-    // CHECK: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $1, off offset:0
+    // PTX: llvm.inline_asm
     // PTX-SAME: ld.global.b32
     %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     return
@@ -48,11 +51,26 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: vectorized_load_f16
   func @vectorized_load_f16(%a_ptr_init: tensor<256x!tt.ptr<f16>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf16, #blocked0>) {
-    // CHECK: llvm.inline_asm
-    // GCN-SAME: global_load_ushort $0, $1, off offset:0
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
+    // GCN: llvm.insertvalue {{.*}}[4] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
+    // GCN: llvm.insertvalue {{.*}}[5] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
+    // GCN: llvm.insertvalue {{.*}}[6] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
+    // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
+    // PTX: llvm.inline_asm
     // PTX-SAME: ld.global.b16
-    // CHECK: llvm.inline_asm
-    // GCN-SAME: global_load_ushort $0, $1, off offset:0
+    // PTX: llvm.inline_asm
     // PTX-SAME: ld.global.b16
     %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf16, #blocked0>
     return
@@ -103,20 +121,30 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 4 elements from vector0
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32)>
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
 
     // Load 4 elements from vector1
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32)>
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
@@ -128,10 +156,15 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 4 elements to global
-    // GCN: llvm.inline_asm {{.*}}global_store_dword $1, $0, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_store_dword $1, $0, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_store_dword $1, $0, off offset:0
-    // GCN: llvm.inline_asm {{.*}}global_store_dword $1, $0, off offset:0
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.extractvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
     // PTX: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
     // PTX: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
     // PTX: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
@@ -159,19 +192,27 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 4 elements from A with single one vectorized load instruction
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $4, off offset:0
-    // GCN-SAME: global_load_dword $1, $4, off offset:4
-    // GCN-SAME: global_load_dword $2, $4, off offset:8
-    // GCN-SAME: global_load_dword $3, $4, off offset:12
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32)>
     // PTX: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
 
     // Load 4 elements from B with single one vectorized load instruction
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $4, off offset:0
-    // GCN-SAME: global_load_dword $1, $4, off offset:4
-    // GCN-SAME: global_load_dword $2, $4, off offset:8
-    // GCN-SAME: global_load_dword $3, $4, off offset:12
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32)>
     // PTX: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
 
     %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
@@ -181,11 +222,15 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 4 elements to global with single one vectorized store instruction
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_store_dword $4, $0, off offset:0
-    // GCN-SAME: global_store_dword $4, $1, off offset:4
-    // GCN-SAME: global_store_dword $4, $2, off offset:8
-    // GCN-SAME: global_store_dword $4, $3, off offset:12
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.extractvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32)>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
     // PTX: @$5 st.global.v4.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
     tt.store %13, %11 : tensor<256xf32, #blocked0>
     return
@@ -213,7 +258,8 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %9 = tt.splat %n_elements : (i32) -> tensor<64xi32, #blocked>
     %10 = "triton_gpu.cmpi"(%4, %9) {predicate = 2 : i64} : (tensor<64xi32, #blocked>, tensor<64xi32, #blocked>) -> tensor<64xi1, #blocked>
     // load op has a vector width = 1 due to the %mask's alignment
-    // GCN: llvm.inline_asm {{.*}}global_load_dword $0, $1, off offset:0
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     // PTX: ld.global.b32
     %11 = tt.load %6, %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32, #blocked>
     %12 = tt.load %8, %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32, #blocked>
@@ -243,32 +289,48 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 8 elements from A with two vectorized load instruction
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $4, off offset:0
-    // GCN-SAME: global_load_dword $1, $4, off offset:4
-    // GCN-SAME: global_load_dword $2, $4, off offset:8
-    // GCN-SAME: global_load_dword $3, $4, off offset:12
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $4, off offset:0
-    // GCN-SAME: global_load_dword $1, $4, off offset:4
-    // GCN-SAME: global_load_dword $2, $4, off offset:8
-    // GCN-SAME: global_load_dword $3, $4, off offset:12
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // PTX: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
 
     // Load 8 elements from B with two vectorized load instruction
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $4, off offset:0
-    // GCN-SAME: global_load_dword $1, $4, off offset:4
-    // GCN-SAME: global_load_dword $2, $4, off offset:8
-    // GCN-SAME: global_load_dword $3, $4, off offset:12
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_load_dword $0, $4, off offset:0
-    // GCN-SAME: global_load_dword $1, $4, off offset:4
-    // GCN-SAME: global_load_dword $2, $4, off offset:8
-    // GCN-SAME: global_load_dword $3, $4, off offset:12
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // PTX: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+
+    // GCN-NOT: llvm.load
 
     %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
@@ -277,16 +339,23 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 8 elements to global with two vectorized store instruction
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_store_dword $4, $0, off offset:0
-    // GCN-SAME: global_store_dword $4, $1, off offset:4
-    // GCN-SAME: global_store_dword $4, $2, off offset:8
-    // GCN-SAME: global_store_dword $4, $3, off offset:12
-    // GCN: llvm.inline_asm
-    // GCN-SAME: global_store_dword $4, $0, off offset:0
-    // GCN-SAME: global_store_dword $4, $1, off offset:4
-    // GCN-SAME: global_store_dword $4, $2, off offset:8
-    // GCN-SAME: global_store_dword $4, $3, off offset:12
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.extractvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
     // PTX: @$5 st.global.v4.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
     // PTX: @$5 st.global.v4.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
     tt.store %13, %11 : tensor<256xf32, #blocked0>
@@ -606,40 +675,76 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %tensor = triton_gpu.alloc_tensor : tensor<2x32x32xf32, #A>
     %index = arith.constant 1 : i32
 
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.commit_group
+    // PTX: llvm.mlir.constant(0 : i32) : i32
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.mlir.constant(0 : i32) : i32
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.mlir.constant(0 : i32) : i32
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.mlir.constant(0 : i32) : i32
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.mlir.constant(16 : i32) : i32
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.mlir.constant(16 : i32) : i32
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.mlir.constant(16 : i32) : i32
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.mlir.constant(16 : i32) : i32
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.commit_group
+
+    // TODO Check this code correctness
+    // GCN: llvm.mlir.constant(0 : i32) : i32
+    // GCN: llvm.add
+    // GCN: llvm.mlir.constant(0 : i32) : i32
+    // GCN: llvm.add
+    // GCN: llvm.mlir.constant(0 : i32) : i32
+    // GCN: llvm.add
+    // GCN: llvm.mlir.constant(0 : i32) : i32
+    // GCN: llvm.add
+    // GCN: llvm.mlir.constant(16 : i32) : i32
+    // GCN: llvm.add
+    // GCN: llvm.mlir.constant(16 : i32) : i32
+    // GCN: llvm.add
+    // GCN: llvm.mlir.constant(16 : i32) : i32
+    // GCN: llvm.add
+    // GCN: llvm.mlir.constant(16 : i32) : i32
+    // GCN: llvm.add
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // GCN: llvm.inline_asm
+    // GCN-SAME: cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> tensor<2x32x32xf32, #A>
     triton_gpu.async_commit_group
     return
@@ -666,11 +771,13 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_store
   func @basic_store(%ptrs: tensor<256x!tt.ptr<f32>, #blocked0>, %vals: tensor<256xf32, #blocked0>, %mask: tensor<256xi1, #blocked0>) {
-    // CHECK: llvm.inline_asm
-    // GCN-SAME: global_store_dword $1, $0, off offset:0
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // PTX: llvm.inline_asm
     // PTX-SAME: st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
-    // CHECK: llvm.inline_asm
-    // GCN-SAME: global_store_dword $1, $0, off offset:0
+    // PTX: llvm.inline_asm
     // PTX-SAME: st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
     tt.store %ptrs, %vals, %mask : tensor<256xf32, #blocked0>
     return
@@ -827,7 +934,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
-    // CHECK: nvvm.barrier0
+    // PTX: nvvm.barrier0
+    // GCN: rocdl.barrier
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<32x16xf32, #mma>) -> tensor<32x16xf32, #blocked0>
@@ -851,7 +959,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
     // CHECK: llvm.store
     // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
-    // XHECK: nvvm.barrier0
+    // PTX: nvvm.barrier0
+    // GCN: rocdl.barrier
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<32x64xf32, #mma>) -> tensor<32x64xf32, #blocked>
@@ -910,7 +1019,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   func @convert_blocked_to_blocked_ptr(%src:tensor<32x!tt.ptr<f32>, #blocked0>) {
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.store
-    // CHECK: nvvm.barrier0
+    // PTX: nvvm.barrier0
+    // GCN: rocdl.barrier
     // CHECK: llvm.inttoptr
     // CHECK-COUNT-4: llvm.insertvalue
     %cvt = triton_gpu.convert_layout %src : (tensor<32x!tt.ptr<f32>, #blocked0>) -> tensor<32x!tt.ptr<f32>, #blocked1>
@@ -1037,8 +1147,10 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32
   func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: atom.global.gpu.add.f32
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.atomicrmw fadd {{.*}}  monotonic  : f32
+    // PTX: llvm.inline_asm
+    // PTX-SAME: atom.global.gpu.add.f32
     %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     return
   }
@@ -1052,9 +1164,12 @@ func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
   %blockidx = tt.get_program_id {axis=0:i32} : i32
   %blockidy = tt.get_program_id {axis=1:i32} : i32
   %blockidz = tt.get_program_id {axis=2:i32} : i32
-  // CHECK: nvvm.read.ptx.sreg.ctaid.x
-  // CHECK: nvvm.read.ptx.sreg.ctaid.y
-  // CHECK: nvvm.read.ptx.sreg.ctaid.z
+  // PTX: nvvm.read.ptx.sreg.ctaid.x
+  // PTX: nvvm.read.ptx.sreg.ctaid.y
+  // PTX: nvvm.read.ptx.sreg.ctaid.z
+  // GCN: rocdl.workgroup.id.x
+  // GCN: rocdl.workgroup.id.y
+  // GCN: rocdl.workgroup.id.z
   %v0 = arith.addi %blockidx, %blockidy : i32
   %v1 = arith.addi %v0, %blockidz : i32
   %0 = tt.splat %v1 : (i32) -> tensor<32xi32, #blocked0>
@@ -1069,9 +1184,12 @@ func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-    // CHECK: nvvm.read.ptx.sreg.nctaid.x
-    // CHECK: nvvm.read.ptx.sreg.nctaid.y
-    // CHECK: nvvm.read.ptx.sreg.nctaid.z
+    // PTX: nvvm.read.ptx.sreg.nctaid.x
+    // PTX: nvvm.read.ptx.sreg.nctaid.y
+    // PTX: nvvm.read.ptx.sreg.nctaid.z
+    // GCN: rocdl.grid.dim.x
+    // GCN: rocdl.grid.dim.y
+    // GCN: rocdl.grid.dim.z
     %blockdimx = tt.get_num_programs {axis=0:i32} : i32
     %blockdimy = tt.get_num_programs {axis=1:i32} : i32
     %blockdimz = tt.get_num_programs {axis=2:i32} : i32
@@ -1089,9 +1207,11 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: test_index_cache
   func @test_index_cache() {
-    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // PTX: nvvm.read.ptx.sreg.tid.x
+    // GCN: rocdl.workitem.id.x
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
-    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+    // PTX-NOT: nvvm.read.ptx.sreg.tid.x
+    // GCN-NOT: rocdl.workitem.id.x
     %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     return
   }
@@ -1103,9 +1223,11 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: test_base_index_cache
   func @test_base_index_cache(%arg0: tensor<128x32xf32, #blocked0>) {
-    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // PLX: nvvm.read.ptx.sreg.tid.x
+    // GCN: rocdl.workitem.id.x
     %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
-    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+    // PTX-NOT: nvvm.read.ptx.sreg.tid.x
+    // GCN-NOT: rocdl.workitem.id.x
     %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
     return
   }
@@ -1117,10 +1239,12 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: test_index_cache_different_block
   func @test_index_cache_different_block(%arg0: tensor<128x32xf32, #blocked0>, %arg1: i1) {
-    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // PTX: nvvm.read.ptx.sreg.tid.x
+    // GCN: rocdl.workitem.id.x
     %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
     scf.if %arg1 {
-      // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+      // PTX-NOT: nvvm.read.ptx.sreg.tid.x
+      // GCN-NOT: rocdl.workitem.id.x
       %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
     }
     return
