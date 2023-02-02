@@ -29,9 +29,9 @@ jobs:
           export CIBW_MANYLINUX_X86_64_IMAGE="manylinux_2_24"
           export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="manylinux_2_24"
           export CIBW_BEFORE_BUILD="pip install cmake;\
-                                    echo 'deb http://deb.debian.org/debian testing main' >> /etc/apt/sources.list;\
-                                    apt-get update -y;\
-                                    apt-get install -y gcc-9 g++-9;"
+                                    echo 'deb http://deb.debian.org/debian stretch-backports main' >> /etc/apt/sources.list.d/stretch-backports.list;\
+                                    apt-get update;\
+                                    apt-get install -y -t stretch-backports gcc-9 g++-9;"
           export CIBW_SKIP="{cp,pp}35-*"
           export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
