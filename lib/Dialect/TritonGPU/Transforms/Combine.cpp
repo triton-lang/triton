@@ -281,26 +281,28 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
   return success();
 }
 
-inline bool expensiveLoadOrStore(Operation *op,
-                                 const Attribute &targetEncoding) {
+inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
   // Case 1: A size 1 tensor is not expensive since all threads will load the
   // same
   if (isSingleValue(op->getOperand(0)))
     return false;
-  // Case 2: the targeEncoding may expose more vectorization opportunities
   auto ptr = op->getOperand(0);
   if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
     auto encoding = tensorTy.getEncoding();
+    // Case 2: Different type conversion is expensive (e.g., mma <-> block)
+    if (encoding.getTypeID() != targetEncoding.getTypeID())
+      return true;
     auto sizePerThread = triton::gpu::getSizePerThread(encoding);
     auto targetSizePerThread = triton::gpu::getSizePerThread(targetEncoding);
     auto order = triton::gpu::getOrder(encoding);
     auto targetOrder = triton::gpu::getOrder(targetEncoding);
+    // Case 3: The targeEncoding may expose more vectorization opportunities
     return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
   }
   return false;
 }
 
-inline bool expensiveToRemat(Operation *op, const Attribute &targetEncoding) {
+inline bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
   if (!op)
     return true;
   if (isa<triton::LoadOp, triton::StoreOp>(op))
