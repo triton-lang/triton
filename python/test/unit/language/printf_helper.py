@@ -52,11 +52,11 @@ def printf(data_type):
     assert_close(y, x)
 
 
-def assert2(data_type):
+def test_assert(data_type):
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
-        tl.assert2(x == 0, "x > 0")
+        tl.device_assert(x == 0, "x > 0")
         tl.store(Y + tl.arange(0, BLOCK), x)
 
     shape = (128, )
@@ -69,4 +69,4 @@ def assert2(data_type):
 
 #printf("float16")
 #printf("int8")
-assert2("float16")
+test_assert("float16")

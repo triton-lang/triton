@@ -459,8 +459,9 @@ struct TritonAssertPattern : public OpConversionPattern<triton::AssertOp> {
   matchAndRewrite(triton::AssertOp op,
                   typename triton::AssertOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<triton::AssertOp>(op, adaptor.condition(),
-                                                  op.messageAttr());
+    rewriter.replaceOpWithNewOp<triton::AssertOp>(
+        op, adaptor.condition(), op.messageAttr(), op.fileAttr(), op.funcAttr(),
+        op.lineAttr());
     return success();
   }
 };

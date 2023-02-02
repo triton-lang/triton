@@ -1310,7 +1310,10 @@ def printf(prefix, *args, _builder=None):
 
 
 @builtin
-def assert2(cond, msg="", _builder=None):
+def device_assert(cond, msg="", _builder=None):
+    import os
+    if os.getenv("TRITON_ENABLE_DEVICE_ASSERT", "0") == "0":
+        return
     msg = _constexpr_to_value(msg)
     # Get the file name, function name and line number of the caller
     import inspect
@@ -1318,7 +1321,7 @@ def assert2(cond, msg="", _builder=None):
     file_name = frame.f_back.f_code.co_filename
     func_name = frame.f_back.f_code.co_name
     lineno = frame.f_back.f_lineno
-    return semantic.assert2(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
+    return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
 
 # -----------------------
 # Iterators
