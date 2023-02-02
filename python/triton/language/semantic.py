@@ -859,7 +859,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor,
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
-        raise ValueError("atomic_" + op + " does not support " + element_ty)
+        raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
