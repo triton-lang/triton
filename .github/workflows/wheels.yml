@@ -32,7 +32,8 @@ jobs:
                                     echo 'deb http://ftp.de.debian.org/debian/ testing main' >> /etc/apt/sources.list;\
                                     echo 'APT::Default-Release "stable";' > /etc/apt/apt.conf.d/stable-as-default
                                     apt-get update;\
-                                    apt install g++ -t testing"
+                                    apt-cache search g++;\
+                                    apt install g++-7 -t testing"
           export CIBW_SKIP="{cp,pp}35-*"
           export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
