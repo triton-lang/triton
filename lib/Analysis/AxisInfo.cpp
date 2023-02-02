@@ -824,7 +824,7 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   return result;
 }
 
-unsigned AxisInfoAnalysis::getPtrVectorSize(Value ptr) {
+unsigned AxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;

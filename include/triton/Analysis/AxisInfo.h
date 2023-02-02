@@ -252,7 +252,7 @@ public:
   visitOperation(Operation *op,
                  ArrayRef<LatticeElement<AxisInfo> *> operands) override;
 
-  unsigned getPtrVectorSize(Value ptr);
+  unsigned getPtrContiguity(Value ptr);
 
   unsigned getPtrAlignment(Value ptr);
 
