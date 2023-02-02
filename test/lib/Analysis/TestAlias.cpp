@@ -36,8 +36,8 @@ struct TestAliasPass
   void runOnOperation() override {
     Operation *operation = getOperation();
     auto &os = llvm::errs();
-    auto op_name = SymbolTable::getSymbolName(operation).getValue().str();
-    os << op_name << "\n";
+    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
+    os << opName << "\n";
 
     SharedMemoryAliasAnalysis analysis(&getContext());
     analysis.run(operation);

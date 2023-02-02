@@ -281,26 +281,35 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
   return success();
 }
 
-// TODO: Interface
-LogicalResult getForwardEncoding(Attribute sourceEncoding, Operation *op,
-                                 Attribute &ret) {
-  if (op->hasTrait<mlir::OpTrait::Elementwise>()) {
-    ret = sourceEncoding;
-    return success();
+inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
+  // Case 1: A size 1 tensor is not expensive since all threads will load the
+  // same
+  if (isSingleValue(op->getOperand(0)))
+    return false;
+  auto ptr = op->getOperand(0);
+  if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
+    auto encoding = tensorTy.getEncoding();
+    // Case 2: Different type conversion is expensive (e.g., mma <-> block)
+    if (encoding.getTypeID() != targetEncoding.getTypeID())
+      return true;
+    auto sizePerThread = triton::gpu::getSizePerThread(encoding);
+    auto targetSizePerThread = triton::gpu::getSizePerThread(targetEncoding);
+    auto order = triton::gpu::getOrder(encoding);
+    auto targetOrder = triton::gpu::getOrder(targetEncoding);
+    // Case 3: The targeEncoding may expose more vectorization opportunities
+    return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
   }
-  if (isa<triton::ReduceOp>(op)) {
-    ret = Attribute();
-    return success();
-  }
-  return failure();
+  return false;
 }
 
-inline bool expensiveToRemat(Operation *op, const Attribute &targetEncoding) {
+inline bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
   if (!op)
     return true;
+  if (isa<triton::LoadOp, triton::StoreOp>(op))
+    return expensiveLoadOrStore(op, targetEncoding);
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
-          triton::gpu::InsertSliceAsyncOp, triton::LoadOp, triton::StoreOp,
-          triton::AtomicRMWOp, triton::AtomicCASOp, triton::DotOp>(op))
+          triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
+          triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
           op))
@@ -509,6 +518,7 @@ public:
         cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
     auto dstEncoding =
         cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
+    // XXX: why is this needed?
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     SetVector<Operation *> cvtSlices;
