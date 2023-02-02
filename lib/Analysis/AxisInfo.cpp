@@ -837,10 +837,10 @@ unsigned AxisInfoAnalysis::getPtrContiguity(Value ptr) {
   unsigned align = getPtrAlignment(ptr);
 
   unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
-  unsigned vec = std::min(align, contigPerThread);
-  vec = std::min<unsigned>(shape[order[0]], vec);
+  contigPerThread = std::min(align, contigPerThread);
+  contigPerThread = std::min<unsigned>(shape[order[0]], contigPerThread);
 
-  return vec;
+  return contigPerThread;
 }
 
 unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
