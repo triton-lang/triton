@@ -143,7 +143,7 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
   }
 }
 
-SmallVector<unsigned> getContigPerThread(Attribute layout) {
+SmallVector<unsigned> getContigPerThread(const Attribute &layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};

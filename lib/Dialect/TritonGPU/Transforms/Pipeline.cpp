@@ -168,7 +168,7 @@ LogicalResult LoopPipeliner::initialize() {
   for (Operation &op : *loop)
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.ptr();
-      unsigned vec = axisInfoAnalysis.getPtrVectorSize(ptr);
+      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
       auto ty = getElementTypeOrSelf(ptr.getType())
                     .cast<triton::PointerType>()
                     .getPointeeType();
