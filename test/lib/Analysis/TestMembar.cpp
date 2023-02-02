@@ -23,8 +23,8 @@ struct TestMembarPass
     Operation *operation = getOperation();
     auto &os = llvm::errs();
     // Convert to std::string can remove quotes from op_name
-    auto op_name = SymbolTable::getSymbolName(operation).getValue().str();
-    os << op_name << "\n";
+    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
+    os << opName << "\n";
     Allocation allocation(operation);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();

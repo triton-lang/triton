@@ -1,5 +1,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -62,13 +64,13 @@ class LoopPipeliner {
   DenseMap<Value, SmallVector<Value>> valueMapping;
 
   /// Block arguments that loads depend on
-  DenseSet<BlockArgument> depArgs;
+  SetVector<BlockArgument> depArgs;
 
   /// Operations (inside the loop body) that loads depend on
-  DenseSet<Operation *> depOps;
+  SetVector<Operation *> depOps;
 
   /// collect values that v depends on and are defined inside the loop
-  void collectDeps(Value v, int stages, DenseSet<Value> &deps);
+  void collectDeps(Value v, int stages, SetVector<Value> &deps);
 
   void setValueMapping(Value origin, Value newValue, int stage);
 
@@ -112,7 +114,7 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
   return valueMapping[origin][stage];
 }
 
-void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
+void LoopPipeliner::collectDeps(Value v, int stages, SetVector<Value> &deps) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return;
@@ -158,20 +160,31 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 LogicalResult LoopPipeliner::initialize() {
   Block *loop = forOp.getBody();
 
+  AxisInfoAnalysis axisInfoAnalysis(forOp.getContext());
+  axisInfoAnalysis.run(forOp->getParentOfType<ModuleOp>());
+
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> allLoads;
   for (Operation &op : *loop)
-    if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
-      allLoads.push_back(loadOp);
+    if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
+      auto ptr = loadOp.ptr();
+      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+      auto ty = getElementTypeOrSelf(ptr.getType())
+                    .cast<triton::PointerType>()
+                    .getPointeeType();
+      unsigned width = vec * ty.getIntOrFloatBitWidth();
+      if (width >= 32)
+        allLoads.push_back(loadOp);
+    }
 
   // Early stop: no need to continue if there is no load in the loop.
   if (allLoads.empty())
     return failure();
 
   // load => values that it depends on
-  DenseMap<Value, DenseSet<Value>> loadDeps;
+  DenseMap<Value, SetVector<Value>> loadDeps;
   for (triton::LoadOp loadOp : allLoads) {
-    DenseSet<Value> deps;
+    SetVector<Value> deps;
     for (Value op : loadOp->getOperands())
       collectDeps(op, numStages - 1, deps);
     loadDeps[loadOp] = deps;

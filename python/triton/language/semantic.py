@@ -312,6 +312,12 @@ def logical_or(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.te
     return or_(input, other, builder)
 
 
+def not_(input: tl.tensor, builder: ir.builder):
+    if not input.type.is_int1():
+        input = bitcast(input, tl.dtype("int1"), builder)
+    return invert(input, builder)
+
+
 def lshr(input: tl.tensor,
          other: tl.tensor,
          builder: ir.builder) -> tl.tensor:
@@ -539,10 +545,10 @@ def broadcast_impl_shape(input: tl.tensor,
         raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
     if shape == src_shape:
         return input
-    for i in range(len(src_shape)):
-        if shape[i] != src_shape[i] and src_shape[i] != 1:
+    for i, item in enumerate(src_shape):
+        if shape[i] != item and item != 1:
             raise ValueError(f"Cannot broadcast, the expanded size of the tensor ({shape[i]})"
-                             f" must match the existing size ({src_shape[i]}) at non-singleton dimension"
+                             f" must match the existing size ({item}) at non-singleton dimension"
                              f" {i}: {src_shape}, {shape}")
     ret_ty = tl.block_type(input.type.scalar, shape)
     return tl.tensor(builder.create_broadcast(input.handle, shape), ret_ty)
@@ -582,8 +588,7 @@ def broadcast_impl_value(lhs: tl.tensor,
         assert len(rhs_shape) == len(lhs_shape)
 
         ret_shape = []
-        for i in range(len(lhs_shape)):
-            left = lhs_shape[i]
+        for i, left in enumerate(lhs_shape):
             right = rhs_shape[i]
             if left == 1:
                 ret_shape.append(right)
@@ -815,7 +820,7 @@ def store(ptr: tl.tensor,
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
     if ptr.type.is_block():
         val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
-    if mask:
+    if mask and ptr.type.is_block():
         mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
     ptr_ty = ptr.type.scalar
     elt_ty = ptr_ty.element_ty
@@ -860,7 +865,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor,
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
-        raise ValueError("atomic_" + op + " does not support " + element_ty)
+        raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)

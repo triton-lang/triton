@@ -2,6 +2,7 @@
 #include "mlir/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <deque>
 
 namespace mlir {
 
@@ -164,7 +165,55 @@ bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
          dotOperandLayout.getParent() == mmaLayout;
 }
 
+bool isSingleValue(Value value) {
+  // Don't consider load as expensive if it is loading a scalar.
+  if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>())
+    return tensorTy.getNumElements() == 1;
+  // TODO: Handle other cases.
+  // For example, when ptr is a tensor of single value.
+  // It means that ptr is a resultant of broadcast or generated through
+  // a chain of broadcast and other operations.
+  // Rematerialize it without considering contiguous memory access pattern is
+  // fine.
+  return true;
+}
+
 namespace {
+
+/// A data structure similar to SetVector but maintains
+/// a deque instead of a vector to allow for efficient
+/// push_back and pop_front operations.
+/// Using SetVector doesn't suffice our needs because
+/// it only pushes and pops from the back.
+/// For example, if we have a queue like this:
+/// 0->4 1->2->3
+///    ^--------
+/// where 3 depends on 4, once we pop 3, we found
+/// 4 is not ready, so we check 2 and push 3 back
+/// to the queue.
+struct DFSSubgraphState {
+  DFSSubgraphState() : set(), deque() {}
+  DenseSet<Operation *> set;
+  std::deque<Operation *> deque;
+
+  bool push_back(Operation *op) {
+    if (set.insert(op).second) {
+      deque.push_back(op);
+      return true;
+    }
+    return false;
+  }
+
+  Operation *pop_front() {
+    Operation *op = deque.front();
+    deque.pop_front();
+    set.erase(op);
+    return op;
+  }
+
+  bool empty() { return deque.empty(); }
+};
+
 /// DFS post-order implementation that maintains a global count to work across
 /// multiple invocations, to help implement topological sort on multi-root DAGs.
 /// We traverse all operations but only record the ones that appear in
@@ -174,23 +223,49 @@ struct DFSState {
   const SetVector<Operation *> &toSort;
   SmallVector<Operation *, 16> topologicalCounts;
   DenseSet<Operation *> seen;
+
+  /// We mark each op as ready if all its operands are seen. If an op is ready,
+  /// we add it to the queue. Otherwise, we keep adding its operands to the
+  /// ancestors set.
+  void addToReadyQueue(Operation *op, DFSSubgraphState &subGraph,
+                       SmallVector<Operation *, 4> &readyQueue) {
+    bool ready = true;
+    for (Value operand : op->getOperands()) {
+      auto def = operand.getDefiningOp();
+      if (def && !seen.count(def)) {
+        subGraph.push_back(def);
+        ready = false;
+      }
+    }
+    if (ready)
+      readyQueue.push_back(op);
+  }
 };
 
 void dfsPostorder(Operation *root, DFSState *state) {
-  SmallVector<Operation *> queue(1, root);
-  std::vector<Operation *> ops;
-  while (!queue.empty()) {
-    Operation *current = queue.pop_back_val();
-    if (!state->seen.insert(current).second)
-      continue;
-    ops.push_back(current);
-    for (Value result : current->getResults()) {
-      for (Operation *op : result.getUsers())
-        queue.push_back(op);
-    }
-    for (Region &region : current->getRegions()) {
-      for (Operation &op : region.getOps())
-        queue.push_back(&op);
+  DFSSubgraphState subGraph;
+  subGraph.push_back(root);
+  SmallVector<Operation *> ops;
+  while (!subGraph.empty()) {
+    // Nodes in the ready queue are ready to be processed.
+    // Meaning that either their operands are all seen or they have null
+    // operands.
+    SmallVector<Operation *, 4> readyQueue;
+    auto *current = subGraph.pop_front();
+    state->addToReadyQueue(current, subGraph, readyQueue);
+    while (!readyQueue.empty()) {
+      Operation *current = readyQueue.pop_back_val();
+      if (!state->seen.insert(current).second)
+        continue;
+      ops.push_back(current);
+      for (Value result : current->getResults()) {
+        for (Operation *op : result.getUsers())
+          state->addToReadyQueue(op, subGraph, readyQueue);
+      }
+      for (Region &region : current->getRegions()) {
+        for (Operation &op : region.getOps())
+          state->addToReadyQueue(&op, subGraph, readyQueue);
+      }
     }
   }
 
