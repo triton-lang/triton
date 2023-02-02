@@ -31,7 +31,7 @@ jobs:
           export CIBW_BEFORE_BUILD="pip install cmake;\
                                     echo 'deb http://deb.debian.org/debian stretch-backports main' >> /etc/apt/sources.list.d/stretch-backports.list;\
                                     apt-get update;\
-                                    apt-get install -y -t stretch-backports gcc g++;"
+                                    apt-get install -y -t stretch-backports gcc-7 g++-7;"
           export CIBW_SKIP="{cp,pp}35-*"
           export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
