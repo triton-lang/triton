@@ -29,8 +29,6 @@ jobs:
           export CIBW_MANYLINUX_X86_64_IMAGE="manylinux_2_24"
           export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="manylinux_2_24"
           export CIBW_BEFORE_BUILD="pip install cmake;\
-                                    echo 'deb http://ftp.de.debian.org/debian/ testing main' >> /etc/apt/sources.list;\
-                                    echo 'APT::Default-Release "stable";' > /etc/apt/apt.conf.d/stable-as-default
                                     apt-get update;\
                                     apt-cache search g++;\
                                     apt install g++-7 -t testing"
