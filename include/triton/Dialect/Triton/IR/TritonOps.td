@@ -420,7 +420,7 @@ def TT_PrintfOp : TT_Op<"printf", [MemoryEffects<[MemWrite]>]>,
     format are generated automatically from the arguments.
   }];
   let assemblyFormat = [{
-    $prefix attr-dict ($args^ `:` type($args))?
+    $prefix attr-dict `:` ($args^ `:` type($args))?
   }];
 }
 
@@ -428,10 +428,13 @@ def TT_PrintfOp : TT_Op<"printf", [MemoryEffects<[MemWrite]>]>,
 // Make AssertOp
 //
 def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
-  let summary = "Device-side assert, as in CUDA for debugging";
-  let description = [{}];
+  let summary = "Device-side assert, as in CUDA for correctness checking";
+  let description = [{
+    `tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.
+    If the condition is false, the message is printed, and the program is aborted.
+  }];
   let arguments = (ins TT_Tensor:$condition, StrAttr:$message, StrAttr:$file, StrAttr:$func, I32Attr:$line);
-  let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
+  let assemblyFormat = "$condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)";
 }
 
 #endif // Triton_OPS
