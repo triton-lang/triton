@@ -333,7 +333,7 @@ LogicalResult simulateBackwardRematerialization(
     // If the current operation is expensive to rematerialize,
     // we stop everything
     if (expensiveToRemat(currOp, currLayout))
-      return mlir::failure();
+      break;
     // A conversion will be removed here (i.e. transferred to operands)
     numCvts -= 1;
     // Done processing
