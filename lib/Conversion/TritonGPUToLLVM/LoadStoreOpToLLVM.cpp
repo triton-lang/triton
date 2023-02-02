@@ -335,7 +335,7 @@ struct StoreOpConversion
           assert(elemOffset < valueElems.size());
           Value elem = valueElems[elemOffset];
           if (elem.getType().isInteger(1))
-            elem = rewriter.create<LLVM::SExtOp>(loc, type::i8Ty(ctx), elem);
+            elem = sext(i8_ty, elem);
           elem = bitcast(elem, valueElemTy);
 
           Type u32Ty = typeConverter->convertType(type::u32Ty(ctx));

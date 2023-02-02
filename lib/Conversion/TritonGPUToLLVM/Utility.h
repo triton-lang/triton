@@ -12,6 +12,8 @@
 #define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
 #define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
+#define sext(...) rewriter.create<LLVM::SExtOp>(loc, __VA_ARGS__)
+#define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
@@ -73,6 +75,8 @@
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
+#define null(...) rewriter.create<LLVM::NullOp>(loc, __VA_ARGS__)
+#define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
 
 // Types
 #define i32_ty rewriter.getIntegerType(32)
@@ -270,6 +274,9 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
+
+Value getStaticString(Location loc, ConversionPatternRewriter &rewriter,
+                      StringRef key, StringRef content);
 
 } // namespace LLVM
 } // namespace mlir

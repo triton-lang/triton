@@ -199,22 +199,17 @@ struct PrintfOpConversion
     auto type = value.getType();
     Value newOp = value;
     Type newType = type;
+    auto loc = UnknownLoc::get(context);
 
     bool bUnsigned = type.isUnsignedInteger();
     if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
       if (bUnsigned) {
-        newType = ui32_ty;
-        newOp = rewriter.create<LLVM::ZExtOp>(UnknownLoc::get(context), newType,
-                                              value);
+        newOp = zext(ui32_ty, value);
       } else {
-        newType = i32_ty;
-        newOp = rewriter.create<LLVM::SExtOp>(UnknownLoc::get(context), newType,
-                                              value);
+        newOp = sext(i32_ty, value);
       }
     } else if (type.isBF16() || type.isF16() || type.isF32()) {
-      newType = f64_ty;
-      newOp = rewriter.create<LLVM::FPExtOp>(UnknownLoc::get(context), newType,
-                                             value);
+      newOp = fpext(f64_ty, value);
     }
 
     return {newType, newOp};
@@ -222,51 +217,20 @@ struct PrintfOpConversion
 
   static void llPrintf(StringRef msg, ValueRange args,
                        ConversionPatternRewriter &rewriter) {
-    static const char formatStringPrefix[] = "printfFormat_";
     assert(!msg.empty() && "printf with empty string not support");
     Type int8Ptr = ptr_ty(i8_ty);
 
-    auto *context = rewriter.getContext();
+    auto *ctx = rewriter.getContext();
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     auto funcOp = getVprintfDeclaration(rewriter);
+    auto loc = UnknownLoc::get(ctx);
 
-    Value one = rewriter.create<LLVM::ConstantOp>(
-        UnknownLoc::get(context), i32_ty, rewriter.getI32IntegerAttr(1));
-    Value zero = rewriter.create<LLVM::ConstantOp>(
-        UnknownLoc::get(context), i32_ty, rewriter.getI32IntegerAttr(0));
-
-    unsigned stringNumber = 0;
-    SmallString<16> stringConstName;
-    do {
-      stringConstName.clear();
-      (formatStringPrefix + Twine(stringNumber++)).toStringRef(stringConstName);
-    } while (moduleOp.lookupSymbol(stringConstName));
-
-    llvm::SmallString<64> formatString(msg);
-    formatString.push_back('\n');
-    formatString.push_back('\0');
-    size_t formatStringSize = formatString.size_in_bytes();
-    auto globalType = LLVM::LLVMArrayType::get(i8_ty, formatStringSize);
-
-    LLVM::GlobalOp global;
-    {
-      ConversionPatternRewriter::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(moduleOp.getBody());
-      global = rewriter.create<LLVM::GlobalOp>(
-          UnknownLoc::get(context), globalType,
-          /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-          rewriter.getStringAttr(formatString));
-    }
-
-    Value globalPtr =
-        rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(context), global);
-    Value stringStart = rewriter.create<LLVM::GEPOp>(
-        UnknownLoc::get(context), int8Ptr, globalPtr,
-        SmallVector<Value>({zero, zero}));
-
-    Value bufferPtr =
-        rewriter.create<LLVM::NullOp>(UnknownLoc::get(context), int8Ptr);
+    Value one = i32_val(1);
+    Value zero = i32_val(0);
+    Value prefixString =
+        LLVM::getStaticString(loc, rewriter, "printfFormat_", msg);
+    Value bufferPtr = null(int8Ptr);
 
     SmallVector<Value, 16> newArgs;
     if (args.size() >= 1) {
@@ -279,27 +243,22 @@ struct PrintfOpConversion
         newArgs.push_back(newArg);
       }
 
-      Type structTy = LLVM::LLVMStructType::getLiteral(context, argTypes);
-      auto allocated = rewriter.create<LLVM::AllocaOp>(UnknownLoc::get(context),
-                                                       ptr_ty(structTy), one,
-                                                       /*alignment=*/0);
+      Type structTy = LLVM::LLVMStructType::getLiteral(ctx, argTypes);
+      auto allocated =
+          rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(structTy), one,
+                                          /*alignment=*/0);
 
       for (const auto &entry : llvm::enumerate(newArgs)) {
-        auto index = rewriter.create<LLVM::ConstantOp>(
-            UnknownLoc::get(context), i32_ty,
-            rewriter.getI32IntegerAttr(entry.index()));
-        auto fieldPtr = rewriter.create<LLVM::GEPOp>(
-            UnknownLoc::get(context), ptr_ty(argTypes[entry.index()]),
-            allocated, ArrayRef<Value>{zero, index});
-        rewriter.create<LLVM::StoreOp>(UnknownLoc::get(context), entry.value(),
-                                       fieldPtr);
+        auto index = i32_val(entry.index());
+        auto fieldPtr = gep(ptr_ty(argTypes[entry.index()]), allocated,
+                            ArrayRef<Value>{zero, index});
+        store(entry.value(), fieldPtr);
       }
-      bufferPtr = rewriter.create<LLVM::BitcastOp>(UnknownLoc::get(context),
-                                                   int8Ptr, allocated);
+      bufferPtr = bitcast(allocated, int8Ptr);
     }
 
-    SmallVector<Value> operands{stringStart, bufferPtr};
-    rewriter.create<LLVM::CallOp>(UnknownLoc::get(context), funcOp, operands);
+    SmallVector<Value> operands{prefixString, bufferPtr};
+    call(funcOp, operands);
   }
 };
 
@@ -327,20 +286,24 @@ struct AssertOpConversion
         return failure();
       }
     }
-    llAssert(op, condition, adaptor.message(), rewriter);
+    llAssert(op, condition, adaptor.message(), adaptor.file(), adaptor.func(),
+             adaptor.line(), rewriter);
     rewriter.eraseOp(op);
     return success();
   }
 
-  static void llAssert(triton::AssertOp op, Value condition, StringRef message,
+  // op: the op at which the assert is inserted. Unlike printf, we need to
+  // know about the op to split the block.
+  static void llAssert(Operation *op, Value condition, StringRef message,
+                       StringRef file, StringRef func, int line,
                        ConversionPatternRewriter &rewriter) {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     auto ctx = rewriter.getContext();
-    auto loc = op.getLoc();
+    auto loc = op->getLoc();
 
     // #block1
     // if (condition) {
-    //   #block2 
+    //   #block2
     //   __assertfail(message);
     // }
     // #block3
@@ -351,43 +314,18 @@ struct AssertOpConversion
     auto funcOp = getAssertfailDeclaration(rewriter);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    static const char messageStringPrefix[] = "assertMessage_";
-    unsigned stringNumber = 0;
-    SmallString<16> stringConstName;
-    do {
-      stringConstName.clear();
-      (messageStringPrefix + Twine(stringNumber++))
-          .toStringRef(stringConstName);
-    } while (moduleOp.lookupSymbol(stringConstName));
-
-    llvm::SmallString<64> messageStr(message);
-    size_t messageSize = messageStr.size_in_bytes();
-    auto globalType = LLVM::LLVMArrayType::get(i8_ty, messageSize);
-
-    LLVM::GlobalOp global;
-    {
-      ConversionPatternRewriter::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(moduleOp.getBody());
-      global = rewriter.create<LLVM::GlobalOp>(
-          UnknownLoc::get(ctx), globalType,
-          /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-          rewriter.getStringAttr(messageStr));
-    }
-
-    Value zero = i32_val(0);
-    Value globalPtr =
-        rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(ctx), global);
-    Value assertionStart = rewriter.create<LLVM::GEPOp>(
-        UnknownLoc::get(ctx), ptr_ty(i8_ty), globalPtr,
-        SmallVector<Value>({zero, zero}));
-    Value nullPtr =
-        rewriter.create<LLVM::NullOp>(UnknownLoc::get(ctx), ptr_ty(i8_ty));
+    Value messageString =
+        LLVM::getStaticString(loc, rewriter, "assertMessage_", message);
+    Value fileString =
+        LLVM::getStaticString(loc, rewriter, "assertFile_", file);
+    Value funcString =
+        LLVM::getStaticString(loc, rewriter, "assertFunc_", func);
+    Value lineNumber = i32_val(line);
     Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
 
-    SmallVector<Value> operands = {assertionStart, nullPtr, zero, nullPtr,
-                                   charSize};
-    auto ret =
-        rewriter.create<LLVM::CallOp>(UnknownLoc::get(ctx), funcOp, operands);
+    SmallVector<Value> operands = {messageString, fileString, lineNumber,
+                                   funcString, charSize};
+    auto ret = call(funcOp, operands);
 
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());

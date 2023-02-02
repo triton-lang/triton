@@ -37,12 +37,12 @@ struct FpToFpOpConversion
                    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
                    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n"
                    "}";
-    auto &call = *builder.create(ptxAsm);
+    auto &ptxOp = *builder.create(ptxAsm);
 
     auto *o0 = builder.newOperand("=r");
     auto *o1 = builder.newOperand("=r");
     auto *i = builder.newOperand(fp8x4Vec, "r");
-    call({o0, o1, i}, /*onlyAttachMLIRArgs=*/true);
+    ptxOp({o0, o1, i}, /*onlyAttachMLIRArgs=*/true);
 
     auto fp16x2VecTy = vec_ty(f16_ty, 2);
     auto fp16x2x2StructTy =
@@ -85,12 +85,12 @@ struct FpToFpOpConversion
                    "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
                    "prmt.b32 $0, b0, b1, 0x7531;           \n"
                    "}";
-    auto &call = *builder.create(ptxAsm);
+    auto &ptxOp = *builder.create(ptxAsm);
 
     auto *o = builder.newOperand("=r");
     auto *i0 = builder.newOperand(fp16x2Vec0, "r");
     auto *i1 = builder.newOperand(fp16x2Vec1, "r");
-    call({o, i0, i1}, /*onlyAttachMLIRArgs=*/true);
+    ptxOp({o, i0, i1}, /*onlyAttachMLIRArgs=*/true);
 
     auto fp8x4VecTy = vec_ty(i8_ty, 4);
     auto fp8x4Vec = builder.launch(rewriter, loc, fp8x4VecTy, false);
@@ -129,12 +129,12 @@ struct FpToFpOpConversion
                    "or.b32 $0, sign0, nosign0;                 \n"
                    "or.b32 $1, sign1, nosign1;                 \n"
                    "}";
-    auto &call = *builder.create(ptxAsm);
+    auto &ptxOp = *builder.create(ptxAsm);
 
     auto *o0 = builder.newOperand("=r");
     auto *o1 = builder.newOperand("=r");
     auto *i = builder.newOperand(fp8x4Vec, "r");
-    call({o0, o1, i}, /* onlyAttachMLIRArgs */ true);
+    ptxOp({o0, o1, i}, /* onlyAttachMLIRArgs */ true);
 
     auto bf16x2VecTy = vec_ty(i16_ty, 2);
     auto bf16x2x2StructTy =
@@ -201,12 +201,12 @@ struct FpToFpOpConversion
                    "prmt.b32 nosign, nosign0, nosign1, 0x6420;   \n"
                    "or.b32 $0, nosign, sign;                     \n"
                    "}";
-    auto &call = *builder.create(ptxAsm);
+    auto &ptxOp = *builder.create(ptxAsm);
 
     auto *o = builder.newOperand("=r");
     auto *i0 = builder.newOperand(bf16x2Vec0, "r");
     auto *i1 = builder.newOperand(bf16x2Vec1, "r");
-    call({o, i0, i1}, /*onlyAttachMLIRArgs=*/true);
+    ptxOp({o, i0, i1}, /*onlyAttachMLIRArgs=*/true);
 
     auto fp8x4VecTy = vec_ty(i8_ty, 4);
     auto fp8x4Vec = builder.launch(rewriter, loc, fp8x4VecTy, false);
@@ -532,7 +532,7 @@ struct ExtElemwiseOpConversion
     Type funcType = getFunctionType(elemTy, operands);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetFuncOp(rewriter, op, funcName, funcType);
-    return rewriter.create<LLVM::CallOp>(loc, funcOp, operands).getResult(0);
+    return call(funcOp, operands).getResult(0);
   }
 
 private:

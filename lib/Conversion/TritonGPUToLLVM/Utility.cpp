@@ -136,5 +136,39 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   return builder.launch(rewriter, loc, val.getType(), false);
 }
 
+Value getStaticString(Location loc, ConversionPatternRewriter &rewriter,
+                      StringRef key, StringRef content) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto ctx = moduleOp.getContext();
+  unsigned stringNumber = 0;
+  SmallString<16> stringConstName;
+  do {
+    stringConstName.clear();
+    (key + Twine(stringNumber++)).toStringRef(stringConstName);
+  } while (moduleOp.lookupSymbol(stringConstName));
+
+  llvm::SmallString<64> contentStr(content);
+  size_t contentSize = contentStr.size_in_bytes();
+  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
+
+  LLVM::GlobalOp global;
+  {
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    global = rewriter.create<LLVM::GlobalOp>(
+        UnknownLoc::get(ctx), globalType,
+        /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
+        rewriter.getStringAttr(contentStr));
+  }
+
+  Value zero = i32_val(0);
+  Value globalPtr =
+      rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(ctx), global);
+  Value stringStart =
+      rewriter.create<LLVM::GEPOp>(UnknownLoc::get(ctx), ptr_ty(i8_ty),
+                                   globalPtr, SmallVector<Value>({zero, zero}));
+  return stringStart;
+}
+
 } // namespace LLVM
 } // namespace mlir
