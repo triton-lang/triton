@@ -17,7 +17,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A10"], ["self-hosted", "V100"], "macos-10.15"]'
+            echo '::set-output name=matrix::[["self-hosted", "A10"], ["self-hosted", "V100"], ["self-hosted", "gfx908"],  "macos-10.15"]'
           else
             echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]'
           fi
@@ -88,32 +88,5 @@ jobs:
       - name: Run CXX unittests
         run: |
           cd python/
-          cd "build/$(ls build)"
-          ctest
-
-      - name: Install Triton ROCM
-        run: |
-          cd triton_rocm/python
-          TRITON_USE_ROCM=ON TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
-      
-      - name: Run lit tests with ROCM
-        run: |
-          cd triton_rocm/python
-          LIT_TEST_DIR="build/$(ls build)/test"
-          if [ ! -d "$LIT_TEST_DIR" ]; then
-            echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
-          fi
-          lit -v "$LIT_TEST_DIR"
-
-      - name: Run python tests with ROCM
-        if: ${{matrix.runner[0] == 'self-hosted'}}
-        run: |
-          cd triton_rocm/python/test/unit/
-          pytest
-
-
-      - name: Run CXX unittests with ROCM
-        run: |
-          cd triton_rocm/python/
           cd "build/$(ls build)"
           ctest
