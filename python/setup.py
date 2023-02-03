@@ -169,7 +169,7 @@ package_data = {
     "triton/language": ["*.bc"],
 }
 
-if os.getenv("TRITION_PACKAGE_CUDA_DEPS"):
+if os.getenv("TRITION_PACKAGE_CUDA_DEPS", True):
     base_dir = os.path.dirname(__file__)
     cuda_dir = os.getenv("CUDA_HOME", "/usr/local/cuda")
     triton_dir = os.path.join(base_dir, "triton")
