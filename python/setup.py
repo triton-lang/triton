@@ -57,10 +57,15 @@ def get_pybind11_package_info():
 def get_llvm_package_info():
     # download if nothing is installed
     system = platform.system()
-    vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-    vglibc = vglibc[0] * 100 + vglibc[1]
-    linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
-    system_suffix = {"Linux": "linux-gnu-{}".format(linux_suffix), "Darwin": "apple-darwin"}[system]
+    if system == "Darwin":
+        system_suffix = "apple-darwin"
+    elif system == "Linux":
+        vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+        vglibc = vglibc[0] * 100 + vglibc[1]
+        linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
+        system_suffix = "linux-gnu-{}".format(linux_suffix)
+    else:
+        raise RuntimeError("unsupported system: {}".format(system))
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
     name = 'llvm+mlir-14.0.6-x86_64-{}-{}'.format(system_suffix, release_suffix)
