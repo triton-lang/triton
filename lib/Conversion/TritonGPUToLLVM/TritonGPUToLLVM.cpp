@@ -236,7 +236,7 @@ struct PrintfOpConversion
     msgNewline.push_back('\n');
     msgNewline.push_back('\0');
     Value prefixString =
-        LLVM::getStaticString(loc, rewriter, "printfFormat_", msgNewline);
+        LLVM::addStringToModule(loc, rewriter, "printfFormat_", msgNewline);
     Value bufferPtr = null(int8Ptr);
 
     SmallVector<Value, 16> newArgs;
@@ -322,11 +322,11 @@ struct AssertOpConversion
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Value messageString =
-        LLVM::getStaticString(loc, rewriter, "assertMessage_", message);
+        LLVM::addStringToModule(loc, rewriter, "assertMessage_", message);
     Value fileString =
-        LLVM::getStaticString(loc, rewriter, "assertFile_", file);
+        LLVM::addStringToModule(loc, rewriter, "assertFile_", file);
     Value funcString =
-        LLVM::getStaticString(loc, rewriter, "assertFunc_", func);
+        LLVM::addStringToModule(loc, rewriter, "assertFunc_", func);
     Value lineNumber = i32_val(line);
     Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
 

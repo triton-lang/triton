@@ -275,8 +275,8 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
 
-Value getStaticString(Location loc, ConversionPatternRewriter &rewriter,
-                      StringRef key, StringRef content);
+Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
+                        StringRef key, StringRef content);
 
 } // namespace LLVM
 } // namespace mlir

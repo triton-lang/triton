@@ -136,8 +136,8 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   return builder.launch(rewriter, loc, val.getType(), false);
 }
 
-Value getStaticString(Location loc, ConversionPatternRewriter &rewriter,
-                      StringRef key, StringRef content) {
+Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
+                        StringRef key, StringRef content) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto ctx = moduleOp.getContext();
   unsigned stringNumber = 0;
