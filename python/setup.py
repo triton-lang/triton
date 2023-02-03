@@ -1,15 +1,16 @@
 import distutils
 import os
 import platform
-import tempfile
 import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 from distutils.version import LooseVersion
 from typing import NamedTuple
+
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
@@ -32,6 +33,7 @@ def get_build_type():
 
 # --- third party packages -----
 
+
 class Package(NamedTuple):
     package: str
     name: str
@@ -42,17 +44,21 @@ class Package(NamedTuple):
     syspath_var_name: str
 
 # pybind11
+
+
 def get_pybind11_package_info():
     name = "pybind11-2.10.0"
     url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
     return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 # llvm
+
+
 def get_llvm_package_info():
     # download if nothing is installed
     system = platform.system()
     vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-    vglibc = vglibc[0]*100 + vglibc[1]
+    vglibc = vglibc[0] * 100 + vglibc[1]
     linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
     system_suffix = {"Linux": "linux-gnu-{}".format(linux_suffix), "Darwin": "apple-darwin"}[system]
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
@@ -60,6 +66,7 @@ def get_llvm_package_info():
     name = 'llvm+mlir-14.0.6-x86_64-{}-{}'.format(system_suffix, release_suffix)
     url = "https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-14.0.6-f28c006a5895/{}.tar.xz".format(name)
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+
 
 def get_thirdparty_packages(triton_cache_path):
     packages = [get_pybind11_package_info(), get_llvm_package_info()]
@@ -88,6 +95,7 @@ def get_thirdparty_packages(triton_cache_path):
 
 # ---- package data ---
 
+
 def download_and_copy_ptxas():
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
@@ -100,12 +108,11 @@ def download_and_copy_ptxas():
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|*")
         with tempfile.TemporaryDirectory() as temp_dir:
-          file.extractall(path=temp_dir)
-          src_path = os.path.join(temp_dir, src_path)
-          os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
-          shutil.copy(src_path, dst_path)
+            file.extractall(path=temp_dir)
+            src_path = os.path.join(temp_dir, src_path)
+            os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+            shutil.copy(src_path, dst_path)
     return dst_suffix
-          
 
 
 # ---- cmake extension ----
