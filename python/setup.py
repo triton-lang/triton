@@ -103,7 +103,7 @@ def get_thirdparty_packages(triton_cache_path):
 
 # ---- package data ---
 
-def get_ptxas_package_data():
+def download_and_copy_ptxas():
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
     url = "https://conda.anaconda.org/nvidia/label/cuda-12.0.0/linux-64/cuda-nvcc-12.0.76-0.tar.bz2"
@@ -209,6 +209,8 @@ package_data = {
     "triton/language": ["*.bc"],
 }
 
+download_and_copy_ptxas()
+
 setup(
     name="triton",
     version="2.0.0",
@@ -223,7 +225,7 @@ setup(
         "torch",
         "lit",
     ],
-    package_data={"triton": [get_ptxas_package_data()]},
+    package_data={"triton": ["third_party/*"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
