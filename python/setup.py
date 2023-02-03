@@ -63,13 +63,13 @@ def get_llvm_package_info():
         vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
         vglibc = vglibc[0] * 100 + vglibc[1]
         linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
-        system_suffix = "linux-gnu-{}".format(linux_suffix)
+        system_suffix = f"linux-gnu-{linux_suffix}"
     else:
-        raise RuntimeError("unsupported system: {}".format(system))
+        raise RuntimeError(f"unsupported system: {system}")
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    name = 'llvm+mlir-14.0.6-x86_64-{}-{}'.format(system_suffix, release_suffix)
-    url = "https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-14.0.6-f28c006a5895/{}.tar.xz".format(name)
+    name = f'llvm+mlir-14.0.6-x86_64-{system_suffix}-{release_suffix}'
+    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-14.0.6-f28c006a5895/{name}.tar.xz"
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -88,14 +88,14 @@ def get_thirdparty_packages(triton_cache_path):
             except Exception:
                 pass
             os.makedirs(package_root_dir, exist_ok=True)
-            print('downloading and extracting {} ...'.format(p.url))
+            print(f'downloading and extracting {p.url} ...')
             ftpstream = urllib.request.urlopen(p.url)
             file = tarfile.open(fileobj=ftpstream, mode="r|*")
             file.extractall(path=package_root_dir)
         if p.include_flag:
-            thirdparty_cmake_args.append("-D{}={}/include".format(p.include_flag, package_dir))
+            thirdparty_cmake_args.append(f"-D{p.include_flag}={package_dir}/include")
         if p.lib_flag:
-            thirdparty_cmake_args.append("-D{}={}/lib".format(p.lib_flag, package_dir))
+            thirdparty_cmake_args.append(f"-D{p.lib_flag}={package_dir}/lib")
     return thirdparty_cmake_args
 
 # ---- package data ---
@@ -109,7 +109,7 @@ def download_and_copy_ptxas():
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
     if not os.path.exists(dst_path):
-        print('downloading and extracting {} ...'.format(url))
+        print(f'downloading and extracting {url} ...')
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|*")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -186,7 +186,7 @@ class CMakeBuild(build_ext):
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
-            cmake_args += ["-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{}={}".format(cfg.upper(), extdir)]
+            cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
             if sys.maxsize > 2**32:
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
