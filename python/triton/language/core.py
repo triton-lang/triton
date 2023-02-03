@@ -1291,7 +1291,7 @@ def zeros_like(input):
 
 
 @builtin
-def printf(prefix, *args, _builder=None):
+def device_print(prefix, *args, _builder=None):
     import string
     new_prefix = prefix
     if isinstance(prefix, constexpr):
@@ -1306,7 +1306,7 @@ def printf(prefix, *args, _builder=None):
     new_args = []
     for arg in args:
         new_args.append(_to_tensor(arg, _builder))
-    return semantic.printf(new_prefix, new_args, _builder)
+    return semantic.device_print(new_prefix, new_args, _builder)
 
 
 @builtin

@@ -7,11 +7,11 @@ import triton
 import triton.language as tl
 
 
-def printf(data_type: str):
+def test_device_print(data_type: str):
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
-        tl.printf("", x)
+        tl.device_print("", x)
         tl.store(Y + tl.arange(0, BLOCK), x)
 
     shape = (128, )
@@ -23,4 +23,4 @@ def printf(data_type: str):
 
 
 if __name__ == "__main__":
-    printf(sys.argv[1])
+    test_device_print(sys.argv[1])

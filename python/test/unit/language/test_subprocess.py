@@ -13,7 +13,7 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
 
 
 @pytest.mark.parametrize("data_type", torch_types)
-def test_printf(data_type: str):
+def test_device_print(data_type: str):
     proc = subprocess.Popen([sys.executable, printf_path, data_type], stdout=subprocess.PIPE, shell=False)
     outs, _ = proc.communicate()
     outs = outs.split()
@@ -29,7 +29,7 @@ def test_printf(data_type: str):
     assert len(new_lines) == 128
 
 
-def test_assert():
+def test_device_assert():
     os.environ["TRITON_ENABLE_DEVICE_ASSERT"] = "1"
     proc = subprocess.Popen([sys.executable, assert_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
     _, errs = proc.communicate()

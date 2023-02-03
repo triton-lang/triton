@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 
 
-def test_assert():
+def test_device_assert():
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
@@ -20,4 +20,4 @@ def test_assert():
 
 
 if __name__ == "__main__":
-    test_assert()
+    test_device_assert()
