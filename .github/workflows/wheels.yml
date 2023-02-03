@@ -27,7 +27,7 @@ jobs:
       - name: Build wheels
         run: |
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
-          export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
+          #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           export CIBW_BEFORE_BUILD="pip install cmake;"
           export CIBW_SKIP="{cp,pp}35-*"
           export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
@@ -36,4 +36,4 @@ jobs:
 
       - name: Upload wheels to PyPI
         run: |
-          python3 -m twine upload wheelhouse/* --skip-existing
+          python3 -m twine upload wheelhouse/* -u __token__ - p ${{ secrets.PYPY_API_TOKEN }}
