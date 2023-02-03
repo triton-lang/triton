@@ -1068,7 +1068,6 @@ def path_to_ptxas():
     ]
 
     for ptxas in paths:
-        print(ptxas)
         if os.path.exists(ptxas):
             result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
