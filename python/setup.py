@@ -1,6 +1,7 @@
 import distutils
 import os
 import platform
+import tempfile
 import re
 import shutil
 import subprocess
@@ -41,12 +42,13 @@ class Package(NamedTuple):
     lib_flag: str
     syspath_var_name: str
 
+# pybind11
 def get_pybind11_package_info():
     name = "pybind11-2.10.0"
     url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
     return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
-
+# llvm
 def get_llvm_package_info():
     # download if nothing is installed
     system = platform.system()
@@ -56,7 +58,6 @@ def get_llvm_package_info():
     name = 'llvm+mlir-14.0.6-x86_64-{}-{}'.format(system_suffix, release_suffix)
     url = "https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-14.0.6-f28c006a5895/{}.tar.xz".format(name)
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-
 
 def get_thirdparty_packages(triton_cache_path):
     packages = [get_pybind11_package_info(), get_llvm_package_info()]
@@ -82,6 +83,28 @@ def get_thirdparty_packages(triton_cache_path):
         if p.lib_flag:
             thirdparty_cmake_args.append("-D{}={}/lib".format(p.lib_flag, package_dir))
     return thirdparty_cmake_args
+
+# ---- package data ---
+
+def get_ptxas_package_data():
+    base_dir = os.path.dirname(__file__)
+    src_path = "bin/ptxas"
+    url = "https://conda.anaconda.org/nvidia/label/cuda-12.0.0/linux-64/cuda-nvcc-12.0.76-0.tar.bz2"
+    dst_prefix = os.path.join(base_dir, "triton")
+    dst_suffix = os.path.join("third_party", "cuda", src_path)
+    dst_path = os.path.join(dst_prefix, dst_suffix)
+    if not os.path.exists(dst_path):
+        print('downloading and extracting {} ...'.format(url))
+        ftpstream = urllib.request.urlopen(url)
+        file = tarfile.open(fileobj=ftpstream, mode="r|*")
+        with tempfile.TemporaryDirectory() as temp_dir:
+          file.extractall(path=temp_dir)
+          src_path = os.path.join(temp_dir, src_path)
+          os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+          shutil.copy(src_path, dst_path)
+    return dst_suffix
+          
+
 
 # ---- cmake extension ----
 
@@ -169,16 +192,6 @@ package_data = {
     "triton/language": ["*.bc"],
 }
 
-if os.getenv("TRITION_PACKAGE_CUDA_DEPS", True):
-    base_dir = os.path.dirname(__file__)
-    cuda_dir = os.getenv("CUDA_HOME", "/usr/local/cuda")
-    triton_dir = os.path.join(base_dir, "triton")
-    os.makedirs(os.path.join(triton_dir, "include"), exist_ok=True)
-    os.makedirs(os.path.join(triton_dir, "bin"), exist_ok=True)
-    shutil.copy(os.path.join(cuda_dir, "include", "cuda.h"), os.path.join(triton_dir, "include"))
-    shutil.copy(os.path.join(cuda_dir, "bin", "ptxas"), os.path.join(triton_dir, "bin"))
-    package_data["triton"] = ["include/cuda.h", "bin/ptxas"]
-
 setup(
     name="triton",
     version="2.0.0",
@@ -193,7 +206,7 @@ setup(
         "torch",
         "lit",
     ],
-    package_data=package_data,
+    package_data={"triton": [get_ptxas_package_data()]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},

@@ -4,7 +4,7 @@ from .. import impl
 from . import core, extern
 
 LIBDEVICE_PATH = os.path.dirname(
-    os.path.abspath(__file__)) + "/libdevice.10.bc"
+    os.path.join(os.path.abspath(__file__), "..", "third_party", "cuda", "lib", "libdevice.10.bc"))
 
 
 @impl.extern
