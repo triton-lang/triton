@@ -1315,17 +1315,26 @@ def device_assert(cond, msg="", _builder=None):
     if os.getenv("TRITON_ENABLE_DEVICE_ASSERT", "0") == "0":
         return
     msg = _constexpr_to_value(msg)
-    # Get the file name, function name and line number of the caller
     import inspect
     frame = inspect.currentframe()
+    module = inspect.getmodule(frame)
+    # XXX: The triton function module doesn't have any name.
+    # We use this trick to find the caller.
+    while hasattr(module, "__name__"):
+        frame = frame.f_back
+        module = inspect.getmodule(frame)
+    func_name = frame.f_code.co_name
     file_name = frame.f_back.f_code.co_filename
-    func_name = frame.f_back.f_code.co_name
+    # FIXME: The line number is not correct. It indicates the line
+    # where the triton function is called but not where the
+    # device_assert is called.
     lineno = frame.f_back.f_lineno
     return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
 
 # -----------------------
 # Iterators
 # -----------------------
+
 
 class static_range:
 

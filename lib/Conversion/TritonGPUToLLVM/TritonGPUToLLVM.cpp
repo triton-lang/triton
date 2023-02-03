@@ -204,12 +204,15 @@ struct PrintfOpConversion
     bool bUnsigned = type.isUnsignedInteger();
     if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
       if (bUnsigned) {
-        newOp = zext(ui32_ty, value);
+        newType = ui32_ty;
+        newOp = zext(newType, value);
       } else {
-        newOp = sext(i32_ty, value);
+        newType = i32_ty;
+        newOp = sext(newType, value);
       }
     } else if (type.isBF16() || type.isF16() || type.isF32()) {
-      newOp = fpext(f64_ty, value);
+      newType = f64_ty;
+      newOp = fpext(newType, value);
     }
 
     return {newType, newOp};
@@ -228,8 +231,12 @@ struct PrintfOpConversion
 
     Value one = i32_val(1);
     Value zero = i32_val(0);
+
+    llvm::SmallString<64> msgNewline(msg);
+    msgNewline.push_back('\n');
+    msgNewline.push_back('\0');
     Value prefixString =
-        LLVM::getStaticString(loc, rewriter, "printfFormat_", msg);
+        LLVM::getStaticString(loc, rewriter, "printfFormat_", msgNewline);
     Value bufferPtr = null(int8Ptr);
 
     SmallVector<Value, 16> newArgs;
