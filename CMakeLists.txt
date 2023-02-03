@@ -72,6 +72,8 @@ if (NOT MLIR_DIR)
       find_package(LLVM 11 REQUIRED COMPONENTS "nvptx;amdgpu")
     endif()
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+    # FindLLVM outputs LLVM_LIBRARY_DIRS but we expect LLVM_LIBRARY_DIR here
+    set(LLVM_LIBRARY_DIR ${LLVM_LIBRARY_DIRS})
     if(APPLE)
       set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
     endif()

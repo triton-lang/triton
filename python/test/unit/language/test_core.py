@@ -1648,24 +1648,10 @@ def test_num_warps_pow2():
 # -------------
 
 
-def system_libdevice_path() -> str:
-    _SYSTEM_LIBDEVICE_SEARCH_PATHS = [
-        '/usr/lib/cuda/nvvm/libdevice/libdevice.10.bc',
-        '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc',
-    ]
-    SYSTEM_LIBDEVICE_PATH: Optional[str] = None
-    for _p in _SYSTEM_LIBDEVICE_SEARCH_PATHS:
-        if os.path.exists(_p):
-            SYSTEM_LIBDEVICE_PATH = _p
-    assert SYSTEM_LIBDEVICE_PATH is not None, \
-        "Could not find libdevice.10.bc path"
-    return SYSTEM_LIBDEVICE_PATH
-
-
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'libdevice.ffs', ''),
                           ('float32', 'libdevice.log2', ''),
-                          ('float32', 'libdevice.pow', system_libdevice_path()),
+                          ('float32', 'libdevice.pow', tl.libdevice.LIBDEVICE_PATH),
                           ('float64', 'libdevice.norm4d', '')])
 def test_libdevice_tensor(dtype_str, expr, lib_path):
 
@@ -1735,6 +1721,140 @@ def test_libdevice_scalar(dtype_str, expr, lib_path):
     kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+# -----------------------
+# test control flow
+# -----------------------
+
+
+def test_if_else():
+
+    @triton.jit
+    def kernel(Cond, TrueVal, FalseVal, Out):
+        if tl.load(Cond):
+            val = tl.load(TrueVal)
+        else:
+            val = tl.load(FalseVal)
+        tl.store(Out, val)
+
+    out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    true_val = to_triton(np.full((1,), 1, dtype=np.int32), device='cuda')
+    false_val = to_triton(np.full((1,), 2, dtype=np.int32), device='cuda')
+    cond = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    # True
+    cond[0] = True
+    kernel[(1,)](cond, true_val, false_val, out)
+    assert to_numpy(out)[0] == true_val[0]
+    # False
+    cond[0] = False
+    kernel[(1,)](cond, true_val, false_val, out)
+    assert to_numpy(out)[0] == false_val[0]
+
+
+def test_if_return():
+
+    @triton.jit
+    def kernel(ExitEarly, Out):
+        if tl.load(ExitEarly):
+            tl.store(Out, 0)
+            return
+        tl.store(Out, 1)
+
+    out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    exit_early = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    # exit early path taken
+    exit_early[0] = 1
+    kernel[(1,)](exit_early, out)
+    assert to_numpy(out)[0] == 0
+    # exit early path not taken
+    exit_early[0] = 0
+    kernel[(1,)](exit_early, out)
+    assert to_numpy(out)[0] == 1
+
+
+@pytest.mark.parametrize("_cond1", [True, False])
+@pytest.mark.parametrize("_cond2", [True, False])
+@pytest.mark.parametrize("_cond3", [True, False])
+def test_nested_if_else_return(_cond1, _cond2, _cond3):
+
+    @triton.jit
+    def kernel(Cond1, Cond2, Cond3, Val1, Val2, Val3, Out):
+        val = 0
+        if tl.load(Cond1):
+            if tl.load(Cond2):
+                val = tl.load(Val1)
+            else:
+                return
+        else:
+            if tl.load(Cond3):
+                val = tl.load(Val2)
+            else:
+                val = tl.load(Val3)
+        tl.store(Out, val)
+
+    out = to_triton(np.full((1,), -1, dtype=np.int32), device='cuda')
+    cond1 = to_triton(np.full((1,), _cond1, dtype=np.int32), device='cuda')
+    cond2 = to_triton(np.full((1,), _cond2, dtype=np.int32), device='cuda')
+    cond3 = to_triton(np.full((1,), _cond3, dtype=np.int32), device='cuda')
+    val1 = to_triton(np.full((1,), 1, dtype=np.int32), device='cuda')
+    val2 = to_triton(np.full((1,), 2, dtype=np.int32), device='cuda')
+    val3 = to_triton(np.full((1,), 3, dtype=np.int32), device='cuda')
+    kernel[(1,)](cond1, cond2, cond3, val1, val2, val3, out)
+    targets = {
+        (True, True, True): val1[0],
+        (True, True, False): val1[0],
+        (True, False, True): out[0],
+        (True, False, False): out[0],
+        (False, True, True): val2[0],
+        (False, True, False): val3[0],
+        (False, False, True): val2[0],
+        (False, False, False): val3[0],
+    }
+    assert out[0] == targets[(_cond1, _cond2, _cond3)]
+
+
+def test_while():
+
+    @triton.jit
+    def kernel(InitI, Bound, CutOff, OutI, OutJ):
+        init_i = tl.load(InitI)
+        curr_i = init_i
+        j = 0
+        while curr_i == init_i and j < tl.load(Bound):
+            curr_i = curr_i + (j == tl.load(CutOff))
+            j += 1
+        tl.store(OutI, curr_i)
+        tl.store(OutJ, j)
+
+    out_i = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    out_j = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    init_i = to_triton(np.full((1,), 1, dtype=np.int32), device='cuda')
+    bound = to_triton(np.full((1,), 10, dtype=np.int32), device='cuda')
+    cut_off = to_triton(np.full((1,), 5, dtype=np.int32), device='cuda')
+    kernel[(1,)](init_i, bound, cut_off, out_i, out_j)
+    assert out_i[0] == init_i[0] + 1
+    assert out_j[0] == cut_off[0] + 1
+
+# def test_for_if():
+
+#     @triton.jit
+#     def kernel(bound, cutoff, M, N):
+#         m = 0
+#         n = 0
+#         for i in range(bound):
+#             if i > cutoff:
+#                 m = m + 1
+#             else:
+#                 n = n + 1
+#         tl.store(M, m)
+#         tl.store(N, n)
+
+#     m = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+#     n = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+#     kernel[(1,)](10, 7, m, n)
+#     print(m[0])
+#     print(n[0])
+
 
 # -----------------------
 # test layout conversions
@@ -1827,3 +1947,16 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
     assert torch.equal(z, x)
+
+
+def test_load_scalar_with_mask():
+    @triton.jit
+    def kernel(Input, Index, Out, N: int):
+        index = tl.load(Index)
+        scalar = tl.load(Input + index, mask=index < N, other=0)
+        tl.store(Out, scalar, mask=index < N)
+    Index = torch.tensor([0], dtype=torch.int32, device='cuda')
+    Input = torch.tensor([0], dtype=torch.int32, device='cuda')
+    Out = torch.empty_like(Index, device='cuda')
+    kernel[(1,)](Input, Index, Out, Index.numel())
+    assert Out.data[0] == 0

@@ -312,6 +312,12 @@ def logical_or(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.te
     return or_(input, other, builder)
 
 
+def not_(input: tl.tensor, builder: ir.builder):
+    if not input.type.is_int1():
+        input = bitcast(input, tl.dtype("int1"), builder)
+    return invert(input, builder)
+
+
 def lshr(input: tl.tensor,
          other: tl.tensor,
          builder: ir.builder) -> tl.tensor:
@@ -808,7 +814,7 @@ def store(ptr: tl.tensor,
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
     if ptr.type.is_block():
         val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
-    if mask:
+    if mask and ptr.type.is_block():
         mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
     ptr_ty = ptr.type.scalar
     elt_ty = ptr_ty.element_ty
@@ -853,7 +859,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor,
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
-        raise ValueError("atomic_" + op + " does not support " + element_ty)
+        raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
