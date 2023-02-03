@@ -55,11 +55,11 @@ def get_llvm_package_info():
     system_suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     if use_assert_enabled_llvm:
-        name = 'llvm+mlir-14.0.0-x86_64-{}-assert'.format(system_suffix)
-        url = "https://github.com/shintaro-iwasaki/llvm-releases/releases/download/llvm-14.0.0-329fda39c507/{}.tar.xz".format(name)
+        name = f"llvm+mlir-14.0.0-x86_64-{system_suffix}-assert"
+        url = f"https://github.com/shintaro-iwasaki/llvm-releases/releases/download/llvm-14.0.0-329fda39c507/{name}.tar.xz"
     else:
-        name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
+        name = f"clang+llvm-14.0.0-x86_64-{system_suffix}"
+        url = f"https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{name}.tar.xz"
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -78,14 +78,14 @@ def get_thirdparty_packages(triton_cache_path):
             except Exception:
                 pass
             os.makedirs(package_root_dir, exist_ok=True)
-            print('downloading and extracting {} ...'.format(p.url))
+            print(f"downloading and extracting {p.url} ...")
             ftpstream = urllib.request.urlopen(p.url)
             file = tarfile.open(fileobj=ftpstream, mode="r|*")
             file.extractall(path=package_root_dir)
         if p.include_flag:
-            thirdparty_cmake_args.append("-D{}={}/include".format(p.include_flag, package_dir))
+            thirdparty_cmake_args.append(f"-D{p.include_flag}={package_dir}/include")
         if p.lib_flag:
-            thirdparty_cmake_args.append("-D{}={}/lib".format(p.lib_flag, package_dir))
+            thirdparty_cmake_args.append(f"-D{p.lib_flag}={package_dir}/lib")
     return thirdparty_cmake_args
 
 # ---- cmake extension ----
@@ -154,7 +154,7 @@ class CMakeBuild(build_ext):
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
-            cmake_args += ["-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{}={}".format(cfg.upper(), extdir)]
+            cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
             if sys.maxsize > 2**32:
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
