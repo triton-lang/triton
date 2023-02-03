@@ -65,9 +65,9 @@ def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: 
     if not all_scalar:
         broadcast_arg = dispatch_args[0]
         # Get the broadcast shape over all the arguments
-        for i in range(len(dispatch_args)):
+        for i, item in enumerate(dispatch_args):
             _, broadcast_arg = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder)
+                item, broadcast_arg, _builder)
         # Change the shape of each argument based on the broadcast shape
         for i in range(len(dispatch_args)):
             dispatch_args[i], _ = semantic.binary_op_type_checking_impl(

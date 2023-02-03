@@ -65,7 +65,7 @@ template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
 
 template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
 
-/// output[i] = input[order[i]]
+// output[i] = input[order[i]]
 template <typename T, typename RES_T = T>
 SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
   size_t rank = order.size();
@@ -76,6 +76,15 @@ SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
   }
   return result;
 }
+
+template <typename T> T highestPowOf2Divisor(T n) {
+  if (n == 0) {
+    return (static_cast<T>(1) << (sizeof(T) * 8 - 2));
+  }
+  return (n & (~(n - 1)));
+}
+
+bool isSingleValue(Value value);
 
 bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
                         triton::gpu::DotOperandEncodingAttr &dotOperandLayout);
