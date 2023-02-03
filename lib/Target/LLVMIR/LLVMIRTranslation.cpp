@@ -128,7 +128,8 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
                                                   .parent_path()
                                                   .parent_path()
                                                   .parent_path() /
-                                              "python" / "triton" / "language" /
+                                              "python" / "triton" / "third_party" / 
+                                              "cuda" / "lib" /
                                               "libdevice.10.bc";
     externLibs.try_emplace(libdevice, path.string());
   }
