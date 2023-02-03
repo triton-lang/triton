@@ -18,11 +18,11 @@ class Autotuner(KernelInterface):
             'prune_num_stages_by'(optional): a function used to prune num_stages. It take configs:List[Config] as its input, and returns pruned configs.
         '''
         if not configs:
-            self.configs = [Config(dict(), num_warps=4, num_stages=2)]
+            self.configs = [Config({}, num_warps=4, num_stages=2)]
         else:
             self.configs = configs
         self.key_idx = [arg_names.index(k) for k in key]
-        self.cache = dict()
+        self.cache = {}
         # hook to reset all required tensor to zeros before relaunching a kernel
         self.hook = lambda args: 0
         if reset_to_zero is not None:

@@ -241,8 +241,8 @@ class JITFunction(KernelInterface[T]):
         src = f"""
 def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
     sig_key =  {sig_keys},
-    constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else tuple()}
-    spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else tuple()}
+    constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
+    spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
     key = (version_key, sig_key, constexpr_key, spec_key)
     if not extern_libs is None:
       key = (key, tuple(extern_libs.items()))
