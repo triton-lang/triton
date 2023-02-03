@@ -77,6 +77,15 @@ SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
   return result;
 }
 
+template <typename T> T highestPowOf2Divisor(T n) {
+  if (n == 0) {
+    return (static_cast<T>(1) << (sizeof(T) * 8 - 2));
+  }
+  return (n & (~(n - 1)));
+}
+
+bool isSingleValue(Value value);
+
 bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
                         triton::gpu::DotOperandEncodingAttr &dotOperandLayout);
 
