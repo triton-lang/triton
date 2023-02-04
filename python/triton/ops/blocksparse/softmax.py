@@ -231,7 +231,7 @@ class softmax:
 
     def __call__(self, a, *, scale=1.0, rel_logits=None, is_causal=False):
         if rel_logits is not None and rel_logits.dtype != a.dtype:
-            raise ValueError("relative position embedding must be %s" % a.dtype)
+            raise ValueError(f"relative position embedding must be {a.dtype}")
         a = _softmax.apply(
             a, scale, rel_logits, is_causal,
             self.spdims, self.block, self.lut, self.maxlut, self.is_dense,
