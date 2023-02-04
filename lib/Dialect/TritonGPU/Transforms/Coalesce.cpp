@@ -107,7 +107,6 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     // Run axis info analysis
     AxisInfoAnalysis axisInfo(&getContext());
     axisInfo.run(op);
-    OpBuilder builder(op);
 
     // For each memory op that has a layout L1:
     // 1. Create a coalesced memory layout L2 of the pointer operands
@@ -117,19 +116,28 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     // 4. Convert the output of this new memory op back to L1
     // 5. Replace all the uses of the original memory op by the new one
     op->walk([&](Operation *curr) {
-      OpBuilder::InsertionGuard g(builder);
-      builder.setInsertionPoint(curr);
-      if (auto load = dyn_cast<triton::LoadOp>(curr))
+      OpBuilder builder(curr);
+      if (auto load = dyn_cast<triton::LoadOp>(curr)) {
         coalesceOp<triton::LoadOp>(axisInfo, curr, load.ptr(), builder);
-      if (auto op = dyn_cast<triton::AtomicRMWOp>(curr))
+        return;
+      }
+      if (auto op = dyn_cast<triton::AtomicRMWOp>(curr)) {
         coalesceOp<triton::AtomicRMWOp>(axisInfo, curr, op.ptr(), builder);
-      if (auto op = dyn_cast<triton::AtomicCASOp>(curr))
+        return;
+      }
+      if (auto op = dyn_cast<triton::AtomicCASOp>(curr)) {
         coalesceOp<triton::AtomicCASOp>(axisInfo, curr, op.ptr(), builder);
-      if (auto load = dyn_cast<triton::gpu::InsertSliceAsyncOp>(curr))
+        return;
+      }
+      if (auto load = dyn_cast<triton::gpu::InsertSliceAsyncOp>(curr)) {
         coalesceOp<triton::gpu::InsertSliceAsyncOp>(axisInfo, curr, load.src(),
                                                     builder);
-      if (auto store = dyn_cast<triton::StoreOp>(curr))
+        return;
+      }
+      if (auto store = dyn_cast<triton::StoreOp>(curr)) {
         coalesceOp<triton::StoreOp>(axisInfo, curr, store.ptr(), builder);
+        return;
+      }
     });
   }
 };
