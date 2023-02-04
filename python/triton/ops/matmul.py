@@ -115,7 +115,7 @@ def _kernel(A, B, C, M, N, K,
 class _matmul(torch.autograd.Function):
     kernel = _kernel
 
-    _locks = dict()
+    _locks = {}
 
     @staticmethod
     def _call(a, b):
