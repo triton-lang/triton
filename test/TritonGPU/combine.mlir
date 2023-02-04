@@ -17,7 +17,6 @@ func @cst() -> tensor<1024xi32, #layout1> {
   return %1: tensor<1024xi32, #layout1>
 }
 
-
 // CHECK-LABEL: range
 func @range() -> tensor<1024xi32, #layout1> {
   %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #layout0>
