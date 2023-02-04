@@ -331,7 +331,7 @@ struct MakeRangeOpConversion
     // TODO: slice layout has more elements than expected.
     // Unexpected behavior for make range, but generally OK when followed by
     // expand dims + broadcast. very weird behavior otherwise potentially.
-    for (const auto multiDim : llvm::enumerate(idxs)) {
+    for (const auto &multiDim : llvm::enumerate(idxs)) {
       assert(multiDim.value().size() == 1);
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
