@@ -850,8 +850,11 @@ unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto axisInfo = lookupLatticeElement(ptr)->getValue();
   auto layout = tensorTy.getEncoding();
   auto order = triton::gpu::getOrder(layout);
-  auto maxMultiple = axisInfo.getDivisibility(order[0]);
+  auto maxMultipleBytes = axisInfo.getDivisibility(order[0]);
   auto maxContig = axisInfo.getContiguity(order[0]);
+  auto elemNumBits = getPointeeBitWidth(tensorTy);
+  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
   return alignment;
 }

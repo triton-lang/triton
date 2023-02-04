@@ -31,15 +31,13 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
 
     // Thread tile size depends on memory alignment
     SmallVector<unsigned, 4> sizePerThread(rank, 1);
-    PointerType ptrType = origType.getElementType().cast<PointerType>();
-    auto pointeeType = ptrType.getPointeeType();
-    unsigned numBits = pointeeType.isa<triton::Float8Type>()
-                           ? 8
-                           : pointeeType.getIntOrFloatBitWidth();
-    unsigned maxMultiple = info.getDivisibility(order[0]);
+    unsigned elemNumBits = getPointeeBitWidth(origType);
+    unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
+    unsigned maxMultipleBytes = info.getDivisibility(order[0]);
+    unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
     unsigned maxContig = info.getContiguity(order[0]);
     unsigned alignment = std::min(maxMultiple, maxContig);
-    unsigned perThread = std::min(alignment, 128 / numBits);
+    unsigned perThread = std::min(alignment, 128 / elemNumBits);
     sizePerThread[order[0]] = std::min<int>(perThread, numElemsPerThread);
 
     SmallVector<unsigned> dims(rank);

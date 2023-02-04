@@ -7,6 +7,10 @@ on:
       - main
       - triton-mlir
 
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
