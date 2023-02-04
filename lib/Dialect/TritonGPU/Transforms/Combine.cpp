@@ -154,6 +154,12 @@ public:
     // block argument
     if (!arg)
       return mlir::failure();
+    // cvt(view) -> view
+    auto view = dyn_cast<triton::ViewOp>(arg);
+    if (view) {
+      rewriter.replaceOpWithNewOp<triton::ViewOp>(op, op->getResult(0).getType(), view.getResult());
+      return mlir::success();
+    }
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
     auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
     if (alloc_tensor) {
@@ -278,6 +284,9 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
       return failure();
     ret = sliceEncoding.getParent();
   }
+  if (auto view = dyn_cast<triton::ViewOp>(op)){
+    return failure();
+  }
   return success();
 }
 
@@ -363,7 +372,8 @@ LogicalResult simulateBackwardRematerialization(
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
       if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-              triton::MakeRangeOp, triton::SplatOp>(*opArgI))
+              triton::MakeRangeOp, triton::SplatOp,
+              triton::ViewOp>(*opArgI))
         continue;
       // We add one expensive conversion for the current operand
       numCvts += 1;
