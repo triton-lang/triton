@@ -627,7 +627,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
 
     # triton result
     rs = RandomState(17)
-    x = numpy_random((n_programs, ), dtype_str=dtype_x_str, rs=rs)
+    x = np.array([2**i for i in range(n_programs)], dtype=getattr(np, dtype_x_str))
     if mode == 'all_neg':
         x = -np.abs(x)
     if mode == 'all_pos':
