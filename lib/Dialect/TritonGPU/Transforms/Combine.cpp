@@ -296,6 +296,10 @@ inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
   if (isSingleValue(op->getOperand(0)))
     return false;
   auto ptr = op->getOperand(0);
+  if(auto load = dyn_cast<triton::LoadOp>(op)){
+    if(load.evict() == triton::EvictionPolicy::EVICT_LAST)
+      return false;
+  }
   if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
     auto encoding = tensorTy.getEncoding();
     // Case 2: Different type conversion is expensive (e.g., mma <-> block)
