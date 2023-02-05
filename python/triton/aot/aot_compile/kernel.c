@@ -1,4 +1,5 @@
 /*[ kernel_header ]*/
+
 #ifndef TT_KERNEL_INCLUDES
 #define TT_KERNEL_INCLUDES
 
@@ -71,3 +72,4 @@ CUresult launch_{kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,u
     void *args[{num_args}] = {{ {arg_pointers} }};
     return cuLaunchKernel(*func, gX, gY, gZ, numWarps * {threads_per_warp}, 1, 1, 0, stream, args, NULL);
 }}
+
