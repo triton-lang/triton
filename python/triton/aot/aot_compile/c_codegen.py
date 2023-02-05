@@ -95,7 +95,7 @@ def signature_tt_to_c_args(
 
 @dataclass
 class CodegenTemplates:
-    common_header: str
+    #common_header: str
     kernel_header: str
     default_load: str
     """ Load cuda module and function using a global CUmodule & CUfunction pointers"""
@@ -137,7 +137,7 @@ class CodeGenerator:
         if template_path is None:
             template_path = Path(__file__).parent / "kernel.c"
         self._template = Path(template_path).read_text()
-        self._common_h = split_template(self._template).common_header
+        #self._common_h = split_template(self._template).common_header
         self._gen_code = []
 
     def make_source(
@@ -158,6 +158,7 @@ class CodeGenerator:
         header = code.kernel_header
         source = [
             f'#include "{out_filename}.h"',
+            #code.common_header,
             code.default_load,
             code.default_launch,
             code.user_launch,
@@ -193,8 +194,6 @@ class CodeGenerator:
         outdir = Path(out_dir)
         print(f"Summary of generated code in ({str(outdir)}):")
 
-        with (out_dir / "common.h").open("w") as fp:
-            fp.write(self._common_h)
 
         code: KernelCSource
         for code in self._gen_code:
@@ -225,24 +224,24 @@ def split_template(template_src: str):
             i += 1
 
     c_source_template = {k: "\n".join(v) for k, v in snippets.items()}
-    c_source_template[
-        "common_header"
-    ] = """
-#pragma once
+#     c_source_template[
+#         "common_header"
+#     ] = """
+# #pragma once
 
-#include <stdio.h>
-#include <stdint.h>
-#include <inttypes.h>
-#include <cuda.h>
+# #include <stdio.h>
+# #include <stdint.h>
+# #include <inttypes.h>
+# #include <cuda.h>
 
 
-typedef struct
-{
-    unsigned int gX;
-    unsigned int gY;
-    unsigned int gZ;
-    unsigned int numWarps;
-} GridWarps;
-    """
+# typedef struct
+# {
+#     unsigned int gX;
+#     unsigned int gY;
+#     unsigned int gZ;
+#     unsigned int numWarps;
+# } GridWarps;
+#     """
 
     return CodegenTemplates(**c_source_template)
