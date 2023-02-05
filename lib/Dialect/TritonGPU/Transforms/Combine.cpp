@@ -552,7 +552,8 @@ public:
       if (expensiveToRemat(op, srcEncoding))
         return failure();
       // don't rematerialize non-element-wise
-      if (!op->hasTrait<mlir::OpTrait::Elementwise>())
+      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+          !op->hasTrait<mlir::OpTrait::Elementwise>())
         return failure();
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
@@ -839,7 +840,8 @@ public:
       for (Value arg : op->getOperands()) {
         Operation *argOp = arg.getDefiningOp();
         if (argOp && (argOp != cvt) &&
-            !isa<arith::ConstantOp, triton::SplatOp, triton::MakeRangeOp>(
+            !isa<arith::ConstantOp, triton::SplatOp, triton::MakeRangeOp,
+                 triton::ViewOp>(
                 argOp)) {
           return failure();
         }
