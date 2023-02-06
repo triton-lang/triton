@@ -330,7 +330,10 @@ def test_bitwise_op(dtype_x, dtype_y, op, device='cuda'):
 def test_shift_op(dtype_x, dtype_y, op, device='cuda'):
     expr = f'x {op} y'
     bw = max(_bitwidth(dtype_x), _bitwidth(dtype_y))
-    dtype_z = f'uint{bw}'
+    if dtype_x.startswith('int'):
+        dtype_z = f'int{bw}'
+    else:
+        dtype_z = f'uint{bw}'
     numpy_expr = f'x.astype(np.{dtype_z}) {op} y.astype(np.{dtype_z})'
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, y_low=0, y_high=65)
 
