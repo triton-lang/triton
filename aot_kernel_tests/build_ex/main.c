@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 // #include "add_kernel0.h"
-#include "dispatcher.c"
+#include "dispatcher.h"
 
 void errMsg(char* msg, int code) {
   if (code != CUDA_SUCCESS) {
