@@ -549,7 +549,10 @@ class tensor:
     @builtin
     def __rshift__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
-        return semantic.lshr(self, other, _builder)
+        if self.dtype.is_int_signed():
+            return semantic.ashr(self, other, _builder)
+        else:
+            return semantic.lshr(self, other, _builder)
 
     # comparison operators
 
