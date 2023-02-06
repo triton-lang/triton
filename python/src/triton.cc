@@ -1083,9 +1083,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_store",
            [](mlir::OpBuilder &self, mlir::Value &ptrs,
-              mlir::Value &value) -> void {
+              mlir::Value &value,
+              mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptrs, value);
+             self.create<mlir::triton::StoreOp>(loc, ptrs, value, cacheModifier, evictionPolicy);
            })
       .def("create_masked_load",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &mask,
@@ -1100,9 +1102,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_masked_store",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &val,
-              mlir::Value &mask) -> void {
+              mlir::Value &mask,
+              mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptrs, val, mask);
+             self.create<mlir::triton::StoreOp>(loc, ptrs, val, mask, cacheModifier, evictionPolicy);
            })
       .def("create_view",
            [](mlir::OpBuilder &self, mlir::Value &arg,

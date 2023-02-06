@@ -161,10 +161,12 @@ def TT_StoreOp : TT_Op<"store",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "store";
 
-    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask);
+    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
+                     TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict);
 
     let builders = [
-        OpBuilder<(ins "Value":$ptr, "Value":$value)>,
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict)>,
     ];
 
     // let assemblyFormat = "operands attr-dict `:` type($value)";

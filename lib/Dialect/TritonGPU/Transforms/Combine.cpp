@@ -296,20 +296,23 @@ inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
   if (isSingleValue(op->getOperand(0)))
     return false;
   auto ptr = op->getOperand(0);
-  if(auto load = dyn_cast<triton::LoadOp>(op)){
+  // Case 2: We assume that `evict_last` loads/stores have high hit rate
+  if(auto load = dyn_cast<triton::LoadOp>(op))
     if(load.evict() == triton::EvictionPolicy::EVICT_LAST)
       return false;
-  }
+  if(auto store = dyn_cast<triton::StoreOp>(op))
+    if(store.evict() == triton::EvictionPolicy::EVICT_LAST)
+      return false;
   if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
     auto encoding = tensorTy.getEncoding();
-    // Case 2: Different type conversion is expensive (e.g., mma <-> block)
+    // Case 3: Different type conversion is expensive (e.g., mma <-> block)
     if (encoding.getTypeID() != targetEncoding.getTypeID())
       return true;
     auto sizePerThread = triton::gpu::getSizePerThread(encoding);
     auto targetSizePerThread = triton::gpu::getSizePerThread(targetEncoding);
     auto order = triton::gpu::getOrder(encoding);
     auto targetOrder = triton::gpu::getOrder(targetEncoding);
-    // Case 3: The targeEncoding may expose more vectorization opportunities
+    // Case 4: The targeEncoding may expose more vectorization opportunities
     return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
   }
   return false;
