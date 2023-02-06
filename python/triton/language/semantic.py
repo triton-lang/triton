@@ -999,6 +999,7 @@ def dot(lhs: tl.tensor,
         allow_tf32: bool,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
+    assert lhs.dtype == rhs.dtype, "lhs and rhs must have the same dtype!"
     assert len(lhs.shape) == 2 and len(rhs.shape) == 2
     assert lhs.shape[1].value == rhs.shape[0].value
     assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
