@@ -103,8 +103,7 @@ private:
   /// Each region is analyzed separately and keeps their own copy of the
   /// information. At op7, we union the information of the region2 and region3
   /// and update the information of region1.
-  void dfsOperation(Operation *operation, RegionInfo *blockInfo,
-                    OpBuilder *builder);
+  void resolve(Operation *operation, OpBuilder *builder);
 
   /// Updates the RegionInfo operation based on the operation.
   void transfer(Operation *operation, RegionInfo *blockInfo,

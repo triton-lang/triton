@@ -4,6 +4,7 @@
 
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include <deque>
 
 namespace mlir {
 
@@ -11,13 +12,27 @@ void MembarAnalysis::run() {
   auto *operation = allocation->getOperation();
   RegionInfo regionInfo;
   OpBuilder builder(operation);
-  dfsOperation(operation, &regionInfo, &builder);
+  resolve(operation, &builder);
 }
 
-void MembarAnalysis::dfsOperation(Operation *operation,
-                                  RegionInfo *parentRegionInfo,
-                                  OpBuilder *builder) {
-  transfer(operation, parentRegionInfo, builder);
+void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
+  std::deque<Block *> blockList;
+  operation->walk([&](Block *block) { blockList.push_back(block); });
+  while (!blockList.empty()) {
+    auto *block = blockList.front();
+    blockList.pop_front();
+    for (auto &op : block->getOperations()) {
+      if (block->getTerminator() == &op) {
+        if (auto regionBranch = dyn_cast<RegionBranchOpInterface>(op)) {
+          SmallVector<RegionSuccessor, 4> successors;
+          regionBranch.getSuccessorRegions(llvm::None, successors);
+          for (auto &successor : successors) {
+            blockList.push_back(&successor.getSuccessor()->front());
+          }
+        }
+      }
+    }
+  }
   if (operation->getNumRegions()) {
     // If there's any nested regions, we need to visit them.
     // scf.if and scf.else: two regions
