@@ -363,7 +363,10 @@ LogicalResult simulateBackwardRematerialization(
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
       if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-              triton::MakeRangeOp, triton::SplatOp>(*opArgI))
+              triton::MakeRangeOp>(*opArgI))
+        continue;
+      if (isa<triton::SplatOp>(*opArgI) &&
+          !isa_and_nonnull<triton::ReduceOp>(opArgI->getOperand(0).getDefiningOp()))
         continue;
       // We add one expensive conversion for the current operand
       numCvts += 1;
@@ -382,19 +385,22 @@ LogicalResult simulateBackwardRematerialization(
 Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
                               BlockAndValueMapping &mapping) {
   Operation *newOp = rewriter.clone(*op, mapping);
-  auto origType = op->getResult(0).getType().cast<RankedTensorType>();
-  auto newType = RankedTensorType::get(
-      origType.getShape(), origType.getElementType(),
-      newOp->getOperand(0).getType().cast<RankedTensorType>().getEncoding());
-  newOp->getResult(0).setType(newType);
-  auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
-  if (typeInfer) {
-    SmallVector<Type, 1> newTypes;
-    auto success = typeInfer.inferReturnTypes(
-        newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
-        newOp->getAttrDictionary(), newOp->getRegions(), newTypes);
-    if (succeeded(success))
-      newOp->getResult(0).setType(newTypes.front());
+  auto origType = op->getResult(0).getType().dyn_cast<RankedTensorType>();
+  auto origOperandType =  newOp->getOperand(0).getType().dyn_cast<RankedTensorType>();
+  if(origType && origOperandType){
+    auto newType = RankedTensorType::get(
+        origType.getShape(), origType.getElementType(),
+        origOperandType.getEncoding());
+    newOp->getResult(0).setType(newType);
+    auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
+    if (typeInfer) {
+      SmallVector<Type, 1> newTypes;
+      auto success = typeInfer.inferReturnTypes(
+          newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
+          newOp->getAttrDictionary(), newOp->getRegions(), newTypes);
+      if (succeeded(success))
+        newOp->getResult(0).setType(newTypes.front());
+    }
   }
   return newOp;
 }
@@ -658,14 +664,17 @@ public:
         currOperand = currOperation->getResult(0);
       }
       // compute target type for the layout cast
-      auto currType = currOperand.getType().cast<RankedTensorType>();
-      auto newType = RankedTensorType::get(
-          currType.getShape(), currType.getElementType(), targetLayout);
-      auto newOperand = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          currOperand.getLoc(), newType, currOperand);
-      if (currOperation)
-        newOperand->moveAfter(currOperation);
-      mapping.map(currOperand, newOperand);
+      auto currType = currOperand.getType().dyn_cast<RankedTensorType>();
+      if(currType){
+        llvm::outs() << "rematerializing " << currOperand << "\n";
+        auto newType = RankedTensorType::get(
+            currType.getShape(), currType.getElementType(), targetLayout);
+        auto newOperand = rewriter.create<triton::gpu::ConvertLayoutOp>(
+            currOperand.getLoc(), newType, currOperand);
+        if (currOperation)
+          newOperand->moveAfter(currOperation);
+        mapping.map(currOperand, newOperand);
+      }
     }
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
     return mlir::success();
