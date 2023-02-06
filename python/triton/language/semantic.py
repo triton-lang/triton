@@ -324,11 +324,13 @@ def lshr(input: tl.tensor,
     input, other = bitwise_op_type_checking_impl(input, other, builder)
     return tl.tensor(builder.create_lshr(input.handle, other.handle), input.type)
 
+
 def ashr(input: tl.tensor,
          other: tl.tensor,
          builder: ir.builder) -> tl.tensor:
     input, other = bitwise_op_type_checking_impl(input, other, builder)
     return tl.tensor(builder.create_ashr(input.handle, other.handle), input.type)
+
 
 def shl(input: tl.tensor,
         other: tl.tensor,
