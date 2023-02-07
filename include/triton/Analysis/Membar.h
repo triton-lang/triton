@@ -36,28 +36,28 @@ public:
   void run();
 
 private:
-  struct RegionInfo {
+  struct BlockInfo {
     using BufferIdSetT = Allocation::BufferIdSetT;
 
     BufferIdSetT syncReadBuffers;
     BufferIdSetT syncWriteBuffers;
 
-    RegionInfo() = default;
-    RegionInfo(const BufferIdSetT &syncReadBuffers,
-               const BufferIdSetT &syncWriteBuffers)
+    BlockInfo() = default;
+    BlockInfo(const BufferIdSetT &syncReadBuffers,
+              const BufferIdSetT &syncWriteBuffers)
         : syncReadBuffers(syncReadBuffers), syncWriteBuffers(syncWriteBuffers) {
     }
 
-    /// Unions two RegionInfo objects.
-    void join(const RegionInfo &other) {
+    /// Unions two BlockInfo objects.
+    void join(const BlockInfo &other) {
       syncReadBuffers.insert(other.syncReadBuffers.begin(),
                              other.syncReadBuffers.end());
       syncWriteBuffers.insert(other.syncWriteBuffers.begin(),
                               other.syncWriteBuffers.end());
     }
 
-    /// Returns true if buffers in two RegionInfo objects are intersected.
-    bool isIntersected(const RegionInfo &other, Allocation *allocation) const {
+    /// Returns true if buffers in two BlockInfo objects are intersected.
+    bool isIntersected(const BlockInfo &other, Allocation *allocation) const {
       return /*RAW*/ isIntersected(syncWriteBuffers, other.syncReadBuffers,
                                    allocation) ||
              /*WAR*/
@@ -72,6 +72,12 @@ private:
     void sync() {
       syncReadBuffers.clear();
       syncWriteBuffers.clear();
+    }
+
+    /// Compares two BlockInfo objects.
+    bool operator==(const BlockInfo &other) const {
+      return syncReadBuffers == other.syncReadBuffers &&
+             syncWriteBuffers == other.syncWriteBuffers;
     }
 
   private:
@@ -105,12 +111,13 @@ private:
   /// and update the information of region1.
   void resolve(Operation *operation, OpBuilder *builder);
 
-  /// Updates the RegionInfo operation based on the operation.
-  void transfer(Operation *operation, RegionInfo *blockInfo,
-                OpBuilder *builder);
+  /// Updates the BlockInfo operation based on the operation.
+  void transfer(Operation *operation, BlockInfo *blockInfo, OpBuilder *builder);
 
 private:
   Allocation *allocation;
+  DenseMap<Block *, BlockInfo> inputBlockInfoMap;
+  DenseMap<Block *, BlockInfo> outputBlockInfoMap;
 };
 
 } // namespace mlir

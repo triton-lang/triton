@@ -10,76 +10,55 @@ namespace mlir {
 
 void MembarAnalysis::run() {
   auto *operation = allocation->getOperation();
-  RegionInfo regionInfo;
   OpBuilder builder(operation);
   resolve(operation, &builder);
 }
 
 void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
+  // Initialize the blockList
   std::deque<Block *> blockList;
   operation->walk([&](Block *block) { blockList.push_back(block); });
+
+  // A fixed point algorithm
   while (!blockList.empty()) {
     auto *block = blockList.front();
     blockList.pop_front();
+    // Make a copy of the input blockInfo but not update
+    auto inputBlockInfo = inputBlockInfoMap.lookup(block);
+    SmallVector<Block *, 4> curSucessors;
     for (auto &op : block->getOperations()) {
-      if (block->getTerminator() == &op) {
-        if (auto regionBranch = dyn_cast<RegionBranchOpInterface>(op)) {
-          SmallVector<RegionSuccessor, 4> successors;
-          regionBranch.getSuccessorRegions(llvm::None, successors);
-          for (auto &successor : successors) {
-            blockList.push_back(&successor.getSuccessor()->front());
-          }
+      if (auto regionBranch = dyn_cast<RegionBranchOpInterface>(op)) {
+        SmallVector<RegionSuccessor, 4> successors;
+        regionBranch.getSuccessorRegions(llvm::None, successors);
+        for (auto &successor : successors) {
+          curSucessors.push_back(&successor.getSuccessor()->front());
         }
+      } else if (auto branch = dyn_cast<BranchOpInterface>(op)) {
+        for (auto *successor : block->getSuccessors()) {
+          curSucessors.push_back(successor);
+        }
+      } else {
+        transfer(&op, &inputBlockInfo, builder);
       }
     }
-  }
-  if (operation->getNumRegions()) {
-    // If there's any nested regions, we need to visit them.
-    // scf.if and scf.else: two regions
-    // scf.if only: two regions
-    // scf.for: one region
-    RegionInfo curRegionInfo;
-    auto traverseRegions = [&]() -> auto{
-      for (auto &region : operation->getRegions()) {
-        // Copy the parent info as the current info.
-        RegionInfo regionInfo = *parentRegionInfo;
-        for (auto &block : region.getBlocks()) {
-          // assert(region.getBlocks().size() == 1 &&
-          //        "Multiple blocks in a region is not supported");
-          for (auto &op : block.getOperations()) {
-            // Traverse the nested operation.
-            dfsOperation(&op, &regionInfo, builder);
-          }
-        }
-        curRegionInfo.join(regionInfo);
-      }
-      // Set the parent region info as the union of the nested region info.
-      *parentRegionInfo = curRegionInfo;
-    };
-
-    traverseRegions();
-    if (isa<scf::ForOp>(operation)) {
-      // scf.for can have two possible inputs: the init value and the
-      // previous iteration's result. Although we've applied alias analysis,
-      // there could be unsynced memory accesses on reused memories.
-      // For example, consider the following code:
-      // %1 = convert_layout %0: blocked -> shared
-      // ...
-      // gpu.barrier
-      // ...
-      // %5 = convert_layout %4 : shared -> dot
-      // %6 = tt.dot %2, %5
-      // scf.yield
-      //
-      // Though %5 could be released before scf.yield, it may shared the same
-      // memory with %1. So we actually have to insert a barrier before %1 to
-      // make sure the memory is synced.
-      traverseRegions();
+    // Get the reference because we want to update if it changed
+    auto &outputBlockInfo = outputBlockInfoMap[block];
+    if (inputBlockInfo == outputBlockInfo) {
+      // If the inputBlockInfo is the same as the outputBlockInfo, we do not
+      // need to update the successors
+      continue;
     }
+    // Update the successors
+    outputBlockInfo.join(inputBlockInfo);
+    for (auto *successor : curSucessors) {
+      inputBlockInfoMap[successor].join(outputBlockInfo);
+      blockList.push_back(successor);
+    }
+    blockList.push_back(block);
   }
 }
 
-void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
+void MembarAnalysis::transfer(Operation *op, BlockInfo *blockInfo,
                               OpBuilder *builder) {
   if (isa<scf::ForOp>(op) || isa<scf::IfOp>(op) || isa<scf::YieldOp>(op) ||
       isa<tensor::ExtractSliceOp>(op) || isa<triton::gpu::AllocTensorOp>(op)) {
@@ -92,7 +71,7 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
 
   if (isa<gpu::BarrierOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
-    regionInfo->sync();
+    blockInfo->sync();
     return;
   }
 
@@ -100,15 +79,15 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
       !isa<gpu::BarrierOp>(op->getNextNode())) {
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
-    regionInfo->sync();
+    blockInfo->sync();
     OpBuilder::InsertionGuard g(*builder);
     builder->setInsertionPointAfter(op);
     builder->create<gpu::BarrierOp>(op->getLoc());
-    regionInfo->sync();
+    blockInfo->sync();
     return;
   }
 
-  RegionInfo curRegionInfo;
+  BlockInfo curBlockInfo;
   for (Value value : op->getOperands()) {
     for (auto bufferId : allocation->getBufferIds(value)) {
       if (bufferId != Allocation::InvalidBufferId) {
@@ -116,10 +95,10 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
             isa<tensor::InsertSliceOp>(op)) {
           // FIXME(Keren): insert_slice and insert_slice_async are always alias
           // for now
-          curRegionInfo.syncWriteBuffers.insert(bufferId);
+          curBlockInfo.syncWriteBuffers.insert(bufferId);
         } else {
           // ConvertLayoutOp: shared memory -> registers
-          curRegionInfo.syncReadBuffers.insert(bufferId);
+          curBlockInfo.syncReadBuffers.insert(bufferId);
         }
       }
     }
@@ -128,25 +107,25 @@ void MembarAnalysis::transfer(Operation *op, RegionInfo *regionInfo,
     // ConvertLayoutOp: registers -> shared memory
     auto bufferId = allocation->getBufferId(value);
     if (bufferId != Allocation::InvalidBufferId) {
-      curRegionInfo.syncWriteBuffers.insert(bufferId);
+      curBlockInfo.syncWriteBuffers.insert(bufferId);
     }
   }
   // Scratch buffer is considered as both shared memory write & read
   auto bufferId = allocation->getBufferId(op);
   if (bufferId != Allocation::InvalidBufferId) {
-    curRegionInfo.syncWriteBuffers.insert(bufferId);
-    curRegionInfo.syncReadBuffers.insert(bufferId);
+    curBlockInfo.syncWriteBuffers.insert(bufferId);
+    curBlockInfo.syncReadBuffers.insert(bufferId);
   }
 
-  if (regionInfo->isIntersected(curRegionInfo, allocation)) {
+  if (blockInfo->isIntersected(curBlockInfo, allocation)) {
     OpBuilder::InsertionGuard g(*builder);
     builder->setInsertionPoint(op);
     builder->create<gpu::BarrierOp>(op->getLoc());
-    regionInfo->sync();
+    blockInfo->sync();
   }
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers.
-  regionInfo->join(curRegionInfo);
+  blockInfo->join(curBlockInfo);
 }
 
 } // namespace mlir
