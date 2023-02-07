@@ -2,6 +2,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include <numeric>
 
 using namespace mlir;
@@ -10,6 +11,21 @@ using namespace mlir::triton;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+int argMax(ArrayRef<int64_t> arr) {
+  auto it = std::max_element(arr.begin(), arr.end());
+  return std::distance(arr.begin(), it);
+}
+
+template<class T>
+SmallVector<unsigned, 4> argSort(const T& arr){
+  SmallVector<unsigned, 4> ret(arr.size());
+  std::iota(ret.begin(), ret.end(), 0);
+  std::sort(ret.begin(), ret.end(), [&](unsigned x, unsigned y) {
+    return arr[x] > arr[y];
+  });
+  return ret;
+}
+
 struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   Attribute getCoalescedEncoding(AxisInfoAnalysis &axisInfo, Value ptr,
                                  int numWarps) {
@@ -17,29 +33,41 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     // Get the shape of the tensor.
     size_t rank = origType.getRank();
     AxisInfo info = axisInfo.lookupLatticeElement(ptr)->getValue();
-    // Layout order in decreasing order of contiguity
-    SmallVector<unsigned, 4> order(rank);
-    std::iota(order.begin(), order.end(), 0);
-    auto contiguity = info.getContiguity();
-    std::sort(order.begin(), order.end(), [&](unsigned x, unsigned y) {
-      return contiguity[x] > contiguity[y];
-    });
-
+    // Get the contiguity order of `ptr`
+    auto order = argSort(info.getContiguity());
+    // The desired divisibility is the maximum divisibility
+    // among all dependent pointers who have the same order as
+    // `ptr`
+    SetVector<Value> withSameOrder;
+    withSameOrder.insert(ptr);
+    for(Operation *op: mlir::getSlice(ptr.getDefiningOp())){
+      for(Value val: op->getResults()){
+        if(val.getType() != origType) 
+          continue;
+        auto valInfo = axisInfo.lookupLatticeElement(val);
+        auto currOrder = argSort(valInfo->getValue().getContiguity());
+        if(order == currOrder)
+          withSameOrder.insert(val);
+      }
+    }
     int numElems = product(origType.getShape());
     int numThreads = numWarps * 32;
     int numElemsPerThread = std::max(numElems / numThreads, 1);
-
     // Thread tile size depends on memory alignment
     SmallVector<unsigned, 4> sizePerThread(rank, 1);
     unsigned elemNumBits = getPointeeBitWidth(origType);
     unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
-    unsigned maxMultipleBytes = info.getDivisibility(order[0]);
-    unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
-    unsigned maxContig = info.getContiguity(order[0]);
-    unsigned alignment = std::min(maxMultiple, maxContig);
-    unsigned perThread = std::min(alignment, 128 / elemNumBits);
+    unsigned perThread = 1;
+    for(Value val: withSameOrder){
+      AxisInfo info = axisInfo.lookupLatticeElement(val)->getValue();
+      unsigned maxMultipleBytes = info.getDivisibility(order[0]);
+      unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
+      unsigned maxContig = info.getContiguity(order[0]);
+      unsigned alignment = std::min(maxMultiple, maxContig);
+      unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
+      perThread = std::max(perThread, currPerThread);
+    }
     sizePerThread[order[0]] = std::min<int>(perThread, numElemsPerThread);
-
     SmallVector<unsigned> dims(rank);
     std::iota(dims.begin(), dims.end(), 0);
     // create encoding
