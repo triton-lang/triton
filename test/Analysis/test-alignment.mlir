@@ -86,10 +86,16 @@ func @div() {
   %5 = arith.divsi %0, %4 : tensor<128xi32>
   // CHECK-NEXT: Contiguity: [1] ; Divisibility: [1] ; Constancy: [1] ; ConstantValue: [None]
   %6 = arith.divsi %4, %0 : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [64] ; Constancy: [128] ; ConstantValue: [64]
+  %7 = arith.divsi %4, %1 : tensor<128xi32>
   // CHECK-NEXT: Contiguity: [1] ; Divisibility: [2] ; Constancy: [128] ; ConstantValue: [66]
-  %7 = arith.constant dense<66> : tensor<128xi32>
+  %8 = arith.constant dense<66> : tensor<128xi32>
   // CHECK-NEXT: Contiguity: [1] ; Divisibility: [1] ; Constancy: [2] ; ConstantValue: [None]
-  %8 = arith.divui %0, %7 : tensor<128xi32>
+  %9 = arith.divui %0, %8 : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [128] ; Divisibility: [8192] ; Constancy: [1] ; ConstantValue: [None]
+  %10 = tt.make_range {end = 8320 : i32, start = 8192 : i32} : tensor<128xi32>
+  // CHECK-NEXT: Contiguity: [1] ; Divisibility: [128] ; Constancy: [64] ; ConstantValue: [None]
+  %11 = arith.divsi %10, %4 : tensor<128xi32>
   return 
 }
 
