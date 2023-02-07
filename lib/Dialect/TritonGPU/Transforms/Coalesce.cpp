@@ -11,11 +11,6 @@ using namespace mlir::triton;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-int argMax(ArrayRef<int64_t> arr) {
-  auto it = std::max_element(arr.begin(), arr.end());
-  return std::distance(arr.begin(), it);
-}
-
 template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);
