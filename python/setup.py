@@ -200,12 +200,6 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
 
-package_data = {
-    "triton/ops": ["*.c"],
-    "triton/ops/blocksparse": ["*.c"],
-    "triton/language": ["*.bc"],
-}
-
 download_and_copy_ptxas()
 
 setup(
