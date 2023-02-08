@@ -81,9 +81,7 @@ private:
              syncWriteBuffers == other.syncWriteBuffers;
     }
 
-    bool operator!=(const BlockInfo &other) const {
-      return !(*this == other);
-    }
+    bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
   private:
     /// Returns true if buffers in two sets are intersected.
@@ -116,8 +114,16 @@ private:
   /// Updates the BlockInfo operation based on the operation.
   void update(Operation *operation, BlockInfo *blockInfo, OpBuilder *builder);
 
-  /// Collects the successors of the operation.
-  void collect(Operation *operation, SmallVector<Block *> &successors);
+  /// Collects the successors of the terminator
+  void visitTerminator(Operation *operation, SmallVector<Block *> &successors);
+
+  /// Collects the successors of the nested operation
+  void visitNestedOp(Operation *operation, SmallVector<Block *> &successors);
+
+  /// Transfer control flow from the operation to the successors.
+  void transfer(Operation *parentOp,
+                SmallVector<RegionSuccessor> &regionSuccessors,
+                SmallVector<Block *> &successors);
 
 private:
   Allocation *allocation;
