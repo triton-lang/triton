@@ -11,8 +11,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // GCN-NOT: llvm.bitcast {{.*}} : {{.*}}32{{.*}}16
     // GCN-NOT: llvm.bitcast {{.*}} : {{.*}}16{{.*}}32
     // GCN: llvm.bitcast {{.*}} : i16 to f16
-    // GCN-NOT: llvm.bitcast {{.*}} : {{.*}}32{{.*}}16
-    // GCN-NOT: llvm.bitcast {{.*}} : {{.*}}16{{.*}}32
+    // GCN: llvm.load {{.*}}: !llvm.ptr<f16, 1>
+    // GCN: llvm.bitcast {{.*}} : f16 to f16
+    // GCN: llvm.store {{.*}} : !llvm.ptr<f16, 1>
     tt.store %1, %2 : f16
     return
   }
