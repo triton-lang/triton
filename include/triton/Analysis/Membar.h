@@ -49,11 +49,12 @@ private:
     }
 
     /// Unions two BlockInfo objects.
-    void join(const BlockInfo &other) {
+    BlockInfo &join(const BlockInfo &other) {
       syncReadBuffers.insert(other.syncReadBuffers.begin(),
                              other.syncReadBuffers.end());
       syncWriteBuffers.insert(other.syncWriteBuffers.begin(),
                               other.syncWriteBuffers.end());
+      return *this;
     }
 
     /// Returns true if buffers in two BlockInfo objects are intersected.
@@ -78,6 +79,10 @@ private:
     bool operator==(const BlockInfo &other) const {
       return syncReadBuffers == other.syncReadBuffers &&
              syncWriteBuffers == other.syncWriteBuffers;
+    }
+
+    bool operator!=(const BlockInfo &other) const {
+      return !(*this == other);
     }
 
   private:
@@ -105,14 +110,14 @@ private:
   ///        op5
   ///        op6
   ///   op7
-  /// region2 and region3 started with the information of region1.
-  /// Each region is analyzed separately and keeps their own copy of the
-  /// information. At op7, we union the information of the region2 and region3
-  /// and update the information of region1.
+  /// TODO: Explain why we don't use ForwardAnalysis:
   void resolve(Operation *operation, OpBuilder *builder);
 
   /// Updates the BlockInfo operation based on the operation.
-  void transfer(Operation *operation, BlockInfo *blockInfo, OpBuilder *builder);
+  void update(Operation *operation, BlockInfo *blockInfo, OpBuilder *builder);
+
+  /// Collects the successors of the operation.
+  void collect(Operation *operation, SmallVector<Block *> &successors);
 
 private:
   Allocation *allocation;

@@ -139,6 +139,7 @@ public:
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
+    llvm::errs() << mod << "\n";
 
     // Step 4
     RewritePatternSet scf_patterns(context);

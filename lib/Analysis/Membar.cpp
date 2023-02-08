@@ -15,9 +15,9 @@ void MembarAnalysis::run() {
 }
 
 void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
-  // Initialize the blockList
+  // Initialize the blockList and push the entry block
   std::deque<Block *> blockList;
-  operation->walk([&](Block *block) { blockList.push_back(block); });
+  blockList.emplace_back(&operation->getRegion(0).front());
 
   // A fixed point algorithm
   while (!blockList.empty()) {
@@ -25,41 +25,75 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
     blockList.pop_front();
     // Make a copy of the input blockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap.lookup(block);
-    SmallVector<Block *, 4> curSucessors;
+    SmallVector<Block *> successors;
     for (auto &op : block->getOperations()) {
-      if (auto regionBranch = dyn_cast<RegionBranchOpInterface>(op)) {
-        SmallVector<RegionSuccessor, 4> successors;
-        regionBranch.getSuccessorRegions(llvm::None, successors);
-        for (auto &successor : successors) {
-          curSucessors.push_back(&successor.getSuccessor()->front());
-        }
-      } else if (auto branch = dyn_cast<BranchOpInterface>(op)) {
-        for (auto *successor : block->getSuccessors()) {
-          curSucessors.push_back(successor);
-        }
-      } else {
-        transfer(&op, &inputBlockInfo, builder);
-      }
+      if (op.hasTrait<OpTrait::IsTerminator>())
+        collect(&op, successors);
+      else
+        update(&op, &inputBlockInfo, builder);
     }
     // Get the reference because we want to update if it changed
-    auto &outputBlockInfo = outputBlockInfoMap[block];
-    if (inputBlockInfo == outputBlockInfo) {
-      // If the inputBlockInfo is the same as the outputBlockInfo, we do not
-      // need to update the successors
+    if (inputBlockInfo != outputBlockInfoMap[block].join(inputBlockInfo)) {
+      // If the inputBlockInfo is different from the outputBlockInfo, we
+      // need to process the successors
+      blockList.emplace_back(block);
+    } else {
+      // Otherwise, we can skip the successors
       continue;
     }
     // Update the successors
-    outputBlockInfo.join(inputBlockInfo);
-    for (auto *successor : curSucessors) {
-      inputBlockInfoMap[successor].join(outputBlockInfo);
-      blockList.push_back(successor);
+    for (auto *successor : successors) {
+      inputBlockInfoMap[successor].join(inputBlockInfo);
+      blockList.emplace_back(successor);
     }
-    blockList.push_back(block);
   }
 }
 
-void MembarAnalysis::transfer(Operation *op, BlockInfo *blockInfo,
-                              OpBuilder *builder) {
+void MembarAnalysis::collect(Operation *op, SmallVector<Block *> &successors) {
+  // If this operation has no successors, we treat it as an exiting terminator.
+  if (op->getNumSuccessors() == 0) {
+    Region *parentRegion = op->getParentRegion();
+    Operation *parentOp = parentRegion->getParentOp();
+
+    // Check to see if the parent tracks region control flow.
+    auto regionInterface = dyn_cast<RegionBranchOpInterface>(parentOp);
+    if (!regionInterface)
+      return;
+
+    // Query the set of successors of the current region
+    SmallVector<RegionSuccessor, 1> regionSuccessors;
+    regionInterface.getSuccessorRegions(parentRegion->getRegionNumber(),
+                                        regionSuccessors);
+    if (regionSuccessors.empty())
+      return;
+
+    for (auto &it : regionSuccessors) {
+      // If the successor is a region, add its entry block to the queue.
+      // If the successor is the parent operation, add its entry block to the
+      // queue if it is a return-like operation.
+      auto *region = it.getSuccessor();
+      if (region) {
+        successors.emplace_back(&region->front());
+      } else if (!region && mlir::isRegionReturnLike(op)) {
+        successors.emplace_back(&parentOp->getRegion(0).front());
+      }
+    }
+  }
+
+  // If this operation has successors, add them to the queue.
+  Block *block = op->getBlock();
+  if (auto branchInterface = dyn_cast<BranchOpInterface>(op)) {
+    Block *parentBlock = branchInterface->getBlock();
+    for (Block *successor : parentBlock->getSuccessors()) {
+      successors.push_back(successor);
+    }
+  }
+
+  llvm_unreachable("unhandled terminator");
+}
+
+void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
+                            OpBuilder *builder) {
   if (isa<scf::ForOp>(op) || isa<scf::IfOp>(op) || isa<scf::YieldOp>(op) ||
       isa<tensor::ExtractSliceOp>(op) || isa<triton::gpu::AllocTensorOp>(op)) {
     // Do not insert barriers before control flow operations and
@@ -93,8 +127,8 @@ void MembarAnalysis::transfer(Operation *op, BlockInfo *blockInfo,
       if (bufferId != Allocation::InvalidBufferId) {
         if (isa<triton::gpu::InsertSliceAsyncOp>(op) ||
             isa<tensor::InsertSliceOp>(op)) {
-          // FIXME(Keren): insert_slice and insert_slice_async are always alias
-          // for now
+          // FIXME(Keren): insert_slice and insert_slice_async are always
+          // alias for now
           curBlockInfo.syncWriteBuffers.insert(bufferId);
         } else {
           // ConvertLayoutOp: shared memory -> registers
