@@ -238,7 +238,6 @@ LogicalResult LoopPipeliner::initialize() {
       loads.insert(loadOp);
   }
 
-  llvm::outs() << loads.size() << "\n";
   // We have some loads to pipeline
   if (!loads.empty()) {
     // Update depArgs & depOps
