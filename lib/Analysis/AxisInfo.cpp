@@ -86,6 +86,17 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
       }
     }
   }
+  else if(Operation* op = value.getDefiningOp()) {
+    DimVectorT knownContiguity(rank, 1);
+    DimVectorT knownDivisibility(rank, 1);
+    DimVectorT knownConstancy(rank, 1);
+    if(Attribute attr = op->getAttr("tt.divisibility")){
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownDivisibility = DimVectorT(vals.begin(), vals.end());
+    }
+    return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
+  }
+
 
   return AxisInfo(/*knownContiguity=*/DimVectorT(rank, contiHint),
                   /*knownDivisibility=*/DimVectorT(rank, divHint),
@@ -815,7 +826,6 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   if (curr.getRank() == 0) {
     return markAllPessimisticFixpoint(op->getResults());
   }
-
   // join all lattice elements
   ChangeResult result = ChangeResult::NoChange;
   for (Value value : op->getResults()) {

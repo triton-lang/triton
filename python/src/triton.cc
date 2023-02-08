@@ -190,7 +190,14 @@ void init_triton_ir(py::module &&m) {
              if (mlir::Operation *definingOp = self.getDefiningOp())
                definingOp->setAttr(name, attr);
              else {
-               /* issue a warning */
+               auto arg = self.cast<mlir::BlockArgument>();
+               int id = arg.getArgNumber();
+               std::string attrName = name + "_arg" + std::to_string(id);
+               mlir::Block* owner = arg.getOwner();
+               if(owner->isEntryBlock() && 
+                  !mlir::isa<mlir::FuncOp>(owner->getParentOp())){
+                 owner->getParentOp()->setAttr(attrName, attr);
+               }
              }
            })
       .def("get_context", &mlir::Value::getContext)

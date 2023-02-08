@@ -169,7 +169,10 @@ LogicalResult LoopPipeliner::initialize() {
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.ptr();
       unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
-      auto ty = getElementTypeOrSelf(ptr.getType())
+      auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+      if(!tensorTy)
+        continue;
+      auto ty = tensorTy.getElementType()
                     .cast<triton::PointerType>()
                     .getPointeeType();
       unsigned width = vec * ty.getIntOrFloatBitWidth();
@@ -235,6 +238,7 @@ LogicalResult LoopPipeliner::initialize() {
       loads.insert(loadOp);
   }
 
+  llvm::outs() << loads.size() << "\n";
   // We have some loads to pipeline
   if (!loads.empty()) {
     // Update depArgs & depOps
