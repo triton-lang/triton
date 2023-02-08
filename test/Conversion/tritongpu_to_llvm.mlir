@@ -52,14 +52,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: vectorized_load_f16
   func @vectorized_load_f16(%a_ptr_init: tensor<256x!tt.ptr<f16>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf16, #blocked0>) {
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f16, 1>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
@@ -68,10 +61,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     // GCN: llvm.insertvalue {{.*}}[5] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
     // GCN: llvm.insertvalue {{.*}}[6] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
     // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
-    // PTX: llvm.inline_asm
-    // PTX-SAME: ld.global.b16
-    // PTX: llvm.inline_asm
-    // PTX-SAME: ld.global.b16
+    // PTX-COUNT-2: llvm.inline_asm{{.*}}ld.global.b16
     %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf16, #blocked0>
     return
   }
@@ -122,10 +112,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
     // Load 4 elements from vector0
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
@@ -137,10 +124,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
     // Load 4 elements from vector1
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
@@ -161,10 +145,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     // GCN: llvm.extractvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.extractvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.extractvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32)>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-4: llvm.store {{.*}} : !llvm.ptr<f32, 1>
     // PTX: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
     // PTX: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
     // PTX: @${{.*}} st.global.b32 [ ${{.*}} + 0 ], { ${{.*}} };
@@ -193,10 +174,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
     // Load 4 elements from A with single one vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
@@ -205,10 +183,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
     // Load 4 elements from B with single one vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
@@ -227,10 +202,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     // GCN: llvm.extractvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.extractvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.extractvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32)>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-4: llvm.store {{.*}} : !llvm.ptr<f32, 1>
     // PTX: @$5 st.global.v4.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
     tt.store %13, %11 : tensor<256xf32, #blocked0>
     return
@@ -290,14 +262,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
     // Load 8 elements from A with two vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
@@ -311,14 +276,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
     // Load 8 elements from B with two vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
@@ -329,8 +287,6 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // PTX: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: @${{.*}} ld.global.v4.b32 { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-
-    // GCN-NOT: llvm.load
 
     %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
@@ -348,14 +304,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     // GCN: llvm.extractvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.extractvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.extractvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-8: llvm.store {{.*}} : !llvm.ptr<f32, 1>
     // PTX: @$5 st.global.v4.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
     // PTX: @$5 st.global.v4.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}}, ${{.*}}, ${{.*}} };
     tt.store %13, %11 : tensor<256xf32, #blocked0>
