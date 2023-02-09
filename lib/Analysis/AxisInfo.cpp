@@ -324,17 +324,20 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    // lhs = k * d_lhs = k * k' * gcd(d_lhs, d_rhs)
-    // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
-    // lhs / rhs = k * k' * gcd(d_lhs, d_rhs) / (p * p' * gcd(d_lhs, d_rhs))
-    //           = k / p * k' / p'
-    // gcd(k', p') = divisibility(d_lhs / gcd(d_lhs, d_rhs), d_rhs / gcd(d_lhs,
-    // d_rhs))
-    auto lhsDivisibility = lhs.getDivisibility(dim);
-    auto rhsDivisibility = rhs.getDivisibility(dim);
-    auto initGcd = gcd(lhsDivisibility, rhsDivisibility);
-    return std::max(lhsDivisibility / initGcd, rhsDivisibility / initGcd);
-  };
+    // Case 1: lhs is 0
+    if (lhs.getConstantValue().has_value() &&
+        lhs.getConstantValue().value() == 0)
+      return lhs.getDivisibility(dim);
+    // Case 2: rhs is constant
+    if (rhs.getConstantValue().has_value()) {
+      auto lhsDivisibility = lhs.getDivisibility(dim);
+      auto rhsValue = rhs.getConstantValue().value();
+      if (lhsDivisibility % rhsValue == 0)
+        return lhsDivisibility / rhsValue;
+    }
+    // Case 3: both are not constant
+    return 1;
+  }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
