@@ -152,7 +152,8 @@ void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                     ::mlir::Value ptr, ::mlir::Value value,
                     ::mlir::triton::CacheModifier cache,
                     ::mlir::triton::EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, mlir::Value(), cache, evict);
+  return StoreOp::build(builder, state, ptr, value, mlir::Value(), cache,
+                        evict);
 }
 
 //-- LoadOp --

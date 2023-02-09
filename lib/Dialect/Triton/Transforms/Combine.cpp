@@ -164,10 +164,9 @@ struct CanonicalizeMaskedStorePattern
 
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
-      rewriter.replaceOpWithNewOp<triton::StoreOp>(storeOp, storeOp.ptr(),
-                                                   storeOp.value(),
-                                                   storeOp.cache(),
-                                                   storeOp.evict());
+      rewriter.replaceOpWithNewOp<triton::StoreOp>(
+          storeOp, storeOp.ptr(), storeOp.value(), storeOp.cache(),
+          storeOp.evict());
     } else {
       // mask = splat(0)
       rewriter.eraseOp(storeOp);

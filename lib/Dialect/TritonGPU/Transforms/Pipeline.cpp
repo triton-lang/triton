@@ -170,7 +170,7 @@ LogicalResult LoopPipeliner::initialize() {
       auto ptr = loadOp.ptr();
       unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-      if(!tensorTy)
+      if (!tensorTy)
         continue;
       auto ty = tensorTy.getElementType()
                     .cast<triton::PointerType>()

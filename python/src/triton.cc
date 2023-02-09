@@ -193,9 +193,9 @@ void init_triton_ir(py::module &&m) {
                auto arg = self.cast<mlir::BlockArgument>();
                int id = arg.getArgNumber();
                std::string attrName = name + "_arg" + std::to_string(id);
-               mlir::Block* owner = arg.getOwner();
-               if(owner->isEntryBlock() && 
-                  !mlir::isa<mlir::FuncOp>(owner->getParentOp())){
+               mlir::Block *owner = arg.getOwner();
+               if (owner->isEntryBlock() &&
+                   !mlir::isa<mlir::FuncOp>(owner->getParentOp())) {
                  owner->getParentOp()->setAttr(attrName, attr);
                }
              }
@@ -1089,12 +1089,12 @@ void init_triton_ir(py::module &&m) {
                  loc, ptrs, cacheModifier, evictionPolicy, isVolatile);
            })
       .def("create_store",
-           [](mlir::OpBuilder &self, mlir::Value &ptrs,
-              mlir::Value &value,
+           [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &value,
               mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptrs, value, cacheModifier, evictionPolicy);
+             self.create<mlir::triton::StoreOp>(loc, ptrs, value, cacheModifier,
+                                                evictionPolicy);
            })
       .def("create_masked_load",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &mask,
@@ -1109,11 +1109,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_masked_store",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &val,
-              mlir::Value &mask,
-              mlir::triton::CacheModifier cacheModifier,
+              mlir::Value &mask, mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptrs, val, mask, cacheModifier, evictionPolicy);
+             self.create<mlir::triton::StoreOp>(loc, ptrs, val, mask,
+                                                cacheModifier, evictionPolicy);
            })
       .def("create_view",
            [](mlir::OpBuilder &self, mlir::Value &arg,

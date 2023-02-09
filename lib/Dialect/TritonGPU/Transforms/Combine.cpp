@@ -155,8 +155,9 @@ public:
     if (!arg)
       return mlir::failure();
     // cvt(view) -> view
-    if(auto view = dyn_cast<triton::ViewOp>(arg)){
-      rewriter.replaceOpWithNewOp<triton::ViewOp>(op, op->getResult(0).getType(), view.getResult());
+    if (auto view = dyn_cast<triton::ViewOp>(arg)) {
+      rewriter.replaceOpWithNewOp<triton::ViewOp>(
+          op, op->getResult(0).getType(), view.getResult());
       return mlir::success();
     }
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
@@ -283,7 +284,7 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
       return failure();
     ret = sliceEncoding.getParent();
   }
-  if (auto view = dyn_cast<triton::ViewOp>(op)){
+  if (auto view = dyn_cast<triton::ViewOp>(op)) {
     return failure();
   }
   return success();
@@ -296,11 +297,11 @@ inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
     return false;
   auto ptr = op->getOperand(0);
   // Case 2: We assume that `evict_last` loads/stores have high hit rate
-  if(auto load = dyn_cast<triton::LoadOp>(op))
-    if(load.evict() == triton::EvictionPolicy::EVICT_LAST)
+  if (auto load = dyn_cast<triton::LoadOp>(op))
+    if (load.evict() == triton::EvictionPolicy::EVICT_LAST)
       return false;
-  if(auto store = dyn_cast<triton::StoreOp>(op))
-    if(store.evict() == triton::EvictionPolicy::EVICT_LAST)
+  if (auto store = dyn_cast<triton::StoreOp>(op))
+    if (store.evict() == triton::EvictionPolicy::EVICT_LAST)
       return false;
   if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
     auto encoding = tensorTy.getEncoding();
@@ -382,7 +383,7 @@ LogicalResult simulateBackwardRematerialization(
         continue;
       if (auto view = dyn_cast<triton::ViewOp>(opArgI))
         continue;
-      
+
       // We add one expensive conversion for the current operand
       numCvts += 1;
       queue.emplace_back(opArgI, newEncoding);
@@ -582,20 +583,20 @@ public:
              !isa<triton::gpu::ConvertLayoutOp>(op) && !isa<scf::YieldOp>(op);
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
-    if (cvtSlices.empty()){
+    if (cvtSlices.empty()) {
       return failure();
     }
 
     llvm::MapVector<Value, Attribute> toConvert;
     for (Operation *op : cvtSlices) {
       // don't rematerialize anything expensive
-      if (expensiveToRemat(op, srcEncoding)){
+      if (expensiveToRemat(op, srcEncoding)) {
         return failure();
       }
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp>(op)){
+          !isa<triton::StoreOp>(op)) {
         return failure();
       }
       // don't rematerialize if it adds an extra conversion that can't
