@@ -155,8 +155,7 @@ public:
     if (!arg)
       return mlir::failure();
     // cvt(view) -> view
-    auto view = dyn_cast<triton::ViewOp>(arg);
-    if (view) {
+    if(auto view = dyn_cast<triton::ViewOp>(arg)){
       rewriter.replaceOpWithNewOp<triton::ViewOp>(op, op->getResult(0).getType(), view.getResult());
       return mlir::success();
     }
@@ -379,9 +378,11 @@ LogicalResult simulateBackwardRematerialization(
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
       if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-              triton::MakeRangeOp, triton::SplatOp,
-              triton::ViewOp>(*opArgI))
+              triton::MakeRangeOp, triton::SplatOp>(*opArgI))
         continue;
+      if (auto view = dyn_cast<triton::ViewOp>(opArgI))
+        continue;
+      
       // We add one expensive conversion for the current operand
       numCvts += 1;
       queue.emplace_back(opArgI, newEncoding);
@@ -855,8 +856,7 @@ public:
       for (Value arg : op->getOperands()) {
         Operation *argOp = arg.getDefiningOp();
         if (argOp && (argOp != cvt) &&
-            !isa<arith::ConstantOp, triton::SplatOp, triton::MakeRangeOp,
-                 triton::ViewOp>(
+            !isa<arith::ConstantOp, triton::SplatOp, triton::MakeRangeOp>(
                 argOp)) {
           return failure();
         }
