@@ -862,6 +862,9 @@ public:
 // -----------------------------------------------------------------------------
 namespace {
 int computeCapabilityToMMAVersion(int computeCapability) {
+#ifdef USE_ROCM
+  return 1;
+#endif
   if (computeCapability < 70) {
     return 0;
   } else if (computeCapability < 80) {

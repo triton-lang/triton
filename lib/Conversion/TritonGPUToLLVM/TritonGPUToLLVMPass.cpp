@@ -383,10 +383,12 @@ private:
 
       // If the load byte width is not eligible or the current compute
       // capability does not support async copy, then we do decompose
+#ifndef USE_ROCM
       if (triton::gpu::InsertSliceAsyncOp::getEligibleLoadByteWidth(
               computeCapability)
               .contains(byteWidth))
         return;
+#endif
 
       // load
       auto tmpTy =
@@ -419,6 +421,11 @@ private:
     });
 
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
+#ifdef USE_ROCM
+      assert(decomposed &&
+             "AsyncWait is not supported for ROCM and should be removed");
+      asyncWaitOp.erase();
+#else
       if (!triton::gpu::AsyncWaitOp::isSupported(computeCapability)) {
         // async wait is supported in Ampere and later
         asyncWaitOp.erase();
@@ -429,6 +436,7 @@ private:
             builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
         asyncWaitOp.erase();
       }
+#endif
     });
   }
 };
