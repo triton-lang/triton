@@ -11,11 +11,6 @@ using namespace mlir::triton;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-int argMax(ArrayRef<int64_t> arr) {
-  auto it = std::max_element(arr.begin(), arr.end());
-  return std::distance(arr.begin(), it);
-}
-
 template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);
@@ -41,7 +36,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     SetVector<Value> withSameOrder;
     withSameOrder.insert(ptr);
     if (ptr.getDefiningOp())
-      for (Operation *op : mlir::getSlice(ptr.getDefiningOp())) {
+      for (Operation *op : mlir::multiRootGetSlice(ptr.getDefiningOp())) {
         for (Value val : op->getResults()) {
           if (val.getType() != origType)
             continue;
