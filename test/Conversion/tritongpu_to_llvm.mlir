@@ -624,76 +624,40 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %tensor = triton_gpu.alloc_tensor : tensor<2x32x32xf32, #A>
     %index = arith.constant 1 : i32
 
-    // PTX: llvm.mlir.constant(0 : i32) : i32
-    // PTX: llvm.add
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // PTX: llvm.mlir.constant(0 : i32) : i32
-    // PTX: llvm.add
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // PTX: llvm.mlir.constant(0 : i32) : i32
-    // PTX: llvm.add
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // PTX: llvm.mlir.constant(0 : i32) : i32
-    // PTX: llvm.add
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // PTX: llvm.mlir.constant(16 : i32) : i32
-    // PTX: llvm.add
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // PTX: llvm.mlir.constant(16 : i32) : i32
-    // PTX: llvm.add
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // PTX: llvm.mlir.constant(16 : i32) : i32
-    // PTX: llvm.add
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // PTX: llvm.mlir.constant(16 : i32) : i32
-    // PTX: llvm.add
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // PTX: llvm.inline_asm
-    // PTX-SAME: cp.async.commit_group
-
-    // TODO Check this code correctness
-    // GCN: llvm.mlir.constant(0 : i32) : i32
-    // GCN: llvm.add
-    // GCN: llvm.mlir.constant(0 : i32) : i32
-    // GCN: llvm.add
-    // GCN: llvm.mlir.constant(0 : i32) : i32
-    // GCN: llvm.add
-    // GCN: llvm.mlir.constant(0 : i32) : i32
-    // GCN: llvm.add
-    // GCN: llvm.mlir.constant(16 : i32) : i32
-    // GCN: llvm.add
-    // GCN: llvm.mlir.constant(16 : i32) : i32
-    // GCN: llvm.add
-    // GCN: llvm.mlir.constant(16 : i32) : i32
-    // GCN: llvm.add
-    // GCN: llvm.mlir.constant(16 : i32) : i32
-    // GCN: llvm.add
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // GCN: llvm.inline_asm
-    // GCN-SAME: cp.async.commit_group
+    // CHECK: llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.mlir.constant(16 : i32) : i32
+    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.mlir.constant(16 : i32) : i32
+    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.mlir.constant(16 : i32) : i32
+    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.mlir.constant(16 : i32) : i32
+    // CHECK: llvm.add
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> tensor<2x32x32xf32, #A>
     triton_gpu.async_commit_group
     return
