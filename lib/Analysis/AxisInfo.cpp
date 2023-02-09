@@ -851,7 +851,7 @@ ChangeResult AxisInfoAnalysis::visitOperation(
     auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
-  curr = mlir::AxisInfo(newContiguity, newDivisibility, newConstancy);
+  curr = mlir::AxisInfo(newContiguity, newDivisibility, newConstancy, curr.getConstantValue());
   // join all lattice elements
   ChangeResult result = ChangeResult::NoChange;
   for (Value value : op->getResults()) {

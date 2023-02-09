@@ -162,7 +162,8 @@ def TT_StoreOp : TT_Op<"store",
     let summary = "store";
 
     let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
-                     TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict);
+                     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache, 
+                     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
 
     let builders = [
         OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache,

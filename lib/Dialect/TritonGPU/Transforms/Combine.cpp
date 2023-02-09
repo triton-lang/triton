@@ -402,9 +402,10 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
                               BlockAndValueMapping &mapping) {
   Operation *newOp = rewriter.clone(*op, mapping);
   auto origType = op->getResult(0).getType().cast<RankedTensorType>();
+  auto argType = newOp->getOperand(0).getType().cast<RankedTensorType>();
   auto newType = RankedTensorType::get(
       origType.getShape(), origType.getElementType(),
-      newOp->getOperand(0).getType().cast<RankedTensorType>().getEncoding());
+      argType.getEncoding());
   newOp->getResult(0).setType(newType);
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
@@ -595,8 +596,7 @@ public:
       }
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp>(op)) {
+          !op->hasTrait<mlir::OpTrait::Elementwise>()) {
         return failure();
       }
       // don't rematerialize if it adds an extra conversion that can't
