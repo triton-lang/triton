@@ -404,8 +404,7 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
   auto origType = op->getResult(0).getType().cast<RankedTensorType>();
   auto argType = newOp->getOperand(0).getType().cast<RankedTensorType>();
   auto newType = RankedTensorType::get(
-      origType.getShape(), origType.getElementType(),
-      argType.getEncoding());
+      origType.getShape(), origType.getElementType(), argType.getEncoding());
   newOp->getResult(0).setType(newType);
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
