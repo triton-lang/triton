@@ -301,8 +301,8 @@ multiRootTopologicalSort(const SetVector<Operation *> &toSort) {
 }
 
 SetVector<Operation *> multiRootGetSlice(Operation *op,
-                                        TransitiveFilter backwardFilter,
-                                        TransitiveFilter forwardFilter) {
+                                         TransitiveFilter backwardFilter,
+                                         TransitiveFilter forwardFilter) {
   SetVector<Operation *> slice;
   slice.insert(op);
 
