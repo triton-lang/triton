@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_UTILITY_H
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include <algorithm>
 #include <numeric>
 #include <string>
@@ -96,6 +97,11 @@ bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
 /// been visited before.
 SetVector<Operation *>
 multiRootTopologicalSort(const SetVector<Operation *> &toSort);
+
+// This uses the toplogicalSort above
+SetVector<Operation *> multiRootGetSlice(Operation *op,
+                                        TransitiveFilter backwardFilter = nullptr,
+                                        TransitiveFilter forwardFilter = nullptr);
 
 } // namespace mlir
 
