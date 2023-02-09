@@ -746,6 +746,7 @@ def cast(input: tl.tensor,
 #                               Memory Operators
 # ===----------------------------------------------------------------------===//
 
+
 def str_to_cache_modifier(cache_modifier):
     cache = ir.CACHE_MODIFIER.NONE  # default
     if cache_modifier:
@@ -756,6 +757,7 @@ def str_to_cache_modifier(cache_modifier):
         else:
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
+
 
 def str_to_eviction_policy(eviction_policy):
     eviction = ir.EVICTION_POLICY.NORMAL  # default

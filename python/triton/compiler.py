@@ -178,7 +178,7 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(stmt, ast.Return):
                 break
         return stmts and isinstance(stmt, ast.Return)
-    
+
     def contains_return_op(self, node):
         if isinstance(node, ast.Return):
             return True
