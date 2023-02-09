@@ -79,9 +79,9 @@ def get_thirdparty_packages(triton_cache_path):
     for p in packages:
         package_root_dir = os.path.join(triton_cache_path, p.package)
         package_dir = os.path.join(package_root_dir, p.name)
-        test_file_path = os.path.join(package_dir, p.test_file)
         if p.syspath_var_name in os.environ:
             package_dir = os.environ[p.syspath_var_name]
+        test_file_path = os.path.join(package_dir, p.test_file)
         if not os.path.exists(test_file_path):
             try:
                 shutil.rmtree(package_root_dir)
@@ -193,7 +193,7 @@ class CMakeBuild(build_ext):
         else:
             import multiprocessing
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ["--", '-j' + str(2 * multiprocessing.cpu_count())]
+            build_args += ['-j' + str(2 * multiprocessing.cpu_count())]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
