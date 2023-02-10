@@ -215,15 +215,15 @@ LogicalResult LoopPipeliner::initialize() {
       // advance to the first conversion as long
       // as the use resides in shared memory and it has
       // a single use itself
-      while(use){
-        if(use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
+      while (use) {
+        if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
           break;
-        auto tensorType = use->getResult(0).getType().dyn_cast<RankedTensorType>();
-        if(!tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
+        auto tensorType =
+            use->getResult(0).getType().dyn_cast<RankedTensorType>();
+        if (!tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
           break;
         use = *use->getResult(0).getUsers().begin();
       }
-
 
       if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
         if (auto tensorType = convertLayout.getResult()
@@ -251,7 +251,6 @@ LogicalResult LoopPipeliner::initialize() {
     if (isCandidate)
       loads.insert(loadOp);
   }
-
 
   // We have some loads to pipeline
   if (!loads.empty()) {
@@ -383,13 +382,14 @@ void LoopPipeliner::emitPrologue() {
                                    loads.size() * (numStages - 2));
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
-    auto bufferType = loadStageBuffer[loadOp][numStages - 1].getType()
+    auto bufferType = loadStageBuffer[loadOp][numStages - 1]
+                          .getType()
                           .cast<RankedTensorType>();
     auto bufferShape = bufferType.getShape();
     auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
-    sliceType =
-        RankedTensorType::get({bufferShape[1], bufferShape[2]}, sliceType.getElementType(),
-                              loadsBufferType[loadOp].getEncoding());
+    sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]},
+                                      sliceType.getElementType(),
+                                      loadsBufferType[loadOp].getEncoding());
     Value extractSlice = builder.create<tensor::ExtractSliceOp>(
         loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][numStages - 1],
         SmallVector<OpFoldResult>{int_attr(0), int_attr(0), int_attr(0)},
@@ -583,8 +583,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       auto bufferType = insertAsyncOp.getType().cast<RankedTensorType>();
       auto bufferShape = bufferType.getShape();
       auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
-      sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]}, sliceType.getElementType(),
-                              loadsBufferType[loadOp].getEncoding());
+      sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]},
+                                        sliceType.getElementType(),
+                                        loadsBufferType[loadOp].getEncoding());
 
       nextOp = builder.create<tensor::ExtractSliceOp>(
           op->getLoc(), sliceType, insertAsyncOp,
@@ -710,7 +711,6 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
         forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
       forOp->erase();
     });
-
   }
 };
 } // anonymous namespace

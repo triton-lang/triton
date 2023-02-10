@@ -1309,7 +1309,6 @@ public:
     if (fixupLoops(m).failed()) {
       signalPassFailure();
     }
-
   }
 };
 
