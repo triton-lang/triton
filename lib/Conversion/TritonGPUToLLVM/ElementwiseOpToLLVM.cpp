@@ -372,6 +372,8 @@ public:
     Type structTy = this->getTypeConverter()->convertType(resultTy);
 
     auto *concreteThis = static_cast<const ConcreteT *>(this);
+    llvm::outs() << op << "\n";
+    llvm::outs() << elems << "\n"; 
     auto operands = getOperands(rewriter, adaptor, elems, loc);
     SmallVector<Value> resultVals(elems);
     for (unsigned i = 0; i < elems; ++i) {
