@@ -444,6 +444,11 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
     }
   }
   rewriter.setInsertionPoint(op);
+  if(op->getNumResults() == 0){
+    Operation* newOp = rewriter.clone(*op, mapping);
+    rewriter.eraseOp(op);
+    return;
+  }
   auto *newOp = cloneWithInferType(rewriter, op, mapping);
   auto newType = newOp->getResult(0).getType().cast<RankedTensorType>();
   auto newCvtType = RankedTensorType::get(
@@ -590,12 +595,13 @@ public:
     llvm::MapVector<Value, Attribute> toConvert;
     for (Operation *op : cvtSlices) {
       // don't rematerialize anything expensive
-      if (expensiveToRemat(op, srcEncoding)) {
+      if (expensiveToRemat(op, dstEncoding)) {
         return failure();
       }
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>()) {
+          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
+          !isa<triton::StoreOp>(op)) {
         return failure();
       }
       // don't rematerialize if it adds an extra conversion that can't
