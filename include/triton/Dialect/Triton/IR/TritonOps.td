@@ -257,8 +257,7 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect,
 }
 
 def TT_ViewOp : TT_Op<"view", [NoSideEffect,
-                               SameOperandsAndResultElementType,
-                               SameOperandsAndResultEncoding]> {
+                               SameOperandsAndResultElementType]> {
     let summary = "view";
 
     let arguments = (ins TT_Tensor:$src);
