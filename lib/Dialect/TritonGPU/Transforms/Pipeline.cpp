@@ -210,33 +210,47 @@ LogicalResult LoopPipeliner::initialize() {
     // TODO: lift this constraint in the future
     if (isCandidate && loadOp.getResult().hasOneUse()) {
       isCandidate = false;
+      // skip all the uses that reside in shared memory and also
+      // have a single use
       Operation *use = *loadOp.getResult().getUsers().begin();
-      if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-        if (auto tensorType = convertLayout.getResult()
-                                  .getType()
-                                  .dyn_cast<RankedTensorType>()) {
-          if (auto dotOpEnc = tensorType.getEncoding()
-                                  .dyn_cast<ttg::DotOperandEncodingAttr>()) {
-            isCandidate = true;
-            loadsMapping[loadOp] = convertLayout;
-            auto ty = loadOp.getType().cast<RankedTensorType>();
-            SmallVector<int64_t> bufferShape(ty.getShape().begin(),
-                                             ty.getShape().end());
-            bufferShape.insert(bufferShape.begin(), numStages);
-            auto sharedEnc = ttg::SharedEncodingAttr::get(
-                ty.getContext(), dotOpEnc, ty.getShape(),
-                triton::gpu::getOrder(ty.getEncoding()), ty.getElementType());
-            loadsBufferType[loadOp] = RankedTensorType::get(
-                bufferShape, ty.getElementType(), sharedEnc);
-          }
-        }
+      // while(use->getNumResults() == 1 &&
+      //       use->getResult(0).hasOneUse()){
+      //   use = *use->getResult(0).getUsers().begin();
+      //   if(use->getNumResults() != 1)
+      //     break;
+      //   auto tensorType = use->getResult(0).getType().dyn_cast<RankedTensorType>();
+      //   if(!tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
+      //     break;
+      // }
+      auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use);
+      if(!convertLayout)
+        break;
+      auto tensorType = convertLayout.getResult().getType().dyn_cast<RankedTensorType>();
+      if(!tensorType)
+        break;
+      auto dotOpEnc = tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
+      if(!dotOpEnc){
+        break;
       }
+      isCandidate = true;
+      loadsMapping[loadOp] = convertLayout;
+      auto ty = loadOp.getType().cast<RankedTensorType>();
+      SmallVector<int64_t> bufferShape(ty.getShape().begin(),
+                                       ty.getShape().end());
+      bufferShape.insert(bufferShape.begin(), numStages);
+      auto sharedEnc = ttg::SharedEncodingAttr::get(
+          ty.getContext(), dotOpEnc, ty.getShape(),
+          triton::gpu::getOrder(ty.getEncoding()), ty.getElementType());
+      loadsBufferType[loadOp] = RankedTensorType::get(
+          bufferShape, ty.getElementType(), sharedEnc);
     } else
       isCandidate = false;
 
     if (isCandidate)
       loads.insert(loadOp);
   }
+
+  llvm::outs() << loads.size() << "\n";
 
   // We have some loads to pipeline
   if (!loads.empty()) {
