@@ -85,6 +85,23 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
         }
       }
     }
+  } else if (Operation *op = value.getDefiningOp()) {
+    DimVectorT knownContiguity(rank, 1);
+    DimVectorT knownDivisibility(rank, 1);
+    DimVectorT knownConstancy(rank, 1);
+    if (Attribute attr = op->getAttr("tt.divisibility")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownDivisibility = DimVectorT(vals.begin(), vals.end());
+    }
+    if (Attribute attr = op->getAttr("tt.contiguity")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownContiguity = DimVectorT(vals.begin(), vals.end());
+    }
+    if (Attribute attr = op->getAttr("tt.constancy")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownConstancy = DimVectorT(vals.begin(), vals.end());
+    }
+    return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   }
 
   return AxisInfo(/*knownContiguity=*/DimVectorT(rank, contiHint),
@@ -818,7 +835,24 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   if (curr.getRank() == 0) {
     return markAllPessimisticFixpoint(op->getResults());
   }
-
+  // override with hint
+  auto newContiguity = curr.getContiguity();
+  auto newDivisibility = curr.getDivisibility();
+  auto newConstancy = curr.getConstancy();
+  if (Attribute attr = op->getAttr("tt.contiguity")) {
+    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    newContiguity = AxisInfo::DimVectorT(vals.begin(), vals.end());
+  }
+  if (Attribute attr = op->getAttr("tt.divisibility")) {
+    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    newDivisibility = AxisInfo::DimVectorT(vals.begin(), vals.end());
+  }
+  if (Attribute attr = op->getAttr("tt.constancy")) {
+    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
+  }
+  curr = mlir::AxisInfo(newContiguity, newDivisibility, newConstancy,
+                        curr.getConstantValue());
   // join all lattice elements
   ChangeResult result = ChangeResult::NoChange;
   for (Value value : op->getResults()) {
