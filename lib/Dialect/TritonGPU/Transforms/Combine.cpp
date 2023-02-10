@@ -444,8 +444,8 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
     }
   }
   rewriter.setInsertionPoint(op);
-  if(op->getNumResults() == 0){
-    Operation* newOp = rewriter.clone(*op, mapping);
+  if (op->getNumResults() == 0) {
+    Operation *newOp = rewriter.clone(*op, mapping);
     rewriter.eraseOp(op);
     return;
   }
