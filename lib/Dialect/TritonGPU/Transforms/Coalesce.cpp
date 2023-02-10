@@ -36,7 +36,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     SetVector<Value> withSameOrder;
     withSameOrder.insert(ptr);
     if (ptr.getDefiningOp())
-      for (Operation *op : mlir::getSlice(ptr.getDefiningOp())) {
+      for (Operation *op : mlir::multiRootGetSlice(ptr.getDefiningOp())) {
         for (Value val : op->getResults()) {
           if (val.getType() != origType)
             continue;

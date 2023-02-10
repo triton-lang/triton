@@ -1080,7 +1080,7 @@ def path_to_ptxas():
     ]
 
     for ptxas in paths:
-        if os.path.exists(ptxas):
+        if os.path.exists(ptxas) and os.path.isfile(ptxas):
             result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
