@@ -683,7 +683,9 @@ public:
       // rematerialize the operand if necessary
       Operation *currOperation = currOperand.getDefiningOp();
       if (processed.contains(currOperation)) {
-        currOperation = cloneWithInferType(rewriter, currOperation, mapping);
+        Operation *newOperation = cloneWithInferType(rewriter, currOperation, mapping);
+        newOperation->moveBefore(currOperation);
+        currOperation = newOperation;
         currOperand = currOperation->getResult(0);
       }
       // compute target type for the layout cast
