@@ -261,16 +261,36 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 8 elements from A with four vectorized load instruction
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // GCN-NOT: llvm.inline_asm
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
 
     // Load 8 elements from B with four vectorized load instruction
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // GCN-NOT: llvm.inline_asm
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
 
     %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
@@ -279,10 +299,20 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 8 elements to global with four vectorized store instruction
-    // CHECK: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
-    // CHECK: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
-    // CHECK: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
-    // CHECK: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.extractvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN-COUNT-8: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // PTX: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
+    // PTX: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
+    // PTX: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
+    // PTX: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
     tt.store %13, %11 : tensor<256xf32, #blocked0>
     return
   }
