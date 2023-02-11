@@ -24,7 +24,7 @@ void MembarAnalysis::dfsOperation(Operation *operation,
     // scf.if only: two regions
     // scf.for: one region
     RegionInfo curRegionInfo;
-    auto traverseRegions = [&]() -> auto {
+    auto traverseRegions = [&]() -> auto{
       for (auto &region : operation->getRegions()) {
         // Copy the parent info as the current info.
         RegionInfo regionInfo = *parentRegionInfo;
