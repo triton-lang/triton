@@ -697,8 +697,8 @@ public:
           currOperand.getLoc(), newType, currOperand);
       if (currOperation)
         newOperand->moveAfter(currOperation);
-      else{
-        Block* block = currOperand.cast<BlockArgument>().getOwner();
+      else {
+        Block *block = currOperand.cast<BlockArgument>().getOwner();
         newOperand->moveAfter(block, block->begin());
       }
       mapping.map(currOperand, newOperand);
