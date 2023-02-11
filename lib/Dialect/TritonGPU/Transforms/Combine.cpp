@@ -685,7 +685,12 @@ public:
       if (processed.contains(currOperation)) {
         Operation *newOperation =
             cloneWithInferType(rewriter, currOperation, mapping);
-        newOperation->moveAfter(currOperation);
+        if(newOperation){
+          if(mapping.contains(currOperand))
+            newOperation->moveAfter(mapping.lookup(currOperand).getDefiningOp());
+          else
+            newOperation->moveAfter(currOperation);
+        }
         currOperation = newOperation;
         currOperand = currOperation->getResult(0);
       }
