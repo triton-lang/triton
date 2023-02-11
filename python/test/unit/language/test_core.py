@@ -330,7 +330,10 @@ def test_bitwise_op(dtype_x, dtype_y, op, device='cuda'):
 def test_shift_op(dtype_x, dtype_y, op, device='cuda'):
     expr = f'x {op} y'
     bw = max(_bitwidth(dtype_x), _bitwidth(dtype_y))
-    dtype_z = f'uint{bw}'
+    if dtype_x.startswith('int'):
+        dtype_z = f'int{bw}'
+    else:
+        dtype_z = f'uint{bw}'
     numpy_expr = f'x.astype(np.{dtype_z}) {op} y.astype(np.{dtype_z})'
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, y_low=0, y_high=65)
 
@@ -627,7 +630,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
 
     # triton result
     rs = RandomState(17)
-    x = numpy_random((n_programs, ), dtype_str=dtype_x_str, rs=rs)
+    x = np.array([2**i for i in range(n_programs)], dtype=getattr(np, dtype_x_str))
     if mode == 'all_neg':
         x = -np.abs(x)
     if mode == 'all_pos':
@@ -1094,7 +1097,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                            [64, 128, 128, 4],
                                            [32, 128, 64, 2],
                                            [128, 128, 64, 2],
-                                           [64, 128, 128, 4]]
+                                           [64, 128, 128, 2]]
                           for allow_tf32 in [True]
                           for col_a in [True, False]
                           for col_b in [True, False]
@@ -1648,24 +1651,10 @@ def test_num_warps_pow2():
 # -------------
 
 
-def system_libdevice_path() -> str:
-    _SYSTEM_LIBDEVICE_SEARCH_PATHS = [
-        '/usr/lib/cuda/nvvm/libdevice/libdevice.10.bc',
-        '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc',
-    ]
-    SYSTEM_LIBDEVICE_PATH: Optional[str] = None
-    for _p in _SYSTEM_LIBDEVICE_SEARCH_PATHS:
-        if os.path.exists(_p):
-            SYSTEM_LIBDEVICE_PATH = _p
-    assert SYSTEM_LIBDEVICE_PATH is not None, \
-        "Could not find libdevice.10.bc path"
-    return SYSTEM_LIBDEVICE_PATH
-
-
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'libdevice.ffs', ''),
                           ('float32', 'libdevice.log2', ''),
-                          ('float32', 'libdevice.pow', system_libdevice_path()),
+                          ('float32', 'libdevice.pow', tl.libdevice.LIBDEVICE_PATH),
                           ('float64', 'libdevice.norm4d', '')])
 def test_libdevice_tensor(dtype_str, expr, lib_path):
 

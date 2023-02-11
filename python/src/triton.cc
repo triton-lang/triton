@@ -191,7 +191,14 @@ void init_triton_ir(py::module &&m) {
              if (mlir::Operation *definingOp = self.getDefiningOp())
                definingOp->setAttr(name, attr);
              else {
-               /* issue a warning */
+               auto arg = self.cast<mlir::BlockArgument>();
+               int id = arg.getArgNumber();
+               std::string attrName = name + "_arg" + std::to_string(id);
+               mlir::Block *owner = arg.getOwner();
+               if (owner->isEntryBlock() &&
+                   !mlir::isa<mlir::FuncOp>(owner->getParentOp())) {
+                 owner->getParentOp()->setAttr(attrName, attr);
+               }
              }
            })
       .def("get_context", &mlir::Value::getContext)
@@ -953,12 +960,23 @@ void init_triton_ir(py::module &&m) {
              auto zeroValue = self.create<mlir::triton::SplatOp>(
                  loc, lhs.getType(), zeroConst);
 
+             uint64_t ones_val = 0xFFFFFFFFFFFFFFFF;
+             auto onesConst =
+                 self.create<mlir::arith::ConstantIntOp>(loc, ones_val, elementType);
+             auto onesValue = self.create<mlir::triton::SplatOp>(
+                 loc, lhs.getType(), onesConst);
+
+             auto negativeCmpValue = self.create<mlir::arith::CmpIOp>(
+                 loc, mlir::arith::CmpIPredicate::slt, lhs, zeroValue);
+             auto otherValue = mlir::Value(self.create<mlir::SelectOp>(
+                 loc, negativeCmpValue, onesValue, zeroValue));
+
              auto cmpValue = self.create<mlir::arith::CmpIOp>(
                  loc, mlir::arith::CmpIPredicate::slt, rhs, splatValue);
 
              auto shiftValue = self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs);
              return mlir::Value(self.create<mlir::SelectOp>(
-                 loc, cmpValue, shiftValue, zeroValue));
+                 loc, cmpValue, shiftValue, otherValue));
 #else
                   return mlir::Value(
                  self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs));
@@ -1158,10 +1176,12 @@ void init_triton_ir(py::module &&m) {
                  loc, ptrs, cacheModifier, evictionPolicy, isVolatile);
            })
       .def("create_store",
-           [](mlir::OpBuilder &self, mlir::Value &ptrs,
-              mlir::Value &value) -> void {
+           [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &value,
+              mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptrs, value);
+             self.create<mlir::triton::StoreOp>(loc, ptrs, value, cacheModifier,
+                                                evictionPolicy);
            })
       .def("create_masked_load",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &mask,
@@ -1176,9 +1196,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_masked_store",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &val,
-              mlir::Value &mask) -> void {
+              mlir::Value &mask, mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptrs, val, mask);
+             self.create<mlir::triton::StoreOp>(loc, ptrs, val, mask,
+                                                cacheModifier, evictionPolicy);
            })
       .def("create_view",
            [](mlir::OpBuilder &self, mlir::Value &arg,
