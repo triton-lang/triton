@@ -685,12 +685,7 @@ public:
       if (processed.contains(currOperation)) {
         Operation *newOperation =
             cloneWithInferType(rewriter, currOperation, mapping);
-        if(newOperation){
-          if(mapping.contains(currOperand))
-            newOperation->moveAfter(mapping.lookup(currOperand).getDefiningOp());
-          else
-            newOperation->moveAfter(currOperation);
-        }
+        newOperation->moveAfter(currOperation);
         currOperation = newOperation;
         currOperand = currOperation->getResult(0);
       }
@@ -702,6 +697,10 @@ public:
           currOperand.getLoc(), newType, currOperand);
       if (currOperation)
         newOperand->moveAfter(currOperation);
+      else{
+        Block* block = currOperand.cast<BlockArgument>().getOwner();
+        newOperand->moveAfter(block, block->begin());
+      }
       mapping.map(currOperand, newOperand);
     }
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
