@@ -19,7 +19,6 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
 #include <filesystem>
-#include <iostream>
 #include <dlfcn.h>
 
 namespace mlir {
@@ -118,43 +117,47 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
   }
 
   if (!funcs.empty()) {
-    // When using the Math Dialect, it is possible that some ops (e.g., log) are
-    // lowered to a function call. In this case, we need to link libdevice
-    // using its default path:
-    // [triton root dir]/python/triton/language/libdevice.10.bc
-    // TODO(Keren): handle external linkage other than libdevice?
     static const std::string libdevice = "libdevice";
     namespace fs = std::filesystem;
-    static const auto this_file_path = std::filesystem::path(__FILE__);
-    static const auto compile_time_path = this_file_path
-                                              .parent_path()
-                                              .parent_path()
-                                              .parent_path()
-                                              .parent_path() /
-                                          "python" / "triton" /
-                                          "third_party" / "cuda" / "lib" /
-                                          "libdevice.10.bc";
-    if (fs::exists(compile_time_path)) {
-        externLibs.try_emplace(libdevice, compile_time_path.string());
+    // Search for libdevice relative to its library path if used from Python
+    // Then native code is in `triton/_C/libtriton.so` and libdevice in
+    // `triton/third_party/cuda/lib/libdevice.10.bc`
+    static const auto this_library_path = [] {
+        Dl_info fileinfo;
+        if (dladdr(reinterpret_cast<void*>(&getExternLibs), &fileinfo) == 0) {
+          return std::filesystem::path();
+        }
+        return std::filesystem::path(fileinfo.dli_fname);
+    }();
+    static const auto runtime_path = this_library_path
+                                         .parent_path()
+                                         .parent_path() /
+                                     "third_party" / "cuda" / "lib" /
+                                     "libdevice.10.bc";
+    if (fs::exists(runtime_path)) {
+        externLibs.try_emplace(libdevice, runtime_path.string());
     } else {
-      static const auto this_library_path = [] {
-          Dl_info fileinfo;
-          if (dladdr(reinterpret_cast<void*>(&getExternLibs), &fileinfo) == 0) {
-            std::cerr << "Can't get info about current symbol" << dlerror() << std::endl;
-            return std::filesystem::path();
-          }
-          return std::filesystem::path(fileinfo.dli_fname);
-      }();
-      static const auto runtime_path = this_library_path
-                                           .parent_path()
-                                           .parent_path() /
-                                       "third_party" / "cuda" / "lib" /
-                                       "libdevice.10.bc";
-      if (fs::exists(runtime_path)) {
-          externLibs.try_emplace(libdevice, runtime_path.string());
-      } else {
-          std::cerr << runtime_path.string() << " does not exists" << std::endl;
+      // When using the Math Dialect, it is possible that some ops (e.g., log) are
+      // lowered to a function call. In this case, we need to link libdevice
+      // using its default path:
+      // [triton root dir]/python/triton/language/libdevice.10.bc
+      // TODO(Keren): handle external linkage other than libdevice?
+      static const auto this_file_path = std::filesystem::path(__FILE__);
+      static const auto compiletime_path = this_file_path
+                                               .parent_path()
+                                               .parent_path()
+                                               .parent_path()
+                                               .parent_path() /
+                                           "python" / "triton" /
+                                           "third_party" / "cuda" / "lib" /
+                                           "libdevice.10.bc";
+      if (!fs::exists(compiletime_path)) {
+        std::string error_msg = "Can't find libdevice at neither " +
+                                 runtime_path.string() + " nor " +
+                                 compiletime_path.string();
+        llvm::report_fatal_error(error_msg.c_str());
       }
+      externLibs.try_emplace(libdevice, compiletime_path.string());
     }
   }
 
