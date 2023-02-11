@@ -654,7 +654,10 @@ public:
       // rematerialize the operand if necessary
       Operation *currOperation = currOperand.getDefiningOp();
       if (processed.contains(currOperation)) {
-        currOperation = cloneWithInferType(rewriter, currOperation, mapping);
+        Operation *newOperation =
+            cloneWithInferType(rewriter, currOperation, mapping);
+        newOperation->moveAfter(currOperation);
+        currOperation = newOperation;
         currOperand = currOperation->getResult(0);
       }
       // compute target type for the layout cast
@@ -665,6 +668,10 @@ public:
           currOperand.getLoc(), newType, currOperand);
       if (currOperation)
         newOperand->moveAfter(currOperation);
+      else {
+        Block *block = currOperand.cast<BlockArgument>().getOwner();
+        newOperand->moveAfter(block, block->begin());
+      }
       mapping.map(currOperand, newOperand);
     }
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
