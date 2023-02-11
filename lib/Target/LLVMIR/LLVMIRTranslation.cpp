@@ -19,6 +19,8 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
 #include <filesystem>
+#include <iostream>
+#include <dlfcn.h>
 
 namespace mlir {
 namespace triton {
@@ -121,17 +123,39 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
     // using its default path:
     // [triton root dir]/python/triton/language/libdevice.10.bc
     // TODO(Keren): handle external linkage other than libdevice?
-    namespace fs = std::filesystem;
     static const std::string libdevice = "libdevice";
-    static const std::filesystem::path path = std::filesystem::path(__FILE__)
-                                                  .parent_path()
-                                                  .parent_path()
-                                                  .parent_path()
-                                                  .parent_path() /
-                                              "python" / "triton" /
-                                              "third_party" / "cuda" / "lib" /
-                                              "libdevice.10.bc";
-    externLibs.try_emplace(libdevice, path.string());
+    namespace fs = std::filesystem;
+    static const auto this_file_path = std::filesystem::path(__FILE__);
+    static const auto compile_time_path = this_file_path
+                                              .parent_path()
+                                              .parent_path()
+                                              .parent_path()
+                                              .parent_path() /
+                                          "python" / "triton" /
+                                          "third_party" / "cuda" / "lib" /
+                                          "libdevice.10.bc";
+    if (fs::exists(compile_time_path)) {
+        externLibs.try_emplace(libdevice, compile_time_path.string());
+    } else {
+      static const auto this_library_path = [] {
+          Dl_info fileinfo;
+          if (dladdr(reinterpret_cast<void*>(&getExternLibs), &fileinfo) == 0) {
+            std::cerr << "Can't get info about current symbol" << dlerror() << std::endl;
+            return std::filesystem::path();
+          }
+          return std::filesystem::path(fileinfo.dli_fname);
+      }();
+      static const auto runtime_path = this_library_path
+                                           .parent_path()
+                                           .parent_path() /
+                                       "third_party" / "cuda" / "lib" /
+                                       "libdevice.10.bc";
+      if (fs::exists(runtime_path)) {
+          externLibs.try_emplace(libdevice, runtime_path.string());
+      } else {
+          std::cerr << runtime_path.string() << " does not exists" << std::endl;
+      }
+    }
   }
 
   return externLibs;
