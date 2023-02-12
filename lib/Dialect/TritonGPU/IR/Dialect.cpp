@@ -230,13 +230,9 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
                                  blockedLayout.getOrder().end());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    // MMA layout doesn't have an intra-warp order, but we
-    // specify its inter-warp order as column-major.
-    return {0, 1};
+    return {1, 0};
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
-    // Dot layout doesn't have an intra-warp order, but we
-    // specify its inter-warp order as column-major.
-    return {0, 1};
+    return {1, 0};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
     unsigned dim = sliceLayout.getDim();
