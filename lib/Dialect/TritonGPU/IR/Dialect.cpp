@@ -234,7 +234,9 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
     // specify its inter-warp order as column-major.
     return {0, 1};
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
-    return {1, 0};
+    // Dot layout doesn't have an intra-warp order, but we
+    // specify its inter-warp order as column-major.
+    return {0, 1};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
     unsigned dim = sliceLayout.getDim();
