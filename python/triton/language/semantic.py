@@ -577,13 +577,13 @@ def broadcast_impl_value(lhs: tl.tensor,
         if len(lhs_shape) < len(rhs_shape):
             # Add new axes to lhs
             for dim in range(len(lhs_shape), len(rhs_shape)):
-                lhs = tl.tensor(builder.create_expand_dims(lhs.handle, dim), tl.block_type(lhs_ty.scalar, lhs_shape + [1]))
+                lhs = tl.tensor(builder.create_expand_dims(lhs.handle, 0), tl.block_type(lhs_ty.scalar, [1] + lhs_shape))
                 lhs_ty = lhs.type
                 lhs_shape = lhs_ty.get_block_shapes()
         elif len(rhs_shape) < len(lhs_shape):
             # Add new axes to rhs
             for dim in range(len(rhs_shape), len(lhs_shape)):
-                rhs = tl.tensor(builder.create_expand_dims(rhs.handle, dim), tl.block_type(rhs_ty.scalar, rhs_shape + [1]))
+                rhs = tl.tensor(builder.create_expand_dims(rhs.handle, 0), tl.block_type(rhs_ty.scalar, [1] + rhs_shape))
                 rhs_ty = rhs.type
                 rhs_shape = rhs_ty.get_block_shapes()
         assert len(rhs_shape) == len(lhs_shape)
