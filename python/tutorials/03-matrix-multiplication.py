@@ -156,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=2, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -164,6 +164,7 @@ import triton.language as tl
 def matmul_kernel(
     # Pointers to matrices
     a_ptr, b_ptr, c_ptr,
+    bias_ptr,
     # Matrix dimensions
     M, N, K,
     # The stride variables represent how much to increase the ptr by when moving by 1
@@ -229,13 +230,19 @@ def matmul_kernel(
     # while the accumulator is still in FP32!
     if ACTIVATION:
         accumulator = ACTIVATION(accumulator)
-    c = accumulator.to(tl.float16)
-
     # -----------------------------------------------------------
     # Write back the block of the output matrix C
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    # exponentiate
+    # accumulator = tl.exp(accumulator)
+    # add bias
+    bias_ptrs = bias_ptr + offs_cm
+    bias = tl.load(bias_ptrs)
+    accumulator += bias[:, None]
+    # write-back result
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c = accumulator.to(tl.float16)
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
@@ -251,7 +258,7 @@ def leaky_relu(x):
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
 
 
-def matmul(a, b, activation=None):
+def matmul(a, b, bias, activation=None):
     # checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.is_contiguous(), "matrix A must be contiguous"
@@ -267,8 +274,9 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    matmul_kernel[grid](
+    h = matmul_kernel[grid](
         a, b, c,
+        bias,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
@@ -287,8 +295,9 @@ def matmul(a, b, activation=None):
 torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b, activation=None)
-torch_output = torch.matmul(a, b)
+bias = torch.randn((512, ), device='cuda', dtype=torch.float16)
+triton_output = matmul(a, b, bias, activation=None)
+torch_output = torch.matmul(a, b) + bias[:, None]
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
 if triton.testing.allclose(triton_output, torch_output):
@@ -296,42 +305,42 @@ if triton.testing.allclose(triton_output, torch_output):
 else:
     print("❌ Triton and Torch differ")
 
-# %%
-# Benchmark
-# --------------
-#
-# Square Matrix Performance
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~
-# We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
+# # %%
+# # Benchmark
+# # --------------
+# #
+# # Square Matrix Performance
+# # ~~~~~~~~~~~~~~~~~~~~~~~~~~
+# # We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
 
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
-        x_vals=[
-            8192
-        ],  # different possible values for `x_name`
-        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg``
-        line_vals=['cublas', 'triton'],
-        # label name for the lines
-        line_names=["cuBLAS", "Triton"],
-        # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel="TFLOPS",  # label name for the y-axis
-        plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
-        args={},
-    )
-)
-def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-    if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
-    if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
-    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
-    return perf(ms), perf(max_ms), perf(min_ms)
+# @triton.testing.perf_report(
+#     triton.testing.Benchmark(
+#         x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
+#         x_vals=[
+#             8192
+#         ],  # different possible values for `x_name`
+#         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+#         # possible values for `line_arg``
+#         line_vals=['cublas', 'triton'],
+#         # label name for the lines
+#         line_names=["cuBLAS", "Triton"],
+#         # line styles
+#         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+#         ylabel="TFLOPS",  # label name for the y-axis
+#         plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
+#         args={},
+#     )
+# )
+# def benchmark(M, N, K, provider):
+#     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+#     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+#     if provider == 'cublas':
+#         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
+#     if provider == 'triton':
+#         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
+#     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
+#     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+# benchmark.run(show_plots=True, print_data=True)
