@@ -16,12 +16,12 @@ You will specifically learn about:
 # of sequential models (e.g., Transformers) or neural networks with small batch size.
 # It takes a vector :math:`x` as input and produces a vector :math:`y` of the same shape as output.
 # The normalization is performed by subtracting the mean and dividing by the standard deviation of :math:`x`.
-# After the normalization, a learnable linear transformation with weights :math:`w` and biases :math:`b` is applied. 
+# After the normalization, a learnable linear transformation with weights :math:`w` and biases :math:`b` is applied.
 # The forward pass can be expressed as follows:
-# 
+#
 # .. math::
 #    y = \frac{ x - \text{E}[x] }{ \sqrt{\text{Var}(x) + \epsilon} } * w + b
-# 
+#
 # where :math:`\epsilon` is a small constant added to the denominator for numerical stability.
 # Let’s first take a look at the foward pass implementation.
 
@@ -51,7 +51,7 @@ def _layer_norm_fwd_fused(
     N,  # number of columns in X
     eps,  # epsilon to avoid division by zero
     BLOCK_SIZE: tl.constexpr,
-):  
+):
     # Map the program id to the row of X and Y it should compute.
     row = tl.program_id(0)
     Y += row * stride
@@ -98,23 +98,23 @@ def _layer_norm_fwd_fused(
 #
 # .. math::
 #    \nabla_{x} = \frac{1}{\sigma}\Big( \nabla_{y} \odot w - \underbrace{ \big( \frac{1}{N} \hat{x} \cdot (\nabla_{y} \odot w) \big) }_{c_1} \odot \hat{x} - \underbrace{ \frac{1}{N} \nabla_{y} \cdot w }_{c_2} \Big)
-# 
+#
 # where :math:`\odot` denotes the element-wise multiplication, :math:`\cdot` denotes the dot product, and :math:`\sigma` is the standard deviation.
 # :math:`c_1` and :math:`c_2` are intermediate constants that improve the readability of the following implementation.
-# 
+#
 # For the weights :math:`w` and biases :math:`b`, the VJPs :math:`\nabla_{w}` and :math:`\nabla_{b}` are more straightforward:
-# 
+#
 # .. math::
 #    \nabla_{w} = \nabla_{y} \odot \hat{x} \quad \text{and} \quad \nabla_{b} = \nabla_{y}
 #
 # Since the same weights :math:`w` and biases :math:`b` are used for all rows in the same batch, their gradients need to sum up.
-# To perform this step efficiently, we use a parallel reduction strategy: each kernel instance accumulates 
+# To perform this step efficiently, we use a parallel reduction strategy: each kernel instance accumulates
 # partial :math:`\nabla_{w}` and :math:`\nabla_{b}` across certain rows into one of :math:`\text{GROUP_SIZE_M}` independent buffers.
 # These buffers stay in the L2 cache and then are further reduced by another function to compute the actual :math:`\nabla_{w}` and :math:`\nabla_{b}`.
-# 
+#
 # Let the number of input rows :math:`M = 4` and :math:`\text{GROUP_SIZE_M} = 2`,
 # here's a diagram of the parallel reduction strategy for :math:`\nabla_{w}` (:math:`\nabla_{b}` is omitted for brevity):
-# 
+#
 #   .. image:: parallel_reduction.png
 #
 # In Stage 1, the rows of X that have the same color share the same buffer and thus a lock is used to ensure that only one kernel instance writes to the buffer at a time.
@@ -136,7 +136,7 @@ def _layer_norm_bwd_dx_fused(
     stride,  # how much to increase the pointer when moving by 1 row
     N,  # number of columns in X
     eps,  # epsilon to avoid division by zero
-    GROUP_SIZE_M: tl.constexpr, 
+    GROUP_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr
 ):
     # Map the program id to the elements of X, DX, and DY it should compute.
@@ -148,9 +148,9 @@ def _layer_norm_bwd_dx_fused(
     DX += row * stride
     # Offset locks and weights/biases gradient pointer for parallel reduction
     lock_id = row % GROUP_SIZE_M
-    Lock += lock_id               
+    Lock += lock_id
     Count = Lock + GROUP_SIZE_M
-    DW = DW + lock_id * N + cols 
+    DW = DW + lock_id * N + cols
     DB = DB + lock_id * N + cols
     # Load data to SRAM
     x = tl.load(X + cols, mask=mask, other=0).to(tl.float32)
@@ -185,15 +185,16 @@ def _layer_norm_bwd_dx_fused(
     # Release the lock
     tl.atomic_xchg(Lock, 0)
 
+
 @triton.jit
 def _layer_norm_bwd_dwdb(
-    DW,  # pointer to the partial sum of weights gradient 
+    DW,  # pointer to the partial sum of weights gradient
     DB,  # pointer to the partial sum of biases gradient
     FINAL_DW,  # pointer to the weights gradient
     FINAL_DB,  # pointer to the biases gradient
     M,  # GROUP_SIZE_M
     N,  # number of columns
-    BLOCK_SIZE_M: tl.constexpr, 
+    BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr
 ):
     # Map the program id to the elements of DW and DB it should compute.
@@ -218,7 +219,7 @@ def _layer_norm_bwd_dwdb(
 # %%
 # Benchmark
 # ---------------------------------
-# We can now compare the performance of our kernel against that of PyTorch. 
+# We can now compare the performance of our kernel against that of PyTorch.
 # Here we focus on inputs that have Less than 64KB per feature.
 # Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward pass.
 
