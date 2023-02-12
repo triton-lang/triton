@@ -219,16 +219,6 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
       assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
                   "supported yet");
     }
-  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.isAmpere()) {
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              8 * mmaLayout.getWarpsPerCTA()[1]};
-    } else if (mmaLayout.isVolta()) {
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              16 * mmaLayout.getWarpsPerCTA()[1]};
-    } else {
-      llvm_unreachable("Unexpected mma version");
-    }
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
@@ -240,7 +230,9 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
                                  blockedLayout.getOrder().end());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    return {1, 0};
+    // MMA layout doesn't have an intra-warp order, but we
+    // specify its inter-warp order as column-major.
+    return {0, 1};
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     return {1, 0};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {

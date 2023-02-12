@@ -434,13 +434,13 @@ struct MMA16816ConversionHelper {
 
   // Get a warpId for M axis.
   Value getWarpM(int M) const {
-    auto matShape = helper.getMmaMatShape();
+    auto matShape = helper.getMmaInstrShape();
     return urem(urem(warp, i32_val(wpt[0])), i32_val(M / matShape[0]));
   }
 
   // Get a warpId for N axis.
   Value getWarpN(int N) const {
-    auto matShape = helper.getMmaMatShape();
+    auto matShape = helper.getMmaInstrShape();
     Value warpMN = udiv(warp, i32_val(wpt[0]));
     return urem(urem(warpMN, i32_val(wpt[1])), i32_val(N / matShape[1]));
   }
