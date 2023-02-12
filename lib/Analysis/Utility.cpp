@@ -121,6 +121,9 @@ bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
+#ifdef USE_ROCM
+  return false;
+#endif
   auto aElemTy = op.a().getType().cast<RankedTensorType>().getElementType();
   auto bElemTy = op.b().getType().cast<RankedTensorType>().getElementType();
   if (aElemTy.isF32() && bElemTy.isF32()) {
@@ -135,6 +138,9 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2) &&
          "Unexpected MMA layout version found");
+#ifdef USE_ROCM
+  return false;
+#endif
   auto elemTy = value.getType().cast<RankedTensorType>().getElementType();
   return elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||
