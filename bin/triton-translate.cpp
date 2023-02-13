@@ -87,6 +87,14 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
       "gfx", llvm::cl::desc("AMDGCN target. e.g. '90a'"),
       llvm::cl::value_desc("architecture"), llvm::cl::init("90a"));
 
+  static llvm::cl::opt<std::string> GCNTriple(
+      "amdgcn", llvm::cl::desc("AMDGCN triple. e.g. '-amd-amdhsa'"),
+      llvm::cl::value_desc("target triple"), llvm::cl::init("-amd-amdhsa"));
+
+  static llvm::cl::opt<std::string> GCNFeatures(
+      "", llvm::cl::desc("AMDGCN features. e.g. '+sramecc,-xnack'"),
+      llvm::cl::value_desc("features"), llvm::cl::init("+sramecc,-xnack"));
+
   llvm::InitLLVM y(argc, argv);
 
   registerAsmPrinterCLOptions();
@@ -120,7 +128,9 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
                                                    ptxVersion.getValue());
   else if (targetKind == "hsaco") {
     auto [module, hsaco] =
-        ::triton::translateLLVMIRToHSACO(*llvmir, GCNArch.getValue());
+        ::triton::translateLLVMIRToHSACO(*llvmir, GCNArch.getValue(),
+                                                  GCNTriple.getValue(),
+                                                  GCNFeatures.getValue());
     llvm::outs() << hsaco;
   } else {
     llvm::errs() << "Error: Unknown target specified: " << targetKind << "\n";

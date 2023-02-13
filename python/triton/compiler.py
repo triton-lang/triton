@@ -1060,15 +1060,15 @@ def amdgcn_get_kernel_name(amdgcn: str) -> str:
             return line.split()[-1].strip()
 
 
-def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str) -> Tuple[str, str]:
+def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str, gfx_triple: str, gfx_features: str) -> Tuple[str, str]:
     '''
-    Translate TritonGPU module to HSACO code.
+    Translate TritonGPU module to HSACO code based on full details of gpu architecture.
     :param mod: a TritonGPU dialect module
     :return:
         - AMDGCN code
         - Path to HSACO object
     '''
-    return _triton.translate_llvmir_to_hsaco(mod, gfx_arch)
+    return _triton.translate_llvmir_to_hsaco(mod, gfx_arch, gfx_triple, gfx_features)
 
 
 @functools.lru_cache
@@ -1624,13 +1624,23 @@ def read_or_execute(cache_manager, force_compile, file_name, metadata,
     cache_manager.put(data, file_name, True if isinstance(data, bytes) else data)
     return module, md5, True, False
 
-#
-
-def _get_amdgpu_arch():
+def _get_amdgpu_arch_fulldetails():
+    """
+    get the amdgpu fulll ISA details for compiling:
+    i.e., arch_triple: amdgcn-amd-amdhsa; arch_name: gfx906; arch_features: sramecc+:xnack-
+    """
     try:
         rocminfo = subprocess.check_output(rocm_path_dir() + '/bin/rocminfo').decode()
-        gfx_arch = re.search('Name:\\s+.*(gfx\\w+)', rocminfo)
-        return gfx_arch.group(1).strip()
+        gfx_arch_details = re.search('amd.*', rocminfo).group(0).strip().split('--')
+        arch_triple = gfx_arch_details[0]
+        arch_name_features = gfx_arch_details[1].split(':')
+        arch_name = arch_name_features[0]
+        arch_features = ""
+
+        if (len(arch_name_features) == 3):
+            arch_features = "+" + re.search('\\w+', arch_name_features[1]).group(0) + ","\
+                            "-" + re.search('\\w+', arch_name_features[2]).group(0)
+        return [arch_triple, arch_name, arch_features]
     except:
         return None
 
@@ -1700,7 +1710,7 @@ arg_type_pattern = {
 
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
-@static_vars(discovered_gfx_arch = _get_amdgpu_arch())
+@static_vars(discovered_gfx_arch_fulldetails = _get_amdgpu_arch_fulldetails())
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
@@ -1725,7 +1735,9 @@ def compile(fn, **kwargs):
         for key in list(extern_libs):
             if extern_libs[key] == '' or extern_libs[key] is None:
                extern_libs.pop(key)
-        gfx_arch = os.environ.get('MI_GPU_ARCH', compile.discovered_gfx_arch)
+
+        gfx_arch_full_details = compile.discovered_gfx_arch_fulldetails
+        gfx_arch = os.environ.get('MI_GPU_ARCH', gfx_arch_full_details[1])
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')
         stages = {
@@ -1737,7 +1749,9 @@ def compile(fn, **kwargs):
             "llir": (lambda path: Path(path).read_text(),
                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
             "amdgcn": (lambda path: Path(path).read_text(),
-                    lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch)),
+                    lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch, 
+                                                        gfx_arch_full_details[0], 
+                                                        gfx_arch_full_details[2])),
         }
     else:
         stages = {
@@ -1845,7 +1859,7 @@ def compile(fn, **kwargs):
     # return handle to compiled kernel
     return CompiledKernel(so_path, metadata, asm)
 
-@static_vars(discovered_gfx_arch = _get_amdgpu_arch())
+@static_vars(discovered_gfx_arch_fulldetails = _get_amdgpu_arch_fulldetails())
 def _get_amdgcn_bitcode_paths():
   if torch.version.hip is not None:
       gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
@@ -1856,7 +1870,10 @@ def _get_amdgcn_bitcode_paths():
                                              "oclc_correctly_rounded_sqrt_on.bc",
                                              "oclc_unsafe_math_off.bc",
                                              "oclc_wavefrontsize64_on.bc"]
-      gfx_arch_id = re.search('gfx(\\w+)', _get_amdgcn_bitcode_paths.discovered_gfx_arch).group(1).strip()
+    
+      gfx_arch = _get_amdgcn_bitcode_paths.discovered_gfx_arch_fulldetails[1]
+      gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
+
       gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
       bitcode_path_dir = rocm_path_dir() + '/amdgcn/bitcode/'
       amdgcn_bitcode_paths = {}
