@@ -783,8 +783,7 @@ private:
     for (int n = 0; n < shape[1]; n += shapePerCTA[1]) {
       for (int nn = 0; nn < rep[1]; ++nn) {
         idxN.push_back(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1]);
-        if (shape[1] > 1)
-          idxN.push_back(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1] + 1);
+        idxN.push_back(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1] + 1);
       }
     }
 
