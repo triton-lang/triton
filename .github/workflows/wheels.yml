@@ -1,17 +1,14 @@
 name: Wheels
 on:
   workflow_dispatch:
-  #schedule:    
+  #schedule:
   #  - cron: "0 0 * * *"
 
 jobs:
-
   Build-Wheels:
-    
     runs-on: [self-hosted, V100]
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v2
 
@@ -19,7 +16,8 @@ jobs:
         run: |
           #sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
           export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d' --format="%cd")
-          sed -i -r "s/version\=\"(.*)\"/version=\"\1-dev"$LATEST_DATE"\"/g" python/setup.py
+          #sed -i -r "s/version\=\"(.*)\"/version=\"\1-dev"$LATEST_DATE"\"/g" python/setup.py
+          sed -i -r "s/version\=\"(.*)\"/version=\"\1-a1\"/g" python/setup.py
           echo "" >> python/setup.cfg
           echo "[build_ext]" >> python/setup.cfg
           echo "base-dir=/project" >> python/setup.cfg
@@ -32,7 +30,6 @@ jobs:
           export CIBW_SKIP="{cp,pp}35-*"
           export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
-
 
       - name: Upload wheels to PyPI
         run: |
