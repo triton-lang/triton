@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 from distutils.version import LooseVersion
 from typing import NamedTuple
@@ -30,8 +31,8 @@ def get_build_type():
         # TODO: change to release when stable enough
         return "TritonRelBuildWithAsserts"
 
-
 # --- third party packages -----
+
 
 class Package(NamedTuple):
     package: str
@@ -42,24 +43,33 @@ class Package(NamedTuple):
     lib_flag: str
     syspath_var_name: str
 
+# pybind11
+
 
 def get_pybind11_package_info():
     name = "pybind11-2.10.0"
     url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
     return Package("pybind11", name, url, "include/pybind11/pybind11.h", "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
+# llvm
+
 
 def get_llvm_package_info():
     # download if nothing is installed
     system = platform.system()
-    system_suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
-    use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
-    if use_assert_enabled_llvm:
-        name = 'llvm+mlir-14.0.0-x86_64-{}-assert'.format(system_suffix)
-        url = "https://github.com/shintaro-iwasaki/llvm-releases/releases/download/llvm-14.0.0-329fda39c507/{}.tar.xz".format(name)
+    if system == "Darwin":
+        system_suffix = "apple-darwin"
+    elif system == "Linux":
+        vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+        vglibc = vglibc[0] * 100 + vglibc[1]
+        linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
+        system_suffix = f"linux-gnu-{linux_suffix}"
     else:
-        name = 'clang+llvm-14.0.0-x86_64-{}'.format(system_suffix)
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.0/{}.tar.xz".format(name)
+        raise RuntimeError(f"unsupported system: {system}")
+    use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
+    release_suffix = "assert" if use_assert_enabled_llvm else "release"
+    name = f'llvm+mlir-14.0.6-x86_64-{system_suffix}-{release_suffix}'
+    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-14.0.6-f28c006a5895/{name}.tar.xz"
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -69,24 +79,46 @@ def get_thirdparty_packages(triton_cache_path):
     for p in packages:
         package_root_dir = os.path.join(triton_cache_path, p.package)
         package_dir = os.path.join(package_root_dir, p.name)
-        test_file_path = os.path.join(package_dir, p.test_file)
         if p.syspath_var_name in os.environ:
             package_dir = os.environ[p.syspath_var_name]
+        test_file_path = os.path.join(package_dir, p.test_file)
         if not os.path.exists(test_file_path):
             try:
                 shutil.rmtree(package_root_dir)
             except Exception:
                 pass
             os.makedirs(package_root_dir, exist_ok=True)
-            print('downloading and extracting {} ...'.format(p.url))
+            print(f'downloading and extracting {p.url} ...')
             ftpstream = urllib.request.urlopen(p.url)
             file = tarfile.open(fileobj=ftpstream, mode="r|*")
             file.extractall(path=package_root_dir)
         if p.include_flag:
-            thirdparty_cmake_args.append("-D{}={}/include".format(p.include_flag, package_dir))
+            thirdparty_cmake_args.append(f"-D{p.include_flag}={package_dir}/include")
         if p.lib_flag:
-            thirdparty_cmake_args.append("-D{}={}/lib".format(p.lib_flag, package_dir))
+            thirdparty_cmake_args.append(f"-D{p.lib_flag}={package_dir}/lib")
     return thirdparty_cmake_args
+
+# ---- package data ---
+
+
+def download_and_copy_ptxas():
+    base_dir = os.path.dirname(__file__)
+    src_path = "bin/ptxas"
+    url = "https://conda.anaconda.org/nvidia/label/cuda-12.0.0/linux-64/cuda-nvcc-12.0.76-0.tar.bz2"
+    dst_prefix = os.path.join(base_dir, "triton")
+    dst_suffix = os.path.join("third_party", "cuda", src_path)
+    dst_path = os.path.join(dst_prefix, dst_suffix)
+    if not os.path.exists(dst_path):
+        print(f'downloading and extracting {url} ...')
+        ftpstream = urllib.request.urlopen(url)
+        file = tarfile.open(fileobj=ftpstream, mode="r|*")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file.extractall(path=temp_dir)
+            src_path = os.path.join(temp_dir, src_path)
+            os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+            shutil.copy(src_path, dst_path)
+    return dst_suffix
+
 
 # ---- cmake extension ----
 
@@ -154,35 +186,21 @@ class CMakeBuild(build_ext):
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
-            cmake_args += ["-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{}={}".format(cfg.upper(), extdir)]
+            cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
             if sys.maxsize > 2**32:
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
         else:
             import multiprocessing
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ["--", '-j' + str(2 * multiprocessing.cpu_count())]
+            build_args += ['-j' + str(2 * multiprocessing.cpu_count())]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
 
-package_data = {
-    "triton/ops": ["*.c"],
-    "triton/ops/blocksparse": ["*.c"],
-    "triton/language": ["*.bc"],
-}
-
-if os.getenv("TRITION_PACKAGE_CUDA_DEPS"):
-    base_dir = os.path.dirname(__file__)
-    cuda_dir = os.getenv("CUDA_HOME", "/usr/local/cuda")
-    triton_dir = os.path.join(base_dir, "triton")
-    os.makedirs(os.path.join(triton_dir, "include"), exist_ok=True)
-    os.makedirs(os.path.join(triton_dir, "bin"), exist_ok=True)
-    shutil.copy(os.path.join(cuda_dir, "include", "cuda.h"), os.path.join(triton_dir, "include"))
-    shutil.copy(os.path.join(cuda_dir, "bin", "ptxas"), os.path.join(triton_dir, "bin"))
-    package_data["triton"] = ["include/cuda.h", "bin/ptxas"]
+download_and_copy_ptxas()
 
 setup(
     name="triton",
@@ -198,7 +216,7 @@ setup(
         "torch",
         "lit",
     ],
-    package_data=package_data,
+    package_data={"triton": ["third_party/**/*"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},

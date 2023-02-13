@@ -184,6 +184,18 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
+    def contains_return_op(self, node):
+        if isinstance(node, ast.Return):
+            return True
+        elif isinstance(node, ast.If):
+            pred = lambda s: self.contains_return_op(s)
+            ret = any(pred(s) for s in node.body)
+            if node.orelse:
+                ret = ret or any(pred(s) for s in node.orelse)
+            return ret
+        else:
+            return False
+
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
 
@@ -480,7 +492,7 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
         if isinstance(cond, triton.language.tensor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
-            if self.scf_stack:
+            if self.scf_stack or not self.contains_return_op(node):
                 self.visit_if_scf(cond, node)
             else:
                 self.visit_if_top_level(cond, node)
@@ -1088,18 +1100,14 @@ def ptx_get_version(cuda_version) -> int:
 
 
 def path_to_ptxas():
-    prefixes = [
+    base_dir = os.path.dirname(__file__)
+    paths = [
         os.environ.get("TRITON_PTXAS_PATH", ""),
-        "",
-        "/usr",
-        os.environ.get('CUDA_PATH', default_cuda_dir())
+        os.path.join(base_dir, "third_party", "cuda", "bin", "ptxas")
     ]
-    if not os.getenv("TRITON_IGNORE_BUNDLED_PTXAS"):
-        prefixes.insert(0, os.path.dirname(__file__))
 
-    for prefix in prefixes:
-        ptxas = os.path.join(prefix, "bin", "ptxas")
-        if os.path.exists(ptxas):
+    for ptxas in paths:
+        if os.path.exists(ptxas) and os.path.isfile(ptxas):
             result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)

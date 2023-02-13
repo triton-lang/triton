@@ -154,6 +154,12 @@ public:
     // block argument
     if (!arg)
       return mlir::failure();
+    // cvt(view) -> view
+    if (auto view = dyn_cast<triton::ViewOp>(arg)) {
+      rewriter.replaceOpWithNewOp<triton::ViewOp>(
+          op, op->getResult(0).getType(), view.getResult());
+      return mlir::success();
+    }
     // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
     auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
     if (alloc_tensor) {
@@ -278,6 +284,9 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
       return failure();
     ret = sliceEncoding.getParent();
   }
+  if (auto view = dyn_cast<triton::ViewOp>(op)) {
+    return failure();
+  }
   return success();
 }
 
@@ -287,16 +296,23 @@ inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
   if (isSingleValue(op->getOperand(0)))
     return false;
   auto ptr = op->getOperand(0);
+  // Case 2: We assume that `evict_last` loads/stores have high hit rate
+  if (auto load = dyn_cast<triton::LoadOp>(op))
+    if (load.evict() == triton::EvictionPolicy::EVICT_LAST)
+      return false;
+  if (auto store = dyn_cast<triton::StoreOp>(op))
+    if (store.evict() == triton::EvictionPolicy::EVICT_LAST)
+      return false;
   if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
     auto encoding = tensorTy.getEncoding();
-    // Case 2: Different type conversion is expensive (e.g., mma <-> block)
+    // Case 3: Different type conversion is expensive (e.g., mma <-> block)
     if (encoding.getTypeID() != targetEncoding.getTypeID())
       return true;
     auto sizePerThread = triton::gpu::getSizePerThread(encoding);
     auto targetSizePerThread = triton::gpu::getSizePerThread(targetEncoding);
     auto order = triton::gpu::getOrder(encoding);
     auto targetOrder = triton::gpu::getOrder(targetEncoding);
-    // Case 3: The targeEncoding may expose more vectorization opportunities
+    // Case 4: The targeEncoding may expose more vectorization opportunities
     return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
   }
   return false;
@@ -365,6 +381,9 @@ LogicalResult simulateBackwardRematerialization(
       if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
               triton::MakeRangeOp, triton::SplatOp>(*opArgI))
         continue;
+      if (auto view = dyn_cast<triton::ViewOp>(opArgI))
+        continue;
+
       // We add one expensive conversion for the current operand
       numCvts += 1;
       queue.emplace_back(opArgI, newEncoding);
@@ -383,9 +402,9 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
                               BlockAndValueMapping &mapping) {
   Operation *newOp = rewriter.clone(*op, mapping);
   auto origType = op->getResult(0).getType().cast<RankedTensorType>();
+  auto argType = newOp->getOperand(0).getType().cast<RankedTensorType>();
   auto newType = RankedTensorType::get(
-      origType.getShape(), origType.getElementType(),
-      newOp->getOperand(0).getType().cast<RankedTensorType>().getEncoding());
+      origType.getShape(), origType.getElementType(), argType.getEncoding());
   newOp->getResult(0).setType(newType);
   auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
   if (typeInfer) {
@@ -397,6 +416,46 @@ Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
       newOp->getResult(0).setType(newTypes.front());
   }
   return newOp;
+}
+
+// op(cvt(arg_0), arg_1, ..., arg_n)
+// -> cvt(op(arg_0, cvt(arg_1), ..., cvt(arg_n)))
+void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
+                           SetVector<Operation *> &cvtSlices,
+                           mlir::PatternRewriter &rewriter) {
+  auto srcEncoding =
+      cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
+  auto dstEncoding =
+      cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
+  BlockAndValueMapping mapping;
+  auto op = cvtSlices.front();
+  for (Value arg : op->getOperands()) {
+    if (arg.getDefiningOp() == cvt)
+      mapping.map(arg, cvt.getOperand());
+    else {
+      auto oldType = arg.getType().cast<RankedTensorType>();
+      auto newType = RankedTensorType::get(
+          oldType.getShape(), oldType.getElementType(), srcEncoding);
+      auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(arg.getLoc(),
+                                                                newType, arg);
+      if (Operation *argOp = arg.getDefiningOp())
+        cvtI->moveAfter(argOp);
+      mapping.map(arg, cvtI);
+    }
+  }
+  rewriter.setInsertionPoint(op);
+  if (op->getNumResults() == 0) {
+    Operation *newOp = rewriter.clone(*op, mapping);
+    rewriter.eraseOp(op);
+    return;
+  }
+  auto *newOp = cloneWithInferType(rewriter, op, mapping);
+  auto newType = newOp->getResult(0).getType().cast<RankedTensorType>();
+  auto newCvtType = RankedTensorType::get(
+      newType.getShape(), newType.getElementType(), dstEncoding);
+  auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+      newOp->getLoc(), newCvtType, newOp->getResult(0));
+  rewriter.replaceOp(op, newCvt->getResults());
 }
 
 //
@@ -529,17 +588,22 @@ public:
              !isa<triton::gpu::ConvertLayoutOp>(op) && !isa<scf::YieldOp>(op);
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
-    if (cvtSlices.empty())
+    if (cvtSlices.empty()) {
       return failure();
+    }
 
     llvm::MapVector<Value, Attribute> toConvert;
     for (Operation *op : cvtSlices) {
       // don't rematerialize anything expensive
-      if (expensiveToRemat(op, srcEncoding))
+      if (expensiveToRemat(op, dstEncoding)) {
         return failure();
+      }
       // don't rematerialize non-element-wise
-      if (!op->hasTrait<mlir::OpTrait::Elementwise>())
+      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
+          !isa<triton::StoreOp>(op)) {
         return failure();
+      }
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
       for (Value arg : op->getOperands()) {
@@ -555,34 +619,7 @@ public:
       }
     }
 
-    BlockAndValueMapping mapping;
-    auto op = cvtSlices.front();
-    for (Value arg : op->getOperands()) {
-      if (arg.getDefiningOp() == cvt)
-        mapping.map(arg, cvt.getOperand());
-      else {
-        auto oldType = arg.getType().cast<RankedTensorType>();
-        auto newType = RankedTensorType::get(
-            oldType.getShape(), oldType.getElementType(), srcEncoding);
-        auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(arg.getLoc(),
-                                                                  newType, arg);
-        if (Operation *argOp = arg.getDefiningOp())
-          cvtI->moveAfter(argOp);
-        mapping.map(arg, cvtI);
-      }
-    }
-    rewriter.setInsertionPoint(op);
-    Operation *newOp = rewriter.clone(*op, mapping);
-    auto oldType = op->getResult(0).getType().cast<RankedTensorType>();
-    auto newType = RankedTensorType::get(oldType.getShape(),
-                                         oldType.getElementType(), srcEncoding);
-
-    newOp->getResult(0).setType(newType);
-    auto newCvtType = RankedTensorType::get(
-        oldType.getShape(), oldType.getElementType(), dstEncoding);
-    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        newOp->getLoc(), newCvtType, newOp->getResult(0));
-    rewriter.replaceOp(op, newCvt->getResults());
+    pushConversionForward(cvt, cvtSlices, rewriter);
     return success();
   }
 };
@@ -646,7 +683,10 @@ public:
       // rematerialize the operand if necessary
       Operation *currOperation = currOperand.getDefiningOp();
       if (processed.contains(currOperation)) {
-        currOperation = cloneWithInferType(rewriter, currOperation, mapping);
+        Operation *newOperation =
+            cloneWithInferType(rewriter, currOperation, mapping);
+        newOperation->moveAfter(currOperation);
+        currOperation = newOperation;
         currOperand = currOperation->getResult(0);
       }
       // compute target type for the layout cast
@@ -657,6 +697,10 @@ public:
           currOperand.getLoc(), newType, currOperand);
       if (currOperation)
         newOperand->moveAfter(currOperation);
+      else {
+        Block *block = currOperand.cast<BlockArgument>().getOwner();
+        newOperand->moveAfter(block, block->begin());
+      }
       mapping.map(currOperand, newOperand);
     }
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
@@ -832,27 +876,10 @@ public:
       }
     }
 
-    // otherwise, we push the conversion forward
+    // Otherwise, we push the conversion forward
     // since we'll be able to move it out of
     // the loop once it reaches the yield op
-    // op(cvt(arg_0), arg_1, ..., arg_n)
-    // -> cvt(op(arg_0, cvt(arg_1), ..., cvt(arg_n)))
-    BlockAndValueMapping mapping;
-    auto op = cvtSlices.front();
-    for (Value arg : op->getOperands()) {
-      if (arg.getDefiningOp() == cvt)
-        mapping.map(arg, cvt.getOperand());
-      else {
-        auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(
-            arg.getLoc(), cvt.getOperand().getType(), arg);
-        mapping.map(arg, cvtI);
-      }
-    }
-    Operation *newOp = rewriter.clone(*op, mapping);
-    newOp->getResult(0).setType(cvt.getOperand().getType());
-    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        newOp->getLoc(), cvt.getResult().getType(), newOp->getResult(0));
-    rewriter.replaceOp(op, newCvt->getResults());
+    pushConversionForward(cvt, cvtSlices, rewriter);
     return success();
   }
 };

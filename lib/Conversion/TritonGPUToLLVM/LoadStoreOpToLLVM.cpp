@@ -44,14 +44,9 @@ struct LoadStoreConversionBase {
     if (!tensorTy)
       return 1;
     auto contiguity = getContiguity(ptr);
-    unsigned numElemBits = 0;
-    auto ptrTy = tensorTy.getElementType().cast<triton::PointerType>();
-    auto pointeeType = ptrTy.getPointeeType();
-    numElemBits = pointeeType.isa<triton::Float8Type>()
-                      ? 8
-                      : pointeeType.getIntOrFloatBitWidth();
+    auto pointeeBitWidth = getPointeeBitWidth(tensorTy);
     // The maximum vector size is 128 bits on NVIDIA GPUs.
-    return std::min<unsigned>(128 / numElemBits, contiguity);
+    return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -1024,7 +1019,6 @@ struct InsertSliceAsyncOpConversion
     auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcShape);
 
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
-
       // 16 * 8 = 128bits
       auto maxBitWidth =
           std::max<unsigned>(128, resElemTy.getIntOrFloatBitWidth());

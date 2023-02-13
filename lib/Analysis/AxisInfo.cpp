@@ -85,6 +85,23 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
         }
       }
     }
+  } else if (Operation *op = value.getDefiningOp()) {
+    DimVectorT knownContiguity(rank, 1);
+    DimVectorT knownDivisibility(rank, 1);
+    DimVectorT knownConstancy(rank, 1);
+    if (Attribute attr = op->getAttr("tt.divisibility")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownDivisibility = DimVectorT(vals.begin(), vals.end());
+    }
+    if (Attribute attr = op->getAttr("tt.contiguity")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownContiguity = DimVectorT(vals.begin(), vals.end());
+    }
+    if (Attribute attr = op->getAttr("tt.constancy")) {
+      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      knownConstancy = DimVectorT(vals.begin(), vals.end());
+    }
+    return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   }
 
   return AxisInfo(/*knownContiguity=*/DimVectorT(rank, contiHint),
@@ -305,17 +322,20 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    // lhs = k * d_lhs = k * k' * gcd(d_lhs, d_rhs)
-    // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
-    // lhs / rhs = k * k' * gcd(d_lhs, d_rhs) / (p * p' * gcd(d_lhs, d_rhs))
-    //           = k / p * k' / p'
-    // gcd(k', p') = divisibility(d_lhs / gcd(d_lhs, d_rhs), d_rhs / gcd(d_lhs,
-    // d_rhs))
-    auto lhsDivisibility = lhs.getDivisibility(dim);
-    auto rhsDivisibility = rhs.getDivisibility(dim);
-    auto initGcd = gcd(lhsDivisibility, rhsDivisibility);
-    return std::max(lhsDivisibility / initGcd, rhsDivisibility / initGcd);
-  };
+    // Case 1: lhs is 0
+    if (lhs.getConstantValue().has_value() &&
+        lhs.getConstantValue().value() == 0)
+      return lhs.getDivisibility(dim);
+    // Case 2: rhs is constant
+    if (rhs.getConstantValue().has_value()) {
+      auto lhsDivisibility = lhs.getDivisibility(dim);
+      auto rhsValue = rhs.getConstantValue().value();
+      if (lhsDivisibility % rhsValue == 0)
+        return lhsDivisibility / rhsValue;
+    }
+    // Case 3: both are not constant
+    return 1;
+  }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
@@ -815,7 +835,24 @@ ChangeResult AxisInfoAnalysis::visitOperation(
   if (curr.getRank() == 0) {
     return markAllPessimisticFixpoint(op->getResults());
   }
-
+  // override with hint
+  auto newContiguity = curr.getContiguity();
+  auto newDivisibility = curr.getDivisibility();
+  auto newConstancy = curr.getConstancy();
+  if (Attribute attr = op->getAttr("tt.contiguity")) {
+    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    newContiguity = AxisInfo::DimVectorT(vals.begin(), vals.end());
+  }
+  if (Attribute attr = op->getAttr("tt.divisibility")) {
+    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    newDivisibility = AxisInfo::DimVectorT(vals.begin(), vals.end());
+  }
+  if (Attribute attr = op->getAttr("tt.constancy")) {
+    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
+  }
+  curr = mlir::AxisInfo(newContiguity, newDivisibility, newConstancy,
+                        curr.getConstantValue());
   // join all lattice elements
   ChangeResult result = ChangeResult::NoChange;
   for (Value value : op->getResults()) {
@@ -850,8 +887,11 @@ unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto axisInfo = lookupLatticeElement(ptr)->getValue();
   auto layout = tensorTy.getEncoding();
   auto order = triton::gpu::getOrder(layout);
-  auto maxMultiple = axisInfo.getDivisibility(order[0]);
+  auto maxMultipleBytes = axisInfo.getDivisibility(order[0]);
   auto maxContig = axisInfo.getContiguity(order[0]);
+  auto elemNumBits = getPointeeBitWidth(tensorTy);
+  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
   return alignment;
 }

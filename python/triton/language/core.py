@@ -549,7 +549,10 @@ class tensor:
     @builtin
     def __rshift__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
-        return semantic.lshr(self, other, _builder)
+        if self.dtype.is_int_signed():
+            return semantic.ashr(self, other, _builder)
+        else:
+            return semantic.lshr(self, other, _builder)
 
     # comparison operators
 
@@ -890,7 +893,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, mask=None, _builder=None):
+def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -907,7 +910,9 @@ def store(pointer, value, mask=None, _builder=None):
     value = _to_tensor(value, _builder)
     if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
-    return semantic.store(pointer, value, mask, _builder)
+    cache_modifier = _constexpr_to_value(cache_modifier)
+    eviction_policy = _constexpr_to_value(eviction_policy)
+    return semantic.store(pointer, value, mask, cache_modifier, eviction_policy, _builder)
 
 
 # -----------------------

@@ -28,7 +28,6 @@ endif()
 
 # Ensure Python3 vars are set correctly
 #  used conditionally in this file and by lit tests
-find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
 set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
@@ -164,6 +163,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     if (PYTHON_INCLUDE_DIRS)
       include_directories(${PYTHON_INCLUDE_DIRS})
     else()
+      find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
       include_directories(${Python3_INCLUDE_DIRS})
       link_directories(${Python3_LIBRARY_DIRS})
       link_libraries(${Python3_LIBRARIES})

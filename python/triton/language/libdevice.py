@@ -4,14 +4,10 @@ import torch
 from .. import impl
 from . import core, extern
 
-
-LIBDEVICE_PATH = os.path.dirname(
-    os.path.abspath(__file__))
-
 if torch.version.hip is not None:
-    LIBDEVICE_PATH += "/cuda2gcn.bc"
+    LIBDEVICE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cuda2gcn.bc")
 else:
-    LIBDEVICE_PATH += "/libdevice.10.bc"
+    LIBDEVICE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "third_party", "cuda", "lib", "libdevice.10.bc")
 
 @impl.extern
 def clz(arg0, _builder=None):

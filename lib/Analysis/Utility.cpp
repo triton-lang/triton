@@ -306,4 +306,29 @@ multiRootTopologicalSort(const SetVector<Operation *> &toSort) {
   return res;
 }
 
+SetVector<Operation *> multiRootGetSlice(Operation *op,
+                                         TransitiveFilter backwardFilter,
+                                         TransitiveFilter forwardFilter) {
+  SetVector<Operation *> slice;
+  slice.insert(op);
+
+  unsigned currentIndex = 0;
+  SetVector<Operation *> backwardSlice;
+  SetVector<Operation *> forwardSlice;
+  while (currentIndex != slice.size()) {
+    auto *currentOp = (slice)[currentIndex];
+    // Compute and insert the backwardSlice starting from currentOp.
+    backwardSlice.clear();
+    getBackwardSlice(currentOp, &backwardSlice, backwardFilter);
+    slice.insert(backwardSlice.begin(), backwardSlice.end());
+
+    // Compute and insert the forwardSlice starting from currentOp.
+    forwardSlice.clear();
+    getForwardSlice(currentOp, &forwardSlice, forwardFilter);
+    slice.insert(forwardSlice.begin(), forwardSlice.end());
+    ++currentIndex;
+  }
+  return multiRootTopologicalSort(slice);
+}
+
 } // namespace mlir
