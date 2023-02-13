@@ -240,7 +240,7 @@ def matmul_kernel(
     bias_ptrs = bias_ptr + offs_cm
     bias = tl.load(bias_ptrs)
     accumulator += bias[:, None]
-    accumulator += (offs_cm[:, None] + offs_cn[None, :])
+    # accumulator += (offs_cm[:, None] + offs_cn[None, :])
     # write-back result
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c = accumulator.to(tl.float16)
