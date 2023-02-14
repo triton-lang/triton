@@ -156,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=2, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
     ],
     key=['M', 'N', 'K'],
 )
@@ -164,7 +164,6 @@ import triton.language as tl
 def matmul_kernel(
     # Pointers to matrices
     a_ptr, b_ptr, c_ptr,
-    bias_ptr,
     # Matrix dimensions
     M, N, K,
     # The stride variables represent how much to increase the ptr by when moving by 1
@@ -230,20 +229,13 @@ def matmul_kernel(
     # while the accumulator is still in FP32!
     if ACTIVATION:
         accumulator = ACTIVATION(accumulator)
+    c = accumulator.to(tl.float16)
+
     # -----------------------------------------------------------
     # Write back the block of the output matrix C
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    # exponentiate
-    # accumulator = tl.exp(accumulator)
-    # add bias
-    bias_ptrs = bias_ptr + offs_cm
-    bias = tl.load(bias_ptrs)
-    accumulator += bias[:, None]
-    accumulator += (offs_cm[:, None] + offs_cn[None, :])
-    # write-back result
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c = accumulator.to(tl.float16)
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
@@ -259,7 +251,7 @@ def leaky_relu(x):
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
 
 
-def matmul(a, b, bias, activation=None):
+def matmul(a, b, activation=None):
     # checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.is_contiguous(), "matrix A must be contiguous"
@@ -275,9 +267,8 @@ def matmul(a, b, bias, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    h = matmul_kernel[grid](
+    matmul_kernel[grid](
         a, b, c,
-        bias,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
@@ -296,9 +287,8 @@ def matmul(a, b, bias, activation=None):
 torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-bias = torch.randn((512, ), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b, bias, activation=None)
-torch_output = torch.matmul(a, b) + bias[:, None]
+triton_output = matmul(a, b, activation=None)
+torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
 if triton.testing.allclose(triton_output, torch_output):

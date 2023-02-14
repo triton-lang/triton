@@ -840,14 +840,9 @@ private:
 
   // Emit indices calculation within each ConversionPattern, and returns a
   // [elemsPerThread X rank] index matrix.
-
   SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
       Location loc, ConversionPatternRewriter &rewriter,
       const Attribute &layout, ArrayRef<int64_t> shape) const {
-    // if (auto mmaLayout = layout.template dyn_cast<MmaEncodingAttr>()) {
-    //   assert(!mmaLayout.isVolta());
-    // }
-
     // step 1, delinearize threadId to get the base index
     auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, shape);
     // step 2, get offset of each element
@@ -861,7 +856,6 @@ private:
     for (unsigned n = 0; n < elemsPerThread; ++n)
       for (unsigned k = 0; k < rank; ++k)
         multiDimIdx[n][k] = add(multiDimBase[k], idx_val(offset[n][k]));
-
     return multiDimIdx;
   }
 
