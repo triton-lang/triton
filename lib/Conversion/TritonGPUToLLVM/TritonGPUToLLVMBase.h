@@ -392,8 +392,6 @@ public:
         getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
 
-    std::map<unsigned, Value> cache0;
-    std::map<unsigned, Value> cache1;
     for (unsigned i = 0; i < numElems; ++i) {
       if (i % minVec == 0)
         word = undef(wordTy);
@@ -808,8 +806,9 @@ private:
     Value warpSize = idx_val(32);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
-    Value warpId0 = urem(warpId, warpsPerCTA[0]);
-    Value warpId1 = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
+    Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), idx_val(shape[0] / 16));
+    Value warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
+                         idx_val(shape[1] / 8));
     Value offWarp0 = mul(warpId0, idx_val(16));
     Value offWarp1 = mul(warpId1, idx_val(8));
 
