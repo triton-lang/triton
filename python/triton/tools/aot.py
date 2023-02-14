@@ -64,6 +64,13 @@ if __name__ == '__main__':
     if args.target == 'amdgcn':
         if not args.gfx:
             raise argparse.ArgumentError(None, "Must specify --gfx for AMDGCN compilation")
-        module, hsaco_path = triton.compiler.llir_to_amdgcn_and_hsaco(module, args.gfx)
+        triple = ""
+        features = ""
+        if args.gfx == "gfx906":
+            triple = "amdgcn-amd-amdhsa"
+            features = "+sramecc,-xnack"
+        else:
+            raise argparse.ArgumentError(None, "Unexpected architecture set by gfx argument. Available options are: \"gfx906\"")
+        module, hsaco_path = triton.compiler.llir_to_amdgcn_and_hsaco(module, args.gfx, triple, features)
 
     print(module)
