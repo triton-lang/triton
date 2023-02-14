@@ -186,6 +186,9 @@ public:
       auto type = op->getResult(0).getType().dyn_cast<RankedTensorType>();
       if (!type)
         return;
+      auto encoding = type.getEncoding().dyn_cast<MmaEncodingAttr>();
+      if (layoutMap.find(encoding) == layoutMap.end())
+        return;
       Type newType = updateStaleType(layoutMap, type);
       if (!newType)
         return;
