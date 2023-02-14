@@ -12,6 +12,11 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
     return *resultVals.begin();
   }
 
+  int n0 = structType.cast<LLVM::LLVMStructType>().getBody().size();
+  int n1 = resultVals.size();
+  if (n0 != n1) {
+    llvm::outs() << n0 << " " << n1 << "\n";
+  }
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
   for (const auto &v : llvm::enumerate(resultVals)) {
     assert(v.value() && "can not insert null values");

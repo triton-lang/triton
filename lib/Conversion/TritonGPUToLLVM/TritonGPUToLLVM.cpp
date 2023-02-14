@@ -85,6 +85,7 @@ struct BroadcastOpConversion
     }
 
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
+
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
     rewriter.replaceOp(op, {resultStruct});
