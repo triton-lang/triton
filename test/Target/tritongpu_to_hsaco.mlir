@@ -1,5 +1,5 @@
-// RUN: AMDGCN_HSACO_DUMP_PATH=%t.hsaco %PYTHON -m triton.tools.aot %s --target=amdgcn --gfx=906 > /dev/null 2>&1
-// RUN: llvm-readobj -a %t.hsaco | FileCheck %s
+// RUN: HSACO_PATH=$(%PYTHON -m triton.tools.aot %s --target=amdgcn --gfx=gfx906 --triple=amdgcn-amd-amdhsa --features="+sramecc,-xnack" | head -n 1)
+// RUN: llvm-readobj -a "${HSACO_PATH}" | FileCheck %s
 
 // CHECK: Format: elf64-amdgpu
 // TODO: Arch: unknown
