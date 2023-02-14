@@ -257,8 +257,7 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect,
 }
 
 def TT_ViewOp : TT_Op<"view", [NoSideEffect,
-                               SameOperandsAndResultElementType,
-                               SameOperandsAndResultEncoding]> {
+                               SameOperandsAndResultElementType]> {
     let summary = "view";
 
     let arguments = (ins TT_Tensor:$src);
@@ -284,8 +283,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
 }
 
 def TT_CatOp : TT_Op<"cat", [NoSideEffect,
-                             SameOperandsAndResultElementType,
-                             SameOperandsAndResultEncoding]> {
+                             SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
