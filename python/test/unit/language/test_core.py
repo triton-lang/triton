@@ -1229,7 +1229,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
     if K > 16 or N > 16 or M > 16:
-        # XXX: skip small sizes because they are not vectorized    
+        # XXX: skip small sizes because they are not vectorized
         assert 'ld.global.v4' in ptx
         assert 'st.global.v4' in ptx
     if dtype == 'float32' and allow_tf32:
