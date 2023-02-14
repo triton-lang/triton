@@ -133,6 +133,8 @@ Type updateStaleType(
   // mma encoding
   if (auto mma = encoding.dyn_cast<MmaEncodingAttr>()) {
     auto newMma = layoutMap.lookup(mma);
+    if (!newMma)
+      return Type();
     return RankedTensorType::get(type.getShape(), type.getElementType(),
                                  newMma);
   }
@@ -140,6 +142,8 @@ Type updateStaleType(
   else if (auto slice = encoding.dyn_cast<SliceEncodingAttr>()) {
     if (auto mma = slice.getParent().dyn_cast<MmaEncodingAttr>()) {
       auto newMma = layoutMap.lookup(mma);
+      if (!newMma)
+        return Type();
       auto newSlice =
           SliceEncodingAttr::get(slice.getContext(), slice.getDim(), newMma);
       return RankedTensorType::get(type.getShape(), type.getElementType(),
@@ -150,6 +154,8 @@ Type updateStaleType(
   else if (auto dotOp = encoding.dyn_cast<DotOperandEncodingAttr>()) {
     if (auto mma = dotOp.getParent().dyn_cast<MmaEncodingAttr>()) {
       auto newMma = layoutMap.lookup(mma);
+      if (!newMma)
+        return Type();
       auto newDotOp = DotOperandEncodingAttr::get(
           dotOp.getContext(), dotOp.getOpIdx(), newMma, dotOp.getIsMMAv1Row());
       return RankedTensorType::get(type.getShape(), type.getElementType(),
@@ -185,9 +191,6 @@ public:
         return;
       auto type = op->getResult(0).getType().dyn_cast<RankedTensorType>();
       if (!type)
-        return;
-      auto encoding = type.getEncoding().dyn_cast<MmaEncodingAttr>();
-      if (layoutMap.find(encoding) == layoutMap.end())
         return;
       Type newType = updateStaleType(layoutMap, type);
       if (!newType)
