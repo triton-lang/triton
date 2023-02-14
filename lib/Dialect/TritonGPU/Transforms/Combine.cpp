@@ -282,6 +282,8 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
         targetEncoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
     if (!sliceEncoding)
       return failure();
+    if (sliceEncoding.getDim() != reduce.axis())
+      return failure();
     ret = sliceEncoding.getParent();
   }
   if (auto view = dyn_cast<triton::ViewOp>(op)) {
