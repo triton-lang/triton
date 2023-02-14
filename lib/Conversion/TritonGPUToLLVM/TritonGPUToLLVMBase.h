@@ -740,13 +740,10 @@ private:
     offPairN = udiv(offPairN, _fpw0);
     offPairN = urem(offPairN, _fpw1);
     offPairN = mul(offPairN, _4);
-
-    // sclare
     offPairM = mul(offPairM, i32_val(rep[0] / 2));
     offQuadM = mul(offQuadM, i32_val(rep[0] / 2));
     offPairN = mul(offPairN, i32_val(rep[1] / 2));
     offQuadN = mul(offQuadN, i32_val(rep[1] / 2));
-
     // quad pair offset
     Value offLaneM = add(offPairM, offQuadM);
     Value offLaneN = add(offPairN, offQuadN);
