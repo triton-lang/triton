@@ -219,16 +219,6 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
       assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
                   "supported yet");
     }
-  } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.isAmpere()) {
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              8 * mmaLayout.getWarpsPerCTA()[1]};
-    } else if (mmaLayout.isVolta()) {
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              16 * mmaLayout.getWarpsPerCTA()[1]};
-    } else {
-      llvm_unreachable("Unexpected mma version");
-    }
   } else {
     assert(0 && "Unimplemented usage of getShapePerCTA");
   }
