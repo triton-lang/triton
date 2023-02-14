@@ -69,6 +69,7 @@ public:
 
     mlir::Value trueValue = selectOp.getTrueValue();
     mlir::Value falseValue = selectOp.getFalseValue();
+    mlir::Value condSelect = selectOp.getCondition();
 
     auto *loadOpCandidate = trueValue.getDefiningOp();
     auto loadOp = llvm::dyn_cast_or_null<triton::LoadOp>(loadOpCandidate);
@@ -83,6 +84,10 @@ public:
     auto broadcastOp =
         llvm::dyn_cast_or_null<triton::BroadcastOp>(broadcastOpCandidate);
     if (!broadcastOp)
+      return mlir::failure();
+
+    auto broadcastCond = broadcastOp.src();
+    if (broadcastCond != condSelect)
       return mlir::failure();
 
     rewriter.replaceOpWithNewOp<triton::LoadOp>(
@@ -164,8 +169,9 @@ struct CanonicalizeMaskedStorePattern
 
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
-      rewriter.replaceOpWithNewOp<triton::StoreOp>(storeOp, storeOp.ptr(),
-                                                   storeOp.value());
+      rewriter.replaceOpWithNewOp<triton::StoreOp>(
+          storeOp, storeOp.ptr(), storeOp.value(), storeOp.cache(),
+          storeOp.evict());
     } else {
       // mask = splat(0)
       rewriter.eraseOp(storeOp);

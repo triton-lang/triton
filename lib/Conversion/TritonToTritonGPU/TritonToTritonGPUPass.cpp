@@ -345,7 +345,8 @@ struct TritonStorePattern : public OpConversionPattern<triton::StoreOp> {
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        op, adaptor.ptr(), adaptor.value(), adaptor.mask());
+        op, adaptor.ptr(), adaptor.value(), adaptor.mask(), adaptor.cache(),
+        adaptor.evict());
     return success();
   }
 };

@@ -747,6 +747,30 @@ def cast(input: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
+def str_to_cache_modifier(cache_modifier):
+    cache = ir.CACHE_MODIFIER.NONE  # default
+    if cache_modifier:
+        if cache_modifier == ".ca":
+            cache = ir.CACHE_MODIFIER.CA
+        elif cache_modifier == ".cg":
+            cache = ir.CACHE_MODIFIER.CG
+        else:
+            raise ValueError(f"Cache modifier {cache_modifier} not supported")
+    return cache
+
+
+def str_to_eviction_policy(eviction_policy):
+    eviction = ir.EVICTION_POLICY.NORMAL  # default
+    if eviction_policy:
+        if eviction_policy == "evict_last":
+            eviction = ir.EVICTION_POLICY.EVICT_LAST
+        elif eviction_policy == "evict_first":
+            eviction = ir.EVICTION_POLICY.EVICT_FIRST
+        else:
+            raise ValueError(f"Eviction policy {eviction_policy} not supported")
+    return eviction
+
+
 def load(ptr: tl.tensor,
          mask: Optional[tl.tensor],
          other: Optional[tl.tensor],
@@ -756,6 +780,11 @@ def load(ptr: tl.tensor,
          builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of load instruction is " + ptr.type.__repr__())
+    if not ptr.type.is_block():
+        if mask and mask.type.is_block():
+            raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
+        if other and other.type.is_block():
+            raise ValueError("Other argument cannot be block type if pointer argument is not a block")
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
@@ -775,30 +804,15 @@ def load(ptr: tl.tensor,
         other = cast(other, elt_ty, builder)
 
     # cache modifier
-    cache = ir.CACHE_MODIFIER.NONE  # default
-    if cache_modifier:
-        if cache_modifier == ".ca":
-            cache = ir.CACHE_MODIFIER.CA
-        elif cache_modifier == ".cg":
-            cache = ir.CACHE_MODIFIER.CG
-        else:
-            raise ValueError(f"Cache modifier {cache_modifier} not supported")
-
-    # eviction policy
-    eviction = ir.EVICTION_POLICY.NORMAL  # default
-    if eviction_policy:
-        if eviction_policy == "evict_last":
-            eviction = ir.EVICTION_POLICY.EVICT_LAST
-        elif eviction_policy == "evict_first":
-            eviction = ir.EVICTION_POLICY.EVICT_FIRST
-        else:
-            raise ValueError(f"Eviction policy {eviction_policy} not supported")
 
     if ptr.type.is_block():
         shape = ptr.type.get_block_shapes()
         dst_ty = tl.block_type(elt_ty, shape)
     else:
         dst_ty = elt_ty
+
+    cache = str_to_cache_modifier(cache_modifier)
+    eviction = str_to_eviction_policy(eviction_policy)
 
     if not mask:
         if other:
@@ -816,9 +830,16 @@ def load(ptr: tl.tensor,
 def store(ptr: tl.tensor,
           val: tl.tensor,
           mask: Optional[tl.tensor],
+          cache_modifier: str,
+          eviction_policy: str,
           builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+    if not ptr.type.is_block():
+        if val.type.is_block():
+            raise ValueError("Value argument cannot be block type if pointer argument is not a block")
+        if mask and mask.type.is_block():
+            raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
     if ptr.type.is_block():
         val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
     if mask and ptr.type.is_block():
@@ -830,14 +851,16 @@ def store(ptr: tl.tensor,
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
-
+    # attributes
+    cache = str_to_cache_modifier(cache_modifier)
+    eviction = str_to_eviction_policy(eviction_policy)
     # cast to target data-type
     val = cast(val, elt_ty, builder)
     if not mask:
-        return tl.tensor(builder.create_store(ptr.handle, val.handle), tl.void)
+        return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
-    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle), tl.void)
+    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction), tl.void)
 
 #########
 # atomic

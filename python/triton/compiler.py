@@ -179,6 +179,18 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
+    def contains_return_op(self, node):
+        if isinstance(node, ast.Return):
+            return True
+        elif isinstance(node, ast.If):
+            pred = lambda s: self.contains_return_op(s)
+            ret = any(pred(s) for s in node.body)
+            if node.orelse:
+                ret = ret or any(pred(s) for s in node.orelse)
+            return ret
+        else:
+            return False
+
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
 
@@ -475,7 +487,7 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
         if isinstance(cond, triton.language.tensor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
-            if self.scf_stack:
+            if self.scf_stack or not self.contains_return_op(node):
                 self.visit_if_scf(cond, node)
             else:
                 self.visit_if_top_level(cond, node)
@@ -1068,7 +1080,7 @@ def path_to_ptxas():
     ]
 
     for ptxas in paths:
-        if os.path.exists(ptxas):
+        if os.path.exists(ptxas) and os.path.isfile(ptxas):
             result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
