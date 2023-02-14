@@ -1618,7 +1618,8 @@ void init_triton_translation(py::module &m) {
 
   m.def(
       "translate_llvmir_to_hsaco",
-      [](const std::string llvmIR, std::string cc) -> std::tuple<std::string, std::string> {
+      [](const std::string llvmIR, std::string gfx_arch, std::string gfx_triple, 
+          std::string gfx_features) -> std::tuple<std::string, std::string> {
         // create LLVM module from C++
         llvm::LLVMContext context;
         std::unique_ptr<llvm::MemoryBuffer> buffer =
@@ -1627,8 +1628,7 @@ void init_triton_translation(py::module &m) {
         std::unique_ptr<llvm::Module> module =
             llvm::parseIR(buffer->getMemBufferRef(), error, context);
         // translate module to HSACO
-        auto hsacoCode =
-            triton::translateLLVMIRToHSACO(*module, cc);
+        auto hsacoCode = triton::translateLLVMIRToHSACO(*module, gfx_arch, gfx_triple, gfx_features);
         return hsacoCode;
       },
       ret::take_ownership);

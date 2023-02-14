@@ -141,18 +141,16 @@ std::string generate_hsaco(llvm::Module* module,
 }
 
 std::tuple<std::string, std::string> llir_to_amdgcn_and_hsaco(llvm::Module* module,
-                                                   std::string cc) {
-  // create
-  std::string triple = "amdgcn-amd-amdhsa";
-  std::string proc = cc;
-  std::string features = "+sramecc,-xnack";
+                                                   std::string gfx_arch,
+                                                   std::string gfx_triple,
+                                                   std::string gfx_features) {
 
   init_llvm();
 
   // verify and store llvm
   auto module_obj = llvm::CloneModule(*module);
-  auto amdgcn = generate_amdgcn_assembly(module, triple, proc, features);
-  auto hsaco_path = generate_hsaco(module_obj.get(), triple, proc, features);
+  auto amdgcn = generate_amdgcn_assembly(module, gfx_triple, gfx_arch, gfx_features);
+  auto hsaco_path = generate_hsaco(module_obj.get(), gfx_triple, gfx_arch, gfx_features);
 
   return std::make_tuple(amdgcn, hsaco_path);
 }
@@ -162,8 +160,10 @@ std::tuple<std::string, std::string> llir_to_amdgcn_and_hsaco(llvm::Module* modu
 namespace triton {
 
 std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module& module,
-                                                            std::string cc) {
-  auto hsacoCode = llir_to_amdgcn_and_hsaco(&module, cc);
+                                                            std::string gfx_arch,
+                                                            std::string gfx_triple,
+                                                            std::string gfx_features) {
+  auto hsacoCode = llir_to_amdgcn_and_hsaco(&module, gfx_arch, gfx_triple, gfx_features);
   return hsacoCode;
 }
 
