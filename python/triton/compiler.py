@@ -1632,7 +1632,7 @@ def read_or_execute(cache_manager, force_compile, file_name, metadata,
     cache_manager.put(data, file_name, True if isinstance(data, bytes) else data)
     return module, md5, True, False
 
-def _get_amdgpu_arch_fulldetails():
+def get_amdgpu_arch_fulldetails():
     """
     get the amdgpu fulll ISA details for compiling:
     i.e., arch_triple: amdgcn-amd-amdhsa; arch_name: gfx906; arch_features: sramecc+:xnack-
@@ -1718,7 +1718,7 @@ arg_type_pattern = {
 
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
-@static_vars(discovered_gfx_arch_fulldetails = _get_amdgpu_arch_fulldetails())
+@static_vars(discovered_gfx_arch_fulldetails = get_amdgpu_arch_fulldetails())
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
@@ -1867,7 +1867,7 @@ def compile(fn, **kwargs):
     # return handle to compiled kernel
     return CompiledKernel(so_path, metadata, asm)
 
-@static_vars(discovered_gfx_arch_fulldetails = _get_amdgpu_arch_fulldetails())
+@static_vars(discovered_gfx_arch_fulldetails = get_amdgpu_arch_fulldetails())
 def _get_amdgcn_bitcode_paths():
   if torch.version.hip is not None:
       gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
