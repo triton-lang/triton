@@ -3,6 +3,7 @@ import sys
 
 import triton
 import triton._C.libtriton.triton as libtriton
+import triton.compiler as tc
 
 if __name__ == '__main__':
 
@@ -18,6 +19,8 @@ if __name__ == '__main__':
     parser.add_argument('--sm', type=int, help="Compute capability to compile for")
     parser.add_argument('--ptx-version', type=int, help="PTX version to compile for")
     parser.add_argument('--gfx', type=str, help="AMDGPU target to compile for")
+    parser.add_argument('--triple', type=str, help="target triple, for example: amdgcn-amd-amdhsa")
+    parser.add_argument('--features', type=str, help="target features, for example: +sramecc,-xnack")
 
     # parse the args
     args = parser.parse_args()
@@ -62,8 +65,28 @@ if __name__ == '__main__':
 
     # llvm-ir -> amdgcn
     if args.target == 'amdgcn':
-        if not args.gfx:
+        # auto detect available architecture and features
+        # if nothing detected, set with default values
+        arch_details = tc.get_amdgpu_arch_fulldetails()
+        if not arch_details:
+            arch_name = ""
+            arch_triple = "amdgcn-amd-amdhsa"
+            arch_features = ""
+        else:
+            arch_triple, arch_name, arch_features = arch_details
+
+        # stop processing if architecture name is not automatically detected and is not set manually
+        if not args.gfx and not arch_name:
             raise argparse.ArgumentError(None, "Must specify --gfx for AMDGCN compilation")
-        module, hsaco_path = triton.compiler.llir_to_amdgcn_and_hsaco(module, args.gfx)
+
+        # rewrite default and automatically detected values with manually provided data
+        if args.gfx:
+            arch_name = args.gfx
+        if args.triple:
+            arch_triple = args.triple
+        if args.features:
+            arch_features = args.features
+
+        module, hsaco_path = triton.compiler.llir_to_amdgcn_and_hsaco(module, arch_name, arch_triple, arch_features)
 
     print(module)
