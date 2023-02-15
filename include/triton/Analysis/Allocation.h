@@ -188,6 +188,8 @@ private:
   friend class triton::AllocationAnalysis;
 };
 
+template <typename T> Interval(T, T) -> Interval<T>;
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_ALLOCATION_H

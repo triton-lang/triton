@@ -11,11 +11,11 @@ using ::mlir::LLVM::getStructFromElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
-struct ReturnOpConversion : public ConvertOpToLLVMPattern<::mlir::ReturnOp> {
-  using ConvertOpToLLVMPattern<ReturnOp>::ConvertOpToLLVMPattern;
+struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
+  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(ReturnOp op, OpAdaptor adaptor,
+  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     unsigned numArguments = op.getNumOperands();
 
@@ -476,7 +476,6 @@ struct ExtractSliceOpConversion
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-    auto resTy = op.getType().dyn_cast<RankedTensorType>();
     smemObj = SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset),
                                  strideVals, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);

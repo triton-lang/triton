@@ -2,7 +2,7 @@
 #define TRITON_ANALYSIS_ALIAS_H
 
 #include "mlir/Analysis/AliasAnalysis.h"
-#include "mlir/Analysis/DataFlowAnalysis.h"
+#include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "llvm/ADT/DenseSet.h"
 
 namespace mlir {
@@ -21,13 +21,17 @@ public:
   }
 
   /// The pessimistic value state of a value without alias
-  static AliasInfo getPessimisticValueState(MLIRContext *context) {
+  static AliasInfo getPessimisticValueState(MLIRContext *context = nullptr) {
     return AliasInfo();
   }
   static AliasInfo getPessimisticValueState(Value value) { return AliasInfo(); }
 
   /// The union of both arguments
   static AliasInfo join(const AliasInfo &lhs, const AliasInfo &rhs);
+
+  void print(raw_ostream &os) const {
+    llvm::interleaveComma(allocs, os, [&](Value alloc) { alloc.print(os); });
+  }
 
 private:
   /// The set of allocated values that are aliased by this lattice.
@@ -58,9 +62,13 @@ private:
 //===----------------------------------------------------------------------===//
 // Shared Memory Alias Analysis
 //===----------------------------------------------------------------------===//
-class SharedMemoryAliasAnalysis : public ForwardDataFlowAnalysis<AliasInfo> {
+class SharedMemoryAliasAnalysis
+    : public dataflow::SparseDataFlowAnalysis<dataflow::Lattice<AliasInfo>> {
 public:
-  using ForwardDataFlowAnalysis<AliasInfo>::ForwardDataFlowAnalysis;
+  using dataflow::SparseDataFlowAnalysis<
+      dataflow::Lattice<AliasInfo>>::SparseDataFlowAnalysis;
+  using dataflow::SparseDataFlowAnalysis<
+      dataflow::Lattice<AliasInfo>>::getLatticeElement;
 
   /// XXX(Keren): Compatible interface with MLIR AliasAnalysis for future use.
   /// Given two values, returns their aliasing behavior.
@@ -70,9 +78,10 @@ public:
   ModRefResult getModRef(Operation *op, Value location);
 
   /// Computes if the alloc set of the results are changed.
-  ChangeResult
+  void
   visitOperation(Operation *op,
-                 ArrayRef<LatticeElement<AliasInfo> *> operands) override;
+                 ArrayRef<const dataflow::Lattice<AliasInfo> *> operands,
+                 ArrayRef<dataflow::Lattice<AliasInfo> *> results) override;
 };
 
 } // namespace mlir

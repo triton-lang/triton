@@ -159,9 +159,6 @@ private:
                       Value smemBase) const {
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
     auto layout = type.getEncoding();
-    auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>();
-    auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>();
-    auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>();
     auto rank = type.getRank();
     auto sizePerThread = getSizePerThread(layout);
     auto accumSizePerThread = product<unsigned>(sizePerThread);

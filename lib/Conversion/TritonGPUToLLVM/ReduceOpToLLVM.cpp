@@ -286,7 +286,6 @@ private:
     auto srcTy = op.operand().getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
-    auto srcRank = srcTy.getRank();
     auto order = getOrder(srcLayout);
 
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
@@ -351,7 +350,6 @@ private:
 
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);
-    Value warpZero = icmp_eq(warpIdAxis, zero);
 
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;

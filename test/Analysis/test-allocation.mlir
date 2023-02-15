@@ -13,7 +13,7 @@
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: matmul_loop
-func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
+func.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %a_ptr_init = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr_init = tt.broadcast %B : (!tt.ptr<f16>) -> tensor<32x128x!tt.ptr<f16>, #BL>
 
@@ -46,7 +46,7 @@ func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B
 
 // Shared memory is available after a tensor's liveness range ends
 // CHECK-LABEL: reusable
-func @reusable(%A : !tt.ptr<f16>) {
+func.func @reusable(%A : !tt.ptr<f16>) {
   %cst1 = arith.constant dense<true> : tensor<128x32xi1, #AL>
   %cst2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
   %cst3 = arith.constant dense<true> : tensor<32x128xi1, #AL>
@@ -78,7 +78,7 @@ func @reusable(%A : !tt.ptr<f16>) {
 // %cst1->%cst4
 // %cst3->%g->%h->%i
 // CHECK-LABEL: preallocate
-func @preallocate(%A : !tt.ptr<f16>) {
+func.func @preallocate(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 1024, size = 512
@@ -113,7 +113,7 @@ func @preallocate(%A : !tt.ptr<f16>) {
 
 // Unused tensors are immediately released
 // CHECK-LABEL: unused
-func @unused(%A : !tt.ptr<f16>) {
+func.func @unused(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 1024
   %cst0 = arith.constant dense<0.000000e+00> : tensor<32x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 0, size = 512
@@ -128,7 +128,7 @@ func @unused(%A : !tt.ptr<f16>) {
 
 // cst0 is alive through the entire function, it cannot be released before the end of the function
 // CHECK-LABEL: longlive
-func @longlive(%A : !tt.ptr<f16>) {
+func.func @longlive(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 512, size = 512
@@ -156,7 +156,7 @@ func @longlive(%A : !tt.ptr<f16>) {
 }
 
 // CHECK-LABEL: alloc
-func @alloc(%A : !tt.ptr<f16>) {
+func.func @alloc(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
@@ -167,7 +167,7 @@ func @alloc(%A : !tt.ptr<f16>) {
 }
 
 // CHECK-LABEL: scratch
-func @scratch() {
+func.func @scratch() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   // CHECK: scratch offset = 0, size = 512
   %b = tt.reduce %cst0 {redOp = 1 : i32, axis = 0 : i32} : tensor<16x16xf16, #AL> -> tensor<16xf16, #sliceAd0>
@@ -176,7 +176,7 @@ func @scratch() {
 }
 
 // CHECK-LABEL: trans
-func @trans(%A : !tt.ptr<f16>) {
+func.func @trans(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 1024
   %tensor = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
   %b = tt.trans %tensor : (tensor<16x32xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED_T>
@@ -184,7 +184,7 @@ func @trans(%A : !tt.ptr<f16>) {
 }
 
 // CHECK-LABEL: insert_slice_async
-func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
+func.func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
   %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
@@ -197,7 +197,7 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
 }
 
 // CHECK-LABEL: extract_slice
-func @extract_slice(%A : !tt.ptr<f16>) {
+func.func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : index
@@ -209,7 +209,7 @@ func @extract_slice(%A : !tt.ptr<f16>) {
 // B0 -> (B1) -> B0
 // Memory used by B1 can be reused by B0.
 // CHECK-LABEL: if
-func @if(%i1 : i1) {
+func.func @if(%i1 : i1) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 512, size = 512
@@ -233,7 +233,7 @@ func @if(%i1 : i1) {
 // B0 -> (B1) -> (B2) -> B0
 // Memory used by B0 cannot be reused by B1 or B2.
 // CHECK-LABEL: if_else
-func @if_else(%i1 : i1) {
+func.func @if_else(%i1 : i1) {
   // CHECK: offset = 0, size = 512
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK-NEXT: offset = 512, size = 512
@@ -260,7 +260,7 @@ func @if_else(%i1 : i1) {
 // Block arguments and yields are memory aliases that do not trigger a new
 // allocation.
 // CHECK-LABEL: for
-func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
+func.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 8192
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: offset = 8192, size = 8192
@@ -275,7 +275,7 @@ func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.p
 }
 
 // CHECK-LABEL: for_if_slice
-func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+func.func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: offset = 0, size = 8192
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: offset = 8192, size = 8192
@@ -296,7 +296,7 @@ func @for_if_slice(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
 
 // c0 cannot be released in the loop
 // CHECK-LABEL: for_use_ancestor
-func @for_use_ancestor(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+func.func @for_use_ancestor(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: offset = 0, size = 8192
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: offset = 8192, size = 8192
@@ -316,7 +316,7 @@ func @for_use_ancestor(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16
 // a_shared_init, b_shared_init, and c_shared_init's liveness ranges are span over the entire function before cst2.
 // So they cannot be reused by cst0 and cst1, but can be reused by cst2.
 // CHECK-LABEL: for_if_for
-func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: offset = 0, size = 8192
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: offset = 8192, size = 8192

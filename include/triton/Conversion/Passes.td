@@ -12,7 +12,6 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
 
     let dependentDialects = ["mlir::arith::ArithmeticDialect",
                              "mlir::math::MathDialect",
-                             "mlir::StandardOpsDialect",
                              // TODO: Does this pass depend on SCF?
                              "mlir::scf::SCFDialect",
                              "mlir::triton::TritonDialect",
@@ -41,8 +40,7 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                              "mlir::tensor::TensorDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
-                             "mlir::NVVM::NVVMDialect",
-                             "mlir::StandardOpsDialect"];
+                             "mlir::NVVM::NVVMDialect"];
 
     let options = [
         Option<"computeCapability", "compute-capability",

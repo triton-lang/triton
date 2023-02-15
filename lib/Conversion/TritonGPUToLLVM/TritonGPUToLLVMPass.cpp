@@ -1,10 +1,11 @@
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM//ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -40,7 +41,6 @@ public:
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
-    addIllegalDialect<mlir::StandardOpsDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -51,7 +51,7 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
-    addIllegalOp<mlir::FuncOp>();
+    addIllegalOp<mlir::func::FuncOp>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -69,7 +69,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
       : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
 
   LogicalResult
-  matchAndRewrite(FuncOp funcOp, OpAdaptor adaptor,
+  matchAndRewrite(func::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
     if (!newFuncOp)
@@ -133,7 +133,8 @@ public:
     decomposeBlockedToDotOperand(mod);
 
     // Step 2
-    decomposeInsertSliceAsyncOp(mod);
+    if (failed(decomposeInsertSliceAsyncOp(mod)))
+      return signalPassFailure();
 
     // Step 3
     Allocation allocation(mod);
@@ -142,7 +143,7 @@ public:
 
     // Step 4
     RewritePatternSet scf_patterns(context);
-    mlir::populateLoopToStdConversionPatterns(scf_patterns);
+    mlir::populateSCFToControlFlowConversionPatterns(scf_patterns);
     mlir::ConversionTarget scf_target(*context);
     scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
                             scf::WhileOp, scf::ExecuteRegionOp>();
@@ -159,8 +160,10 @@ public:
       return signalPassFailure();
 
     // Step 6 - get axis and shared memory info
-    AxisInfoAnalysis axisInfoAnalysis(mod.getContext());
-    axisInfoAnalysis.run(mod);
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
+    if (failed(solver->initializeAndRun(mod)))
+      return signalPassFailure();
     initSharedMemory(allocation.getSharedMemorySize(), typeConverter);
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
@@ -178,38 +181,39 @@ public:
 
     // Normal conversions
     populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
-                                    axisInfoAnalysis, &allocation, smem,
+                                    *axisInfoAnalysis, &allocation, smem,
                                     indexCacheInfo, /*benefit=*/10);
     // ConvertLayoutOp
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                          axisInfoAnalysis, &allocation, smem,
+                                          *axisInfoAnalysis, &allocation, smem,
                                           indexCacheInfo, /*benefit=*/10);
     // DotOp
     populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                axisInfoAnalysis, &allocation, smem,
+                                *axisInfoAnalysis, &allocation, smem,
                                 /*benefit=*/10);
     // ElementwiseOp
     populateElementwiseOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                        axisInfoAnalysis, &allocation, smem,
+                                        *axisInfoAnalysis, &allocation, smem,
                                         /*benefit=*/10);
     // LoadStoreOp
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                      axisInfoAnalysis, &allocation, smem,
+                                      *axisInfoAnalysis, &allocation, smem,
                                       indexCacheInfo, /*benefit=*/10);
     // ReduceOp
     populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                   axisInfoAnalysis, &allocation, smem,
+                                   *axisInfoAnalysis, &allocation, smem,
                                    indexCacheInfo, /*benefit=*/10);
     // ViewOp
     populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                 axisInfoAnalysis, &allocation, smem,
+                                 *axisInfoAnalysis, &allocation, smem,
                                  /*benefit=*/10);
 
     // Add arith/math's patterns to help convert scalar expression to LLVM.
     mlir::arith::populateArithmeticToLLVMConversionPatterns(typeConverter,
                                                             patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::populateStdToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
@@ -306,9 +310,11 @@ private:
     });
   }
 
-  void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
-    AxisInfoAnalysis axisInfoAnalysis(mod.getContext());
-    axisInfoAnalysis.run(mod);
+  LogicalResult decomposeInsertSliceAsyncOp(ModuleOp mod) const {
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
+    if (failed(solver->initializeAndRun(mod)))
+      return failure();
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
     // have thorough analysis on async wait. Currently, we decompose
@@ -342,7 +348,7 @@ private:
       auto resSharedLayout =
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
-      unsigned inVec = axisInfoAnalysis.getPtrContiguity(src);
+      unsigned inVec = axisInfoAnalysis->getPtrContiguity(src);
       unsigned outVec = resSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       auto maxBitWidth =
@@ -400,11 +406,11 @@ private:
       } else if (decomposed) {
         // Wait for all previous async ops
         OpBuilder builder(asyncWaitOp);
-        auto newAsyncWaitOp =
-            builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
+        builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
         asyncWaitOp.erase();
       }
     });
+    return success();
   }
 };
 
