@@ -602,6 +602,7 @@ public:
       }
       // don't rematerialize non-element-wise
       if (!isa<triton::ViewOp, triton::CatOp>(op) &&
+          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
           !isa<triton::StoreOp>(op)) {
         return failure();
@@ -866,6 +867,7 @@ public:
 
     for (Operation *op : cvtSlices) {
       if (!isa<triton::ViewOp, triton::CatOp>(op) &&
+          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
           !isa<triton::StoreOp>(op))
         return failure();
