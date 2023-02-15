@@ -117,14 +117,6 @@ private:
   /// Collects the successors of the terminator
   void visitTerminator(Operation *operation, SmallVector<Block *> &successors);
 
-  /// Collects the successors of the nested operation
-  void visitNestedOp(Operation *operation, SmallVector<Block *> &successors);
-
-  /// Transfer control flow from the operation to the successors.
-  void transfer(Operation *parentOp,
-                SmallVector<RegionSuccessor> &regionSuccessors,
-                SmallVector<Block *> &successors);
-
 private:
   Allocation *allocation;
   DenseMap<Block *, BlockInfo> inputBlockInfoMap;

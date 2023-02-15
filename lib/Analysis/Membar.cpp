@@ -15,8 +15,20 @@ void MembarAnalysis::run() {
 }
 
 void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
-  // Initialize the blockList and push the entry block
+  // Initialize the blockList
   std::deque<Block *> blockList;
+  operation->walk<WalkOrder::PreOrder>([&](Block *block) {
+    for (auto &op : block->getOperations()) {
+      // Check if the operation belongs to scf dialect, if so, we need to
+      // throw an error
+      if (op.getDialect()->getNamespace() == "scf") {
+        op.emitError("scf dialect is not supported in membar. Please lower it "
+                     "to cf dialect first.");
+        return;
+      }
+    }
+  });
+  // Add entry block to the blockList
   blockList.emplace_back(&operation->getRegion(0).front());
 
   // A fixed point algorithm
@@ -28,87 +40,29 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
     SmallVector<Block *> successors;
     for (auto &op : block->getOperations()) {
       if (op.hasTrait<OpTrait::IsTerminator>()) {
-        // End of the block
         visitTerminator(&op, successors);
-      } else if (op.getNumRegions() > 0) {
-        visitNestedOp(&op, successors);
       } else {
         update(&op, &inputBlockInfo, builder);
       }
     }
     // Get the reference because we want to update if it changed
-    if (inputBlockInfo != outputBlockInfoMap[block]) {
-      // If the inputBlockInfo is different from the outputBlockInfo, we
-      // need to process the successors
-      blockList.emplace_back(block);
-    } else {
-      // Otherwise, we can skip the successors
+    if (inputBlockInfo == outputBlockInfoMap[block]) {
+      // If the inputBlockInfo is the same as the outputBlockInfo, we
+      // skip the successors
       continue;
     }
+    // Update the current block
     outputBlockInfoMap[block].join(inputBlockInfo);
     // Update the successors
     for (auto *successor : successors) {
-      inputBlockInfoMap[successor].join(inputBlockInfo);
+      inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
       blockList.emplace_back(successor);
     }
   }
 }
 
-void MembarAnalysis::transfer(Operation *parentOp,
-                              SmallVector<RegionSuccessor> &regionSuccessors,
-                              SmallVector<Block *> &successors) {
-  for (auto &regionSuccessor : regionSuccessors) {
-    // If the successor is a region, add its entry block to the queue.
-    // If the successor is the parent operation, add its entry block to the
-    // queue if it is a return-like operation.
-    if (auto *region = regionSuccessor.getSuccessor()) {
-      successors.emplace_back(&region->front());
-    } else {
-      successors.emplace_back(&parentOp->getRegion(0).front());
-    }
-  }
-}
-
-void MembarAnalysis::visitNestedOp(Operation *op, SmallVector<Block *> &successors) {
-  if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
-    SmallVector<RegionSuccessor> regionSuccessors;
-    branch.getSuccessorRegions(llvm::None, regionSuccessors);
-    transfer(op, regionSuccessors, successors);
-    return;
-  } 
-  // Otherwise conservatively add all nested regions 
-  for (auto &region : op->getRegions()) {
-    successors.emplace_back(&region.front());
-  }
-}
-
-void MembarAnalysis::visitTerminator(Operation *op, SmallVector<Block *> &successors) {
-  // If this operation has no successors, we treat it as an exiting terminator.
-  if (op->getNumSuccessors() == 0) {
-    Region *parentRegion = op->getParentRegion();
-    Operation *parentOp = parentRegion->getParentOp();
-
-    // Check to see if the parent tracks region control flow.
-    auto regionInterface = dyn_cast<RegionBranchOpInterface>(parentOp);
-    if (!regionInterface)
-      return;
-
-    // Query the set of successors of the current region
-    SmallVector<RegionSuccessor> regionSuccessors;
-    regionInterface.getSuccessorRegions(parentRegion->getRegionNumber(),
-                                        regionSuccessors);
-    if (regionSuccessors.empty())
-      return;
-
-    if (mlir::isRegionReturnLike(op)) {
-      // RegionBranchTerminatorOpInterface: scf.while
-      // ReturnLike: scf.yield
-      transfer(parentOp, regionSuccessors, successors);
-      return;
-    }
-  }
-
-  // If this operation has successors, add them to the queue.
+void MembarAnalysis::visitTerminator(Operation *op,
+                                     SmallVector<Block *> &successors) {
   if (auto branchInterface = dyn_cast<BranchOpInterface>(op)) {
     Block *parentBlock = branchInterface->getBlock();
     for (Block *successor : parentBlock->getSuccessors()) {
@@ -116,12 +70,8 @@ void MembarAnalysis::visitTerminator(Operation *op, SmallVector<Block *> &succes
     }
     return;
   }
-
-  // Conservatively visit all successors
-  Block *block = op->getBlock();
-  for (Block *successor : block->getSuccessors()) {
-    successors.push_back(successor);
-  }
+  // Otherwise, it could be a return op
+  assert(isa<ReturnOp>(op) && "Unknown terminator");
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
