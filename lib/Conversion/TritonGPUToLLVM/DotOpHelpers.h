@@ -159,7 +159,7 @@ struct DotOpMmaV1ConversionHelper {
     return M / shapePerCTAM * param.rep[0];
   }
 
-  using CoordTy = SmallVector<Value, 2>;
+  using CoordTy = SmallVector<Value>;
   // Get the coordinates(m,n) of the elements emit by a thread in accumulator.
   static SmallVector<CoordTy>
   getMNCoords(Value thread, ConversionPatternRewriter &rewriter,

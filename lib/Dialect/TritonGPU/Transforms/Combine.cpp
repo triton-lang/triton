@@ -601,7 +601,8 @@ public:
         return failure();
       }
       // don't rematerialize non-element-wise
-      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
+          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
           !isa<triton::StoreOp>(op)) {
         return failure();
@@ -865,8 +866,10 @@ public:
       return failure();
 
     for (Operation *op : cvtSlices) {
-      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultType>())
+      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
+          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
+          !isa<triton::StoreOp>(op))
         return failure();
       for (Value arg : op->getOperands()) {
         Operation *argOp = arg.getDefiningOp();
