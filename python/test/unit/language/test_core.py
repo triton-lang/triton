@@ -1471,10 +1471,10 @@ def test_pointer_arguments(device):
     pin_memory = 'pinned' in device
     x = torch.empty(1024, device=device.split('_')[0], pin_memory=pin_memory)
     if device == "cpu":
-      with pytest.raises(ValueError):
-        kernel[(1,)](x)
+        with pytest.raises(ValueError):
+            kernel[(1,)](x)
     else:
-      kernel[(1, )](x)
+        kernel[(1, )](x)
 
 
 @pytest.mark.parametrize("value, value_type", [
