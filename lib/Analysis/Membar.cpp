@@ -76,7 +76,8 @@ void MembarAnalysis::visitTerminator(Operation *op,
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             OpBuilder *builder) {
-  if (isa<tensor::ExtractSliceOp>(op) || isa<triton::gpu::AllocTensorOp>(op)) {
+  if (isa<tensor::ExtractSliceOp>(op) || isa<triton::gpu::AllocTensorOp>(op) ||
+      isa<triton::TransOp>(op)) {
     // alloc is an allocation op without memory write.
     // FIXME(Keren): extract_slice is always alias for now
     return;
