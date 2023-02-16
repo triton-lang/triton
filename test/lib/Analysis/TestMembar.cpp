@@ -1,4 +1,4 @@
-#include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
@@ -9,10 +9,9 @@ using namespace mlir;
 namespace {
 
 struct TestMembarPass
-    : public PassWrapper<TestMembarPass, OperationPass<FuncOp>> {
+    : public PassWrapper<TestMembarPass, OperationPass<func::FuncOp>> {
 
-  // LLVM15+
-  // MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestMembarPass);
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestMembarPass);
 
   StringRef getArgument() const final { return "test-print-membar"; }
   StringRef getDescription() const final {

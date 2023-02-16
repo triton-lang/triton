@@ -61,7 +61,6 @@ struct FpToFpOpConversion
   convertFp16x4ToFp8x4(Location loc, ConversionPatternRewriter &rewriter,
                        const Value &v0, const Value &v1, const Value &v2,
                        const Value &v3) {
-    auto ctx = rewriter.getContext();
     auto fp16x2VecTy = vec_ty(f16_ty, 2);
     Value fp16x2Vec0 = undef(fp16x2VecTy);
     Value fp16x2Vec1 = undef(fp16x2VecTy);
@@ -153,7 +152,6 @@ struct FpToFpOpConversion
   convertBf16x4ToFp8x4(Location loc, ConversionPatternRewriter &rewriter,
                        const Value &v0, const Value &v1, const Value &v2,
                        const Value &v3) {
-    auto ctx = rewriter.getContext();
     auto bf16x2VecTy = vec_ty(i16_ty, 2);
     Value bf16x2Vec0 = undef(bf16x2VecTy);
     Value bf16x2Vec1 = undef(bf16x2VecTy);

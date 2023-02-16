@@ -141,11 +141,7 @@ def TT_LoadOp : TT_Op<"load",
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
     ];
 
-    // let assemblyFormat = "operands attr-dict `:` type($result)";
-    let parser = [{ return mlir::triton::parseLoadOp(parser, result); }];
-
-    let printer = [{ return mlir::triton::printLoadOp(p, *this); }];
-
+    let hasCustomAssemblyFormat = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -170,11 +166,7 @@ def TT_StoreOp : TT_Op<"store",
                        "triton::EvictionPolicy":$evict)>,
     ];
 
-    // let assemblyFormat = "operands attr-dict `:` type($value)";
-    let parser = [{ return mlir::triton::parseStoreOp(parser, result); }];
-
-    let printer = [{ return mlir::triton::printStoreOp(p, *this); }];
-
+    let hasCustomAssemblyFormat = 1;
     let hasCanonicalizer = 1;
 }
 

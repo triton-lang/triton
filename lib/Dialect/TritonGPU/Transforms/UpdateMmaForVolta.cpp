@@ -1,5 +1,5 @@
 #include "Utility.h"
-#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -118,8 +118,8 @@ void setOpResultType(Operation *op, ArrayRef<Type> newTypes) {
                     .get("value")
                     .dyn_cast<mlir::DenseElementsAttr>();
     if (attr) {
-      auto newAttr = mlir::DenseElementsAttr::getFromRawBuffer(
-          newType, attr.getRawData(), true);
+      auto newAttr =
+          mlir::DenseElementsAttr::getFromRawBuffer(newType, attr.getRawData());
       op->setAttr("value", newAttr);
     }
   }
