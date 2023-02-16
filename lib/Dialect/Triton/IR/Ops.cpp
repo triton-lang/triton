@@ -1,10 +1,9 @@
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Types.h"
-
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
 namespace mlir {
 namespace triton {
@@ -38,8 +37,8 @@ static Type getPointerTypeSameShape(Type type) {
 }
 
 // Parser & printer for assembly forms
-ParseResult parseLoadOp(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 4> allOperands;
+ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
   Type resultTypes[1];
   SMLoc allOperandLoc = parser.getCurrentLocation();
   if (parser.parseOperandList(allOperands) ||
@@ -73,18 +72,18 @@ ParseResult parseLoadOp(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void printLoadOp(OpAsmPrinter &printer, LoadOp loadOp) {
+void LoadOp::print(OpAsmPrinter &printer) {
   printer << " ";
-  printer << loadOp.getOperation()->getOperands();
+  printer << getOperation()->getOperands();
   // "operand_segment_sizes" can be deduced, so we don't print it.
-  printer.printOptionalAttrDict(loadOp->getAttrs(),
-                                {loadOp.operand_segment_sizesAttrName()});
+  printer.printOptionalAttrDict(getOperation()->getAttrs(),
+                                {operand_segment_sizesAttrName()});
   printer << " : ";
-  printer.printStrippedAttrOrType(loadOp.result().getType());
+  printer.printStrippedAttrOrType(getResult().getType());
 }
 
-ParseResult parseStoreOp(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 4> allOperands;
+ParseResult StoreOp::parse(OpAsmParser &parser, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
   Type valueType;
   SMLoc allOperandLoc = parser.getCurrentLocation();
   if (parser.parseOperandList(allOperands) ||
@@ -104,12 +103,12 @@ ParseResult parseStoreOp(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void printStoreOp(OpAsmPrinter &printer, StoreOp storeOp) {
+void StoreOp::print(OpAsmPrinter &printer) {
   printer << " ";
-  printer << storeOp.getOperation()->getOperands();
-  printer.printOptionalAttrDict(storeOp->getAttrs(), /*elidedAttrs=*/{});
+  printer << getOperation()->getOperands();
+  printer.printOptionalAttrDict(getOperation()->getAttrs(), /*elidedAttrs=*/{});
   printer << " : ";
-  printer.printStrippedAttrOrType(storeOp.value().getType());
+  printer.printStrippedAttrOrType(value().getType());
 }
 
 } // namespace triton
@@ -319,7 +318,8 @@ OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
   if (!constOperand)
     return {};
   auto shapedType = getType().cast<ShapedType>();
-  auto ret = SplatElementsAttr::get(shapedType, {constOperand.getValue()});
+  auto ret = SplatElementsAttr::get(
+      shapedType, ArrayRef<Attribute>(constOperand.getValue()));
   return ret;
 }
 

@@ -59,7 +59,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 // This is needed because these ops don't
 // handle encodings
 // e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td#L111
-def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise, 
+def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise,
                                  SameOperandsAndResultShape, 
                                  SameOperandsAndResultEncoding]> {
   let summary = "integer comparison operation";
@@ -73,7 +73,7 @@ def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise,
   let results = (outs TT_BoolLike:$result);
 }
 
-def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise, 
+def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise,
                                  SameOperandsAndResultShape, 
                                  SameOperandsAndResultEncoding]> {
   let summary = "floating-point comparison operation";
@@ -88,8 +88,8 @@ def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise,
 }
 
 // TODO: migrate to arith::SelectOp on LLVM16
-def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise, 
-                                     SameOperandsAndResultShape, 
+def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise,
+                                     SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding]> {
   let summary = "select operation";
 
@@ -188,10 +188,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
     }
   }];
 
-  // The custom parser could be replaced with oilist in LLVM-16
-  let parser = [{ return parseInsertSliceAsyncOp(parser, result); }];
-
-  let printer = [{ return printInsertSliceAsyncOp(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // Allocate shared memory

@@ -2,6 +2,7 @@
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -160,15 +161,18 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 LogicalResult LoopPipeliner::initialize() {
   Block *loop = forOp.getBody();
 
-  AxisInfoAnalysis axisInfoAnalysis(forOp.getContext());
-  axisInfoAnalysis.run(forOp->getParentOfType<ModuleOp>());
+  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+  AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
+  if (failed(solver->initializeAndRun(forOp->getParentOfType<ModuleOp>()))) {
+    return failure();
+  }
 
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> allLoads;
   for (Operation &op : *loop)
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.ptr();
-      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+      unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
       if (!tensorTy)
         continue;
