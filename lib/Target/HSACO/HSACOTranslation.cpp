@@ -30,10 +30,9 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include <regex>
-#include <cstdio>
 #include <iostream>
 #include <memory>
+#include <random>
 
 namespace {
 
@@ -45,10 +44,19 @@ void init_llvm() {
   LLVMInitializeAMDGPUAsmPrinter();
 }
 
-std::unique_ptr<llvm::TargetMachine> initialize_module(llvm::Module* module,
-                                                       const std::string& triple,
-                                                       const std::string& proc,
-                                                       const std::string& features) {
+std::mt19937_64 *InitRngWithRandomSeed() {
+  std::random_device device("/dev/urandom");
+  return new std::mt19937_64(device());
+}
+
+uint64_t New64() {
+  static std::mt19937_64 *rng = InitRngWithRandomSeed();
+  return (*rng)();
+}
+
+std::unique_ptr<llvm::TargetMachine>
+initialize_module(llvm::Module *module, const std::string &triple,
+                  const std::string &proc, const std::string &features) {
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
@@ -76,12 +84,11 @@ std::unique_ptr<llvm::TargetMachine> initialize_module(llvm::Module* module,
   return std::unique_ptr<llvm::TargetMachine>(machine);
 }
 
-std::string generate_amdgcn_assembly(llvm::Module* module,
-                                     const std::string& triple,
-                                     const std::string& proc,
-                                     const std::string& features) {
+std::string generate_amdgcn_assembly(llvm::Module *module,
+                                     const std::string &triple,
+                                     const std::string &proc,
+                                     const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
-
   llvm::SmallVector<char, 0> buffer;
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
@@ -99,13 +106,12 @@ std::string generate_amdgcn_assembly(llvm::Module* module,
   return amdgcn;
 }
 
-std::string generate_hsaco(llvm::Module* module,
-                           const std::string& triple,
-                           const std::string& proc,
-                           const std::string& features) {
+std::string generate_hsaco(llvm::Module *module, const std::string &triple,
+                           const std::string &proc,
+                           const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
 
-  std::string kernel_name = std::string(std::tmpnam(nullptr)) + "_" + module->getModuleIdentifier();
+  std::string kernel_name = "/tmp/" + std::to_string(New64());
 
   // create dump files
   std::error_code ec;
@@ -113,13 +119,14 @@ std::string generate_hsaco(llvm::Module* module,
   std::string isabin_path = kernel_name + std::string(".o");
   std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
       new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
-  if (ec)
-  {
-    std::cout << isabin_path << " was not created. error code: " << ec << std::endl;
+  if (ec) {
+    std::cout << isabin_path << " was not created. error code: " << ec
+              << std::endl;
   }
   // emit
   llvm::legacy::PassManager pass;
-  machine->addPassesToEmitFile(pass, *isabin_fs, nullptr, llvm::CGFT_ObjectFile);
+  machine->addPassesToEmitFile(pass, *isabin_fs, nullptr,
+                               llvm::CGFT_ObjectFile);
   pass.run(*module);
 
   // generate HASCO file
@@ -128,10 +135,10 @@ std::string generate_hsaco(llvm::Module* module,
   std::string error_message;
   int lld_result =
       llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",
-                                {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
+                                {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu",
+                                 "-shared", "-o", hsaco_path, isabin_path},
                                 llvm::None, {}, 0, 0, &error_message);
-  if (lld_result)
-  {
+  if (lld_result) {
     std::cout << "ld.lld execute fail: " << std::endl;
     std::cout << error_message << std::endl;
     std::cout << lld_result << std::endl;
@@ -140,30 +147,31 @@ std::string generate_hsaco(llvm::Module* module,
   return hsaco_path;
 }
 
-std::tuple<std::string, std::string> llir_to_amdgcn_and_hsaco(llvm::Module* module,
-                                                   std::string gfx_arch,
-                                                   std::string gfx_triple,
-                                                   std::string gfx_features) {
+std::tuple<std::string, std::string>
+llir_to_amdgcn_and_hsaco(llvm::Module *module, std::string gfx_arch,
+                         std::string gfx_triple, std::string gfx_features) {
 
   init_llvm();
 
   // verify and store llvm
   auto module_obj = llvm::CloneModule(*module);
-  auto amdgcn = generate_amdgcn_assembly(module, gfx_triple, gfx_arch, gfx_features);
-  auto hsaco_path = generate_hsaco(module_obj.get(), gfx_triple, gfx_arch, gfx_features);
+  auto amdgcn =
+      generate_amdgcn_assembly(module, gfx_triple, gfx_arch, gfx_features);
+  auto hsaco_path =
+      generate_hsaco(module_obj.get(), gfx_triple, gfx_arch, gfx_features);
 
   return std::make_tuple(amdgcn, hsaco_path);
 }
 
-}
+} // namespace
 
 namespace triton {
 
-std::tuple<std::string, std::string> translateLLVMIRToHSACO(llvm::Module& module,
-                                                            std::string gfx_arch,
-                                                            std::string gfx_triple,
-                                                            std::string gfx_features) {
-  auto hsacoCode = llir_to_amdgcn_and_hsaco(&module, gfx_arch, gfx_triple, gfx_features);
+std::tuple<std::string, std::string>
+translateLLVMIRToHSACO(llvm::Module &module, std::string gfx_arch,
+                       std::string gfx_triple, std::string gfx_features) {
+  auto hsacoCode =
+      llir_to_amdgcn_and_hsaco(&module, gfx_arch, gfx_triple, gfx_features);
   return hsacoCode;
 }
 
