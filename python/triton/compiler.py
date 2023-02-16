@@ -16,7 +16,7 @@ import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-from sysconfig import get_paths
+import sysconfig
 from typing import Any, Callable, Dict, Tuple, Union
 
 import setuptools
@@ -1306,7 +1306,16 @@ def _build(name, src, srcdir):
         cc = gcc if gcc is not None else clang
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
-    py_include_dir = get_paths('posix_prefix')["include"]
+    # This function was renamed and made public in Python 3.10
+    if hasattr(sysconfig, 'get_default_scheme'):
+        scheme = sysconfig.get_default_scheme()
+    else:
+        scheme = sysconfig._get_default_scheme()
+    # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
+    # path changes to include 'local'. This change is required to use triton with system-wide python.
+    if scheme == 'posix_local':
+        scheme = 'posix_prefix'
+    py_include_dir = sys_config.get_paths(scheme=scheme)["include"]
 
     cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
     cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
