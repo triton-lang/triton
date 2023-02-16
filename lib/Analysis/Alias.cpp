@@ -18,8 +18,9 @@ AliasInfo AliasInfo::join(const AliasInfo &lhs, const AliasInfo &rhs) {
   return ret;
 }
 
-ChangeResult SharedMemoryAliasAnalysis::visitOperation(
-    Operation *op, ArrayRef<LatticeElement<AliasInfo> *> operands) {
+void SharedMemoryAliasAnalysis::visitOperation(
+    Operation *op, ArrayRef<const dataflow::Lattice<AliasInfo> *> operands,
+    ArrayRef<dataflow::Lattice<AliasInfo> *> results) {
   AliasInfo aliasInfo;
   bool pessimistic = true;
   if (maybeSharedAllocationOp(op)) {
@@ -44,14 +45,11 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
   }
 
   if (pessimistic) {
-    return markAllPessimisticFixpoint(op->getResults());
+    return markAllPessimisticFixpoint(results);
   }
   // Join all lattice elements
-  ChangeResult result = ChangeResult::NoChange;
-  for (Value value : op->getResults()) {
-    result |= getLatticeElement(value).join(aliasInfo);
-  }
-  return result;
+  for (auto *result : results)
+    propagateIfChanged(result, result->join(aliasInfo));
 }
 
 AliasResult SharedMemoryAliasAnalysis::alias(Value lhs, Value rhs) {

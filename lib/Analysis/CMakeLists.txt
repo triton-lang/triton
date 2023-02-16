@@ -8,4 +8,7 @@ add_mlir_library(TritonAnalysis
   DEPENDS
   TritonTableGen
   TritonGPUAttrDefsIncGen
+
+  LINK_LIBS PUBLIC
+  MLIRAnalysis
 )

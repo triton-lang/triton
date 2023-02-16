@@ -141,11 +141,7 @@ def TT_LoadOp : TT_Op<"load",
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
     ];
 
-    // let assemblyFormat = "operands attr-dict `:` type($result)";
-    let parser = [{ return mlir::triton::parseLoadOp(parser, result); }];
-
-    let printer = [{ return mlir::triton::printLoadOp(p, *this); }];
-
+    let hasCustomAssemblyFormat = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -161,17 +157,16 @@ def TT_StoreOp : TT_Op<"store",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "store";
 
-    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask);
+    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
+                     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache, 
+                     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
 
     let builders = [
-        OpBuilder<(ins "Value":$ptr, "Value":$value)>,
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict)>,
     ];
 
-    // let assemblyFormat = "operands attr-dict `:` type($value)";
-    let parser = [{ return mlir::triton::parseStoreOp(parser, result); }];
-
-    let printer = [{ return mlir::triton::printStoreOp(p, *this); }];
-
+    let hasCustomAssemblyFormat = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -228,7 +223,8 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
 // Shape Manipulation Ops
 //
 def TT_SplatOp : TT_Op<"splat", [NoSideEffect,
-                                 SameOperandsAndResultElementType]> {
+                                 SameOperandsAndResultElementType,
+                                 SameOperandsAndResultEncoding]> {
     let summary = "splat";
 
     let arguments = (ins TT_Type:$src);
@@ -265,7 +261,8 @@ def TT_ViewOp : TT_Op<"view", [NoSideEffect,
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
-                                         SameOperandsAndResultElementType]> {
+                                         SameOperandsAndResultElementType,
+                                         SameOperandsAndResultEncoding]> {
     let summary = "broadcast. No left-padding as of now.";
 
     let arguments = (ins TT_Type:$src);
@@ -289,7 +286,8 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
 }
 
 def TT_TransOp : TT_Op<"trans", [NoSideEffect,
-                                 DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+                                 DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                 SameOperandsAndResultElementType]> {
 
     let summary = "transpose a tensor";
 

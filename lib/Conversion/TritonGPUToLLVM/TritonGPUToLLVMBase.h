@@ -4,9 +4,11 @@
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "triton/Analysis/Allocation.h"
 
 //
+#include "DotOpHelpers.h"
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -38,15 +40,15 @@ void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
 // TODO(Superjomn): remove the code when MLIR v15.0 is included.
 // All the rights are reserved by the LLVM community.
 
-struct FuncOpConversionBase : public ConvertOpToLLVMPattern<FuncOp> {
+struct FuncOpConversionBase : public ConvertOpToLLVMPattern<func::FuncOp> {
 private:
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
   /// attributes.
-  static void filterFuncAttributes(ArrayRef<NamedAttribute> attrs,
-                                   bool filterArgAttrs,
+  static void filterFuncAttributes(func::FuncOp op, bool filterArgAttrs,
                                    SmallVectorImpl<NamedAttribute> &result) {
-    for (const auto &attr : attrs) {
+
+    for (const auto &attr : op->getAttrs()) {
       if (attr.getName() == SymbolTable::getSymbolAttrName() ||
           attr.getName() == FunctionOpInterface::getTypeAttrName() ||
           attr.getName() == "std.varargs" ||
@@ -64,27 +66,27 @@ private:
   }
 
 protected:
-  using ConvertOpToLLVMPattern<FuncOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<func::FuncOp>::ConvertOpToLLVMPattern;
 
   // Convert input FuncOp to LLVMFuncOp by using the LLVMTypeConverter provided
   // to this legalization pattern.
   LLVM::LLVMFuncOp
-  convertFuncOpToLLVMFuncOp(FuncOp funcOp,
+  convertFuncOpToLLVMFuncOp(func::FuncOp funcOp,
                             ConversionPatternRewriter &rewriter) const {
     // Convert the original function arguments. They are converted using the
     // LLVMTypeConverter provided to this legalization pattern.
     auto varargsAttr = funcOp->getAttrOfType<BoolAttr>("func.varargs");
     TypeConverter::SignatureConversion result(funcOp.getNumArguments());
     auto llvmType = getTypeConverter()->convertFunctionSignature(
-        funcOp.getType(), varargsAttr && varargsAttr.getValue(), result);
+        funcOp.getFunctionType(), varargsAttr && varargsAttr.getValue(),
+        result);
     if (!llvmType)
       return nullptr;
 
     // Propagate argument/result attributes to all converted arguments/result
     // obtained after converting a given original argument/result.
     SmallVector<NamedAttribute, 4> attributes;
-    filterFuncAttributes(funcOp->getAttrs(), /*filterArgAttrs=*/true,
-                         attributes);
+    filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, attributes);
     if (ArrayAttr resAttrDicts = funcOp.getAllResultAttrs()) {
       assert(!resAttrDicts.empty() && "expected array to be non-empty");
       auto newResAttrDicts =
@@ -130,7 +132,7 @@ protected:
     }
     auto newFuncOp = rewriter.create<LLVM::LLVMFuncOp>(
         funcOp.getLoc(), funcOp.getName(), llvmType, linkage,
-        /*dsoLocal*/ false, attributes);
+        /*dsoLocal*/ false, LLVM::CConv::C, attributes);
     rewriter.inlineRegionBefore(funcOp.getBody(), newFuncOp.getBody(),
                                 newFuncOp.end());
     if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), *typeConverter,
@@ -190,8 +192,8 @@ public:
                                                const Allocation *allocation,
                                                Value smem,
                                                IndexCacheInfo indexCacheInfo)
-      : converter(&typeConverter), indexCacheInfo(indexCacheInfo),
-        allocation(allocation), smem(smem) {}
+      : converter(&typeConverter), allocation(allocation), smem(smem),
+        indexCacheInfo(indexCacheInfo) {}
 
   LLVMTypeConverter *getTypeConverter() const { return converter; }
 
@@ -391,8 +393,6 @@ public:
         getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
 
-    std::map<unsigned, Value> cache0;
-    std::map<unsigned, Value> cache1;
     for (unsigned i = 0; i < numElems; ++i) {
       if (i % minVec == 0)
         word = undef(wordTy);
@@ -695,29 +695,103 @@ private:
   emitBaseIndexForMmaLayoutV1(Location loc, ConversionPatternRewriter &rewriter,
                               const MmaEncodingAttr &mmaLayout,
                               ArrayRef<int64_t> shape) const {
-    llvm_unreachable("emitIndicesForMmaLayoutV1 not implemented");
+
+    auto wpt = mmaLayout.getWarpsPerCTA();
+    auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
+    auto [isARow, isBRow, isAVec4, isBVec4, id] =
+        mmaLayout.decodeVoltaLayoutStates();
+
+    Value thread = getThreadId(rewriter, loc);
+    auto *ctx = thread.getContext();
+    Value _1 = i32_val(1);
+    Value _2 = i32_val(2);
+    Value _4 = i32_val(4);
+    Value _16 = i32_val(16);
+    Value _32 = i32_val(32);
+    Value _fpw0 = i32_val(fpw[0]);
+    Value _fpw1 = i32_val(fpw[1]);
+
+    LLVM::DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
+    LLVM::DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+
+    SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
+    SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
+    SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
+
+    Value lane = urem(thread, _32);
+    Value warp = udiv(thread, _32);
+
+    Value warp0 = urem(warp, i32_val(wpt[0]));
+    Value warp12 = udiv(warp, i32_val(wpt[0]));
+    Value warp1 = urem(warp12, i32_val(wpt[1]));
+
+    // warp offset
+    Value offWarpM = mul(warp0, i32_val(spw[0]));
+    Value offWarpN = mul(warp1, i32_val(spw[1]));
+    // quad offset
+    Value offQuadM = mul(udiv(and_(lane, _16), _4), _fpw0);
+    Value offQuadN = mul(udiv(and_(lane, _16), _4), _fpw1);
+    // pair offset
+    Value offPairM = udiv(urem(lane, _16), _4);
+    offPairM = urem(offPairM, _fpw0);
+    offPairM = mul(offPairM, _4);
+    Value offPairN = udiv(urem(lane, _16), _4);
+    offPairN = udiv(offPairN, _fpw0);
+    offPairN = urem(offPairN, _fpw1);
+    offPairN = mul(offPairN, _4);
+    offPairM = mul(offPairM, i32_val(rep[0] / 2));
+    offQuadM = mul(offQuadM, i32_val(rep[0] / 2));
+    offPairN = mul(offPairN, i32_val(rep[1] / 2));
+    offQuadN = mul(offQuadN, i32_val(rep[1] / 2));
+    // quad pair offset
+    Value offLaneM = add(offPairM, offQuadM);
+    Value offLaneN = add(offPairN, offQuadN);
+    // a, b offset
+    Value offsetAM = add(offWarpM, offLaneM);
+    Value offsetBN = add(offWarpN, offLaneN);
+    // m indices
+    Value offsetCM = add(and_(lane, _1), offsetAM);
+    // n indices
+    Value offsetCN = add((and_(lane, _2)), (add(offWarpN, offPairN)));
+    return {offsetCM, offsetCN};
   }
 
   SmallVector<SmallVector<unsigned>>
   emitOffsetForMmaLayoutV1(const MmaEncodingAttr &mmaLayout,
                            ArrayRef<int64_t> shape) const {
-    SmallVector<SmallVector<unsigned>> ret;
 
-    for (unsigned i = 0; i < shape[0];
-         i += getShapePerCTA(mmaLayout, shape)[0]) {
-      for (unsigned j = 0; j < shape[1];
-           j += getShapePerCTA(mmaLayout, shape)[1]) {
-        ret.push_back({i, j});
-        ret.push_back({i, j + 1});
-        ret.push_back({i + 2, j});
-        ret.push_back({i + 2, j + 1});
-        ret.push_back({i, j + 8});
-        ret.push_back({i, j + 9});
-        ret.push_back({i + 2, j + 8});
-        ret.push_back({i + 2, j + 9});
+    auto [isARow, isBRow, isAVec4, isBVec4, id] =
+        mmaLayout.decodeVoltaLayoutStates();
+    LLVM::DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
+    LLVM::DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+    auto wpt = mmaLayout.getWarpsPerCTA();
+    auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
+    SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
+    SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
+    SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
+
+    SmallVector<unsigned> idxM;
+    for (unsigned m = 0; m < shape[0]; m += shapePerCTA[0])
+      for (unsigned mm = 0; mm < rep[0]; ++mm)
+        idxM.push_back(m + mm * 2);
+
+    SmallVector<unsigned> idxN;
+    for (int n = 0; n < shape[1]; n += shapePerCTA[1]) {
+      for (int nn = 0; nn < rep[1]; ++nn) {
+        idxN.push_back(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1]);
+        idxN.push_back(n + nn / 2 * 4 + (nn % 2) * 2 * fpw[1] * rep[1] + 1);
       }
     }
 
+    SmallVector<SmallVector<unsigned>> ret;
+    for (unsigned x1 : idxN) {   // N
+      for (unsigned x0 : idxM) { // M
+        SmallVector<unsigned> idx(2);
+        idx[0] = x0; // M
+        idx[1] = x1; // N
+        ret.push_back(std::move(idx));
+      }
+    }
     return ret;
   }
 
@@ -733,8 +807,9 @@ private:
     Value warpSize = idx_val(32);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
-    Value warpId0 = urem(warpId, warpsPerCTA[0]);
-    Value warpId1 = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
+    Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), idx_val(shape[0] / 16));
+    Value warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
+                         idx_val(shape[1] / 8));
     Value offWarp0 = mul(warpId0, idx_val(16));
     Value offWarp1 = mul(warpId1, idx_val(8));
 
@@ -762,17 +837,9 @@ private:
 
   // Emit indices calculation within each ConversionPattern, and returns a
   // [elemsPerThread X rank] index matrix.
-
-  // TODO: [phil] redundant indices computation do not appear to hurt
-  // performance much, but they could still significantly slow down
-  // computations.
   SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
       Location loc, ConversionPatternRewriter &rewriter,
       const Attribute &layout, ArrayRef<int64_t> shape) const {
-    if (auto mmaLayout = layout.template dyn_cast<MmaEncodingAttr>()) {
-      assert(!mmaLayout.isVolta());
-    }
-
     // step 1, delinearize threadId to get the base index
     auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, shape);
     // step 2, get offset of each element
@@ -786,7 +853,6 @@ private:
     for (unsigned n = 0; n < elemsPerThread; ++n)
       for (unsigned k = 0; k < rank; ++k)
         multiDimIdx[n][k] = add(multiDimBase[k], idx_val(offset[n][k]));
-
     return multiDimIdx;
   }
 
@@ -796,7 +862,6 @@ private:
                             ArrayRef<int64_t> shape) const {
     auto parent = sliceLayout.getParent();
     unsigned dim = sliceLayout.getDim();
-    size_t rank = shape.size();
     auto parentIndices =
         emitIndices(loc, rewriter, parent, sliceLayout.paddedShape(shape));
     unsigned numIndices = parentIndices.size();

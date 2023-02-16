@@ -11,11 +11,11 @@ using ::mlir::LLVM::getStructFromElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
-struct ReturnOpConversion : public ConvertOpToLLVMPattern<::mlir::ReturnOp> {
-  using ConvertOpToLLVMPattern<ReturnOp>::ConvertOpToLLVMPattern;
+struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
+  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(ReturnOp op, OpAdaptor adaptor,
+  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     unsigned numArguments = op.getNumOperands();
 
@@ -69,35 +69,6 @@ struct BroadcastOpConversion
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
     SmallVector<Value> srcVals = getElementsFromStruct(loc, src, rewriter);
-    if (auto srcMma = srcLayout.dyn_cast<MmaEncodingAttr>()) {
-      // NOTE: This is just an naive fix, but for MMA layout, and 2-d fix should
-      // be all right.
-      // TODO[Superjomn]: Replace this with a generic implementation.
-      if (srcMma.isVolta()) {
-        assert(srcTy.getElementType().isF16() &&
-               "Unexpected data type on Volta");
-        int numElemsPerThread = srcMma.getElemsPerThread(resultTy.getShape());
-        int srcUniqElems = srcVals.size() / 2;
-        int dup = numElemsPerThread / srcUniqElems;
-        SmallVector<Value> retVals;
-        if (srcShape[0] == 1) { // add-cols
-          for (int i = 0; i < srcUniqElems; ++i)
-            for (int k = 0; k < dup; ++k)
-              retVals.push_back(srcVals[i * 2]);
-
-        } else { // add-rows
-          for (int k = 0; k < dup; ++k)
-            for (int i = 0; i < srcUniqElems; ++i)
-              retVals.push_back(srcVals[i]);
-        }
-
-        auto llvmStructTy = getTypeConverter()->convertType(resultTy);
-        Value ret = getStructFromElements(loc, retVals, rewriter, llvmStructTy);
-
-        rewriter.replaceOp(op, {ret});
-        return success();
-      }
-    }
 
     DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
@@ -114,6 +85,7 @@ struct BroadcastOpConversion
     }
 
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
+
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
     rewriter.replaceOp(op, {resultStruct});
@@ -330,7 +302,7 @@ struct MakeRangeOpConversion
     // TODO: slice layout has more elements than expected.
     // Unexpected behavior for make range, but generally OK when followed by
     // expand dims + broadcast. very weird behavior otherwise potentially.
-    for (const auto multiDim : llvm::enumerate(idxs)) {
+    for (const auto &multiDim : llvm::enumerate(idxs)) {
       assert(multiDim.value().size() == 1);
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
@@ -504,7 +476,6 @@ struct ExtractSliceOpConversion
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-    auto resTy = op.getType().dyn_cast<RankedTensorType>();
     smemObj = SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset),
                                  strideVals, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);

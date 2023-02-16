@@ -1,10 +1,10 @@
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
-#include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -59,10 +59,13 @@ public:
     Type retType = getTypeConverter()->convertType(op.getType());
     auto value = adaptor.getValue().dyn_cast<DenseElementsAttr>();
     assert(value);
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
-        op, retType,
-        value.reshape(retType) // This is a hack. We just want to add encoding
-    );
+    if (value.getElementType().isInteger(1) && value.isSplat())
+      // Workaround until https://reviews.llvm.org/D133743 is included.
+      value = DenseElementsAttr::get(retType, value.getSplatValue<bool>());
+    else
+      // This is a hack. We just want to add encoding
+      value = value.reshape(retType);
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, retType, value);
     return success();
   }
 };
@@ -127,12 +130,12 @@ void populateArithmeticPatternsAndLegality(
 }
 
 // this shouldn't exist if mlir's SelectOp checked encodings properly
-class StdSelectPattern : public OpConversionPattern<SelectOp> {
+class StdSelectPattern : public OpConversionPattern<arith::SelectOp> {
 public:
-  using OpConversionPattern<SelectOp>::OpConversionPattern;
+  using OpConversionPattern<arith::SelectOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(SelectOp op, typename SelectOp::Adaptor adaptor,
+  matchAndRewrite(arith::SelectOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
     rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
@@ -148,8 +151,8 @@ void populateStdPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   // Rewrite rule
   patterns.add<StdSelectPattern>(typeConverter, context);
-  target.addLegalOp<ReturnOp>(); // this is ok because all functions are inlined
-                                 // by the frontend
+  target.addLegalOp<func::ReturnOp>(); // this is ok because all functions are
+                                       // inlined by the frontend
 }
 
 void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
@@ -345,7 +348,8 @@ struct TritonStorePattern : public OpConversionPattern<triton::StoreOp> {
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        op, adaptor.ptr(), adaptor.value(), adaptor.mask());
+        op, adaptor.ptr(), adaptor.value(), adaptor.mask(), adaptor.cache(),
+        adaptor.evict());
     return success();
   }
 };
@@ -454,18 +458,19 @@ struct TritonPrintfPattern : public OpConversionPattern<triton::PrintfOp> {
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
-  patterns.add< // TODO: view should have custom pattern that views the layout
-      TritonGenericPattern<triton::ViewOp>,
-      TritonGenericPattern<triton::BitcastOp>,
-      TritonGenericPattern<triton::FpToFpOp>,
-      TritonGenericPattern<triton::IntToPtrOp>,
-      TritonGenericPattern<triton::PtrToIntOp>,
-      TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
-      TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-      TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
-      TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
-      TritonStorePattern, TritonExtElemwisePattern, TritonPrintfPattern,
-      TritonAtomicRMWPattern>(typeConverter, context);
+  patterns
+      .insert< // TODO: view should have custom pattern that views the layout
+          TritonGenericPattern<triton::ViewOp>,
+          TritonGenericPattern<triton::BitcastOp>,
+          TritonGenericPattern<triton::FpToFpOp>,
+          TritonGenericPattern<triton::IntToPtrOp>,
+          TritonGenericPattern<triton::PtrToIntOp>,
+          TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
+          TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
+          TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
+          TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
+          TritonStorePattern, TritonExtElemwisePattern, TritonPrintfPattern,
+          TritonAtomicRMWPattern>(typeConverter, context);
 }
 
 //
@@ -573,12 +578,97 @@ public:
   }
 };
 
+// This is borrowed from ConvertFIfOpTypes in
+//    SCF/Transforms/StructuralTypeConversions.cpp
+class SCFWhilePattern : public OpConversionPattern<scf::WhileOp> {
+public:
+  using OpConversionPattern<scf::WhileOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scf::WhileOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *converter = getTypeConverter();
+    assert(converter);
+    SmallVector<Type> newResultTypes;
+    if (failed(converter->convertTypes(op.getResultTypes(), newResultTypes)))
+      return failure();
+
+    auto newOp = rewriter.create<scf::WhileOp>(op.getLoc(), newResultTypes,
+                                               adaptor.getOperands());
+    for (auto i : {0u, 1u}) {
+      auto &dstRegion = newOp.getRegion(i);
+      rewriter.inlineRegionBefore(op.getRegion(i), dstRegion, dstRegion.end());
+      if (failed(rewriter.convertRegionTypes(&dstRegion, *converter)))
+        return rewriter.notifyMatchFailure(op, "could not convert body types");
+    }
+    rewriter.replaceOp(op, newOp.getResults());
+    return success();
+  }
+};
+
+class SCFConditionPattern : public OpConversionPattern<scf::ConditionOp> {
+public:
+  using OpConversionPattern<scf::ConditionOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(scf::ConditionOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.updateRootInPlace(
+        op, [&]() { op->setOperands(adaptor.getOperands()); });
+    return success();
+  }
+};
+
 void populateSCFPatterns(TritonGPUTypeConverter &typeConverter,
                          RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<SCFYieldPattern, SCFForPattern, SCFIfPattern>(typeConverter,
-                                                             context);
+  patterns.add<SCFYieldPattern, SCFForPattern, SCFIfPattern, SCFWhilePattern,
+               SCFConditionPattern>(typeConverter, context);
 }
+
+// CF
+
+class CFBranchPattern : public OpConversionPattern<cf::BranchOp> {
+public:
+  using OpConversionPattern<cf::BranchOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(cf::BranchOp op, cf::BranchOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto newOp = rewriter.replaceOpWithNewOp<cf::BranchOp>(
+        op, op.getSuccessor(), adaptor.getOperands());
+    return success();
+  }
+};
+
+class CFCondBranchPattern : public OpConversionPattern<cf::CondBranchOp> {
+public:
+  using OpConversionPattern<cf::CondBranchOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(cf::CondBranchOp op, cf::CondBranchOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto converter = getTypeConverter();
+    auto newOp = rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
+        op, adaptor.getCondition(), op.getTrueDest(),
+        adaptor.getTrueDestOperands(), op.getFalseDest(),
+        adaptor.getFalseDestOperands());
+
+    if (failed(rewriter.convertRegionTypes(newOp.getTrueDest()->getParent(),
+                                           *converter)))
+      return failure();
+    if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(),
+                                           *converter)))
+      return failure();
+    return success();
+  }
+};
+
+void populateCFPatterns(TritonGPUTypeConverter &typeConverter,
+                        RewritePatternSet &patterns) {
+  MLIRContext *context = patterns.getContext();
+  patterns.add<CFBranchPattern, CFCondBranchPattern>(typeConverter, context);
+}
+//
 
 class ConvertTritonToTritonGPU
     : public ConvertTritonToTritonGPUBase<ConvertTritonToTritonGPU> {
@@ -603,6 +693,7 @@ public:
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);
+    populateCFPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();

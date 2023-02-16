@@ -1,11 +1,14 @@
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
+#include <optional>
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -34,15 +37,15 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   // LLVM version in use may not officially support target hardware.
   // Supported versions for LLVM 14 are here:
   // https://github.com/llvm/llvm-project/blob/f28c006a5895fc0e329fe15fead81e37457cb1d1/clang/include/clang/Basic/BuiltinsNVPTX.def
-  int maxPTX = std::min(75, version);
-  int maxCC = std::min(86, cc);
+  int maxPTX = std::min(80, version);
+  int maxCC = std::min(90, cc);
   // options
   auto options = llvm::cl::getRegisteredOptions();
   auto *shortPtr =
       static_cast<llvm::cl::opt<bool> *>(options["nvptx-short-ptr"]);
   assert(shortPtr);
   shortPtr->setValue(true);
-  std::string sm = "sm_" + std::to_string(maxCC);
+  std::string sm = cc == 90 ? "sm_90a" : "sm_" + std::to_string(cc);
   // max PTX version
   int ptxMajor = maxPTX / 10;
   int ptxMinor = maxPTX % 10;

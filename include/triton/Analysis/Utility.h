@@ -1,6 +1,8 @@
 #ifndef TRITON_ANALYSIS_UTILITY_H
 #define TRITON_ANALYSIS_UTILITY_H
 
+#include "mlir/Analysis/DataFlowFramework.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
 #include <numeric>
@@ -11,7 +13,7 @@ namespace mlir {
 class ReduceOpHelper {
 public:
   explicit ReduceOpHelper(triton::ReduceOp op) : op(op) {
-    srcTy = op.operand().getType().cast<RankedTensorType>();
+    srcTy = op.getOperand().getType().cast<RankedTensorType>();
   }
 
   ArrayRef<int64_t> getSrcShape() { return srcTy.getShape(); }
@@ -65,7 +67,7 @@ template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
 
 template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
 
-/// output[i] = input[order[i]]
+// output[i] = input[order[i]]
 template <typename T, typename RES_T = T>
 SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
   size_t rank = order.size();
@@ -77,6 +79,15 @@ SmallVector<RES_T> reorder(ArrayRef<T> input, ArrayRef<unsigned> order) {
   return result;
 }
 
+template <typename T> T highestPowOf2Divisor(T n) {
+  if (n == 0) {
+    return (static_cast<T>(1) << (sizeof(T) * 8 - 2));
+  }
+  return (n & (~(n - 1)));
+}
+
+bool isSingleValue(Value value);
+
 bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
                         triton::gpu::DotOperandEncodingAttr &dotOperandLayout);
 
@@ -87,6 +98,14 @@ bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
 /// been visited before.
 SetVector<Operation *>
 multiRootTopologicalSort(const SetVector<Operation *> &toSort);
+
+// This uses the toplogicalSort above
+SetVector<Operation *>
+multiRootGetSlice(Operation *op, TransitiveFilter backwardFilter = nullptr,
+                  TransitiveFilter forwardFilter = nullptr);
+
+// Create a basic DataFlowSolver with constant and dead code analysis included.
+std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 } // namespace mlir
 

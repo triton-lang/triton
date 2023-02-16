@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.6)
+
+cmake_policy(SET CMP0116 OLD)
+
 include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -17,7 +20,6 @@ option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
 # Ensure Python3 vars are set correctly
 #  used conditionally in this file and by lit tests
-find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
 set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
@@ -72,6 +74,8 @@ if (NOT MLIR_DIR)
       find_package(LLVM 11 REQUIRED COMPONENTS "nvptx;amdgpu")
     endif()
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+    # FindLLVM outputs LLVM_LIBRARY_DIRS but we expect LLVM_LIBRARY_DIR here
+    set(LLVM_LIBRARY_DIR ${LLVM_LIBRARY_DIRS})
     if(APPLE)
       set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
     endif()
@@ -146,13 +150,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
     if (PYTHON_INCLUDE_DIRS)
       include_directories(${PYTHON_INCLUDE_DIRS})
     else()
+      find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
       include_directories(${Python3_INCLUDE_DIRS})
       link_directories(${Python3_LIBRARY_DIRS})
       link_libraries(${Python3_LIBRARIES})
       add_link_options(${Python3_LINK_OPTIONS})
     endif()
 endif()
-
 
 # # Triton
 # file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
@@ -210,7 +214,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # optimizations
     MLIRPass
     MLIRTransforms
-    MLIRLLVMIR
+    MLIRLLVMDialect
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRExecutionEngine

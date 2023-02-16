@@ -424,6 +424,18 @@ class constexpr:
     def __invert__(self):
         return constexpr(~self.value)
 
+    def __pow__(self, other):
+        return constexpr(self.value ** other.value)
+
+    def __rshift__(self, other):
+        return constexpr(self.value >> other.value)
+
+    def __lshift__(self, other):
+        return constexpr(self.value << other.value)
+
+    def __not__(self):
+        return constexpr(not self.value)
+
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
@@ -537,7 +549,10 @@ class tensor:
     @builtin
     def __rshift__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
-        return semantic.lshr(self, other, _builder)
+        if self.dtype.is_int_signed():
+            return semantic.ashr(self, other, _builder)
+        else:
+            return semantic.lshr(self, other, _builder)
 
     # comparison operators
 
@@ -605,6 +620,12 @@ class tensor:
     def logical_or(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.logical_or(self, other, _builder)
+
+    # note: __not__ isn't actually a magic method in python
+    # but it's ok because our ASTVisitor handles it
+    @builtin
+    def __not__(self, _builder=None):
+        return semantic.not_(self, _builder)
 
     @builtin
     def __getitem__(self, slices, _builder=None):
@@ -852,7 +873,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, mask=None, _builder=None):
+def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -869,7 +890,9 @@ def store(pointer, value, mask=None, _builder=None):
     value = _to_tensor(value, _builder)
     if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
-    return semantic.store(pointer, value, mask, _builder)
+    cache_modifier = _constexpr_to_value(cache_modifier)
+    eviction_policy = _constexpr_to_value(eviction_policy)
+    return semantic.store(pointer, value, mask, cache_modifier, eviction_policy, _builder)
 
 
 # -----------------------
@@ -1289,3 +1312,33 @@ def printf(prefix, *args, _builder=None):
     for arg in args:
         new_args.append(_to_tensor(arg, _builder))
     return semantic.printf(new_prefix, new_args, _builder)
+
+# -----------------------
+# Iterators
+# -----------------------
+
+
+class static_range:
+
+    """Iterator that counts upward forever."""
+
+    def __init__(self, arg1, arg2=None, step=None):
+        assert isinstance(arg1, constexpr)
+        if step is None:
+            self.step = constexpr(1)
+        else:
+            assert isinstance(step, constexpr)
+            self.step = step
+        if arg2 is None:
+            self.start = constexpr(0)
+            self.end = arg1
+        else:
+            assert isinstance(arg2, constexpr)
+            self.start = arg1
+            self.end = arg2
+
+    def __iter__(self):
+        raise RuntimeError("static_range can only be used in @triton.jit'd functions")
+
+    def __next__(self):
+        raise RuntimeError("static_range can only be used in @triton.jit'd functions")
