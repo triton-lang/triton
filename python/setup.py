@@ -59,8 +59,8 @@ def get_llvm_package_info():
     system = platform.system()
     system_suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
-    name = 'llvm+mlir-16.0.0-x86_64-{}-{}'.format(system_suffix, "assert" if use_assert_enabled_llvm else "release")
-    url = "https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-16.0.0-37b7a60cd74b/{}.tar.xz".format(name)
+    name = 'llvm+mlir-17.0.0-x86_64-{}-{}'.format(system_suffix, "assert" if use_assert_enabled_llvm else "release")
+    url = "https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-17.0.0-37b7a60cd74b/{}.tar.xz".format(name)
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
