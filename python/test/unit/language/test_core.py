@@ -1463,18 +1463,18 @@ def test_noop(device='cuda'):
     kernel[(1, )](x)
 
 
-@pytest.mark.parametrize("device", ['cuda', 'cpu'])
+@pytest.mark.parametrize("device", ['cuda', 'cpu', 'cpu_pinned'])
 def test_pointer_arguments(device):
     @triton.jit
     def kernel(x):
         pass
-    x = torch.empty(1024, device=device)
-    result = True
-    try:
+    pin_memory = 'pinned' in device
+    x = torch.empty(1024, device=device.split('_')[0], pin_memory=pin_memory)
+    if device == "cpu":
+      with pytest.raises(ValueError):
         kernel[(1,)](x)
-    except ValueError:
-        result = True if device == 'cpu' else False
-    assert result
+    else:
+      kernel[(1, )](x)
 
 
 @pytest.mark.parametrize("value, value_type", [
