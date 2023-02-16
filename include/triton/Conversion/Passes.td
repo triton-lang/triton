@@ -10,7 +10,7 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
     }];
     let constructor = "mlir::triton::createConvertTritonToTritonGPUPass()";
 
-    let dependentDialects = ["mlir::arith::ArithmeticDialect",
+    let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
                              // TODO: Does this pass depend on SCF?
                              "mlir::scf::SCFDialect",
@@ -32,7 +32,7 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
     }];
     let constructor = "mlir::triton::createConvertTritonGPUToLLVMPass()";
 
-    let dependentDialects = ["mlir::arith::ArithmeticDialect",
+    let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
                              "mlir::gpu::GPUDialect",
                              "mlir::scf::SCFDialect",

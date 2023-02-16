@@ -67,11 +67,11 @@ func.func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}
   %c = tt.load %ptr, %mask, %other {cache = 1 : i32, evict = 1 : i32, isVolatile = true} : f32
 
   // store scalar
-  // CHECK: tt.store %{{.*}}, %[[L0]] : f32
+  // CHECK: tt.store %{{.*}}, %[[L0]] {cache = 1 : i32, evict = 1 : i32} : f32
   tt.store %ptr, %a : f32
-  // CHECK: tt.store %{{.*}}, %[[L1]], %{{.*}} : f32
+  // CHECK: tt.store %{{.*}}, %[[L1]], %{{.*}} {cache = 1 : i32, evict = 1 : i32} : f32
   tt.store %ptr, %b, %mask : f32
-  // CHECK: tt.store %{{.*}}, %[[L2]], %{{.*}} : f32
+  // CHECK: tt.store %{{.*}}, %[[L2]], %{{.*}} {cache = 1 : i32, evict = 1 : i32} : f32
   tt.store %ptr, %c, %mask : f32
   return
 }
