@@ -94,8 +94,9 @@ def _kernel(A, B, C, M, N, K,
             a = tl.load(A)
             b = tl.load(B)
         else:
-            a = tl.load(A, mask=rk[None, :] < k, other=0.)
-            b = tl.load(B, mask=rk[:, None] < k, other=0.)
+            k_remaining = K - k * (BLOCK_K * SPLIT_K)
+            a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.)
+            b = tl.load(B, mask=rk[:, None] < k_remaining, other=0.)
         acc += tl.dot(a, b)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk
