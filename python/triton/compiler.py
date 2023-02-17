@@ -1280,13 +1280,13 @@ static PyMethodDef ModuleMethods[] = {{
 
 static struct PyModuleDef ModuleDef = {{
   PyModuleDef_HEAD_INIT,
-  \"launcher\",
+  \"__triton_launcher\",
   NULL, //documentation
   -1, //size
   ModuleMethods
 }};
 
-PyMODINIT_FUNC PyInit_launcher(void) {{
+PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
     return NULL;
@@ -1641,7 +1641,7 @@ class CompiledKernel:
     def __init__(self, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
-        spec = importlib.util.spec_from_file_location("launcher", so_path)
+        spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
