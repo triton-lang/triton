@@ -29,124 +29,15 @@ struct SplatOpConversion
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) {
     auto tensorTy = resType.cast<RankedTensorType>();
-    if (tensorTy.getEncoding().isa<BlockedEncodingAttr>() ||
-        tensorTy.getEncoding().isa<SliceEncodingAttr>()) {
-      auto srcType = typeConverter->convertType(elemType);
-      auto llSrc = bitcast(constVal, srcType);
-      size_t elemsPerThread = getElemsPerThread(tensorTy);
-      llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
-      llvm::SmallVector<Type> elemTypes(elems.size(), srcType);
-      auto structTy =
-          LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
+    auto srcType = typeConverter->convertType(elemType);
+    auto llSrc = bitcast(constVal, srcType);
+    size_t elemsPerThread = getElemsPerThread(tensorTy);
+    llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
+    llvm::SmallVector<Type> elemTypes(elems.size(), srcType);
+    auto structTy =
+        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
 
-      return getStructFromElements(loc, elems, rewriter, structTy);
-    } else if (auto dotLayout =
-                   tensorTy.getEncoding()
-                       .dyn_cast<triton::gpu::DotOperandEncodingAttr>()) {
-      return convertSplatLikeOpWithDotOperandLayout(
-          dotLayout, resType, elemType, constVal, typeConverter, rewriter, loc);
-    } else if (auto mmaLayout =
-                   tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>()) {
-      return convertSplatLikeOpWithMmaLayout(
-          mmaLayout, resType, elemType, constVal, typeConverter, rewriter, loc);
-    } else
-      assert(false && "Unsupported layout found in ConvertSplatLikeOp");
-
-    return {};
-  }
-
-  static Value convertSplatLikeOpWithDotOperandLayout(
-      const triton::gpu::DotOperandEncodingAttr &layout, Type resType,
-      Type elemType, Value constVal, TypeConverter *typeConverter,
-      ConversionPatternRewriter &rewriter, Location loc) {
-    auto tensorTy = resType.cast<RankedTensorType>();
-    auto shape = tensorTy.getShape();
-    auto dotOperand =
-        tensorTy.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
-    auto parent = layout.getParent();
-    Value retVal = constVal;
-    Type retTy = elemType;
-    int numElems{};
-    if (auto mmaLayout = parent.dyn_cast<MmaEncodingAttr>()) {
-      Type matTy;
-      if (mmaLayout.isAmpere()) {
-        numElems = layout.getOpIdx() == 0
-                       ? MMA16816ConversionHelper::getANumElemsPerThread(
-                             tensorTy, mmaLayout.getWarpsPerCTA()[0])
-                       : MMA16816ConversionHelper::getBNumElemsPerThread(
-                             tensorTy, mmaLayout.getWarpsPerCTA()[1]);
-        DotOpMmaV2ConversionHelper helper(mmaLayout);
-        helper.deduceMmaType(tensorTy);
-        matTy = helper.getMatType();
-      } else if (mmaLayout.isVolta()) {
-        DotOpMmaV1ConversionHelper helper(mmaLayout);
-        bool isRow = layout.getIsMMAv1Row().cast<BoolAttr>().getValue();
-        auto [isARow, isBRow, isAVec4, isBVec4, _0] =
-            mmaLayout.decodeVoltaLayoutStates();
-        if (layout.getOpIdx() == 0) {
-          DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
-          numElems =
-              helper.numElemsPerThreadA(shape, isARow, isAVec4, aParam.vec);
-        } else {
-          DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
-          numElems =
-              helper.numElemsPerThreadB(shape, isBRow, isBVec4, bParam.vec);
-        }
-        matTy = helper.getMatType(tensorTy);
-      }
-
-      auto numPackedElems = matTy.cast<LLVM::LLVMStructType>()
-                                .getBody()[0]
-                                .cast<VectorType>()
-                                .getNumElements();
-      retTy = vec_ty(elemType, numPackedElems);
-      retVal = undef(retTy);
-      for (auto i = 0; i < numPackedElems; ++i) {
-        retVal = insert_element(retTy, retVal, constVal, i32_val(i));
-      }
-
-    } else if (auto blockedLayout = parent.dyn_cast<BlockedEncodingAttr>()) {
-      numElems = DotOpFMAConversionHelper::getNumElemsPerThread(shape, layout);
-    } else {
-      assert(false && "Unsupported layout found");
-    }
-
-    auto structTy = LLVM::LLVMStructType::getLiteral(
-        rewriter.getContext(), SmallVector<Type>(numElems, retTy));
-    return getStructFromElements(loc, SmallVector<Value>(numElems, retVal),
-                                 rewriter, structTy);
-  }
-
-  static Value convertSplatLikeOpWithMmaLayout(
-      const MmaEncodingAttr &layout, Type resType, Type elemType,
-      Value constVal, TypeConverter *typeConverter,
-      ConversionPatternRewriter &rewriter, Location loc) {
-    auto tensorTy = resType.cast<RankedTensorType>();
-    auto shape = tensorTy.getShape();
-    if (layout.isAmpere()) {
-      auto [repM, repN] = DotOpMmaV2ConversionHelper::getRepMN(tensorTy);
-      size_t fcSize = 4 * repM * repN;
-
-      auto structTy = LLVM::LLVMStructType::getLiteral(
-          rewriter.getContext(), SmallVector<Type>(fcSize, elemType));
-      return getStructFromElements(loc, SmallVector<Value>(fcSize, constVal),
-                                   rewriter, structTy);
-    }
-    if (layout.isVolta()) {
-      DotOpMmaV1ConversionHelper helper(layout);
-      int repM = helper.getRepM(shape[0]);
-      int repN = helper.getRepN(shape[1]);
-      // According to mma layout of v1, each thread process 8 elements.
-      int elems = 8 * repM * repN;
-
-      auto structTy = LLVM::LLVMStructType::getLiteral(
-          rewriter.getContext(), SmallVector<Type>(elems, elemType));
-      return getStructFromElements(loc, SmallVector<Value>(elems, constVal),
-                                   rewriter, structTy);
-    }
-
-    assert(false && "Unsupported mma layout found");
-    return {};
+    return getStructFromElements(loc, elems, rewriter, structTy);
   }
 
   LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
@@ -254,6 +145,7 @@ struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
     SmallVector<Type> types(elems, elemTy);
     Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
     auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
+
     Value view = getStructFromElements(loc, vals, rewriter, structTy);
     rewriter.replaceOp(op, view);
     return success();

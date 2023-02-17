@@ -57,13 +57,13 @@ DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
 class CombineSelectMaskedLoadPattern : public mlir::RewritePattern {
 public:
   CombineSelectMaskedLoadPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::SelectOp::getOperationName(), 3, context,
-                             {triton::LoadOp::getOperationName()}) {}
+      : mlir::RewritePattern(mlir::arith::SelectOp::getOperationName(), 3,
+                             context, {triton::LoadOp::getOperationName()}) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto selectOp = llvm::dyn_cast<mlir::SelectOp>(op);
+    auto selectOp = llvm::dyn_cast<mlir::arith::SelectOp>(op);
     if (!selectOp)
       return mlir::failure();
 

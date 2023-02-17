@@ -187,6 +187,7 @@ def matmul_kernel(
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
@@ -213,7 +214,7 @@ def matmul_kernel(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in range(0, K, BLOCK_SIZE_K):
+    for k in range(0, num_pid_k):
         # Note that for simplicity, we don't apply a mask here.
         # This means that if K is not a multiple of BLOCK_SIZE_K,
         # this will access out-of-bounds memory and produce an

@@ -141,11 +141,7 @@ def TT_LoadOp : TT_Op<"load",
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
     ];
 
-    // let assemblyFormat = "operands attr-dict `:` type($result)";
-    let parser = [{ return mlir::triton::parseLoadOp(parser, result); }];
-
-    let printer = [{ return mlir::triton::printLoadOp(p, *this); }];
-
+    let hasCustomAssemblyFormat = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -170,11 +166,7 @@ def TT_StoreOp : TT_Op<"store",
                        "triton::EvictionPolicy":$evict)>,
     ];
 
-    // let assemblyFormat = "operands attr-dict `:` type($value)";
-    let parser = [{ return mlir::triton::parseStoreOp(parser, result); }];
-
-    let printer = [{ return mlir::triton::printStoreOp(p, *this); }];
-
+    let hasCustomAssemblyFormat = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -257,8 +249,7 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect,
 }
 
 def TT_ViewOp : TT_Op<"view", [NoSideEffect,
-                               SameOperandsAndResultElementType,
-                               SameOperandsAndResultEncoding]> {
+                               SameOperandsAndResultElementType]> {
     let summary = "view";
 
     let arguments = (ins TT_Tensor:$src);
@@ -284,8 +275,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
 }
 
 def TT_CatOp : TT_Op<"cat", [NoSideEffect,
-                             SameOperandsAndResultElementType,
-                             SameOperandsAndResultEncoding]> {
+                             SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);

@@ -1,13 +1,13 @@
+#include "triton/Dialect/Triton/IR/Dialect.h"
+
 #include <numeric>
 
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
-
-#include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -366,7 +366,6 @@ template SmallVector<int64_t>
 SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
 
 unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
-  size_t rank = shape.size();
   auto parent = getParent();
   return ::getElemsPerThread(parent, paddedShape(shape));
 }
@@ -378,11 +377,19 @@ unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 
   int res = 0;
   if (isVolta()) {
-    unsigned mmasRow = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]);
-    unsigned mmasCol = ceil<unsigned>(shape[1], 16 * getWarpsPerCTA()[1]);
-    // Each warp-level mma884 will perform a m16xn16xk4 mma, thus get a m16xn16
-    // matrix as result.
-    res = mmasRow * mmasCol * (16 * 16 / 32);
+    auto [isARow, isBRow, isAVec4, isBVec4, id] = decodeVoltaLayoutStates();
+    static constexpr std::array<unsigned, 2> fpw{{2, 2}};
+    unsigned packSize0 = (isARow || isAVec4) ? 1 : 2;
+    unsigned packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+    unsigned repM = 2 * packSize0;
+    unsigned repN = 2 * packSize1;
+    unsigned spwM = fpw[0] * 4 * repM;
+    unsigned spwN = fpw[1] * 4 * repN;
+    unsigned wptM = getWarpsPerCTA()[0];
+    unsigned wptN = getWarpsPerCTA()[1];
+    unsigned resM = repM * std::max<int>(1, shape[0] / (spwM * wptM));
+    unsigned resN = 2 * repN * std::max<int>(1, shape[1] / (spwN * wptN));
+    res = resM * resN;
   } else if (isAmpere()) {
     unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
     unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
@@ -647,9 +654,9 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
 // InsertSliceAsyncOp
 //===----------------------------------------------------------------------===//
 
-ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser,
-                                    OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 8> allOperands;
+ParseResult InsertSliceAsyncOp::parse(OpAsmParser &parser,
+                                      OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 8> allOperands;
   Type srcType, dstType;
   SMLoc allOperandLoc = parser.getCurrentLocation();
   if (parser.parseOperandList(allOperands) ||
@@ -688,18 +695,16 @@ ParseResult parseInsertSliceAsyncOp(OpAsmParser &parser,
   return success();
 }
 
-void printInsertSliceAsyncOp(OpAsmPrinter &printer,
-                             InsertSliceAsyncOp insertSliceAsyncOp) {
+void InsertSliceAsyncOp::print(OpAsmPrinter &printer) {
   printer << " ";
-  printer << insertSliceAsyncOp.getOperation()->getOperands();
+  printer << getOperation()->getOperands();
   // "operand_segment_sizes" can be deduced, so we don't print it.
-  printer.printOptionalAttrDict(
-      insertSliceAsyncOp->getAttrs(),
-      {insertSliceAsyncOp.operand_segment_sizesAttrName()});
+  printer.printOptionalAttrDict(getOperation()->getAttrs(),
+                                {operand_segment_sizesAttrName()});
   printer << " : ";
-  printer.printStrippedAttrOrType(insertSliceAsyncOp.src().getType());
+  printer.printStrippedAttrOrType(src().getType());
   printer << " -> ";
-  printer.printStrippedAttrOrType(insertSliceAsyncOp.result().getType());
+  printer.printStrippedAttrOrType(result().getType());
 }
 
 //===----------------------------------------------------------------------===//

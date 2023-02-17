@@ -11,7 +11,7 @@
 
 // CHECK-LABEL: matmul_loop
 // There shouldn't be any aliasing with the dot op encoding.
-func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
+func.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %a_ptr_init = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr_init = tt.broadcast %B : (!tt.ptr<f16>) -> tensor<32x128x!tt.ptr<f16>, #BL>
   %a_mask = arith.constant dense<true> : tensor<128x32xi1, #AL>
@@ -36,7 +36,7 @@ func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B
 }
 
 // CHECK-LABEL: alloc
-func @alloc(%A : !tt.ptr<f16>) {
+func.func @alloc(%A : !tt.ptr<f16>) {
   // CHECK: %cst -> %cst
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
@@ -46,7 +46,7 @@ func @alloc(%A : !tt.ptr<f16>) {
 }
 
 // CHECK-LABEL: convert
-func @convert(%A : !tt.ptr<f16>) {
+func.func @convert(%A : !tt.ptr<f16>) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   // CHECK: %0 -> %0
   %cst1 = triton_gpu.convert_layout %cst0 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #A_SHARED>
@@ -54,7 +54,7 @@ func @convert(%A : !tt.ptr<f16>) {
 }
 
 // CHECK-LABEL: trans
-func @trans(%A : !tt.ptr<f16>) {
+func.func @trans(%A : !tt.ptr<f16>) {
   // CHECK: %cst -> %cst
   %tensor = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
   // CHECK: %0 -> %cst
@@ -63,7 +63,7 @@ func @trans(%A : !tt.ptr<f16>) {
 }
 
 // CHECK-LABEL: insert_slice_async
-func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
+func.func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
   %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
   %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
@@ -76,7 +76,7 @@ func @insert_slice_async(%A : !tt.ptr<f16>, %i1 : i1) {
 }
 
 // CHECK-LABEL: insert_slice
-func @insert_slice(%A : !tt.ptr<f16>, %i1 : i1) {
+func.func @insert_slice(%A : !tt.ptr<f16>, %i1 : i1) {
   %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<16x16x!tt.ptr<f16>, #AL>
   %mask = tt.splat %i1 : (i1) -> tensor<16x16xi1, #AL>
   %other = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
@@ -90,7 +90,7 @@ func @insert_slice(%A : !tt.ptr<f16>, %i1 : i1) {
 }
 
 // CHECK-LABEL: extract_slice
-func @extract_slice(%A : !tt.ptr<f16>) {
+func.func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK: %cst -> %cst
   %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : index
@@ -100,7 +100,7 @@ func @extract_slice(%A : !tt.ptr<f16>) {
 }
 
 // CHECK-LABEL: if_cat
-func @if_cat(%i1 : i1) {
+func.func @if_cat(%i1 : i1) {
   // CHECK: %cst -> %cst
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK: %cst_0 -> %cst_0
@@ -119,7 +119,7 @@ func @if_cat(%i1 : i1) {
 }
 
 // CHECK-LABEL: if_alias
-func @if_alias(%i1 : i1) {
+func.func @if_alias(%i1 : i1) {
   // CHECK: %cst -> %cst
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK-NEXT: %cst_0 -> %cst_0
@@ -134,7 +134,7 @@ func @if_alias(%i1 : i1) {
 }
 
 // CHECK-LABEL: for
-func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
+func.func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   // CHECK: %cst -> %cst
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: %cst_0 -> %cst_0
@@ -154,7 +154,7 @@ func @for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.p
 }
 
 // CHECK-LABEL: for_if
-func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+func.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: %cst -> %cst
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: %cst_0 -> %cst_0
@@ -180,7 +180,7 @@ func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !t
 }
 
 // CHECK-LABEL: for_if_for
-func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: %cst -> %cst
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: %cst_0 -> %cst_0

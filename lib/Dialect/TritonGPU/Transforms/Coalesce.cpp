@@ -27,7 +27,11 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     auto origType = ptr.getType().cast<RankedTensorType>();
     // Get the shape of the tensor.
     size_t rank = origType.getRank();
-    AxisInfo info = axisInfo.lookupLatticeElement(ptr)->getValue();
+    dataflow::Lattice<AxisInfo> *latticeElement =
+        axisInfo.getLatticeElement(ptr);
+    AxisInfo info = latticeElement && !latticeElement->isUninitialized()
+                        ? latticeElement->getValue()
+                        : AxisInfo();
     // Get the contiguity order of `ptr`
     auto order = argSort(info.getContiguity());
     // The desired divisibility is the maximum divisibility
@@ -40,7 +44,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
         for (Value val : op->getResults()) {
           if (val.getType() != origType)
             continue;
-          auto valInfo = axisInfo.lookupLatticeElement(val);
+          auto valInfo = axisInfo.getLatticeElement(val);
           auto currOrder = argSort(valInfo->getValue().getContiguity());
           if (order == currOrder)
             withSameOrder.insert(val);
@@ -55,7 +59,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
     unsigned perThread = 1;
     for (Value val : withSameOrder) {
-      AxisInfo info = axisInfo.lookupLatticeElement(val)->getValue();
+      AxisInfo info = axisInfo.getLatticeElement(val)->getValue();
       unsigned maxMultipleBytes = info.getDivisibility(order[0]);
       unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
       unsigned maxContig = info.getContiguity(order[0]);
@@ -123,8 +127,10 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   void runOnOperation() override {
     Operation *op = getOperation();
     // Run axis info analysis
-    AxisInfoAnalysis axisInfo(&getContext());
-    axisInfo.run(op);
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    AxisInfoAnalysis *axisInfo = solver->load<AxisInfoAnalysis>();
+    if (failed(solver->initializeAndRun(op)))
+      return signalPassFailure();
 
     // For each i/o operation, we determine what layout
     // the pointers should have for best memory coalescing
@@ -146,10 +152,10 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       RankedTensorType ty = ptr.getType().template dyn_cast<RankedTensorType>();
       if (!ty || !ty.getElementType().isa<PointerType>())
         return;
-      AxisInfo info = axisInfo.lookupLatticeElement(ptr)->getValue();
+      AxisInfo info = axisInfo->getLatticeElement(ptr)->getValue();
       auto mod = curr->getParentOfType<ModuleOp>();
       int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-      auto convertType = getTypeConverter(axisInfo, ptr, numWarps);
+      auto convertType = getTypeConverter(*axisInfo, ptr, numWarps);
       layoutMap[ptr] = convertType;
     });
 

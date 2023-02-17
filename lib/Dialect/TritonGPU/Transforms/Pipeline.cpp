@@ -2,6 +2,7 @@
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -160,15 +161,18 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 LogicalResult LoopPipeliner::initialize() {
   Block *loop = forOp.getBody();
 
-  AxisInfoAnalysis axisInfoAnalysis(forOp.getContext());
-  axisInfoAnalysis.run(forOp->getParentOfType<ModuleOp>());
+  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+  AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
+  if (failed(solver->initializeAndRun(forOp->getParentOfType<ModuleOp>()))) {
+    return failure();
+  }
 
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> allLoads;
   for (Operation &op : *loop)
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.ptr();
-      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+      unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
       if (!tensorTy)
         continue;
@@ -211,6 +215,20 @@ LogicalResult LoopPipeliner::initialize() {
     if (isCandidate && loadOp.getResult().hasOneUse()) {
       isCandidate = false;
       Operation *use = *loadOp.getResult().getUsers().begin();
+
+      // advance to the first conversion as long
+      // as the use resides in shared memory and it has
+      // a single use itself
+      while (use) {
+        if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
+          break;
+        auto tensorType =
+            use->getResult(0).getType().dyn_cast<RankedTensorType>();
+        if (!tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
+          break;
+        use = *use->getResult(0).getUsers().begin();
+      }
+
       if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
         if (auto tensorType = convertLayout.getResult()
                                   .getType()
@@ -368,10 +386,14 @@ void LoopPipeliner::emitPrologue() {
                                    loads.size() * (numStages - 2));
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
+    auto bufferType = loadStageBuffer[loadOp][numStages - 1]
+                          .getType()
+                          .cast<RankedTensorType>();
+    auto bufferShape = bufferType.getShape();
     auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
-    sliceType =
-        RankedTensorType::get(sliceType.getShape(), sliceType.getElementType(),
-                              loadsBufferType[loadOp].getEncoding());
+    sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]},
+                                      sliceType.getElementType(),
+                                      loadsBufferType[loadOp].getEncoding());
     Value extractSlice = builder.create<tensor::ExtractSliceOp>(
         loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][numStages - 1],
         SmallVector<OpFoldResult>{int_attr(0), int_attr(0), int_attr(0)},
@@ -561,10 +583,14 @@ scf::ForOp LoopPipeliner::createNewForOp() {
           loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
       builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
       nextBuffers.push_back(insertAsyncOp);
+      // ExtractSlice
+      auto bufferType = insertAsyncOp.getType().cast<RankedTensorType>();
+      auto bufferShape = bufferType.getShape();
       auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
-      sliceType = RankedTensorType::get(sliceType.getShape(),
+      sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]},
                                         sliceType.getElementType(),
                                         loadsBufferType[loadOp].getEncoding());
+
       nextOp = builder.create<tensor::ExtractSliceOp>(
           op->getLoc(), sliceType, insertAsyncOp,
           SmallVector<OpFoldResult>{extractSliceIndex, int_attr(0),

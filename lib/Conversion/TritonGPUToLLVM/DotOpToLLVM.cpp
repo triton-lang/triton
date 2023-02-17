@@ -115,8 +115,6 @@ private:
     auto DTensorTy = D.getType().cast<RankedTensorType>();
     auto AShape = ATensorTy.getShape();
     auto BShape = BTensorTy.getShape();
-    auto DShape = DTensorTy.getShape();
-    auto wpt = mmaLayout.getWarpsPerCTA();
 
     bool isARow = ALayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
     bool isBRow = BLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
@@ -221,7 +219,6 @@ private:
                               ConversionPatternRewriter &rewriter) const {
     auto *ctx = rewriter.getContext();
     auto loc = op.getLoc();
-    auto threadId = getThreadId(rewriter, loc);
 
     auto A = op.a();
     auto B = op.b();
@@ -230,12 +227,10 @@ private:
 
     auto aTensorTy = A.getType().cast<RankedTensorType>();
     auto bTensorTy = B.getType().cast<RankedTensorType>();
-    auto cTensorTy = C.getType().cast<RankedTensorType>();
     auto dTensorTy = D.getType().cast<RankedTensorType>();
 
     auto aShape = aTensorTy.getShape();
     auto bShape = bTensorTy.getShape();
-    auto cShape = cTensorTy.getShape();
 
     BlockedEncodingAttr dLayout =
         dTensorTy.getEncoding().cast<BlockedEncodingAttr>();

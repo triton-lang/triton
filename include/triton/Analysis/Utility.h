@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_UTILITY_H
 #define TRITON_ANALYSIS_UTILITY_H
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
@@ -12,7 +13,7 @@ namespace mlir {
 class ReduceOpHelper {
 public:
   explicit ReduceOpHelper(triton::ReduceOp op) : op(op) {
-    srcTy = op.operand().getType().cast<RankedTensorType>();
+    srcTy = op.getOperand().getType().cast<RankedTensorType>();
   }
 
   ArrayRef<int64_t> getSrcShape() { return srcTy.getShape(); }
@@ -102,6 +103,9 @@ multiRootTopologicalSort(const SetVector<Operation *> &toSort);
 SetVector<Operation *>
 multiRootGetSlice(Operation *op, TransitiveFilter backwardFilter = nullptr,
                   TransitiveFilter forwardFilter = nullptr);
+
+// Create a basic DataFlowSolver with constant and dead code analysis included.
+std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 } // namespace mlir
 

@@ -3,7 +3,7 @@
 static mlir::LogicalResult verifySameEncoding(mlir::Type tyA, mlir::Type tyB) {
   using namespace mlir;
   auto encA = tyA.dyn_cast<RankedTensorType>();
-  auto encB = tyA.dyn_cast<RankedTensorType>();
+  auto encB = tyB.dyn_cast<RankedTensorType>();
   if (!encA || !encB)
     return success();
   return encA.getEncoding() == encB.getEncoding() ? success() : failure();

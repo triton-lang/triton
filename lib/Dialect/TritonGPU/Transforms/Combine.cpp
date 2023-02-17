@@ -1,6 +1,6 @@
 #include "Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
@@ -281,6 +281,8 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
     auto sliceEncoding =
         targetEncoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
     if (!sliceEncoding)
+      return failure();
+    if (sliceEncoding.getDim() != reduce.axis())
       return failure();
     ret = sliceEncoding.getParent();
   }
@@ -599,7 +601,8 @@ public:
         return failure();
       }
       // don't rematerialize non-element-wise
-      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
+          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
           !isa<triton::StoreOp>(op)) {
         return failure();
@@ -863,8 +866,10 @@ public:
       return failure();
 
     for (Operation *op : cvtSlices) {
-      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultType>())
+      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
+          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
+          !isa<triton::StoreOp>(op))
         return failure();
       for (Value arg : op->getOperands()) {
         Operation *argOp = arg.getDefiningOp();

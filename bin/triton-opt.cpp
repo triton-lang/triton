@@ -8,7 +8,7 @@
 
 #include "mlir/IR/Dialect.h"
 #include "mlir/InitAllPasses.h"
-#include "mlir/Support/MlirOptMain.h"
+#include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
 namespace mlir {
 namespace test {
@@ -33,8 +33,8 @@ int main(int argc, char **argv) {
   // TODO: register Triton & TritonGPU passes
   mlir::DialectRegistry registry;
   registry.insert<mlir::triton::TritonDialect,
-                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
-                  mlir::arith::ArithmeticDialect, mlir::StandardOpsDialect,
+                  mlir::triton::gpu::TritonGPUDialect, mlir::func::FuncDialect,
+                  mlir::math::MathDialect, mlir::arith::ArithmeticDialect,
                   mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();
 
   return mlir::asMainReturnCode(mlir::MlirOptMain(

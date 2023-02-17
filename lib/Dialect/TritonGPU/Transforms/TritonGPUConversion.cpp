@@ -82,12 +82,12 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
                scf::ReduceReturnOp>();
 
   addDynamicallyLegalDialect<arith::ArithmeticDialect, math::MathDialect,
-                             triton::TritonDialect, StandardOpsDialect,
-                             scf::SCFDialect>([&](Operation *op) {
-    if (typeConverter.isLegal(op))
-      return true;
-    return false;
-  });
+                             triton::TritonDialect, scf::SCFDialect>(
+      [&](Operation *op) {
+        if (typeConverter.isLegal(op))
+          return true;
+        return false;
+      });
 
   // We have requirements for the data layouts
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {

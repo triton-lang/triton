@@ -7,10 +7,8 @@
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
-#include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Matchers.h"
@@ -159,7 +157,7 @@ struct DotOpMmaV1ConversionHelper {
     return M / shapePerCTAM * param.rep[0];
   }
 
-  using CoordTy = SmallVector<Value, 2>;
+  using CoordTy = SmallVector<Value>;
   // Get the coordinates(m,n) of the elements emit by a thread in accumulator.
   static SmallVector<CoordTy>
   getMNCoords(Value thread, ConversionPatternRewriter &rewriter,
@@ -422,9 +420,9 @@ struct MMA16816ConversionHelper {
   MMA16816ConversionHelper(Type dotOperand, MmaEncodingAttr mmaLayout,
                            Value thread, ConversionPatternRewriter &rewriter,
                            TypeConverter *typeConverter, Location loc)
-      : mmaLayout(mmaLayout), thread(thread), helper(mmaLayout),
-        rewriter(rewriter), typeConverter(typeConverter), loc(loc),
-        ctx(mmaLayout.getContext()), wpt(mmaLayout.getWarpsPerCTA()) {
+      : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()), thread(thread),
+        helper(mmaLayout), rewriter(rewriter), typeConverter(typeConverter),
+        loc(loc), ctx(mmaLayout.getContext()) {
     helper.deduceMmaType(dotOperand);
 
     Value _32 = i32_val(32);
