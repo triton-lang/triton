@@ -57,10 +57,19 @@ def get_pybind11_package_info():
 def get_llvm_package_info():
     # download if nothing is installed
     system = platform.system()
-    system_suffix = {"Linux": "linux-gnu-ubuntu-18.04", "Darwin": "apple-darwin"}[system]
+    if system == "Darwin":
+        system_suffix = "apple-darwin"
+    elif system == "Linux":
+        vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+        vglibc = vglibc[0] * 100 + vglibc[1]
+        linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
+        system_suffix = f"linux-gnu-{linux_suffix}"
+    else:
+        raise RuntimeError(f"unsupported system: {system}")
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
-    name = 'llvm+mlir-15.0.7-x86_64-{}-{}'.format(system_suffix, "assert" if use_assert_enabled_llvm else "release")
-    url = "https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-15.0.7-8dfdcc7b7bf6/{}.tar.xz".format(name)
+    release_suffix = "assert" if use_assert_enabled_llvm else "release"
+    name = f'llvm+mlir-15.0.7-x86_64-{system_suffix}-{release_suffix}'
+    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-15.0.7-8dfdcc7b7bf6/{name}.tar.xz"
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
