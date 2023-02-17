@@ -75,7 +75,7 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   opt.NoNaNsFPMath = true;
   llvm::TargetMachine *machine = target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      llvm::None, llvm::CodeGenOpt::Aggressive);
+      std::nullopt, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if (layout.empty())
     module.setDataLayout(machine->createDataLayout());

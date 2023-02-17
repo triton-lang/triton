@@ -144,10 +144,10 @@ public:
 
       llvm::errs() << "Unexpected dot operand layout detected in "
                       "TritonToLLVMTypeConverter";
-      return llvm::None;
+      return std::nullopt;
     }
 
-    return llvm::None;
+    return std::nullopt;
   }
 };
 
