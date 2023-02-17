@@ -43,7 +43,7 @@ struct SplatOpConversion
   LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op->getLoc();
-    auto src = adaptor.src();
+    auto src = adaptor.getSrc();
     auto llStruct = convertSplatLikeOp(src.getType(), op.getType(), src,
                                        getTypeConverter(), rewriter, loc);
     rewriter.replaceOp(op, {llStruct});
@@ -109,8 +109,8 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     // unpack input values
-    auto lhsVals = getElementsFromStruct(loc, adaptor.lhs(), rewriter);
-    auto rhsVals = getElementsFromStruct(loc, adaptor.rhs(), rewriter);
+    auto lhsVals = getElementsFromStruct(loc, adaptor.getLhs(), rewriter);
+    auto rhsVals = getElementsFromStruct(loc, adaptor.getRhs(), rewriter);
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
     for (Value v : lhsVals)
@@ -135,7 +135,7 @@ struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // We cannot directly run `rewriter.replaceOp(op, adaptor.src())`
+    // We cannot directly run `rewriter.replaceOp(op, adaptor.getSrc())`
     // due to MLIR's restrictions
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
@@ -144,8 +144,7 @@ struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-    auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
-
+    auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
     Value view = getStructFromElements(loc, vals, rewriter, structTy);
     rewriter.replaceOp(op, view);
     return success();
@@ -162,7 +161,7 @@ struct TransOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto srcSmemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
+        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> dstStrides = {srcSmemObj.strides[1],
                                      srcSmemObj.strides[0]};
     SmallVector<Value> dstOffsets = {srcSmemObj.offsets[1],

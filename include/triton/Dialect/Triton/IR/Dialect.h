@@ -1,7 +1,7 @@
 #ifndef TRITON_DIALECT_TRITON_IR_DIALECT_H_
 #define TRITON_DIALECT_TRITON_IR_DIALECT_H_
 
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"

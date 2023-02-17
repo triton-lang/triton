@@ -597,12 +597,12 @@ DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(Type operandTy) {
 
 DotOpMmaV2ConversionHelper::TensorCoreType
 DotOpMmaV2ConversionHelper::getMmaType(triton::DotOp op) {
-  Value A = op.a();
-  Value B = op.b();
+  Value A = op.getA();
+  Value B = op.getB();
   auto aTy = A.getType().cast<RankedTensorType>();
   auto bTy = B.getType().cast<RankedTensorType>();
   // d = a*b + c
-  auto dTy = op.d().getType().cast<RankedTensorType>();
+  auto dTy = op.getD().getType().cast<RankedTensorType>();
 
   if (dTy.getElementType().isF32()) {
     if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
@@ -610,7 +610,7 @@ DotOpMmaV2ConversionHelper::getMmaType(triton::DotOp op) {
     if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
       return TensorCoreType::FP32_BF16_BF16_FP32;
     if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
-        op.allowTF32())
+        op.getAllowTF32())
       return TensorCoreType::FP32_TF32_TF32_FP32;
   } else if (dTy.getElementType().isInteger(32)) {
     if (aTy.getElementType().isInteger(8) && bTy.getElementType().isInteger(8))
@@ -822,10 +822,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     // The result type is 4xi32, each i32 is composed of 2xf16
     // elements (adjacent two columns in a row) or a single f32 element.
     Value resV4 = builder.launch(rewriter, loc, resTy);
-    return {extract_val(elemTy, resV4, i32_arr_attr(0)),
-            extract_val(elemTy, resV4, i32_arr_attr(1)),
-            extract_val(elemTy, resV4, i32_arr_attr(2)),
-            extract_val(elemTy, resV4, i32_arr_attr(3))};
+    return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
+            extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else if (elemBytes == 4 && needTrans) { // Use lds.32 to load tf32 matrices
     Value ptr2 = getPtr(ptrIdx + 1);
     assert(sMatStride == 1);
@@ -1117,8 +1115,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
 
     Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
     for (int i = 0; i < 4; ++i)
-      fc[m * colsPerThread + 4 * n + i] =
-          extract_val(elemTy, mmaOut, i32_arr_attr(i));
+      fc[m * colsPerThread + 4 * n + i] = extract_val(elemTy, mmaOut, i);
   };
 
   for (int k = 0; k < numRepK; ++k)

@@ -51,7 +51,7 @@ struct TestAliasPass
       dataflow::Lattice<AliasInfo> *latticeElement =
           analysis->getLatticeElement(value);
       SmallVector<std::string, 4> opNames;
-      if (latticeElement && !latticeElement->isUninitialized()) {
+      if (latticeElement) {
         auto &info = latticeElement->getValue();
         for (auto &alias : info.getAllocs()) {
           auto opName =
