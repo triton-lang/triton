@@ -355,8 +355,10 @@ struct ConstantAnalysis : public DataFlowAnalysis {
       return success();
     }
     setAllToUnknownConstants(op->getResults());
-    for (Region &region : op->getRegions())
-      setAllToUnknownConstants(region.getArguments());
+    for (Region &region : op->getRegions()) {
+      for (Block &block : region.getBlocks())
+        setAllToUnknownConstants(block.getArguments());
+    }
     return success();
   }
 

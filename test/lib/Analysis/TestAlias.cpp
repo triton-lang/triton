@@ -74,6 +74,14 @@ struct TestAliasPass
           auto argName = getValueOperandName(arg.value(), state);
           print(argName, opNames, os);
         }
+      } else if (auto branch = dyn_cast<BranchOpInterface>(op)) {
+        auto numSuccessors = branch->getNumSuccessors();
+        for (size_t i = 0; i < numSuccessors; ++i) {
+          auto operand = branch.getSuccessorBlockArgument(i).getValue();
+          auto opNames = getAllocOpNames(operand);
+          auto argName = getValueOperandName(operand, state);
+          print(argName, opNames, os);
+        }
       }
       for (auto result : llvm::enumerate(op->getResults())) {
         auto opNames = getAllocOpNames(result.value());
