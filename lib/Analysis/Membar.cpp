@@ -4,6 +4,7 @@
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include <deque>
 
 namespace mlir {
@@ -71,7 +72,7 @@ void MembarAnalysis::visitTerminator(Operation *op,
     return;
   }
   // Otherwise, it could be a return op
-  assert(isa<ReturnOp>(op) && "Unknown terminator");
+  assert(isa<func::ReturnOp>(op) && "Unknown terminator");
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,

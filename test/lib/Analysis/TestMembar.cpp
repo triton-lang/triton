@@ -1,4 +1,4 @@
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
@@ -30,14 +30,14 @@ struct TestMembarPass
     // Lower the module to the cf dialect
     auto *context = operation->getContext();
     RewritePatternSet scfPatterns(context);
-    mlir::populateLoopToStdConversionPatterns(scfPatterns);
+    mlir::populateSCFToControlFlowConversionPatterns(scfPatterns);
     mlir::ConversionTarget scfTarget(*context);
     scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp, scf::WhileOp,
                            scf::ExecuteRegionOp>();
     scfTarget.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(applyPartialConversion(operation, scfTarget,
                                       std::move(scfPatterns))))
-      return;
+      return signalPassFailure();
 
     // Print all ops after membar pass
     Allocation allocation(operation);

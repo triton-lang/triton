@@ -136,29 +136,19 @@ public:
 
     // Step 3
     RewritePatternSet scfPatterns(context);
-    mlir::populateLoopToStdConversionPatterns(scfPatterns);
+    mlir::populateSCFToControlFlowConversionPatterns(scfPatterns);
     mlir::ConversionTarget scfTarget(*context);
-    scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp, scf::WhileOp,
-                           scf::ExecuteRegionOp>();
+    scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
+                            scf::WhileOp, scf::ExecuteRegionOp>();
     scfTarget.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    if (failed(applyPartialConversion(mod, scfTarget, std::move(scfPatterns))))
+    if (failed(
+            applyPartialConversion(mod, scfTarget, std::move(scfPatterns))))
       return signalPassFailure();
 
     // Step 4
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
-
-    // Step 4
-    RewritePatternSet scf_patterns(context);
-    mlir::populateSCFToControlFlowConversionPatterns(scf_patterns);
-    mlir::ConversionTarget scf_target(*context);
-    scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
-                            scf::WhileOp, scf::ExecuteRegionOp>();
-    scf_target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    if (failed(
-            applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
-      return signalPassFailure();
 
     // Step 5
     RewritePatternSet funcPatterns(context);
