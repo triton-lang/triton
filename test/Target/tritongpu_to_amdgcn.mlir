@@ -1,4 +1,4 @@
-// RUN: %PYTHON -m triton.tools.aot %s --target=amdgcn --gfx=906 | FileCheck %s
+// RUN: %PYTHON -m triton.tools.aot %s --target=amdgcn --gfx=gfx906 --triple=amdgcn-amd-amdhsa --features="+sramecc,-xnack" | FileCheck %s
 
 // == LLVM IR check begin ==
 // CHECK-LABEL: {{^}}test_empty_kernel:
