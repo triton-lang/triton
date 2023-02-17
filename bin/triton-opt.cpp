@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
   registry.insert<mlir::triton::TritonDialect,
                   mlir::triton::gpu::TritonGPUDialect, mlir::func::FuncDialect,
-                  mlir::math::MathDialect, mlir::arith::ArithmeticDialect,
+                  mlir::math::MathDialect, mlir::arith::ArithDialect,
                   mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();
 
   return mlir::asMainReturnCode(mlir::MlirOptMain(
