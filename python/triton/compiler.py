@@ -1740,6 +1740,7 @@ def compile(fn, **kwargs):
             extern_libs = get_amdgcn_bitcode_paths()
         else:
             extern_libs.update(get_amdgcn_bitcode_paths())
+
         for key in list(extern_libs):
             if extern_libs[key] == '' or extern_libs[key] is None:
                extern_libs.pop(key)
@@ -1883,13 +1884,19 @@ def _get_amdgcn_bitcode_paths():
       gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
 
       gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
-      bitcode_path_dir = rocm_path_dir() + '/amdgcn/bitcode/'
+      bitcode_path_dir = os.path.join(Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/")
+
       amdgcn_bitcode_paths = {}
       i = 1
       for bc_lib in gpu_arch_agnostic_bitcode_libraries:
-        amdgcn_bitcode_paths['library_' + str(i)] = bitcode_path_dir + bc_lib
-        i += 1
-      amdgcn_bitcode_paths['library_' + str(i)] = bitcode_path_dir + gpu_arch_specific_bitcode_library
+        bc_path = bitcode_path_dir + bc_lib
+        if os.path.exists(bc_path):
+            amdgcn_bitcode_paths['library_' + str(i)] = bc_path
+            i += 1
+      bc_gfx_path = bitcode_path_dir + gpu_arch_specific_bitcode_library
+      if os.path.exists(bc_gfx_path):
+        amdgcn_bitcode_paths['library_' + str(i)] = bc_gfx_path
+    
       return amdgcn_bitcode_paths
   else:
       return {}
