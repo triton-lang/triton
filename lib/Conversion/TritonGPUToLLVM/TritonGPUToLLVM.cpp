@@ -54,9 +54,9 @@ struct BroadcastOpConversion
     // regardless of the order of the layout
     //
     Location loc = op->getLoc();
-    Value src = adaptor.src();
-    Value result = op.result();
-    auto srcTy = op.src().getType().cast<RankedTensorType>();
+    Value src = adaptor.getSrc();
+    Value result = op.getResult();
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto resultTy = result.getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
@@ -111,7 +111,7 @@ struct PrintfOpConversion
     }
     std::string formatStr;
     llvm::raw_string_ostream os(formatStr);
-    os << op.prefix();
+    os << op.getPrefix();
     if (!operands.empty()) {
       os << getFormatSubstr(operands[0]);
     }
@@ -289,13 +289,13 @@ struct MakeRangeOpConversion
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto rankedTy = op.result().getType().dyn_cast<RankedTensorType>();
+    auto rankedTy = op.getResult().getType().dyn_cast<RankedTensorType>();
     auto shape = rankedTy.getShape();
     auto layout = rankedTy.getEncoding();
 
     auto elemTy = rankedTy.getElementType();
     assert(elemTy.isInteger(32));
-    Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.start());
+    Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
     auto idxs = emitIndices(loc, rewriter, layout, shape);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
@@ -323,10 +323,10 @@ struct GetProgramIdOpConversion
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(op.axis() < 3);
+    assert(op.getAxis() < 3);
 
     Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(
-        loc, rewriter.getIndexType(), dims[op.axis()]);
+        loc, rewriter.getIndexType(), dims[op.getAxis()]);
     auto llvmIndexTy = getTypeConverter()->getIndexType();
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
         op, TypeRange{llvmIndexTy}, ValueRange{blockId});
@@ -347,10 +347,10 @@ struct GetNumProgramsOpConversion
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(op.axis() < 3);
+    assert(op.getAxis() < 3);
 
     Value blockId = rewriter.create<::mlir::gpu::GridDimOp>(
-        loc, rewriter.getIndexType(), dims[op.axis()]);
+        loc, rewriter.getIndexType(), dims[op.getAxis()]);
     auto llvmIndexTy = getTypeConverter()->getIndexType();
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
         op, TypeRange{llvmIndexTy}, ValueRange{blockId});
@@ -379,8 +379,8 @@ struct AddPtrOpConversion
           getTypeConverter()->convertType(resultTensorTy.getElementType());
       SmallVector<Type> types(elems, elemTy);
       Type structTy = LLVM::LLVMStructType::getLiteral(getContext(), types);
-      auto ptrs = getElementsFromStruct(loc, adaptor.ptr(), rewriter);
-      auto offsets = getElementsFromStruct(loc, adaptor.offset(), rewriter);
+      auto ptrs = getElementsFromStruct(loc, adaptor.getPtr(), rewriter);
+      auto offsets = getElementsFromStruct(loc, adaptor.getOffset(), rewriter);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
@@ -390,7 +390,7 @@ struct AddPtrOpConversion
     } else {
       assert(resultTy.isa<triton::PointerType>());
       Type llResultTy = getTypeConverter()->convertType(resultTy);
-      Value result = gep(llResultTy, adaptor.ptr(), adaptor.offset());
+      Value result = gep(llResultTy, adaptor.getPtr(), adaptor.getOffset());
       rewriter.replaceOp(op, result);
     }
     return success();
@@ -440,7 +440,7 @@ struct ExtractSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = extract_slice %src[%offsets]
     Location loc = op->getLoc();
-    auto srcTy = op.source().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
     assert(op.hasUnitStride() &&
@@ -449,13 +449,13 @@ struct ExtractSliceOpConversion
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
     auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.source(), rewriter);
+        getSharedMemoryObjectFromStruct(loc, adaptor.getSource(), rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
     for (auto i = 0; i < mixedOffsets.size(); ++i) {
       if (op.isDynamicOffset(i))
-        opOffsetVals.emplace_back(adaptor.offsets()[i]);
+        opOffsetVals.emplace_back(adaptor.getOffsets()[i]);
       else
         opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
       offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));

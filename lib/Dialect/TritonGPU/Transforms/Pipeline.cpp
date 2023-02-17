@@ -1,5 +1,5 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
@@ -171,7 +171,7 @@ LogicalResult LoopPipeliner::initialize() {
   SmallVector<triton::LoadOp, 2> allLoads;
   for (Operation &op : *loop)
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
-      auto ptr = loadOp.ptr();
+      auto ptr = loadOp.getPtr();
       unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
       if (!tensorTy)
@@ -318,7 +318,7 @@ void LoopPipeliner::emitPrologue() {
         }
         // load => copy async
         if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(op)) {
-          Value mask = lookupOrDefault(loadOp.mask(), stage);
+          Value mask = lookupOrDefault(loadOp.getMask(), stage);
           Value newMask;
           if (mask) {
             Value splatCond = builder.create<triton::SplatOp>(
@@ -332,10 +332,10 @@ void LoopPipeliner::emitPrologue() {
           // TODO: check if the hardware supports async copy
           newOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
               op->getLoc(), loadsBuffer[loadOp].getType(),
-              lookupOrDefault(loadOp.ptr(), stage),
+              lookupOrDefault(loadOp.getPtr(), stage),
               loadStageBuffer[loadOp][stage], pipelineIterIdx, newMask,
-              lookupOrDefault(loadOp.other(), stage), loadOp.cache(),
-              loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+              lookupOrDefault(loadOp.getOther(), stage), loadOp.getCache(),
+              loadOp.getEvict(), loadOp.getIsVolatile(), /*axis*/ 0);
           builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
           loadStageBuffer[loadOp].push_back(newOp->getResult(0));
         } else
@@ -464,7 +464,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   // 2. body of the new ForOp
   builder.setInsertionPointToStart(newForOp.getBody());
-  BlockAndValueMapping mapping;
+  IRMapping mapping;
   for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
@@ -501,7 +501,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   }
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
          "depOps contains invalid values");
-  BlockAndValueMapping nextMapping;
+  IRMapping nextMapping;
   DenseMap<BlockArgument, Value> depArgsMapping;
   size_t argIdx = 0;
   for (BlockArgument arg : depArgs) {
@@ -559,7 +559,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     // Update loading mask
     if (loads.contains(op->getResult(0))) {
       auto loadOp = llvm::cast<triton::LoadOp>(op);
-      Value mask = loadOp.mask();
+      Value mask = loadOp.getMask();
       Value newMask;
       if (mask) {
         Value splatCond = builder.create<triton::SplatOp>(
@@ -570,17 +570,17 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         // once
         if (!(forOp.isDefinedOutsideOfLoop(mask) && nextMapping.contains(mask)))
           nextMapping.map(mask, newMask);
-        newMask = nextMapping.lookupOrDefault(loadOp.mask());
+        newMask = nextMapping.lookupOrDefault(loadOp.getMask());
       } else
         newMask = builder.create<triton::SplatOp>(
             loadOp.getLoc(), getI1SameShape(loadOp), nextLoopCond);
       Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
           op->getLoc(), loadsBuffer[loadOp].getType(),
-          nextMapping.lookupOrDefault(loadOp.ptr()),
+          nextMapping.lookupOrDefault(loadOp.getPtr()),
           newForOp.getRegionIterArgs()[bufferIdx + nextBuffers.size()],
           insertSliceIndex, newMask,
-          nextMapping.lookupOrDefault(loadOp.other()), loadOp.cache(),
-          loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+          nextMapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
+          loadOp.getEvict(), loadOp.getIsVolatile(), /*axis*/ 0);
       builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
       nextBuffers.push_back(insertAsyncOp);
       // ExtractSlice
@@ -624,8 +624,8 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       if (auto dotOp = llvm::dyn_cast<triton::DotOp>(&op)) {
         builder.setInsertionPoint(&op);
         auto dotType = dotOp.getType().cast<RankedTensorType>();
-        Value a = dotOp.a();
-        Value b = dotOp.b();
+        Value a = dotOp.getA();
+        Value b = dotOp.getB();
         auto layoutCast = [&](Value dotOperand, int opIdx) -> Value {
           auto tensorType = dotOperand.getType().cast<RankedTensorType>();
           if (!tensorType.getEncoding().isa<ttg::DotOperandEncodingAttr>()) {

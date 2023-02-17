@@ -53,8 +53,8 @@ getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
-  auto srcTy = op.src().getType().cast<RankedTensorType>();
-  auto dstTy = op.result().getType().cast<RankedTensorType>();
+  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
@@ -100,7 +100,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 // TODO: extend beyond scalars
 SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   SmallVector<unsigned> smemShape;
-  if (op.ptr().getType().isa<RankedTensorType>()) {
+  if (op.getPtr().getType().isa<RankedTensorType>()) {
     // do nothing or just assert because shared memory is not used in tensor up
     // to now
   } else {
@@ -167,8 +167,8 @@ private:
       unsigned bytes = helper.getScratchSizeInBytes();
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtLayout.src().getType().cast<RankedTensorType>();
-      auto dstTy = cvtLayout.result().getType().cast<RankedTensorType>();
+      auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
+      auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();
       auto srcEncoding = srcTy.getEncoding();
       auto dstEncoding = dstTy.getEncoding();
       if (srcEncoding.isa<SharedEncodingAttr>() ||
@@ -225,10 +225,12 @@ private:
   void getValueAlias(Value value, SharedMemoryAliasAnalysis &analysis) {
     dataflow::Lattice<AliasInfo> *latticeElement =
         analysis.getLatticeElement(value);
-    if (latticeElement && !latticeElement->isUninitialized()) {
+    if (latticeElement) {
       AliasInfo &info = latticeElement->getValue();
-      for (auto alloc : info.getAllocs()) {
-        allocation->addAlias(value, alloc);
+      if (!info.getAllocs().empty()) {
+        for (auto alloc : info.getAllocs()) {
+          allocation->addAlias(value, alloc);
+        }
       }
     }
   }

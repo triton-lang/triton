@@ -1,5 +1,5 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
@@ -43,7 +43,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
                                  RankedTensorType tensorType, ValueRange inputs,
                                  Location loc) {
     llvm_unreachable("Argument rematerialization not implemented");
-    return llvm::None;
+    return std::nullopt;
   });
 
   // If the origValue still has live user(s), use this to
@@ -51,7 +51,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   addSourceMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
                                ValueRange inputs, Location loc) {
     llvm_unreachable("Source rematerialization not implemented");
-    return llvm::None;
+    return std::nullopt;
   });
 
   // This will be called when (desiredType != newOperandType)
@@ -64,7 +64,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     return Optional<Value>(cast.getResult());
     // return Optional<Value>(cast.getResult(0));
     // llvm_unreachable("Not implemented");
-    // return llvm::None;
+    // return std::nullopt;
   });
 }
 
@@ -81,7 +81,7 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
   addIllegalOp<scf::ExecuteRegionOp, scf::ParallelOp, scf::ReduceOp,
                scf::ReduceReturnOp>();
 
-  addDynamicallyLegalDialect<arith::ArithmeticDialect, math::MathDialect,
+  addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
                              triton::TritonDialect, scf::SCFDialect>(
       [&](Operation *op) {
         if (typeConverter.isLegal(op))
@@ -92,9 +92,9 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
   // We have requirements for the data layouts
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {
     Attribute aEncoding =
-        dotOp.a().getType().cast<RankedTensorType>().getEncoding();
+        dotOp.getA().getType().cast<RankedTensorType>().getEncoding();
     Attribute bEncoding =
-        dotOp.b().getType().cast<RankedTensorType>().getEncoding();
+        dotOp.getB().getType().cast<RankedTensorType>().getEncoding();
     if (aEncoding && aEncoding.isa<triton::gpu::DotOperandEncodingAttr>() &&
         bEncoding && bEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
       return true;
