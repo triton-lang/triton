@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Callable, List, TypeVar
+from typing import Callable, List, TypeVar, Optional, Union
 
 import triton
 from . import builtin, semantic
@@ -10,7 +10,7 @@ from triton._C.libtriton.triton import ir
 T = TypeVar('T')
 
 
-def _to_tensor(x, builder):
+def _to_tensor(x: Tensorable, builder) -> tensor:
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
     # Note: compile-time const integers are represented by unsigned values
@@ -653,6 +653,7 @@ class tensor:
             return semantic.bitcast(self, dtype, _builder)
         return semantic.cast(self, dtype, _builder)
 
+Tensorable = Union[bool, float, int, tensor, constexpr]
 
 # -----------------------
 # SPMD Programming Model
@@ -779,7 +780,7 @@ def trans(input, _builder=None):
 
 
 @builtin
-def cat(input, other, can_reorder=False, _builder=None):
+def cat(input: tensor, other: tensor, can_reorder=False, _builder=None):
     """
     Concatenate the given blocks
 
@@ -796,7 +797,7 @@ def cat(input, other, can_reorder=False, _builder=None):
 
 
 @builtin
-def view(input, shape, _builder=None):
+def view(input: tensor, shape, _builder=None) -> tensor:
     """
     Returns a tensor with the same elements as `input` but a different shape.
     The order of the elements may not be preserved.
@@ -843,7 +844,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
 
 
 @builtin
-def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None):
+def load(pointer: tensor, mask: Optional[tensor]=None, other: Optional[tensor]=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None) -> tensor:
     """
     Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -861,9 +862,9 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
     'type cache_modifier: str, optional
     """
     # mask, other can be constexpr
-    if _constexpr_to_value(mask) is not None:
+    if mask is not None and _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
-    if _constexpr_to_value(other) is not None:
+    if other is not None and _constexpr_to_value(other) is not None:
         other = _to_tensor(other, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
@@ -872,7 +873,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _builder=None):
+def store(pointer: tensor, value, mask: Optional[tensor]=None, cache_modifier="", eviction_policy="", _builder=None) -> tensor:
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -887,7 +888,7 @@ def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _bui
     """
     # value can be constexpr
     value = _to_tensor(value, _builder)
-    if _constexpr_to_value(mask) is not None:
+    if mask is not None and _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
@@ -921,7 +922,7 @@ def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
 @builtin
 @_add_atomic_docstr("compare-and-swap")
-def atomic_cas(pointer, cmp, val, _builder=None):
+def atomic_cas(pointer: tensor, cmp, val, _builder=None) -> tensor:
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
     return semantic.atomic_cas(pointer, cmp, val, _builder)
@@ -929,49 +930,49 @@ def atomic_cas(pointer, cmp, val, _builder=None):
 
 @builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer, val, mask=None, _builder=None):
+def atomic_xchg(pointer: tensor, val, mask=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_xchg(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer, val, mask=None, _builder=None):
+def atomic_add(pointer: tensor, val, mask=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_add(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer, val, mask=None, _builder=None):
+def atomic_max(pointer: tensor, val, mask=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_max(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer, val, mask=None, _builder=None):
+def atomic_min(pointer: tensor, val, mask=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_min(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer, val, mask=None, _builder=None):
+def atomic_and(pointer: tensor, val, mask=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_and(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer, val, mask=None, _builder=None):
+def atomic_or(pointer: tensor, val, mask=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_or(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer, val, mask=None, _builder=None):
+def atomic_xor(pointer: tensor, val, mask=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_xor(pointer, val, mask, _builder)
 
@@ -982,7 +983,7 @@ def atomic_xor(pointer, val, mask=None, _builder=None):
 
 
 @builtin
-def where(condition, x, y, _builder=None):
+def where(condition: Tensorable, x: Tensorable, y: Tensorable, _builder=None) -> tensor:
     """
     Returns a tensor of elements from either :code:`x` or :code:`y`, depending on :code:`condition`.
 
@@ -1009,14 +1010,14 @@ def where(condition, x, y, _builder=None):
 # -----------------------
 
 @builtin
-def umulhi(x, y, _builder=None):
+def umulhi(x, y, _builder=None) -> tensor:
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return semantic.umulhi(x, y, _builder)
 
 
 @builtin
-def fdiv(x, y, ieee_rounding=False, _builder=None):
+def fdiv(x, y, ieee_rounding=False, _builder=None) -> tensor:
     ieee_rounding = _constexpr_to_value(ieee_rounding)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
@@ -1038,31 +1039,31 @@ def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
 
 @builtin
 @_add_math_1arg_docstr("exponential")
-def exp(x, _builder=None):
+def exp(x: tensor, _builder=None) -> tensor:
     return semantic.exp(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
-def log(x, _builder=None):
+def log(x: tensor, _builder=None) -> tensor:
     return semantic.log(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("cosine")
-def cos(x, _builder=None):
+def cos(x: tensor, _builder=None) -> tensor:
     return semantic.cos(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("sine")
-def sin(x, _builder=None):
+def sin(x: tensor, _builder=None) -> tensor:
     return semantic.sin(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("square root")
-def sqrt(x, _builder=None):
+def sqrt(x: tensor, _builder=None) -> tensor:
     return semantic.sqrt(x, _builder)
 
 
@@ -1087,42 +1088,42 @@ def _add_reduction_docstr(name: str) -> Callable[[T], T]:
 
 @builtin
 @_add_reduction_docstr("maximum")
-def max(input, axis, _builder=None):
+def max(input: tensor, axis, _builder=None) -> tensor:
     axis = _constexpr_to_value(axis)
     return semantic.max(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("maximum index")
-def argmax(input, axis, _builder=None):
+def argmax(input: tensor, axis, _builder=None) -> tensor:
     axis = _constexpr_to_value(axis)
     return semantic.argmax(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("minimum")
-def min(input, axis, _builder=None):
+def min(input: tensor, axis, _builder=None) -> tensor:
     axis = _constexpr_to_value(axis)
     return semantic.min(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("minimum index")
-def argmin(input, axis, _builder=None):
+def argmin(input: tensor, axis, _builder=None) -> tensor:
     axis = _constexpr_to_value(axis)
     return semantic.argmin(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("sum")
-def sum(input, axis, _builder=None):
+def sum(input: tensor, axis, _builder=None) -> tensor:
     axis = _constexpr_to_value(axis)
     return semantic.sum(input, axis, _builder)
 
 
 @builtin
 @_add_reduction_docstr("xor sum")
-def xor_sum(input, axis, _builder=None):
+def xor_sum(input: tensor, axis, _builder=None) -> tensor:
     axis = _constexpr_to_value(axis)
     return semantic.xor_sum(input, axis, _builder)
 
@@ -1138,7 +1139,7 @@ def debug_barrier(_builder=None):
 
 
 @builtin
-def multiple_of(input, values, _builder=None):
+def multiple_of(input: tensor, values, _builder=None) -> tensor:
     """
     Let the compiler knows that the values in :code:`input` are all multiples of :code:`value`.
     """
@@ -1154,7 +1155,7 @@ def multiple_of(input, values, _builder=None):
 
 
 @builtin
-def max_contiguous(input, values, _builder=None):
+def max_contiguous(input: tensor, values, _builder=None) -> tensor:
     """
     Let the compiler knows that the `value` first values in :code:`input` are contiguous.
     """
@@ -1174,12 +1175,12 @@ def max_contiguous(input, values, _builder=None):
 # -----------------------
 
 @triton.jit
-def abs(x):
+def abs(x) -> tensor:
     return where(x >= 0, x, -x)
 
 
 @triton.jit
-def cdiv(x, div):
+def cdiv(x, div) -> tensor:
     """
     Computes the ceiling division of :code:`x` by :code:`div`
 
@@ -1192,7 +1193,7 @@ def cdiv(x, div):
 
 
 @triton.jit
-def minimum(x, y):
+def minimum(x, y) -> tensor:
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
 
@@ -1205,7 +1206,7 @@ def minimum(x, y):
 
 
 @triton.jit
-def maximum(x, y):
+def maximum(x, y) -> tensor:
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
 
@@ -1219,13 +1220,13 @@ def maximum(x, y):
 
 @triton.jit
 @_add_math_1arg_docstr("sigmoid")
-def sigmoid(x):
+def sigmoid(x) -> tensor:
     return 1 / (1 + triton.language.exp(-x))
 
 
 @triton.jit
 @_add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding=False):
+def softmax(x, ieee_rounding=False) -> tensor:
     z = x - triton.language.max(x, 0)
     num = triton.language.exp(z)
     den = triton.language.sum(num, 0)
@@ -1233,7 +1234,7 @@ def softmax(x, ieee_rounding=False):
 
 
 @triton.jit
-def ravel(x):
+def ravel(x) -> tensor:
     """
     Returns a contiguous flattened view of :code:`x`
 
@@ -1244,7 +1245,7 @@ def ravel(x):
 
 
 @triton.jit
-def swizzle2d(i, j, size_i, size_j, size_g):
+def swizzle2d(i, j, size_i, size_j, size_g: Tensorable) -> tuple[tensor, tensor]:
     """
     Transforms indices of a row-major size_i*size_j matrix into those
     of one where indices are row major for each group of size_j rows.
@@ -1277,7 +1278,7 @@ def swizzle2d(i, j, size_i, size_j, size_g):
 
 
 @triton.jit
-def zeros(shape, dtype):
+def zeros(shape, dtype: dtype) -> tensor:
     """
     Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
 
@@ -1290,7 +1291,7 @@ def zeros(shape, dtype):
 
 
 @triton.jit
-def zeros_like(input):
+def zeros_like(input) -> tensor:
     return zeros(input.shape, input.dtype)
 
 

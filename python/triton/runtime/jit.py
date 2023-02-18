@@ -313,10 +313,12 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.kernel_decorators = []
         self.kernel = None
         # annotations
-        self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
+        filtered_fn_annotations = [(name, ty) for name, ty in fn.__annotations__.items() if name in self.arg_names]
+        self.annotations = {self.arg_names.index(name): ty for name, ty in filtered_fn_annotations}
         self.__annotations__ = fn.__annotations__
         # index of constexprs
-        self.constexprs = [self.arg_names.index(ann) for ann in self.__annotations__.keys()]
+        filtered_annotations = [ann for ann in self.__annotations__.keys() if ann in self.arg_names]
+        self.constexprs = [self.arg_names.index(ann) for ann in filtered_annotations]
         # launcher
         self.run = self._make_launcher()
         # re-use docs of wrapped function
