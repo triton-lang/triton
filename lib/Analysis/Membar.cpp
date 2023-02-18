@@ -28,9 +28,8 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
         return;
       }
     }
+    blockList.emplace_back(block);
   });
-  // Add entry block to the blockList
-  blockList.emplace_back(&operation->getRegion(0).front());
 
   // A fixed point algorithm
   while (!blockList.empty()) {
