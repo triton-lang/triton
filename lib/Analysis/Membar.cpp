@@ -28,7 +28,9 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
         return;
       }
     }
-    blockList.emplace_back(block);
+    if (block->isEntryBlock()) {
+      blockList.emplace_back(block);
+    }
   });
 
   // A fixed point algorithm
