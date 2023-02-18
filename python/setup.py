@@ -65,7 +65,7 @@ def get_llvm_package_info():
         linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
         system_suffix = f"linux-gnu-{linux_suffix}"
     else:
-        raise RuntimeError(f"unsupported system: {system}")
+        return Package("llvm", "LLVM-C.lib", "", "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
     name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'

@@ -43,8 +43,8 @@ include_directories(${PYBIND11_INCLUDE_DIR})
 
 if(WIN32)
     SET(BUILD_SHARED_LIBS OFF)
-    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps/dlfcn-win32/src)
-    add_subdirectory(deps/dlfcn-win32/src ${CMAKE_BINARY_DIR}/dlfcn-win32)
+    find_package(dlfcn-win32 REQUIRED)
+    set(CMAKE_DL_LIBS dlfcn-win32::dl)
 endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
@@ -203,35 +203,69 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 if(TRITON_BUILD_PYTHON_MODULE)
   add_library(triton SHARED ${PYTHON_SRC})
 
-  target_link_libraries(triton
-    TritonAnalysis
-    TritonTransforms
-    TritonGPUTransforms
-    TritonLLVMIR
-    TritonPTX
-    ${dialect_libs}
-    ${conversion_libs}
-    # optimizations
-    MLIRPass
-    MLIRTransforms
-    MLIRLLVMDialect
-    MLIRSupport
-    MLIRTargetLLVMIRExport
-    MLIRExecutionEngine
-    MLIRMathToLLVM
-    MLIRNVVMToLLVMIRTranslation
-    MLIRIR
-  )
-
-  target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-
   if(WIN32)
-      target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} dl) # dl is from dlfcn-win32
+    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${CMAKE_DL_LIBS}
+      TritonAnalysis
+      TritonTransforms
+      TritonGPUTransforms
+      TritonLLVMIR
+      TritonPTX
+      ${dialect_libs}
+      ${conversion_libs}
+      # optimizations
+      MLIRPass
+      MLIRTransforms
+      MLIRLLVMDialect
+      MLIRSupport
+      MLIRTargetLLVMIRExport
+      MLIRExecutionEngine
+      MLIRMathToLLVM
+      MLIRNVVMToLLVMIRTranslation
+      MLIRIR
+    )
   elseif(APPLE)
-      target_link_libraries(triton ${LLVM_LIBRARIES} z)
+    target_link_libraries(triton ${LLVM_LIBRARIES} z
+      TritonAnalysis
+      TritonTransforms
+      TritonGPUTransforms
+      TritonLLVMIR
+      TritonPTX
+      ${dialect_libs}
+      ${conversion_libs}
+      # optimizations
+      MLIRPass
+      MLIRTransforms
+      MLIRLLVMDialect
+      MLIRSupport
+      MLIRTargetLLVMIRExport
+      MLIRExecutionEngine
+      MLIRMathToLLVM
+      MLIRNVVMToLLVMIRTranslation
+      MLIRIR
+    )
   else()
-      target_link_libraries(triton ${LLVM_LIBRARIES} z stdc++fs)
+    target_link_libraries(triton ${LLVM_LIBRARIES} z stdc++fs
+      TritonAnalysis
+      TritonTransforms
+      TritonGPUTransforms
+      TritonLLVMIR
+      TritonPTX
+      ${dialect_libs}
+      ${conversion_libs}
+      # optimizations
+      MLIRPass
+      MLIRTransforms
+      MLIRLLVMDialect
+      MLIRSupport
+      MLIRTargetLLVMIRExport
+      MLIRExecutionEngine
+      MLIRMathToLLVM
+      MLIRNVVMToLLVMIRTranslation
+      MLIRIR
+    )
   endif()
+  
+  target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
