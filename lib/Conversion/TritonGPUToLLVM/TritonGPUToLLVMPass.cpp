@@ -137,11 +137,10 @@ public:
     RewritePatternSet scfPatterns(context);
     mlir::populateSCFToControlFlowConversionPatterns(scfPatterns);
     mlir::ConversionTarget scfTarget(*context);
-    scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
-                            scf::WhileOp, scf::ExecuteRegionOp>();
+    scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp, scf::WhileOp,
+                           scf::ExecuteRegionOp>();
     scfTarget.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    if (failed(
-            applyPartialConversion(mod, scfTarget, std::move(scfPatterns))))
+    if (failed(applyPartialConversion(mod, scfTarget, std::move(scfPatterns))))
       return signalPassFailure();
 
     // Step 4
