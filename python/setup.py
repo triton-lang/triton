@@ -159,7 +159,7 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
-        triton_cache_path = os.path.join(os.environ["HOME"], ".triton")
+        triton_cache_path = os.path.join(os.getenv("HOME", os.environ["HOMEPATH"]), ".triton")
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages(triton_cache_path)
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
