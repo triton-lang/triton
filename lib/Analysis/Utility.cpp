@@ -331,7 +331,8 @@ namespace {
 // Copied from TestDeadCodeAnalysis.cpp, because some dead code analysis
 // interacts with constant propagation, but SparseConstantPropagation
 // doesn't seem to be sufficient.
-struct ConstantAnalysis : public DataFlowAnalysis {
+class ConstantAnalysis : public DataFlowAnalysis {
+public:
   using DataFlowAnalysis::DataFlowAnalysis;
 
   LogicalResult initialize(Operation *top) override {
@@ -361,6 +362,7 @@ struct ConstantAnalysis : public DataFlowAnalysis {
     return success();
   }
 
+private:
   /// Set all given values as not constants.
   void setAllToUnknownConstants(ValueRange values) {
     dataflow::ConstantValue unknownConstant(nullptr, nullptr);
