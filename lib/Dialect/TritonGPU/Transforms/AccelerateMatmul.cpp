@@ -42,7 +42,7 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 
 SmallVector<unsigned, 2> warpsPerTileV1(const ArrayRef<int64_t> shape,
                                         int numWarps) {
-  // Set a default value and ensure product of wpt equals numWarps
+  // Set a default value that ensures product of wpt equals numWarps
   return {static_cast<unsigned>(numWarps), 1};
 }
 

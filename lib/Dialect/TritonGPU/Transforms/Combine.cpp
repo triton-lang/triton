@@ -1120,11 +1120,11 @@ public:
     patterns.add<FoldConvertAndReduce>(context);
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
-    patterns.add<RematerializeForward>(context);
+    // patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<MoveConvertOutOfIf>(context);
     patterns.add<ConvertTransConvert>(context);
-    patterns.add<ConvertDotConvert>(context);
+    // patterns.add<ConvertDotConvert>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
