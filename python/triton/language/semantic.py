@@ -513,6 +513,7 @@ def view(input: tl.tensor,
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
 
+
 def reshape(input: tl.tensor,
             dst_shape: List[int],
             builder: ir.builder) -> tl.tensor:
