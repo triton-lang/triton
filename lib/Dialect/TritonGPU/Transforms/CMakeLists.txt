@@ -3,8 +3,8 @@ mlir_tablegen(TritonGPUCombine.inc -gen-rewriters)
 add_public_tablegen_target(TritonGPUCombineIncGen)
 
 add_mlir_dialect_library(TritonGPUTransforms
+  AccelerateMatmul.cpp
   Coalesce.cpp
-  CanonicalizeLoops.cpp
   Combine.cpp
   Pipeline.cpp
   Prefetch.cpp

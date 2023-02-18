@@ -7,7 +7,8 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{
-    Unroll loops to hide global memory -> shared memory latency.
+    Replace `LoadOp` in loops by `InsertSliceAsyncOp` instructions that asynchronously construct the data
+    needed at the next iteration
   }];
 
   let constructor = "mlir::createTritonGPUPipelinePass()";
@@ -27,7 +28,8 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
   let summary = "prefetch";
 
   let description = [{
-    Prefetch operands (a and b) of tt.dot into shared memory to hide shared memory -> register latency.
+    Decompose `DotOp` instructions in loops into several finer-grained `DotOp`
+    that may have their operands constructed at the end of the previous iteration
   }];
 
   let constructor = "mlir::createTritonGPUPrefetchPass()";
@@ -35,6 +37,27 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+}
+
+def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
+  let summary = "accelerate matmul";
+
+  let description = [{
+    Optimize the input/output layout of `dot` instruction to make them compatible hardware accelerators
+    (e.g., Nvidia tensor cores)
+  }];
+
+  let constructor = "mlir::createTritonGPUAccelerateMatmulPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"80",
+           "device compute capability">
+  ];
+
 }
 
 def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
@@ -53,10 +76,6 @@ def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
   let summary = "combine triton gpu ops";
 
   let description = [{
-    convert_layout(convert_layout(%src, #LAYOUT_0), #LAYOUT_1) =>
-      convert_layout(%src, #LAYOUT_1)
-
-    convert_layout(%src, #LAYOUT) => %src if %src.layout() == #LAYOUT
   }];
 
   let constructor = "mlir::createTritonGPUCombineOpsPass()";
@@ -93,19 +112,6 @@ def TritonGPUDecomposeConversions: Pass<"tritongpu-decompose-conversions", "mlir
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
-}
-
-def TritonGPUCanonicalizeLoops: Pass<"tritongpu-canonicalize-loops", "mlir::ModuleOp"> {
-  let summary = "canonicalize scf.ForOp ops";
-
-  let description = [{
-    This implements some optimizations that are missing in the standard scf.ForOp
-    canonicalizer.
-  }];
-
-  let constructor = "mlir::createTritonGPUCanonicalizeLoopsPass()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
 
 def UpdateMmaForVolta : Pass<"tritongpu-update-mma-for-volta", "mlir::ModuleOp"> {

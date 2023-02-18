@@ -981,6 +981,7 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.enable_debug()
     pm.add_coalesce_pass()
+    pm.add_tritongpu_accelerate_matmul_pass()
     # The combine pass converts blocked layout to mma layout
     # for dot ops so that pipeline can get shared memory swizzled correctly.
     pm.add_tritongpu_combine_pass(compute_capability)
