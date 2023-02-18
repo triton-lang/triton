@@ -520,6 +520,13 @@ def view(input: tl.tensor,
     return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
 
 
+def reshape(input: tl.tensor,
+            dst_shape: List[int],
+            builder: ir.builder) -> tl.tensor:
+    raise ValueError("`reshape` is not supported yet. Please use `view` instead if applicable. "
+                     "Note that view may reorder elements in an implementation- and context- dependent way.")
+
+
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     dst_shape = list(input.type.shape)
     dst_shape.insert(axis, 1)
@@ -786,6 +793,11 @@ def load(ptr: tl.tensor,
          builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of load instruction is " + ptr.type.__repr__())
+    if not ptr.type.is_block():
+        if mask and mask.type.is_block():
+            raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
+        if other and other.type.is_block():
+            raise ValueError("Other argument cannot be block type if pointer argument is not a block")
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
@@ -836,6 +848,11 @@ def store(ptr: tl.tensor,
           builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+    if not ptr.type.is_block():
+        if val.type.is_block():
+            raise ValueError("Value argument cannot be block type if pointer argument is not a block")
+        if mask and mask.type.is_block():
+            raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
     if ptr.type.is_block():
         val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
     if mask and ptr.type.is_block():

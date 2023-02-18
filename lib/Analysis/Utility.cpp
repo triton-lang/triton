@@ -1,5 +1,8 @@
 #include "triton/Analysis/Utility.h"
+#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <deque>
@@ -8,14 +11,14 @@ namespace mlir {
 
 bool ReduceOpHelper::isFastReduction() {
   auto srcLayout = srcTy.getEncoding();
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   return axis == triton::gpu::getOrder(srcLayout)[0];
 }
 
 unsigned ReduceOpHelper::getInterWarpSize() {
   auto srcLayout = srcTy.getEncoding();
   auto srcShape = srcTy.getShape();
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSize();
   return std::min(srcReduceDimSize / sizeIntraWarps,
@@ -25,7 +28,7 @@ unsigned ReduceOpHelper::getInterWarpSize() {
 unsigned ReduceOpHelper::getIntraWarpSize() {
   auto srcLayout = srcTy.getEncoding();
   auto srcShape = srcTy.getShape();
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   return std::min(srcReduceDimSize,
                   triton::gpu::getThreadsPerWarp(srcLayout)[axis]);
@@ -33,20 +36,20 @@ unsigned ReduceOpHelper::getIntraWarpSize() {
 
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
   auto srcLayout = srcTy.getEncoding();
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   return triton::gpu::getThreadsPerWarp(srcLayout)[axis] *
          triton::gpu::getWarpsPerCTA(srcLayout)[axis];
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   auto smemShape = convertType<unsigned>(getSrcShape());
   smemShape[axis] = std::min(smemShape[axis], getThreadsReductionAxis());
   return smemShape;
 }
 
 SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   SmallVector<SmallVector<unsigned>> smemShapes(3);
 
   auto argLayout = srcTy.getEncoding();
@@ -79,10 +82,10 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     elems = product<unsigned>(smemShape);
   }
 
-  auto tensorType = op.operand().getType().cast<RankedTensorType>();
+  auto tensorType = op.getOperand().getType().cast<RankedTensorType>();
   unsigned bytes = elems * tensorType.getElementTypeBitWidth() / 8;
 
-  if (triton::ReduceOp::withIndex(op.redOp()))
+  if (triton::ReduceOp::withIndex(op.getRedOp()))
     bytes += elems * sizeof(int32_t);
 
   return bytes;
@@ -106,8 +109,7 @@ bool maybeSharedAllocationOp(Operation *op) {
          (dialect->getTypeID() ==
               mlir::TypeID::get<triton::gpu::TritonGPUDialect>() ||
           dialect->getTypeID() == mlir::TypeID::get<triton::TritonDialect>() ||
-          dialect->getTypeID() ==
-              mlir::TypeID::get<arith::ArithmeticDialect>() ||
+          dialect->getTypeID() == mlir::TypeID::get<arith::ArithDialect>() ||
           dialect->getTypeID() == mlir::TypeID::get<tensor::TensorDialect>());
 }
 
@@ -124,12 +126,12 @@ bool supportMMA(triton::DotOp op, int version) {
 #ifdef USE_ROCM
   return false;
 #endif
-  auto aElemTy = op.a().getType().cast<RankedTensorType>().getElementType();
-  auto bElemTy = op.b().getType().cast<RankedTensorType>().getElementType();
+  auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
+  auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.allowTF32() && version >= 2;
+    return op.getAllowTF32() && version >= 2;
   }
-  return supportMMA(op.a(), version) && supportMMA(op.b(), version);
+  return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
 
 bool supportMMA(Value value, int version) {
@@ -329,6 +331,57 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
     ++currentIndex;
   }
   return multiRootTopologicalSort(slice);
+}
+
+namespace {
+// Copied from TestDeadCodeAnalysis.cpp, because some dead code analysis
+// interacts with constant propagation, but SparseConstantPropagation
+// doesn't seem to be sufficient.
+struct ConstantAnalysis : public DataFlowAnalysis {
+  using DataFlowAnalysis::DataFlowAnalysis;
+
+  LogicalResult initialize(Operation *top) override {
+    WalkResult result = top->walk([&](Operation *op) {
+      if (failed(visit(op)))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    return success(!result.wasInterrupted());
+  }
+
+  LogicalResult visit(ProgramPoint point) override {
+    Operation *op = point.get<Operation *>();
+    Attribute value;
+    if (matchPattern(op, m_Constant(&value))) {
+      auto *constant = getOrCreate<dataflow::Lattice<dataflow::ConstantValue>>(
+          op->getResult(0));
+      propagateIfChanged(constant, constant->join(dataflow::ConstantValue(
+                                       value, op->getDialect())));
+      return success();
+    }
+    setAllToUnknownConstants(op->getResults());
+    for (Region &region : op->getRegions())
+      setAllToUnknownConstants(region.getArguments());
+    return success();
+  }
+
+  /// Set all given values as not constants.
+  void setAllToUnknownConstants(ValueRange values) {
+    dataflow::ConstantValue unknownConstant(nullptr, nullptr);
+    for (Value value : values) {
+      auto *constant =
+          getOrCreate<dataflow::Lattice<dataflow::ConstantValue>>(value);
+      propagateIfChanged(constant, constant->join(unknownConstant));
+    }
+  }
+};
+} // namespace
+
+std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
+  auto solver = std::make_unique<DataFlowSolver>();
+  solver->load<dataflow::DeadCodeAnalysis>();
+  solver->load<ConstantAnalysis>();
+  return solver;
 }
 
 } // namespace mlir

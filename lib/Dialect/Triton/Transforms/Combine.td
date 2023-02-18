@@ -1,9 +1,9 @@
 #ifndef TRITON_PATTERNS
 #define TRITON_PATTERNS
 
-include "mlir/Dialect/StandardOps/IR/Ops.td"
-include "mlir/Dialect/Arithmetic/IR/ArithmeticOps.td"
+include "mlir/Dialect/Arith/IR/ArithOps.td"
 include "triton/Dialect/Triton/IR/TritonOps.td"
+include "mlir/IR/PatternBase.td"
 
 
 // AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
@@ -16,7 +16,7 @@ def CombineDotAddIPattern : Pat<
         (TT_DotOp $a, $b, $d, $allowTF32),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 def CombineDotAddFPattern : Pat<
-        (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32)),
+        (Arith_AddFOp $d, (TT_DotOp:$res $a, $b, $c, $allowTF32), $fastmath),
         (TT_DotOp $a, $b, $d, $allowTF32),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 
@@ -25,15 +25,15 @@ def CombineDotAddIRevPattern : Pat<
         (TT_DotOp $a, $b, $d, $allowTF32),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 def CombineDotAddFRevPattern : Pat<
-        (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $allowTF32), $d),
+        (Arith_AddFOp (TT_DotOp:$res $a, $b, $c, $allowTF32), $d, $fastmath),
         (TT_DotOp $a, $b, $d, $allowTF32),
         [(Constraint<CPred<"isZero($0)">> $c)]>;
 
 // TODO: this fails for addptr(addptr(ptr, i32), i64)
 // Commented out until fixed
 // addptr(addptr(%ptr, %idx0), %idx1) => addptr(%ptr, AddI(%idx0, %idx1))
-//   Note: leave (sub %c0, %c0) canceling to ArithmeticDialect
-//         (ref: ArithmeticCanonicalization.td)
+//   Note: leave (sub %c0, %c0) canceling to ArithDialect
+//         (ref: ArithCanonicalization.td)
 // def CombineAddPtrPattern : Pat<
 //         (TT_AddPtrOp (TT_AddPtrOp $ptr, $idx0), $idx1),
 //         (TT_AddPtrOp $ptr, (Arith_AddIOp $idx0, $idx1))>;

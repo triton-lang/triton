@@ -1,10 +1,9 @@
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Types.h"
-
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
 namespace mlir {
 namespace triton {
@@ -38,8 +37,8 @@ static Type getPointerTypeSameShape(Type type) {
 }
 
 // Parser & printer for assembly forms
-ParseResult parseLoadOp(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 4> allOperands;
+ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
   Type resultTypes[1];
   SMLoc allOperandLoc = parser.getCurrentLocation();
   if (parser.parseOperandList(allOperands) ||
@@ -66,25 +65,25 @@ ParseResult parseLoadOp(OpAsmParser &parser, OperationState &result) {
     return failure();
   // Deduce operand_segment_sizes from the number of the operands.
   auto operand_segment_sizesAttrName =
-      LoadOp::operand_segment_sizesAttrName(result.name);
+      LoadOp::getOperandSegmentSizesAttrName(result.name);
   result.addAttribute(
       operand_segment_sizesAttrName,
-      parser.getBuilder().getI32VectorAttr({1, hasMask, hasOther}));
+      parser.getBuilder().getDenseI32ArrayAttr({1, hasMask, hasOther}));
   return success();
 }
 
-void printLoadOp(OpAsmPrinter &printer, LoadOp loadOp) {
+void LoadOp::print(OpAsmPrinter &printer) {
   printer << " ";
-  printer << loadOp.getOperation()->getOperands();
+  printer << getOperation()->getOperands();
   // "operand_segment_sizes" can be deduced, so we don't print it.
-  printer.printOptionalAttrDict(loadOp->getAttrs(),
-                                {loadOp.operand_segment_sizesAttrName()});
+  printer.printOptionalAttrDict(getOperation()->getAttrs(),
+                                {getOperandSegmentSizesAttrName()});
   printer << " : ";
-  printer.printStrippedAttrOrType(loadOp.result().getType());
+  printer.printStrippedAttrOrType(getResult().getType());
 }
 
-ParseResult parseStoreOp(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 4> allOperands;
+ParseResult StoreOp::parse(OpAsmParser &parser, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
   Type valueType;
   SMLoc allOperandLoc = parser.getCurrentLocation();
   if (parser.parseOperandList(allOperands) ||
@@ -104,12 +103,12 @@ ParseResult parseStoreOp(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void printStoreOp(OpAsmPrinter &printer, StoreOp storeOp) {
+void StoreOp::print(OpAsmPrinter &printer) {
   printer << " ";
-  printer << storeOp.getOperation()->getOperands();
-  printer.printOptionalAttrDict(storeOp->getAttrs(), /*elidedAttrs=*/{});
+  printer << getOperation()->getOperands();
+  printer.printOptionalAttrDict(getOperation()->getAttrs(), /*elidedAttrs=*/{});
   printer << " : ";
-  printer.printStrippedAttrOrType(storeOp.value().getType());
+  printer.printStrippedAttrOrType(getValue().getType());
 }
 
 } // namespace triton
@@ -196,15 +195,15 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
     }
   }
   state.addAttribute(
-      operand_segment_sizesAttrName(state.name),
-      builder.getI32VectorAttr({1, (mask ? 1 : 0), (other ? 1 : 0)}));
+      getOperandSegmentSizesAttrName(state.name),
+      builder.getDenseI32ArrayAttr({1, (mask ? 1 : 0), (other ? 1 : 0)}));
   state.addAttribute(
-      cacheAttrName(state.name),
+      getCacheAttrName(state.name),
       ::mlir::triton::CacheModifierAttr::get(builder.getContext(), cache));
   state.addAttribute(
-      evictAttrName(state.name),
+      getEvictAttrName(state.name),
       ::mlir::triton::EvictionPolicyAttr::get(builder.getContext(), evict));
-  state.addAttribute(isVolatileAttrName(state.name),
+  state.addAttribute(getIsVolatileAttrName(state.name),
                      builder.getBoolAttr(isVolatile));
   state.addTypes({resultType});
 }
@@ -314,12 +313,13 @@ bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
 }
 
 //-- SplatOp --
-OpFoldResult SplatOp::fold(ArrayRef<Attribute> operands) {
-  auto constOperand = src().getDefiningOp<arith::ConstantOp>();
+OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
+  auto constOperand = getSrc().getDefiningOp<arith::ConstantOp>();
   if (!constOperand)
     return {};
   auto shapedType = getType().cast<ShapedType>();
-  auto ret = SplatElementsAttr::get(shapedType, {constOperand.getValue()});
+  auto ret = SplatElementsAttr::get(
+      shapedType, ArrayRef<Attribute>(constOperand.getValue()));
   return ret;
 }
 
@@ -353,8 +353,8 @@ mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
 }
 
 //-- BroadcastOp --
-OpFoldResult BroadcastOp::fold(ArrayRef<Attribute> operands) {
-  auto constOperand = src().getDefiningOp<arith::ConstantOp>();
+OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
+  auto constOperand = getSrc().getDefiningOp<arith::ConstantOp>();
   if (!constOperand)
     return {};
 

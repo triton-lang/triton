@@ -16,6 +16,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/IR/CallingConv.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
@@ -24,6 +27,7 @@
 #include <iostream>
 #include <dlfcn.h>
 #include <filesystem>
+#include <iterator>
 
 namespace mlir {
 namespace triton {
@@ -31,7 +35,7 @@ namespace triton {
 // Describes NVVM Metadata. It is used to record the nvvm related meta
 // information from mlir module.
 struct NVVMMetadata {
-  int maxntidx{-1};
+  SmallVector<int, 3> maxntid;
   bool isKernel{};
   // Free to extend with other information.
 };
@@ -41,13 +45,26 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
-  if (metadata.maxntidx > 0) {
-    auto warps = llvm::ConstantInt::get(llvm::IntegerType::get(ctx, 32),
-                                        llvm::APInt(32, metadata.maxntidx));
+  if (!metadata.maxntid.empty()) {
+    auto maxntid =
+        llvm::to_vector(llvm::map_range(metadata.maxntid, [&](int value) {
+          return llvm::ConstantInt::get(llvm::IntegerType::get(ctx, 32),
+                                        llvm::APInt(32, value));
+        }));
 
-    llvm::Metadata *md_args[] = {llvm::ValueAsMetadata::get(func),
-                                 llvm::MDString::get(ctx, "maxntidx"),
-                                 llvm::ValueAsMetadata::get(warps)};
+    SmallVector<llvm::Metadata *> md_args = {llvm::ValueAsMetadata::get(func)};
+    if (maxntid.size() > 0) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidx"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[0]));
+    }
+    if (maxntid.size() > 1) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidy"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[1]));
+    }
+    if (maxntid.size() > 2) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidz"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[2]));
+    }
 
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
@@ -77,9 +94,10 @@ extractNVVMMetadata(mlir::ModuleOp module,
     bool hasMetadata{};
 
     // maxntid
-    if (op->hasAttr("nvvm.maxntid")) {
-      auto attr = op->getAttr("nvvm.maxntid");
-      meta.maxntidx = attr.dyn_cast<IntegerAttr>().getInt();
+    if (auto attr = op->getAttrOfType<ArrayAttr>("nvvm.maxntid")) {
+      llvm::transform(attr.getAsValueRange<IntegerAttr>(),
+                      std::back_inserter(meta.maxntid),
+                      [](llvm::APInt value) { return value.getZExtValue(); });
       hasMetadata = true;
     }
 

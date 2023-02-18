@@ -1,11 +1,11 @@
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
-#include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -60,18 +60,20 @@ public:
     Type retType = getTypeConverter()->convertType(op.getType());
     auto value = adaptor.getValue().dyn_cast<DenseElementsAttr>();
     assert(value);
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
-        op, retType,
-        value.reshape(retType) // This is a hack. We just want to add encoding
-    );
+    if (value.getElementType().isInteger(1) && value.isSplat())
+      // Workaround until https://reviews.llvm.org/D133743 is included.
+      value = DenseElementsAttr::get(retType, value.getSplatValue<bool>());
+    else
+      // This is a hack. We just want to add encoding
+      value = value.reshape(retType);
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, retType, value);
     return success();
   }
 };
 
-class ConvertArithmeticOp : public ConversionPattern {
+class ConvertArithOp : public ConversionPattern {
 public:
-  ConvertArithmeticOp(TritonGPUTypeConverter &typeConverter,
-                      MLIRContext *context)
+  ConvertArithOp(TritonGPUTypeConverter &typeConverter, MLIRContext *context)
       : ConversionPattern(typeConverter, MatchAnyOpTypeTag(), /*benefit=*/1,
                           context) {}
 
@@ -79,19 +81,19 @@ public:
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
     Dialect *dialect = op->getDialect();
-    if (dialect->getTypeID() != mlir::TypeID::get<arith::ArithmeticDialect>())
+    if (dialect->getTypeID() != mlir::TypeID::get<arith::ArithDialect>())
       return failure();
     return success();
   }
 };
 
-void populateArithmeticPatternsAndLegality(
-    TritonGPUTypeConverter &typeConverter, RewritePatternSet &patterns,
-    TritonGPUConversionTarget &target) {
+void populateArithPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
+                                      RewritePatternSet &patterns,
+                                      TritonGPUConversionTarget &target) {
   // --------------
   // Add legality and rewrite pattern rules for operations
-  // from the Arithmetic dialect. The basic premise is that
-  // arithmetic operations require both inputs to have the same
+  // from the Arith dialect. The basic premise is that
+  // Arith operations require both inputs to have the same
   // non-null encoding
   // --------------
   MLIRContext *context = patterns.getContext();
@@ -128,12 +130,12 @@ void populateArithmeticPatternsAndLegality(
 }
 
 // this shouldn't exist if mlir's SelectOp checked encodings properly
-class StdSelectPattern : public OpConversionPattern<SelectOp> {
+class StdSelectPattern : public OpConversionPattern<arith::SelectOp> {
 public:
-  using OpConversionPattern<SelectOp>::OpConversionPattern;
+  using OpConversionPattern<arith::SelectOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(SelectOp op, typename SelectOp::Adaptor adaptor,
+  matchAndRewrite(arith::SelectOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
     rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
@@ -149,8 +151,8 @@ void populateStdPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   // Rewrite rule
   patterns.add<StdSelectPattern>(typeConverter, context);
-  target.addLegalOp<ReturnOp>(); // this is ok because all functions are inlined
-                                 // by the frontend
+  target.addLegalOp<func::ReturnOp>(); // this is ok because all functions are
+                                       // inlined by the frontend
 }
 
 void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
@@ -176,7 +178,7 @@ struct TritonMakeRangePattern
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = getTypeConverter()->convertType(op.getType());
     rewriter.replaceOpWithNewOp<triton::MakeRangeOp>(
-        op, retType, adaptor.start(), adaptor.end());
+        op, retType, adaptor.getStart(), adaptor.getEnd());
     return success();
   }
 };
@@ -189,21 +191,22 @@ struct TritonExpandDimsPattern
   matchAndRewrite(triton::ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Type retType = op.getType());
-    RankedTensorType argType = adaptor.src().getType().cast<RankedTensorType>();
+    RankedTensorType argType =
+        adaptor.getSrc().getType().cast<RankedTensorType>();
     Attribute _argEncoding = argType.getEncoding();
     if (!_argEncoding)
       return failure();
     auto argEncoding = _argEncoding.cast<triton::gpu::BlockedEncodingAttr>();
     // return shape
     auto retShape = argType.getShape().vec();
-    retShape.insert(retShape.begin() + op.axis(), 1);
+    retShape.insert(retShape.begin() + op.getAxis(), 1);
     // return encoding
     auto retSizePerThread = argEncoding.getSizePerThread().vec();
-    retSizePerThread.insert(retSizePerThread.begin() + op.axis(), 1);
+    retSizePerThread.insert(retSizePerThread.begin() + op.getAxis(), 1);
     auto retThreadsPerWarp = argEncoding.getThreadsPerWarp().vec();
-    retThreadsPerWarp.insert(retThreadsPerWarp.begin() + op.axis(), 1);
+    retThreadsPerWarp.insert(retThreadsPerWarp.begin() + op.getAxis(), 1);
     auto retWarpsPerCTA = argEncoding.getWarpsPerCTA().vec();
-    retWarpsPerCTA.insert(retWarpsPerCTA.begin() + op.axis(), 1);
+    retWarpsPerCTA.insert(retWarpsPerCTA.begin() + op.getAxis(), 1);
     SmallVector<unsigned, 4> retOrder(retShape.size());
     std::iota(retOrder.begin(), retOrder.end(), 0);
     triton::gpu::BlockedEncodingAttr retEncoding =
@@ -212,14 +215,14 @@ struct TritonExpandDimsPattern
                                               retOrder);
     // convert operand to slice of return type
     Attribute newArgEncoding = triton::gpu::SliceEncodingAttr::get(
-        getContext(), op.axis(), retEncoding);
+        getContext(), op.getAxis(), retEncoding);
     RankedTensorType newArgType = RankedTensorType::get(
         argType.getShape(), argType.getElementType(), newArgEncoding);
     // construct new op
     auto newSrc = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        op.getLoc(), newArgType, adaptor.src());
+        op.getLoc(), newArgType, adaptor.getSrc());
     rewriter.replaceOpWithNewOp<triton::ExpandDimsOp>(op, newSrc,
-                                                      adaptor.axis());
+                                                      adaptor.getAxis());
     return success();
   }
 };
@@ -246,15 +249,15 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     RankedTensorType retType =
         RankedTensorType::get(origShape, origType.getElementType(), dEncoding);
     // a & b must be of smem layout
-    auto aType = adaptor.a().getType().cast<RankedTensorType>();
-    auto bType = adaptor.b().getType().cast<RankedTensorType>();
+    auto aType = adaptor.getA().getType().cast<RankedTensorType>();
+    auto bType = adaptor.getB().getType().cast<RankedTensorType>();
     Attribute aEncoding = aType.getEncoding();
     Attribute bEncoding = bType.getEncoding();
     if (!aEncoding || !bEncoding)
       return failure();
-    Value a = adaptor.a();
-    Value b = adaptor.b();
-    Value c = adaptor.c();
+    Value a = adaptor.getA();
+    Value b = adaptor.getB();
+    Value c = adaptor.getC();
     if (!aEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
       Attribute encoding =
           triton::gpu::DotOperandEncodingAttr::get(getContext(), 0, dEncoding);
@@ -272,7 +275,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     c = rewriter.create<triton::gpu::ConvertLayoutOp>(c.getLoc(), retType, c);
 
     rewriter.replaceOpWithNewOp<triton::DotOp>(op, retType, a, b, c,
-                                               adaptor.allowTF32());
+                                               adaptor.getAllowTF32());
     return success();
   }
 };
@@ -300,7 +303,7 @@ struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
   LogicalResult
   matchAndRewrite(triton::TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value src = adaptor.src();
+    Value src = adaptor.getSrc();
     auto srcType = src.getType().cast<RankedTensorType>();
     Attribute srcEncoding = srcType.getEncoding();
     if (!srcEncoding)
@@ -332,9 +335,9 @@ struct TritonLoadPattern : public OpConversionPattern<triton::LoadOp> {
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::LoadOp>(
-        op, typeConverter->convertType(op.getType()), adaptor.ptr(),
-        adaptor.mask(), adaptor.other(), adaptor.cache(), adaptor.evict(),
-        adaptor.isVolatile());
+        op, typeConverter->convertType(op.getType()), adaptor.getPtr(),
+        adaptor.getMask(), adaptor.getOther(), adaptor.getCache(),
+        adaptor.getEvict(), adaptor.getIsVolatile());
     return success();
   }
 };
@@ -346,8 +349,8 @@ struct TritonStorePattern : public OpConversionPattern<triton::StoreOp> {
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        op, adaptor.ptr(), adaptor.value(), adaptor.mask(), adaptor.cache(),
-        adaptor.evict());
+        op, adaptor.getPtr(), adaptor.getValue(), adaptor.getMask(),
+        adaptor.getCache(), adaptor.getEvict());
     return success();
   }
 };
@@ -360,8 +363,8 @@ struct TritonAtomicCASPattern
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::AtomicCASOp>(
-        op, typeConverter->convertType(op.getType()), adaptor.ptr(),
-        adaptor.cmp(), adaptor.val());
+        op, typeConverter->convertType(op.getType()), adaptor.getPtr(),
+        adaptor.getCmp(), adaptor.getVal());
     return success();
   }
 };
@@ -374,8 +377,8 @@ struct TritonAtomicRMWPattern
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::AtomicRMWOp>(
-        op, typeConverter->convertType(op.getType()), adaptor.atomic_rmw_op(),
-        adaptor.ptr(), adaptor.val(), adaptor.mask());
+        op, typeConverter->convertType(op.getType()), adaptor.getAtomicRmwOp(),
+        adaptor.getPtr(), adaptor.getVal(), adaptor.getMask());
     return success();
   }
 };
@@ -388,8 +391,8 @@ struct TritonExtElemwisePattern
   matchAndRewrite(triton::ExtElemwiseOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::ExtElemwiseOp>(
-        op, typeConverter->convertType(op.getType()), adaptor.args(),
-        adaptor.libname(), adaptor.libpath(), adaptor.symbol());
+        op, typeConverter->convertType(op.getType()), adaptor.getArgs(),
+        adaptor.getLibname(), adaptor.getLibpath(), adaptor.getSymbol());
     return success();
   }
 };
@@ -415,7 +418,7 @@ struct TritonBroadcastPattern
   LogicalResult
   matchAndRewrite(BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcType = adaptor.src().getType().cast<RankedTensorType>();
+    auto srcType = adaptor.getSrc().getType().cast<RankedTensorType>();
     auto srcEncoding = srcType.getEncoding();
     if (!srcEncoding)
       return failure();
@@ -436,7 +439,7 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<triton::ReduceOp>(
-        op, adaptor.redOp(), adaptor.operand(), adaptor.axis());
+        op, adaptor.getRedOp(), adaptor.getOperand(), adaptor.getAxis());
     return success();
   }
 };
@@ -447,7 +450,7 @@ struct TritonPrintfPattern : public OpConversionPattern<triton::PrintfOp> {
   LogicalResult
   matchAndRewrite(PrintfOp op, typename PrintfOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<triton::PrintfOp>(op, op.prefixAttr(),
+    rewriter.replaceOpWithNewOp<triton::PrintfOp>(op, op.getPrefixAttr(),
                                                   adaptor.getOperands());
     return success();
   }
@@ -456,18 +459,19 @@ struct TritonPrintfPattern : public OpConversionPattern<triton::PrintfOp> {
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
-  patterns.add< // TODO: view should have custom pattern that views the layout
-      TritonGenericPattern<triton::ViewOp>,
-      TritonGenericPattern<triton::BitcastOp>,
-      TritonGenericPattern<triton::FpToFpOp>,
-      TritonGenericPattern<triton::IntToPtrOp>,
-      TritonGenericPattern<triton::PtrToIntOp>,
-      TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
-      TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-      TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
-      TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
-      TritonStorePattern, TritonExtElemwisePattern, TritonPrintfPattern,
-      TritonAtomicRMWPattern>(typeConverter, context);
+  patterns
+      .insert< // TODO: view should have custom pattern that views the layout
+          TritonGenericPattern<triton::ViewOp>,
+          TritonGenericPattern<triton::BitcastOp>,
+          TritonGenericPattern<triton::FpToFpOp>,
+          TritonGenericPattern<triton::IntToPtrOp>,
+          TritonGenericPattern<triton::PtrToIntOp>,
+          TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
+          TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
+          TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
+          TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
+          TritonStorePattern, TritonExtElemwisePattern, TritonPrintfPattern,
+          TritonAtomicRMWPattern>(typeConverter, context);
 }
 
 //
@@ -498,7 +502,7 @@ struct SCFForPattern : public OpConversionPattern<scf::ForOp> {
       return rewriter.notifyMatchFailure(op, "could not convert body types");
     }
     // Change the clone to use the updated operands. We could have cloned with
-    // a BlockAndValueMapping, but this seems a bit more direct.
+    // a IRMapping, but this seems a bit more direct.
     newOp->setOperands(adaptor.getOperands());
     // Update the result types to the new converted types.
     SmallVector<Type> newResultTypes;
@@ -624,29 +628,28 @@ void populateSCFPatterns(TritonGPUTypeConverter &typeConverter,
 
 // CF
 
-class CFBranchPattern : public OpConversionPattern<BranchOp> {
+class CFBranchPattern : public OpConversionPattern<cf::BranchOp> {
 public:
-  using OpConversionPattern<BranchOp>::OpConversionPattern;
+  using OpConversionPattern<cf::BranchOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(BranchOp op, BranchOp::Adaptor adaptor,
+  matchAndRewrite(cf::BranchOp op, cf::BranchOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto converter = getTypeConverter();
-    auto newOp = rewriter.replaceOpWithNewOp<BranchOp>(op, op.getSuccessor(),
-                                                       adaptor.getOperands());
+    rewriter.replaceOpWithNewOp<cf::BranchOp>(op, op.getSuccessor(),
+                                              adaptor.getOperands());
     return success();
   }
 };
 
-class CFCondBranchPattern : public OpConversionPattern<CondBranchOp> {
+class CFCondBranchPattern : public OpConversionPattern<cf::CondBranchOp> {
 public:
-  using OpConversionPattern<CondBranchOp>::OpConversionPattern;
+  using OpConversionPattern<cf::CondBranchOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(CondBranchOp op, CondBranchOp::Adaptor adaptor,
+  matchAndRewrite(cf::CondBranchOp op, cf::CondBranchOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto converter = getTypeConverter();
-    auto newOp = rewriter.replaceOpWithNewOp<CondBranchOp>(
+    auto newOp = rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
         op, adaptor.getCondition(), op.getTrueDest(),
         adaptor.getTrueDestOperands(), op.getFalseDest(),
         adaptor.getFalseDestOperands());
@@ -685,7 +688,7 @@ public:
     RewritePatternSet patterns(context);
     // add rules
     populateStdPatternsAndLegality(typeConverter, patterns, target);
-    populateArithmeticPatternsAndLegality(typeConverter, patterns, target);
+    populateArithPatternsAndLegality(typeConverter, patterns, target);
     populateMathPatternsAndLegality(typeConverter, patterns, target);
     populateTritonPatterns(typeConverter, patterns);
     // TODO: can we use
