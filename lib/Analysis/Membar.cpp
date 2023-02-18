@@ -36,7 +36,7 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
   while (!blockList.empty()) {
     auto *block = blockList.front();
     blockList.pop_front();
-    // Make a copy of the input blockInfo but not update
+    // Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap.lookup(block);
     SmallVector<Block *> successors;
     for (auto &op : block->getOperations()) {
