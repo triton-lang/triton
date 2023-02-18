@@ -202,66 +202,36 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
 if(TRITON_BUILD_PYTHON_MODULE)
   add_library(triton SHARED ${PYTHON_SRC})
-
+  set(TRITON_LIBRARIES
+    TritonAnalysis
+    TritonTransforms
+    TritonGPUTransforms
+    TritonLLVMIR
+    TritonPTX
+    ${dialect_libs}
+    ${conversion_libs}
+    # optimizations
+    MLIRPass
+    MLIRTransforms
+    MLIRLLVMDialect
+    MLIRSupport
+    MLIRTargetLLVMIRExport
+    MLIRExecutionEngine
+    MLIRMathToLLVM
+    MLIRNVVMToLLVMIRTranslation
+    MLIRIR
+  )
   if(WIN32)
     target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${CMAKE_DL_LIBS}
-      TritonAnalysis
-      TritonTransforms
-      TritonGPUTransforms
-      TritonLLVMIR
-      TritonPTX
-      ${dialect_libs}
-      ${conversion_libs}
-      # optimizations
-      MLIRPass
-      MLIRTransforms
-      MLIRLLVMDialect
-      MLIRSupport
-      MLIRTargetLLVMIRExport
-      MLIRExecutionEngine
-      MLIRMathToLLVM
-      MLIRNVVMToLLVMIRTranslation
-      MLIRIR
+      ${TRITON_LIBRARIES}
     )
   elseif(APPLE)
     target_link_libraries(triton ${LLVM_LIBRARIES} z
-      TritonAnalysis
-      TritonTransforms
-      TritonGPUTransforms
-      TritonLLVMIR
-      TritonPTX
-      ${dialect_libs}
-      ${conversion_libs}
-      # optimizations
-      MLIRPass
-      MLIRTransforms
-      MLIRLLVMDialect
-      MLIRSupport
-      MLIRTargetLLVMIRExport
-      MLIRExecutionEngine
-      MLIRMathToLLVM
-      MLIRNVVMToLLVMIRTranslation
-      MLIRIR
+      ${TRITON_LIBRARIES}
     )
   else()
     target_link_libraries(triton ${LLVM_LIBRARIES} z stdc++fs
-      TritonAnalysis
-      TritonTransforms
-      TritonGPUTransforms
-      TritonLLVMIR
-      TritonPTX
-      ${dialect_libs}
-      ${conversion_libs}
-      # optimizations
-      MLIRPass
-      MLIRTransforms
-      MLIRLLVMDialect
-      MLIRSupport
-      MLIRTargetLLVMIRExport
-      MLIRExecutionEngine
-      MLIRMathToLLVM
-      MLIRNVVMToLLVMIRTranslation
-      MLIRIR
+      ${TRITON_LIBRARIES}
     )
   endif()
   
