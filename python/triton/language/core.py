@@ -9,6 +9,7 @@ from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
+TRITON_MAX_TENSOR_NUMEL = 131072
 
 def _to_tensor(x, builder):
     if isinstance(x, bool):
@@ -254,6 +255,8 @@ class block_type(dtype):
         self.numel = 1
         for s in self.shape:
             self.numel *= s
+            if self.numel > TRITON_MAX_TENSOR_NUMEL:
+                raise ValueError("number of elements must be less than or equal to TRITON_MAX_TENSOR_NUMEL = 131072")
 
         self.name = self.__str__()
 
