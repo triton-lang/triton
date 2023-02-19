@@ -115,17 +115,15 @@ public:
     // Step 1: Decompose unoptimized layout conversions to use shared memory
     // Step 2: Decompose insert_slice_async to use load + insert_slice for
     //   pre-Ampere architectures or unsupported vectorized load sizes
-    // Step 3: Allocate shared memories and insert barriers
-    // Step 4: Convert SCF to CFG
+    // Step 3: Convert SCF to CFG
+    // Step 4: Allocate shared memories and insert barriers
     // Step 5: Convert FuncOp to LLVMFuncOp via partial conversion
     // Step 6: Get axis and shared memory info
     // Step 7: Convert the rest of ops via partial conversion
     //
-    // The reason for putting step 3 before step 4 is that the membar
-    // analysis currently only supports SCF but not CFG. The reason for a
-    // separation between 5/7 is that, step 6 is out of the scope of Dialect
-    // Conversion, thus we need to make sure the smem is not revised during the
-    // conversion of step 7.
+    // The reason for a separation between 5/7 is that, step 6 is out of the
+    // scope of Dialect Conversion, thus we need to make sure the smem is not
+    // revised during the conversion of step 7.
 
     // Step 1
     decomposeMmaToDotOperand(mod, numWarps);
@@ -136,26 +134,25 @@ public:
       return signalPassFailure();
 
     // Step 3
+    RewritePatternSet scfPatterns(context);
+    mlir::populateSCFToControlFlowConversionPatterns(scfPatterns);
+    mlir::ConversionTarget scfTarget(*context);
+    scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp, scf::WhileOp,
+                           scf::ExecuteRegionOp>();
+    scfTarget.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    if (failed(applyPartialConversion(mod, scfTarget, std::move(scfPatterns))))
+      return signalPassFailure();
+
+    // Step 4
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
 
-    // Step 4
-    RewritePatternSet scf_patterns(context);
-    mlir::populateSCFToControlFlowConversionPatterns(scf_patterns);
-    mlir::ConversionTarget scf_target(*context);
-    scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
-                            scf::WhileOp, scf::ExecuteRegionOp>();
-    scf_target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    if (failed(
-            applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
-      return signalPassFailure();
-
     // Step 5
-    RewritePatternSet func_patterns(context);
-    func_patterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
+    RewritePatternSet funcPatterns(context);
+    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
     if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(func_patterns))))
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
       return signalPassFailure();
 
     // Step 6 - get axis and shared memory info
