@@ -954,9 +954,7 @@ class TritonGPUCombineOpsPass
     : public TritonGPUCombineOpsBase<TritonGPUCombineOpsPass> {
 public:
   TritonGPUCombineOpsPass() = default;
-  TritonGPUCombineOpsPass(int computeCapability) {
-    this->computeCapability = computeCapability;
-  }
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -983,7 +981,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonGPUCombineOpsPass(int computeCapability) {
-  return std::make_unique<TritonGPUCombineOpsPass>(computeCapability);
+std::unique_ptr<Pass> mlir::createTritonGPUCombineOpsPass() {
+  return std::make_unique<TritonGPUCombineOpsPass>();
 }

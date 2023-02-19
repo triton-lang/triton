@@ -981,19 +981,17 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.enable_debug()
     pm.add_coalesce_pass()
-    pm.add_tritongpu_accelerate_matmul_pass()
-    # The combine pass converts blocked layout to mma layout
-    # for dot ops so that pipeline can get shared memory swizzled correctly.
-    pm.add_tritongpu_combine_pass(compute_capability)
+    pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
+    pm.add_tritongpu_combine_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
-    # Prefetch must be done after pipeline pass because pipeline pass
-    # extracts slices from the original tensor.
+    # Prefetch pass relies on matmul operands being sliceable.
+    # This may only be the case after the `pipeline` pass has run already
     pm.add_tritongpu_prefetch_pass()
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
-    pm.add_tritongpu_combine_pass(compute_capability)
+    pm.add_tritongpu_combine_pass()
     pm.add_licm_pass()
-    pm.add_tritongpu_combine_pass(compute_capability)
+    pm.add_tritongpu_combine_pass()
     pm.add_cse_pass()
     pm.add_tritongpu_decompose_conversions_pass()
     if compute_capability // 10 == 7:
