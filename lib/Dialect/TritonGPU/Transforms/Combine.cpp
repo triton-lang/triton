@@ -945,6 +945,53 @@ public:
   }
 };
 
+
+//
+class ConvertDotConvert : public mlir::RewritePattern {
+public:
+  ConvertDotConvert(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto dotOp =
+        dyn_cast_or_null<triton::DotOp>(dstOp.getSrc().getDefiningOp());
+    if (!dotOp)
+      return mlir::failure();
+    if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
+        std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
+      return mlir::failure();
+    auto cvtOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
+        dotOp.getOperand(2).getDefiningOp());
+    if (!cvtOp)
+      return mlir::failure();
+    auto loadOp =
+        dyn_cast_or_null<triton::LoadOp>(cvtOp.getSrc().getDefiningOp());
+    if (!loadOp)
+      return mlir::failure();
+    auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
+    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    if (dstTy != srcTy)
+      return mlir::failure();
+
+    // TODO: int tensor cores
+    auto _0f = rewriter.create<arith::ConstantFloatOp>(
+        op->getLoc(), APFloat(0.0f), dstTy.getElementType().cast<FloatType>());
+    auto _0 = rewriter.create<triton::SplatOp>(
+        op->getLoc(), dotOp.getResult().getType(), _0f);
+    auto newDot = rewriter.create<triton::DotOp>(
+        op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
+        dotOp.getOperand(1), _0, dotOp.getAllowTF32());
+    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        op->getLoc(), dstTy, newDot.getResult());
+    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getOperand());
+    return mlir::success();
+  }
+};
+
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -970,6 +1017,7 @@ public:
     patterns.add<MoveConvertOutOfIf>(context);
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<ConvertTransConvert>(context);
+    patterns.add<ConvertDotConvert>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
