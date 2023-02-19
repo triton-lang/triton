@@ -248,7 +248,7 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
-def TT_ViewOp : TT_Op<"view", [Pure,
+def TT_ViewOp : TT_Op<"view", [NoMemorySideEffect,
                                SameOperandsAndResultElementType]> {
     let summary = "view";
 
@@ -274,7 +274,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
     let hasFolder = 1;
 }
 
-def TT_CatOp : TT_Op<"cat", [Pure,
+def TT_CatOp : TT_Op<"cat", [NoMemorySideEffect,
                              SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
