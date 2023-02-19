@@ -476,10 +476,16 @@ def not_equal(input: tl.tensor,
 
 
 def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
-    if not isinstance(start, int) or not isinstance(end, int):
+    if not isinstance(start, int) or not isinstance(end, int) or start >> 32 or end >> 32:
         raise ValueError("arange's arguments must be of type tl.constexpr")
+    if end <= start:
+        raise ValueError("arange's end argument must be greater than the start argument")
+    TRITON_MAX_TENSOR_NUMEL = 131072
+    numel = end - start
+    if numel > TRITON_MAX_TENSOR_NUMEL:
+        raise ValueError("number of elements must be less than or equal to TRITON_MAX_TENSOR_NUMEL = 131072")
 
-    shape = [end - start]
+    shape = [numel]
     ret_ty = tl.block_type(tl.int32, shape)
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
 
