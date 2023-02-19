@@ -179,8 +179,8 @@ func.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B
   return
 }
 
-// CHECK-LABEL: for_if_for
-func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+// CHECK-LABEL: for_for_if
+func.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: %cst -> %cst
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: %cst_0 -> %cst_0
@@ -211,5 +211,36 @@ func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>
     }
     scf.yield %a_shared, %b_shared, %c_shared_next : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
   }
+  return
+}
+
+// CHECK-LABEL: cf_for
+func.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %arg4: !tt.ptr<f16>) {
+  // CHECK: %cst -> %cst
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #A_SHARED>
+  // CHECK-NEXT: %cst_0 -> %cst_0
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #A_SHARED>
+  gpu.barrier
+  // CHECK-NEXT: %0 -> %0
+  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+  // CHECK-NEXT: %cst_1 -> %cst_1
+  %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #A_SHARED>
+  // CHECK-NEXT: %2 -> %cst,%cst_0,%cst_1
+  // CHECK-NEXT: %3 -> %cst,%cst_0,%cst_1
+  // CHECK-NEXT: %4 -> %cst,%cst_0,%cst_1
+  cf.br ^bb1(%arg0, %cst, %cst_0, %cst_1 : index, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>)
+^bb1(%1: index, %2: tensor<128x32xf16, #A_SHARED>, %3: tensor<128x32xf16, #A_SHARED>, %4: tensor<128x32xf16, #A_SHARED>):  // 2 preds: ^bb0, ^bb2
+  %5 = arith.cmpi slt, %1, %arg1 : index
+  cf.cond_br %5, ^bb2, ^bb3
+^bb2:  // pred: ^bb1
+  %6 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #blocked>
+  gpu.barrier
+  %7 = tt.cat %2, %3 {axis = 0 : i64} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #blocked>
+  %8 = arith.addi %1, %arg2 : index
+  cf.br ^bb1(%8, %4, %2, %3 : index, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>)
+^bb3:  // pred: ^bb1
+  gpu.barrier
+  // CHECK-NEXT: %9 -> %9
+  %9 = tt.cat %0, %0 {axis = 0 : i64} : (tensor<256x32xf16, #A_SHARED>, tensor<256x32xf16, #A_SHARED>) -> tensor<512x32xf16, #A_SHARED>
   return
 }
