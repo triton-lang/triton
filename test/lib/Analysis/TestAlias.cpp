@@ -65,8 +65,19 @@ struct TestAliasPass
     };
 
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      if (op->getNumResults() < 1)
+      if (op->getNumResults() < 1) {
+        // cond br, br
+        if (auto branch = dyn_cast<BranchOpInterface>(op)) {
+          auto *block = branch->getBlock();
+          for (auto arg : llvm::enumerate(block->getArguments())) {
+            auto operand = block->getArgument(arg.index());
+            auto opNames = getAllocOpNames(operand);
+            auto argName = getValueOperandName(arg.value(), state);
+            print(argName, opNames, os);
+          }
+        }
         return;
+      }
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         for (auto arg : llvm::enumerate(forOp.getRegionIterArgs())) {
           auto operand = forOp.getOpOperandForRegionIterArg(arg.value()).get();
