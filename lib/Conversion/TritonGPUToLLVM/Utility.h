@@ -226,10 +226,7 @@ struct SharedMemoryObject {
                      ConversionPatternRewriter &rewriter)
       : base(base) {
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
-
-    for (auto idx : order) {
-      offsets.emplace_back(i32_val(0));
-    }
+    offsets.append(order.size(), i32_val(0));
   }
 
   SmallVector<Value> getElems() const {

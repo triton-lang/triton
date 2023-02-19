@@ -74,7 +74,7 @@ initialize_module(llvm::Module *module, const std::string &triple,
   opt.NoNaNsFPMath = true;
   llvm::TargetMachine *machine = target->createTargetMachine(
       module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      llvm::None, llvm::CodeGenOpt::Aggressive);
+      std::nullopt, llvm::CodeGenOpt::Aggressive);
 
   module->setDataLayout(machine->createDataLayout());
 
@@ -137,7 +137,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
       llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",
                                 {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu",
                                  "-shared", "-o", hsaco_path, isabin_path},
-                                llvm::None, {}, 0, 0, &error_message);
+                                std::nullopt, {}, 0, 0, &error_message);
   if (lld_result) {
     std::cout << "ld.lld execute fail: " << std::endl;
     std::cout << error_message << std::endl;

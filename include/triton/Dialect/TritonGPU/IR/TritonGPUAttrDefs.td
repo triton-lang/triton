@@ -1,6 +1,7 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
+include "mlir/IR/AttrTypeBase.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 
@@ -136,6 +137,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration;
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -273,6 +275,7 @@ for
     // ArrayRefParameter<"unsigned">:$sizePerCTA
   );
 
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -422,6 +425,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     static constexpr int numBitsToHoldMmaV1ID{5};
   }];
 
+  let hasCustomAssemblyFormat = 1;
 }
 
 def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
@@ -456,6 +460,8 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
   }];
+
+  let hasCustomAssemblyFormat = 1;
 }
 
 def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
@@ -492,6 +498,7 @@ section 9.7.13.4.1 for more details.
 
   ];
 
+  let hasCustomAssemblyFormat = 1;
   let extraClassDeclaration = extraBaseClassDeclaration;
 }
 

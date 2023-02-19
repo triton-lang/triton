@@ -971,6 +971,7 @@ def optimize_triton_ir(mod):
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_licm_pass()
+    pm.add_symbol_dce_pass()
     pm.run(mod)
     return mod
 
@@ -1312,7 +1313,7 @@ def generate_launcher(constants, signature):
     -1, //size
     ModuleMethods
     }};
-    PyMODINIT_FUNC PyInit_launcher(void) {{
+    PyMODINIT_FUNC PyInit___triton_launcher(void) {{
     PyObject *m = PyModule_Create(&ModuleDef);
     if(m == NULL) {{
         return NULL;
@@ -1326,7 +1327,6 @@ def generate_launcher(constants, signature):
     #include \"cuda.h\"
     #include <stdbool.h>
     #include <Python.h>
-
     static inline void gpuAssert(CUresult code, const char *file, int line)
     {{
        if (code != CUDA_SUCCESS)
@@ -1340,21 +1340,17 @@ def generate_launcher(constants, signature):
           PyErr_SetString(PyExc_RuntimeError, err);
        }}
     }}
-
     #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
-
     void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
       void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
       if(gridX*gridY*gridZ > 0){{
         CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
       }}
     }}
-
     typedef struct _DevicePtrInfo {{
         CUdeviceptr dev_ptr;
         bool valid;
     }} DevicePtrInfo;
-
     static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
       DevicePtrInfo ptr_info;
       ptr_info.dev_ptr = 0;
@@ -1379,22 +1375,21 @@ def generate_launcher(constants, signature):
           return ptr_info;
         }}
         ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
-        unsigned attr;
-        CUresult status =
-            cuPointerGetAttribute(&attr, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr_info.dev_ptr);
-        if (ptr_info.dev_ptr &&
-           (!(attr == CU_MEMORYTYPE_DEVICE || attr == CU_MEMORYTYPE_UNIFIED) ||
-            !(status == CUDA_SUCCESS))) {{
+        if(!ptr_info.dev_ptr)
+          return ptr_info;
+        uint64_t dev_ptr;
+        int status = cuPointerGetAttribute(&dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
+        if (status == CUDA_ERROR_INVALID_VALUE) {{
             PyErr_Format(PyExc_ValueError,
                          "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
             ptr_info.valid = false;
         }}
+        ptr_info.dev_ptr = dev_ptr;
         return ptr_info;
       }}
       PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
       return ptr_info;
     }}
-
     static PyObject* launch(PyObject* self, PyObject* args) {{
       int gridX, gridY, gridZ;
       uint64_t _stream;
@@ -1409,18 +1404,14 @@ def generate_launcher(constants, signature):
       if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
         return NULL;
       }}
-
       if (launch_enter_hook != Py_None) {{
         PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
         hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
         Py_DECREF(new_args);
       }}
-
-
       // raise exception asap
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
       _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
-
       if (launch_exit_hook != Py_None) {{
         PyObject *new_args = NULL;
         if (hook_ret) {{
@@ -1431,35 +1422,31 @@ def generate_launcher(constants, signature):
         hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
         Py_DECREF(new_args);
       }}
-
       if (hook_ret) {{
           Py_DECREF(hook_ret);
       }}
       if(PyErr_Occurred()) {{
-          return NULL;
+        return NULL;
       }}
       // return None
       Py_INCREF(Py_None);
       return Py_None;
     }}
-
     static PyMethodDef ModuleMethods[] = {{
       {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
       {{NULL, NULL, 0, NULL}} // sentinel
     }};
-
     static struct PyModuleDef ModuleDef = {{
       PyModuleDef_HEAD_INIT,
-      \"launcher\",
+      \"__triton_launcher\",
       NULL, //documentation
       -1, //size
       ModuleMethods
     }};
-
-    PyMODINIT_FUNC PyInit_launcher(void) {{
+    PyMODINIT_FUNC PyInit___triton_launcher(void) {{
       PyObject *m = PyModule_Create(&ModuleDef);
       if(m == NULL) {{
-          return NULL;
+        return NULL;
       }}
       PyModule_AddFunctions(m, ModuleMethods);
       return m;
@@ -1706,14 +1693,14 @@ def make_hash(fn, **kwargs):
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
-# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func,
+# - ^\s*func\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
 # - (public\s+)? : optionally match the keyword public and any following whitespace
 # - (@\w+) : match an @ symbol followed by one or more word characters
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+mlir_prototype_pattern = r'^\s*func\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
     "ttir": mlir_prototype_pattern,
@@ -1927,7 +1914,7 @@ class CompiledKernel:
     def __init__(self, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
-        spec = importlib.util.spec_from_file_location("launcher", so_path)
+        spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")

@@ -14,7 +14,7 @@ def Triton_Dialect : Dialect {
     Triton Dialect.
 
     Dependent Dialects:
-      * Arithmetic:
+      * Arith:
         * addf, addi, andi, cmpf, cmpi, divf, fptosi, ...
       * Math:
         * exp, sin, cos, log, ...
@@ -23,14 +23,11 @@ def Triton_Dialect : Dialect {
   }];
 
   let dependentDialects = [
-    "arith::ArithmeticDialect",
+    "arith::ArithDialect",
     "math::MathDialect",
-    "StandardOpsDialect",
     "scf::SCFDialect",
-
-    // Since LLVM 15
-    // "cf::ControlFlowDialect",
-    // "func::FuncDialect"
+    "cf::ControlFlowDialect",
+    "func::FuncDialect"
   ];
 
   let extraClassDeclaration = [{
@@ -38,6 +35,7 @@ def Triton_Dialect : Dialect {
   }];
 
   let hasConstantMaterializer = 1;
+  let useDefaultTypePrinterParser = 1;
 }
 
 include "triton/Dialect/Triton/IR/TritonTypes.td"

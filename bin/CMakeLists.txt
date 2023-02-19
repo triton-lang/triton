@@ -49,7 +49,7 @@ llvm_update_compile_flags(triton-translate)
          # MLIR core
          MLIROptLib
          MLIRIR
-         MLIRLLVMIR
+         MLIRLLVMDialect
          MLIRPass
          MLIRSupport
          MLIRTransforms
@@ -59,6 +59,6 @@ llvm_update_compile_flags(triton-translate)
          MLIRLLVMToLLVMIRTranslation
          MLIRNVVMToLLVMIRTranslation
          MLIRROCDLToLLVMIRTranslation
-         MLIRSCFToStandard
+         MLIRSCFToControlFlow
          )
 mlir_check_all_link_libraries(triton-translate)

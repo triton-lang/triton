@@ -1,5 +1,5 @@
 #include "triton/Conversion/TritonGPUToLLVM/GCNAsmFormat.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include <gtest/gtest.h>
@@ -11,7 +11,7 @@ protected:
   static constexpr int numValues = 4;
 
   GcnAsmFormatTest() {
-    ctx.loadDialect<arith::ArithmeticDialect>();
+    ctx.loadDialect<arith::ArithDialect>();
 
     createValues();
   }

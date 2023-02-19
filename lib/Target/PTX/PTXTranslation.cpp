@@ -1,11 +1,14 @@
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
+#include <optional>
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -72,7 +75,7 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   opt.NoNaNsFPMath = true;
   llvm::TargetMachine *machine = target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      llvm::None, llvm::CodeGenOpt::Aggressive);
+      std::nullopt, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if (layout.empty())
     module.setDataLayout(machine->createDataLayout());

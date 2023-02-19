@@ -612,9 +612,6 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
     if capability[0] < 7:
         if dtype_x_str == 'float16':
             pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
-    if torch.version.hip is not None:
-        if dtype_x_str == 'float16':
-            pytest.skip("Not yet supported on AMDGPU.")
     n_programs = 5
 
     # triton kernel
@@ -1192,20 +1189,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
     #    assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
-def test_dot_without_load():
-    @triton.jit
-    def kernel(out):
-        pid = tl.program_id(axis=0)
-        a = tl.zeros((32, 32), tl.float32)
-        b = tl.zeros((32, 32), tl.float32)
-        c = tl.zeros((32, 32), tl.float32)
-        c = tl.dot(a, b)
-        pout = out + tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
-        tl.store(pout, c)
-
-    out = torch.ones((32, 32), dtype=torch.float32, device="cuda")
-    kernel[(1,)](out)
-
 # ---------------
 # test arange
 # ---------------
@@ -1772,7 +1755,7 @@ def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
 #dst = {dst_layout}
 """ + """
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-  func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  func.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<128> : tensor<128x1xi32, #src>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>
     %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #src}>>

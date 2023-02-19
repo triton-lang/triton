@@ -138,10 +138,10 @@ private:
   matchAndRewriteBasic(triton::ReduceOp op, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
-    unsigned axis = op.axis();
-    bool withIndex = triton::ReduceOp::withIndex(op.redOp());
+    unsigned axis = op.getAxis();
+    bool withIndex = triton::ReduceOp::withIndex(op.getRedOp());
 
-    auto srcTy = op.operand().getType().cast<RankedTensorType>();
+    auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
     auto srcOrd = srcLayout.getOrder();
     auto srcShape = srcTy.getShape();
@@ -161,7 +161,7 @@ private:
 
     unsigned srcElems = getElemsPerThread(srcTy);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    auto srcValues = getElementsFromStruct(loc, adaptor.operand(), rewriter);
+    auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
 
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcShape);
@@ -176,10 +176,11 @@ private:
       key[axis] = 0;
       bool isFirst = accs.find(key) == accs.end();
       if (!withIndex) {
-        accumulate(rewriter, loc, op.redOp(), accs[key], srcValues[i], isFirst);
+        accumulate(rewriter, loc, op.getRedOp(), accs[key], srcValues[i],
+                   isFirst);
       } else {
         Value curIndex = srcIndices[i][axis];
-        accumulateWithIndex(rewriter, loc, op.redOp(), accs[key],
+        accumulateWithIndex(rewriter, loc, op.getRedOp(), accs[key],
                             accIndices[key], srcValues[i], curIndex, isFirst);
       }
       if (isFirst)
@@ -221,14 +222,14 @@ private:
         barrier();
         if (!withIndex) {
           Value cur = load(readPtr);
-          accumulate(rewriter, loc, op.redOp(), acc, cur, false);
+          accumulate(rewriter, loc, op.getRedOp(), acc, cur, false);
           barrier();
           store(acc, writePtr);
         } else {
           Value cur = load(readPtr);
           Value indexReadPtr = gep(indexPtrTy, indexWritePtr, readOffset);
           Value curIndex = load(indexReadPtr);
-          accumulateWithIndex(rewriter, loc, op.redOp(), acc, accIndex, cur,
+          accumulateWithIndex(rewriter, loc, op.getRedOp(), acc, accIndex, cur,
                               curIndex, false);
           barrier();
           store(acc, writePtr);
@@ -280,13 +281,12 @@ private:
   LogicalResult matchAndRewriteFast(triton::ReduceOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
-    unsigned axis = adaptor.axis();
-    bool withIndex = triton::ReduceOp::withIndex(op.redOp());
+    unsigned axis = adaptor.getAxis();
+    bool withIndex = triton::ReduceOp::withIndex(op.getRedOp());
 
-    auto srcTy = op.operand().getType().cast<RankedTensorType>();
+    auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
-    auto srcRank = srcTy.getRank();
     auto order = getOrder(srcLayout);
 
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
@@ -311,7 +311,7 @@ private:
 
     unsigned srcElems = getElemsPerThread(srcTy);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    auto srcValues = getElementsFromStruct(loc, adaptor.operand(), rewriter);
+    auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
 
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcShape);
@@ -326,10 +326,11 @@ private:
       key[axis] = 0;
       bool isFirst = accs.find(key) == accs.end();
       if (!withIndex) {
-        accumulate(rewriter, loc, op.redOp(), accs[key], srcValues[i], isFirst);
+        accumulate(rewriter, loc, op.getRedOp(), accs[key], srcValues[i],
+                   isFirst);
       } else {
         Value curIndex = srcIndices[i][axis];
-        accumulateWithIndex(rewriter, loc, op.redOp(), accs[key],
+        accumulateWithIndex(rewriter, loc, op.getRedOp(), accs[key],
                             accIndices[key], srcValues[i], curIndex, isFirst);
       }
       if (isFirst)
@@ -351,7 +352,6 @@ private:
 
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);
-    Value warpZero = icmp_eq(warpIdAxis, zero);
 
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
@@ -364,10 +364,10 @@ private:
       for (unsigned N = sizeIntraWarps / 2; N > 0; N >>= 1) {
         Value shfl = shflSync(loc, rewriter, acc, N);
         if (!withIndex) {
-          accumulate(rewriter, loc, op.redOp(), acc, shfl, false);
+          accumulate(rewriter, loc, op.getRedOp(), acc, shfl, false);
         } else {
           Value shflIndex = shflSync(loc, rewriter, accIndex, N);
-          accumulateWithIndex(rewriter, loc, op.redOp(), acc, accIndex, shfl,
+          accumulateWithIndex(rewriter, loc, op.getRedOp(), acc, accIndex, shfl,
                               shflIndex, false);
         }
       }
@@ -410,10 +410,10 @@ private:
       for (unsigned N = sizeInterWarps / 2; N > 0; N >>= 1) {
         Value shfl = shflSync(loc, rewriter, acc, N);
         if (!withIndex) {
-          accumulate(rewriter, loc, op.redOp(), acc, shfl, false);
+          accumulate(rewriter, loc, op.getRedOp(), acc, shfl, false);
         } else {
           Value shflIndex = shflSync(loc, rewriter, accIndex, N);
-          accumulateWithIndex(rewriter, loc, op.redOp(), acc, accIndex, shfl,
+          accumulateWithIndex(rewriter, loc, op.getRedOp(), acc, accIndex, shfl,
                               shflIndex, false);
         }
       }
