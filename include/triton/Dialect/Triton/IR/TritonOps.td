@@ -249,7 +249,7 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 }
 
 // view is not `pure` because it may reorder elements
-def TT_ViewOp : TT_Op<"view", [NoMemorySideEffect,
+def TT_ViewOp : TT_Op<"view", [NoMemoryEffect,
                                SameOperandsAndResultElementType]> {
     let summary = "view";
 
@@ -276,7 +276,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 }
 
 // cat is not `pure` because it may reorder elements
-def TT_CatOp : TT_Op<"cat", [NoMemorySideEffect,
+def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
                              SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
