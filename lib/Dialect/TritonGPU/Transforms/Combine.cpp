@@ -568,9 +568,9 @@ public:
 };
 
 //
-class FoldConvertAndReduce : public mlir::RewritePattern {
+class RematerializeForward : public mlir::RewritePattern {
 public:
-  explicit FoldConvertAndReduce(mlir::MLIRContext *context)
+  explicit RematerializeForward(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
                              1, context) {}
 
@@ -841,110 +841,6 @@ public:
 //
 // -----------------------------------------------------------------------------
 
-class RematerializeForward : public mlir::RewritePattern {
-public:
-  explicit RematerializeForward(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             2, context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *_cvtOp,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto cvt = cast<triton::gpu::ConvertLayoutOp>(_cvtOp);
-    auto forOp = dyn_cast<scf::ForOp>(cvt->getParentOp());
-    if (!forOp)
-      return mlir::failure();
-    auto isInLoop = [&](Operation *op) { return op->getParentOp() == forOp; };
-
-    SetVector<Operation *> cvtSlices;
-    auto filter = [&](Operation *op) {
-      return isInLoop(op) &&
-             !isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
-                  triton::AtomicCASOp>(op) &&
-             !isa<triton::DotOp>(op) && !isa<scf::YieldOp>(op) &&
-             !isa<triton::gpu::ConvertLayoutOp>(op);
-    };
-    mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
-    if (cvtSlices.empty())
-      return failure();
-
-    for (Operation *op : cvtSlices) {
-      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
-          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp>(op))
-        return failure();
-      for (Value arg : op->getOperands()) {
-        Operation *argOp = arg.getDefiningOp();
-        if (argOp && (argOp != cvt) &&
-            !isa<arith::ConstantOp, triton::SplatOp, triton::MakeRangeOp>(
-                argOp)) {
-          return failure();
-        }
-      }
-    }
-
-    // Otherwise, we push the conversion forward
-    // since we'll be able to move it out of
-    // the loop once it reaches the yield op
-    pushConversionForward(cvt, cvtSlices, rewriter);
-    return success();
-  }
-};
-
-// -----------------------------------------------------------------------------
-//
-// -----------------------------------------------------------------------------
-namespace {} // namespace
-
-class OptimizeBlockedToShared : public mlir::RewritePattern {
-public:
-  explicit OptimizeBlockedToShared(mlir::MLIRContext *context)
-      : RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(), 1,
-                       context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
-    auto srcType = cvt.getOperand().getType().cast<RankedTensorType>();
-    auto dstType = cvt.getResult().getType().cast<RankedTensorType>();
-    auto srcBlockedLayout =
-        srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
-    auto dstSharedLayout =
-        dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
-    if (!srcBlockedLayout || !dstSharedLayout)
-      return failure();
-    if (srcBlockedLayout.getOrder() == dstSharedLayout.getOrder())
-      return failure();
-    // For now only works if single use is transpose
-    // TODO: rematerialize #shared uses
-    auto users = op->getUsers();
-    if (std::distance(users.begin(), users.end()) != 1 ||
-        !isa<triton::TransOp>(*users.begin()))
-      return failure();
-
-    auto tmpShared = triton::gpu::SharedEncodingAttr::get(
-        op->getContext(), dstSharedLayout.getVec(),
-        dstSharedLayout.getPerPhase(), dstSharedLayout.getMaxPhase(),
-        srcBlockedLayout.getOrder());
-    auto tmpType = RankedTensorType::get(srcType.getShape(),
-                                         srcType.getElementType(), tmpShared);
-    auto tmpCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        op->getLoc(), tmpType, cvt.getOperand());
-
-    auto newDstType = RankedTensorType::get(
-        users.begin()->getResultTypes()[0].cast<RankedTensorType>().getShape(),
-        srcType.getElementType(), dstSharedLayout);
-
-    auto newTrans = rewriter.create<triton::TransOp>(op->getLoc(), newDstType,
-                                                     tmpCvt.getResult());
-
-    rewriter.replaceOp(*users.begin(), newTrans.getResult());
-    return success();
-  }
-};
-
 class OptimizeConvertToDotOperand : public mlir::RewritePattern {
 public:
   explicit OptimizeConvertToDotOperand(mlir::MLIRContext *context)
@@ -993,10 +889,10 @@ public:
   }
 };
 
-// Convert + trans + convert
-// x = convert_layout distributed -> #shared_x
-// y = trans x -> #shared_y
-// z = convert_layout y -> #dot_operand
+// convert(trans(convert(arg)))
+// x = convert_layout arg: #distributed -> #shared_x
+// y = trans x: #shared_x -> #shared_y
+// z = convert_layout y: #shared_y -> #dot_operand
 class ConvertTransConvert : public mlir::RewritePattern {
 
 public:
@@ -1049,52 +945,6 @@ public:
   }
 };
 
-//
-class ConvertDotConvert : public mlir::RewritePattern {
-public:
-  ConvertDotConvert(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             1, context) {}
-
-  LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
-    auto dotOp =
-        dyn_cast_or_null<triton::DotOp>(dstOp.getSrc().getDefiningOp());
-    if (!dotOp)
-      return mlir::failure();
-    if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
-        std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
-      return mlir::failure();
-    auto cvtOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-        dotOp.getOperand(2).getDefiningOp());
-    if (!cvtOp)
-      return mlir::failure();
-    auto loadOp =
-        dyn_cast_or_null<triton::LoadOp>(cvtOp.getSrc().getDefiningOp());
-    if (!loadOp)
-      return mlir::failure();
-    auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
-    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
-    if (dstTy != srcTy)
-      return mlir::failure();
-
-    // TODO: int tensor cores
-    auto _0f = rewriter.create<arith::ConstantFloatOp>(
-        op->getLoc(), APFloat(0.0f), dstTy.getElementType().cast<FloatType>());
-    auto _0 = rewriter.create<triton::SplatOp>(
-        op->getLoc(), dotOp.getResult().getType(), _0f);
-    auto newDot = rewriter.create<triton::DotOp>(
-        op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
-        dotOp.getOperand(1), _0, dotOp.getAllowTF32());
-    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        op->getLoc(), dstTy, newDot.getResult());
-    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getOperand());
-    return mlir::success();
-  }
-};
-
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -1113,18 +963,15 @@ public:
 
     mlir::RewritePatternSet patterns(context);
 
-    patterns.add<OptimizeBlockedToShared>(context);
-    patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<SimplifyConversion>(context);
     patterns.add<SimplifyReduceCvt>(context);
-    patterns.add<FoldConvertAndReduce>(context);
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<RematerializeBackward>(context);
-    // patterns.add<RematerializeForward>(context);
+    patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
     patterns.add<MoveConvertOutOfIf>(context);
+    patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<ConvertTransConvert>(context);
-    // patterns.add<ConvertDotConvert>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
