@@ -28,9 +28,8 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
         return;
       }
     }
-    // Have to visit every block because the entry block
-    // might not have any dangling read/write
-    blockList.emplace_back(block);
+    if (block->isEntryBlock())
+      blockList.emplace_back(block);
   });
 
   // A fixed point algorithm
@@ -48,9 +47,10 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
       }
     }
     // Get the reference because we want to update if it changed
-    if (inputBlockInfo == outputBlockInfoMap[block]) {
-      // If the inputBlockInfo is the same as the outputBlockInfo, we
-      // skip the successors
+    if (outputBlockInfoMap.count(block) &&
+        inputBlockInfo == outputBlockInfoMap[block]) {
+      // If we have seen the block before and the inputBlockInfo is the same as
+      // the outputBlockInfo, we skip the successors
       continue;
     }
     // Update the current block
