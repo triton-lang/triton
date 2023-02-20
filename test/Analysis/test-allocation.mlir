@@ -315,8 +315,8 @@ func.func @for_use_ancestor(%lb : index, %ub : index, %step : index, %A : !tt.pt
 
 // a_shared_init, b_shared_init, and c_shared_init's liveness ranges are span over the entire function before cst2.
 // So they cannot be reused by cst0 and cst1, but can be reused by cst2.
-// CHECK-LABEL: for_if_for
-func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+// CHECK-LABEL: for_for_if
+func.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: offset = 0, size = 8192
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: offset = 8192, size = 8192
