@@ -460,7 +460,7 @@ struct AtomicCASOpConversion
     auto failureOrdering = LLVM::AtomicOrdering::monotonic;
     auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
         loc, casPtr, casCmp, casVal, successOrdering,
-        failureOrdering);
+        failureOrdering, StringRef("agent"));
     // Extract the new_loaded value from the pair.
     Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
 
@@ -662,7 +662,7 @@ struct AtomicRMWOpConversion
       // since it supports memref indexes (after moving triton to use memrefs).
       auto atom = rewriter.create<LLVM::AtomicRMWOp>(
           loc, *maybeKind, rmwPtr, valElements[i],
-          LLVM::AtomicOrdering::monotonic);
+          LLVM::AtomicOrdering::monotonic, StringRef("agent"));
       rewriter.create<LLVM::BrOp>(loc, atom.getResult(), endBlock);
 
       rewriter.setInsertionPointToStart(endBlock);
