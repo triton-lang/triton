@@ -23,6 +23,8 @@ std::unique_ptr<Pass> createTritonGPUCombineOpsPass();
 
 std::unique_ptr<Pass> createTritonGPUVerifier();
 
+std::unique_ptr<Pass> createTritonGPUFuseTranspositionsPass();
+
 std::unique_ptr<Pass> createTritonGPUUpdateMmaForVoltaPass();
 
 /// Generate the code for registering passes.

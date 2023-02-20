@@ -983,6 +983,7 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     pm.add_coalesce_pass()
     pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
     pm.add_tritongpu_combine_pass()
+    pm.add_tritongpu_fuse_transpositions_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
     # Prefetch pass relies on matmul operands being sliceable.
     # This may only be the case after the `pipeline` pass has run already

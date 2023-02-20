@@ -60,6 +60,20 @@ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::Modul
 
 }
 
+def TritonGPUFuseTranspositions : Pass<"tritongpu-fuse-transposition", "mlir::ModuleOp"> {
+  let summary = "fuse transpositions";
+
+  let description = [{
+    Re-arranged layouts of tensors used as matrix multiplication operands so as to promote the use of
+    hardware-accelerated transpositions.
+  }];
+
+  let constructor = "mlir::createTritonGPUFuseTranspositionsPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
   let summary = "coalesce";
 

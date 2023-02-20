@@ -1419,6 +1419,10 @@ void init_triton_ir(py::module &&m) {
              self.addPass(
                  mlir::createTritonGPUAccelerateMatmulPass(computeCapability));
            })
+      .def("add_tritongpu_fuse_transpositions_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUFuseTranspositionsPass());
+           })
       .def("add_tritongpu_combine_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUCombineOpsPass());
