@@ -616,12 +616,21 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %tensor = triton_gpu.alloc_tensor : tensor<2x16x64xf32, #A>
     %index = arith.constant 1 : i32
 
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, 0x10
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, 0x10
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.commit_group
+    // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
+    // TODO: Fix AMD compilation.
+    // last operation (commit_group) is still emitted by AMD pipeline,
+    // It is left to catch changes in AMD compilation pipeline.
+
+    // PTX: llvm.inline_asm has_side_effects asm_dialect = att
+    // PTX-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, 0x10
+    // PTX: llvm.inline_asm has_side_effects asm_dialect = att
+    // PTX-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, 0x10
+    // PTX: llvm.inline_asm has_side_effects asm_dialect = att
+    // PTX-SAME: cp.async.commit_group
+
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<vector<8xf32>, 3>
+    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f32>, #AL> -> tensor<2x16x64xf32, #A>
     triton_gpu.async_commit_group
     return
@@ -658,16 +667,25 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %tensor = triton_gpu.alloc_tensor : tensor<2x16x32xf32, #A>
     %index = arith.constant 1 : i32
 
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.commit_group
+    // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
+    // TODO: Fix AMD compilation.
+    // last operation (commit_group) is still emitted by AMD pipeline,
+    // It is left to catch changes in AMD compilation pipeline.
+
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.commit_group
+
+    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-4: llvm.store {{.*}} : !llvm.ptr<vector<1xf32>, 3>
+    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x32x!tt.ptr<f32>, #AL> -> tensor<2x16x32xf32, #A>
     triton_gpu.async_commit_group
     return
@@ -703,33 +721,37 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %tensor = triton_gpu.alloc_tensor : tensor<2x32x32xf32, #A>
     %index = arith.constant 1 : i32
 
-    // TODO: split CHECK tags below in PTX and GCN specific tags in case they fail for AMD GPU.
-    // Code below is working for PTX target, but not for AMD GPU.
-    // Failure of below checks probably mean that someone
-    // impelemented related operations for AMD GPU target.
+    // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
+    // TODO: Fix AMD compilation.
+    // last operation (commit_group) is still emitted by AMD pipeline,
+    // It is left to catch changes in AMD compilation pipeline.
     //
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.mul
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.commit_group
+    // PTX: llvm.mlir.constant(0 : i32) : i32
+    // PTX: llvm.mlir.constant(16 : i32) : i32
+    // PTX: llvm.mul
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.commit_group
+
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-8: llvm.store {{.*}} : !llvm.ptr<vector<1xf32>, 3>
+    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> tensor<2x32x32xf32, #A>
     triton_gpu.async_commit_group
     return
