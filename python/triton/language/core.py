@@ -844,7 +844,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
 
 
 @builtin
-def load(pointer: tensor, mask: Optional[tensor]=None, other: Optional[tensor]=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None) -> tensor:
+def load(pointer: tensor, mask: Optional[Tensorable]=None, other: Optional[Tensorable]=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None) -> tensor:
     """
     Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -873,7 +873,7 @@ def load(pointer: tensor, mask: Optional[tensor]=None, other: Optional[tensor]=N
 
 
 @builtin
-def store(pointer: tensor, value, mask: Optional[tensor]=None, cache_modifier="", eviction_policy="", _builder=None) -> tensor:
+def store(pointer: tensor, value, mask: Optional[Tensorable]=None, cache_modifier="", eviction_policy="", _builder=None) -> tensor:
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -922,7 +922,7 @@ def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
 @builtin
 @_add_atomic_docstr("compare-and-swap")
-def atomic_cas(pointer: tensor, cmp, val, _builder=None) -> tensor:
+def atomic_cas(pointer: tensor, cmp: Tensorable, val: Tensorable, _builder=None) -> tensor:
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
     return semantic.atomic_cas(pointer, cmp, val, _builder)
@@ -930,49 +930,49 @@ def atomic_cas(pointer: tensor, cmp, val, _builder=None) -> tensor:
 
 @builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer: tensor, val, mask=None, _builder=None) -> tensor:
+def atomic_xchg(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_xchg(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer: tensor, val, mask=None, _builder=None) -> tensor:
+def atomic_add(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_add(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer: tensor, val, mask=None, _builder=None) -> tensor:
+def atomic_max(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_max(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer: tensor, val, mask=None, _builder=None) -> tensor:
+def atomic_min(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_min(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer: tensor, val, mask=None, _builder=None) -> tensor:
+def atomic_and(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_and(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer: tensor, val, mask=None, _builder=None) -> tensor:
+def atomic_or(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_or(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer: tensor, val, mask=None, _builder=None) -> tensor:
+def atomic_xor(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_xor(pointer, val, mask, _builder)
 
@@ -1010,14 +1010,14 @@ def where(condition: Tensorable, x: Tensorable, y: Tensorable, _builder=None) ->
 # -----------------------
 
 @builtin
-def umulhi(x, y, _builder=None) -> tensor:
+def umulhi(x: Tensorable, y: Tensorable, _builder=None) -> tensor:
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return semantic.umulhi(x, y, _builder)
 
 
 @builtin
-def fdiv(x, y, ieee_rounding=False, _builder=None) -> tensor:
+def fdiv(x: tensor, y: tensor, ieee_rounding=False, _builder=None) -> tensor:
     ieee_rounding = _constexpr_to_value(ieee_rounding)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
@@ -1180,7 +1180,7 @@ def abs(x) -> tensor:
 
 
 @triton.jit
-def cdiv(x, div) -> tensor:
+def cdiv(x: tensor, div) -> tensor:
     """
     Computes the ceiling division of :code:`x` by :code:`div`
 
@@ -1278,7 +1278,7 @@ def swizzle2d(i, j, size_i, size_j, size_g: Tensorable) -> tuple[tensor, tensor]
 
 
 @triton.jit
-def zeros(shape, dtype: dtype) -> tensor:
+def zeros(shape, dtype) -> tensor:
     """
     Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
 
