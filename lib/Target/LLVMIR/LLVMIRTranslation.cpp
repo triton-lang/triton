@@ -81,6 +81,8 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
 #else // AMDGCN
     func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
     func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
+    func->addFnAttr("denormal-fp-math-f32", "preserve-sign");
+    func->addFnAttr("amdgpu-unsafe-fp-atomics", "true");
 #endif
   }
 }
