@@ -1,5 +1,7 @@
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -131,14 +133,15 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
-    mlir::RewritePatternSet patterns(context);
+    mlir::PassManager pm(m.getContext());
+    pm.addPass(mlir::createCanonicalizerPass());
+    auto ret = pm.run(m);
 
+    mlir::RewritePatternSet patterns(context);
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<ConvertTransConvert>(context);
-
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
-    }
   }
 };
 
