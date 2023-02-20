@@ -6,10 +6,9 @@ using namespace mlir;
 namespace {
 
 struct TestAllocationPass
-    : public PassWrapper<TestAllocationPass, OperationPass<FuncOp>> {
+    : public PassWrapper<TestAllocationPass, OperationPass<func::FuncOp>> {
 
-  // LLVM15+
-  // MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAllocationPass);
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAllocationPass);
 
   StringRef getArgument() const final { return "test-print-allocation"; }
   StringRef getDescription() const final {
@@ -19,9 +18,9 @@ struct TestAllocationPass
   void runOnOperation() override {
     Operation *operation = getOperation();
     auto &os = llvm::errs();
-    // Convert to std::string can remove quotes from op_name
-    auto op_name = SymbolTable::getSymbolName(operation).getValue().str();
-    os << op_name << "\n";
+    // Convert to std::string can remove quotes from opName
+    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
+    os << opName << "\n";
     Allocation allocation(operation);
     operation->walk([&](Operation *op) {
       auto scratchBufferId = allocation.getBufferId(op);

@@ -157,7 +157,8 @@ class Libdevice(ExternLibrary):
         super().__init__("libdevice", path)
         self._symbol_groups = {}
 
-    def _extract_symbol(self, line) -> Optional[Symbol]:
+    @staticmethod
+    def _extract_symbol(line) -> Optional[Symbol]:
         # Extract symbols from line in the following format:
         # "define [internal] <ret_type> @<name>(<arg_types>,)"
         entries = line.split("@")
@@ -288,7 +289,7 @@ class Libdevice(ExternLibrary):
         #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core, extern\n"
         import_str += "import os\n"
-        header_str = "LIBDEVICE_PATH = os.path.dirname(\n\tos.path.abspath(__file__)) + \"/libdevice.10.bc\"\n"
+        header_str = "LIBDEVICE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"..\", \"third_party\", \"cuda\", \"lib\", \"libdevice.10.bc\")"
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@extern.extern\n"

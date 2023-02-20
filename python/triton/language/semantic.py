@@ -312,11 +312,24 @@ def logical_or(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.te
     return or_(input, other, builder)
 
 
+def not_(input: tl.tensor, builder: ir.builder):
+    if not input.type.is_int1():
+        input = bitcast(input, tl.dtype("int1"), builder)
+    return invert(input, builder)
+
+
 def lshr(input: tl.tensor,
          other: tl.tensor,
          builder: ir.builder) -> tl.tensor:
     input, other = bitwise_op_type_checking_impl(input, other, builder)
     return tl.tensor(builder.create_lshr(input.handle, other.handle), input.type)
+
+
+def ashr(input: tl.tensor,
+         other: tl.tensor,
+         builder: ir.builder) -> tl.tensor:
+    input, other = bitwise_op_type_checking_impl(input, other, builder)
+    return tl.tensor(builder.create_ashr(input.handle, other.handle), input.type)
 
 
 def shl(input: tl.tensor,
@@ -471,10 +484,15 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_make_range(start, end), ret_ty)
 
 
-def zeros(shape: List[int], dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
-    _0 = builder.get_null_value(dtype.to_ir(builder))
+def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+    if value == 0:
+        _value = builder.get_null_value(dtype.to_ir(builder))
+    else:
+        get_value_fn = getattr(builder, f"get_{dtype.name}")
+        _value = get_value_fn(value)
     ret_ty = tl.block_type(dtype, shape)
-    return tl.tensor(builder.create_splat(_0, shape), ret_ty)
+    return tl.tensor(builder.create_splat(_value, shape), ret_ty)
+
 
 # ===----------------------------------------------------------------------===//
 #                               Shape Manipulation
@@ -496,8 +514,15 @@ def view(input: tl.tensor,
     return tl.tensor(builder.create_view(input.handle, dst_shape), ret_ty)
 
 
+def reshape(input: tl.tensor,
+            dst_shape: List[int],
+            builder: ir.builder) -> tl.tensor:
+    raise ValueError("`reshape` is not supported yet. Please use `view` instead if applicable. "
+                     "Note that view may reorder elements in an implementation- and context- dependent way.")
+
+
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    dst_shape = [s for s in input.type.shape]
+    dst_shape = list(input.type.shape)
     dst_shape.insert(axis, 1)
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_expand_dims(input.handle, axis), ret_ty)
@@ -528,10 +553,10 @@ def broadcast_impl_shape(input: tl.tensor,
         raise ValueError(f"Cannot broadcast, rank mismatch: {src_shape}, {shape}")
     if shape == src_shape:
         return input
-    for i in range(len(src_shape)):
-        if shape[i] != src_shape[i] and src_shape[i] != 1:
+    for i, item in enumerate(src_shape):
+        if shape[i] != item and item != 1:
             raise ValueError(f"Cannot broadcast, the expanded size of the tensor ({shape[i]})"
-                             f" must match the existing size ({src_shape[i]}) at non-singleton dimension"
+                             f" must match the existing size ({item}) at non-singleton dimension"
                              f" {i}: {src_shape}, {shape}")
     ret_ty = tl.block_type(input.type.scalar, shape)
     return tl.tensor(builder.create_broadcast(input.handle, shape), ret_ty)
@@ -571,8 +596,7 @@ def broadcast_impl_value(lhs: tl.tensor,
         assert len(rhs_shape) == len(lhs_shape)
 
         ret_shape = []
-        for i in range(len(lhs_shape)):
-            left = lhs_shape[i]
+        for i, left in enumerate(lhs_shape):
             right = rhs_shape[i]
             if left == 1:
                 ret_shape.append(right)
@@ -730,6 +754,30 @@ def cast(input: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
+def str_to_cache_modifier(cache_modifier):
+    cache = ir.CACHE_MODIFIER.NONE  # default
+    if cache_modifier:
+        if cache_modifier == ".ca":
+            cache = ir.CACHE_MODIFIER.CA
+        elif cache_modifier == ".cg":
+            cache = ir.CACHE_MODIFIER.CG
+        else:
+            raise ValueError(f"Cache modifier {cache_modifier} not supported")
+    return cache
+
+
+def str_to_eviction_policy(eviction_policy):
+    eviction = ir.EVICTION_POLICY.NORMAL  # default
+    if eviction_policy:
+        if eviction_policy == "evict_last":
+            eviction = ir.EVICTION_POLICY.EVICT_LAST
+        elif eviction_policy == "evict_first":
+            eviction = ir.EVICTION_POLICY.EVICT_FIRST
+        else:
+            raise ValueError(f"Eviction policy {eviction_policy} not supported")
+    return eviction
+
+
 def load(ptr: tl.tensor,
          mask: Optional[tl.tensor],
          other: Optional[tl.tensor],
@@ -739,6 +787,11 @@ def load(ptr: tl.tensor,
          builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of load instruction is " + ptr.type.__repr__())
+    if not ptr.type.is_block():
+        if mask and mask.type.is_block():
+            raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
+        if other and other.type.is_block():
+            raise ValueError("Other argument cannot be block type if pointer argument is not a block")
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
@@ -758,30 +811,15 @@ def load(ptr: tl.tensor,
         other = cast(other, elt_ty, builder)
 
     # cache modifier
-    cache = ir.CACHE_MODIFIER.NONE  # default
-    if cache_modifier:
-        if cache_modifier == ".ca":
-            cache = ir.CACHE_MODIFIER.CA
-        elif cache_modifier == ".cg":
-            cache = ir.CACHE_MODIFIER.CG
-        else:
-            raise ValueError(f"Cache modifier {cache_modifier} not supported")
-
-    # eviction policy
-    eviction = ir.EVICTION_POLICY.NORMAL  # default
-    if eviction_policy:
-        if eviction_policy == "evict_last":
-            eviction = ir.EVICTION_POLICY.EVICT_LAST
-        elif eviction_policy == "evict_first":
-            eviction = ir.EVICTION_POLICY.EVICT_FIRST
-        else:
-            raise ValueError(f"Eviction policy {eviction_policy} not supported")
 
     if ptr.type.is_block():
         shape = ptr.type.get_block_shapes()
         dst_ty = tl.block_type(elt_ty, shape)
     else:
         dst_ty = elt_ty
+
+    cache = str_to_cache_modifier(cache_modifier)
+    eviction = str_to_eviction_policy(eviction_policy)
 
     if not mask:
         if other:
@@ -799,12 +837,19 @@ def load(ptr: tl.tensor,
 def store(ptr: tl.tensor,
           val: tl.tensor,
           mask: Optional[tl.tensor],
+          cache_modifier: str,
+          eviction_policy: str,
           builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+    if not ptr.type.is_block():
+        if val.type.is_block():
+            raise ValueError("Value argument cannot be block type if pointer argument is not a block")
+        if mask and mask.type.is_block():
+            raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
     if ptr.type.is_block():
         val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
-    if mask:
+    if mask and ptr.type.is_block():
         mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
     ptr_ty = ptr.type.scalar
     elt_ty = ptr_ty.element_ty
@@ -813,14 +858,16 @@ def store(ptr: tl.tensor,
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
-
+    # attributes
+    cache = str_to_cache_modifier(cache_modifier)
+    eviction = str_to_eviction_policy(eviction_policy)
     # cast to target data-type
     val = cast(val, elt_ty, builder)
     if not mask:
-        return tl.tensor(builder.create_store(ptr.handle, val.handle), tl.void)
+        return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
-    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle), tl.void)
+    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction), tl.void)
 
 #########
 # atomic
@@ -849,7 +896,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor,
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
-        raise ValueError("atomic_" + op + " does not support " + element_ty)
+        raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
@@ -891,8 +938,8 @@ def atomic_max(ptr: tl.tensor,
     # return atomic_umin(i_ptr, i_val) if val < 0
     i_val = bitcast(val, tl.int32, builder)
     i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
+    pos = greater_equal(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
+    neg = less_than(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr.handle, i_val.handle, and_(mask, pos, builder).handle), i_val.type)
     neg_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, i_ptr.handle, i_val.handle, and_(mask, neg, builder).handle), i_val.type)
     return where(pos, pos_ret, neg_ret, builder)
@@ -923,8 +970,8 @@ def atomic_min(ptr: tl.tensor,
     # return atomic_umax(i_ptr, i_val) if val < 0
     i_val = bitcast(val, tl.int32, builder)
     i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(builder.get_float32(0), sca_ty), builder)
+    pos = greater_equal(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
+    neg = less_than(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN,
                                                   i_ptr.handle,
                                                   i_val.handle,
@@ -989,6 +1036,7 @@ def dot(lhs: tl.tensor,
         allow_tf32: bool,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
+    assert lhs.dtype == rhs.dtype, "lhs and rhs must have the same dtype!"
     assert len(lhs.shape) == 2 and len(rhs.shape) == 2
     assert lhs.shape[1].value == rhs.shape[0].value
     assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
@@ -998,7 +1046,7 @@ def dot(lhs: tl.tensor,
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     else:
-        _0 = builder.get_float32(0)
+        _0 = builder.get_fp32(0)
         ret_scalar_ty = tl.float32
     M = lhs.type.shape[0]
     N = rhs.type.shape[1]

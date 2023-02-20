@@ -1,7 +1,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/Dialect/SCF/SCF.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
@@ -41,7 +41,6 @@ public:
   TritonGPUReorderInstructionsPass() = default;
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     // Sink conversions into loops when they will increase
     // register pressure
@@ -52,6 +51,9 @@ public:
       auto user_begin = op->user_begin();
       auto user_end = op->user_end();
       if (std::distance(user_begin, user_end) != 1)
+        return;
+      if (user_begin->getParentOfType<scf::ForOp>() ==
+          op->getParentOfType<scf::ForOp>())
         return;
       opToMove.insert({op, *user_begin});
     });
@@ -85,12 +87,17 @@ public:
       if (!dstEncoding)
         return;
       int opIdx = dstEncoding.getOpIdx();
-      if (opIdx != 1)
+      if (opIdx != 0)
         return;
       if (op->getUsers().empty())
         return;
-      auto user_begin = op->user_begin();
-      op->moveBefore(*user_begin);
+      auto dotUser = dyn_cast<triton::DotOp>(*op->user_begin());
+      if (!dotUser)
+        return;
+      auto BOp = dotUser.getOperand(1).getDefiningOp();
+      if (!BOp)
+        return;
+      op->moveBefore(BOp);
     });
     return;
   }

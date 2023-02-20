@@ -26,12 +26,12 @@ def _to_tensor(x, builder):
         else:
             raise RuntimeError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
-        return tensor(builder.get_float32(x), float32)
+        return tensor(builder.get_fp32(x), float32)
     elif isinstance(x, constexpr):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
         return x
-    assert False, f'cannot convert {x} to tensor'
+    assert False, f"cannot convert {x} of type {type(x)} to tensor"
 
 
 class dtype:
@@ -139,13 +139,16 @@ class dtype:
     def is_bool(self):
         return self.is_int1()
 
-    def is_void(self):
+    @staticmethod
+    def is_void():
         raise RuntimeError("Not implemented")
 
-    def is_block(self):
+    @staticmethod
+    def is_block():
         return False
 
-    def is_ptr(self):
+    @staticmethod
+    def is_ptr():
         return False
 
     def __eq__(self, other: dtype):
@@ -421,6 +424,18 @@ class constexpr:
     def __invert__(self):
         return constexpr(~self.value)
 
+    def __pow__(self, other):
+        return constexpr(self.value ** other.value)
+
+    def __rshift__(self, other):
+        return constexpr(self.value >> other.value)
+
+    def __lshift__(self, other):
+        return constexpr(self.value << other.value)
+
+    def __not__(self):
+        return constexpr(not self.value)
+
     def __call__(self, *args, **kwds):
         return self.value(*args, **kwds)
 
@@ -534,7 +549,10 @@ class tensor:
     @builtin
     def __rshift__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
-        return semantic.lshr(self, other, _builder)
+        if self.dtype.is_int_signed():
+            return semantic.ashr(self, other, _builder)
+        else:
+            return semantic.lshr(self, other, _builder)
 
     # comparison operators
 
@@ -602,6 +620,12 @@ class tensor:
     def logical_or(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.logical_or(self, other, _builder)
+
+    # note: __not__ isn't actually a magic method in python
+    # but it's ok because our ASTVisitor handles it
+    @builtin
+    def __not__(self, _builder=None):
+        return semantic.not_(self, _builder)
 
     @builtin
     def __getitem__(self, slices, _builder=None):
@@ -690,24 +714,31 @@ def arange(start, end, _builder=None):
     return semantic.arange(start, end, _builder)
 
 
-@builtin
-def zeros(shape, dtype, _builder=None):
-    """
-    Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
-
-    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
-    :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
-    :type dtype: DType
-    """
+def _shape_check_impl(shape):
+    shape = _constexpr_to_value(shape)
     for i, d in enumerate(shape):
         if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
             raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
-    shape = [x.value for x in shape]
+    return [_constexpr_to_value(x) for x in shape]
+
+
+@builtin
+def full(shape, value, dtype, _builder=None):
+    """
+    Returns a tensor filled with the scalar value for the given :code:`shape` and :code:`dtype`.
+
+    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
+    :value value: A scalar value to fill the array with
+    :type shape: tuple of ints
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
+    :type dtype: DType
+    """
+    shape = _shape_check_impl(shape)
+    value = _constexpr_to_value(value)
     dtype = _constexpr_to_value(dtype)
-    return semantic.zeros(shape, dtype, _builder)
+    return semantic.full(shape, value, dtype, _builder)
 
 
 # -----------------------
@@ -738,6 +769,7 @@ def broadcast_to(input, shape, _builder=None):
     :param shape: The desired shape.
     :type shape: Tuple[int]
     """
+    shape = _shape_check_impl(shape)
     return semantic.broadcast_impl_shape(input, shape, _builder)
 
 
@@ -775,15 +807,14 @@ def view(input, shape, _builder=None):
     :type shape: Tuple[int]
 
     """
-    shape = [x.value for x in shape]
+    shape = _shape_check_impl(shape)
     return semantic.view(input, shape, _builder)
 
 
 @builtin
 def reshape(input, shape, _builder=None):
-    # TODO: should be more than just a view
-    shape = [x.value for x in shape]
-    return semantic.view(input, shape, _builder)
+    shape = _shape_check_impl(shape)
+    return semantic.reshape(input, shape, _builder)
 
 # -----------------------
 # Linear Algebra
@@ -841,7 +872,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, mask=None, _builder=None):
+def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -858,7 +889,9 @@ def store(pointer, value, mask=None, _builder=None):
     value = _to_tensor(value, _builder)
     if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
-    return semantic.store(pointer, value, mask, _builder)
+    cache_modifier = _constexpr_to_value(cache_modifier)
+    eviction_policy = _constexpr_to_value(eviction_policy)
+    return semantic.store(pointer, value, mask, cache_modifier, eviction_policy, _builder)
 
 
 # -----------------------
@@ -1244,6 +1277,19 @@ def swizzle2d(i, j, size_i, size_j, size_g):
 
 
 @triton.jit
+def zeros(shape, dtype):
+    """
+    Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
+
+    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
+    :type shape: tuple of ints
+    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
+    :type dtype: DType
+    """
+    return full(shape, 0, dtype)
+
+
+@triton.jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
 
@@ -1265,3 +1311,33 @@ def printf(prefix, *args, _builder=None):
     for arg in args:
         new_args.append(_to_tensor(arg, _builder))
     return semantic.printf(new_prefix, new_args, _builder)
+
+# -----------------------
+# Iterators
+# -----------------------
+
+
+class static_range:
+
+    """Iterator that counts upward forever."""
+
+    def __init__(self, arg1, arg2=None, step=None):
+        assert isinstance(arg1, constexpr)
+        if step is None:
+            self.step = constexpr(1)
+        else:
+            assert isinstance(step, constexpr)
+            self.step = step
+        if arg2 is None:
+            self.start = constexpr(0)
+            self.end = arg1
+        else:
+            assert isinstance(arg2, constexpr)
+            self.start = arg1
+            self.end = arg2
+
+    def __iter__(self):
+        raise RuntimeError("static_range can only be used in @triton.jit'd functions")
+
+    def __next__(self):
+        raise RuntimeError("static_range can only be used in @triton.jit'd functions")

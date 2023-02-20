@@ -1,4 +1,5 @@
 #include "triton/Analysis/Allocation.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -33,10 +34,8 @@ constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
-  auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
   auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
   auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
-  auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
   auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
   assert(!(srcMmaLayout && dstMmaLayout) &&
@@ -54,10 +53,17 @@ getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
-  auto srcTy = op.src().getType().cast<RankedTensorType>();
-  auto dstTy = op.result().getType().cast<RankedTensorType>();
+  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
+
+  // MmaToDotShortcut doesn't use shared mem
+  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>())
+    if (auto dotOperandLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>())
+      if (isMmaToDotShortcut(mmaLayout, dotOperandLayout))
+        return {};
+
   assert(srcLayout && dstLayout &&
          "Unexpect layout in getScratchConfigForCvtLayout()");
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
@@ -68,8 +74,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
   outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
 
-  auto srcShapePerCTA = getShapePerCTA(srcLayout);
-  auto dstShapePerCTA = getShapePerCTA(dstLayout);
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  auto srcShapePerCTA = getShapePerCTA(srcLayout, srcShape);
+  auto dstShapePerCTA = getShapePerCTA(dstLayout, dstShape);
 
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> paddedRepShape(rank);
@@ -92,7 +100,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 // TODO: extend beyond scalars
 SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   SmallVector<unsigned> smemShape;
-  if (op.ptr().getType().isa<RankedTensorType>()) {
+  if (op.getPtr().getType().isa<RankedTensorType>()) {
     // do nothing or just assert because shared memory is not used in tensor up
     // to now
   } else {
@@ -159,8 +167,8 @@ private:
       unsigned bytes = helper.getScratchSizeInBytes();
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtLayout.src().getType().cast<RankedTensorType>();
-      auto dstTy = cvtLayout.result().getType().cast<RankedTensorType>();
+      auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
+      auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();
       auto srcEncoding = srcTy.getEncoding();
       auto dstEncoding = dstTy.getEncoding();
       if (srcEncoding.isa<SharedEncodingAttr>() ||
@@ -215,10 +223,10 @@ private:
   }
 
   void getValueAlias(Value value, SharedMemoryAliasAnalysis &analysis) {
-    LatticeElement<AliasInfo> *latticeElement =
-        analysis.lookupLatticeElement(value);
+    dataflow::Lattice<AliasInfo> *latticeElement =
+        analysis.getLatticeElement(value);
     if (latticeElement) {
-      auto &info = latticeElement->getValue();
+      AliasInfo &info = latticeElement->getValue();
       if (!info.getAllocs().empty()) {
         for (auto alloc : info.getAllocs()) {
           allocation->addAlias(value, alloc);
@@ -235,14 +243,19 @@ private:
       getScratchValueSize(op);
     });
     // Get the alias values
-    SharedMemoryAliasAnalysis aliasAnalysis(operation->getContext());
-    aliasAnalysis.run(operation);
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    SharedMemoryAliasAnalysis *aliasAnalysis =
+        solver->load<SharedMemoryAliasAnalysis>();
+    if (failed(solver->initializeAndRun(operation))) {
+      // TODO: return error instead of bailing out..
+      llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
+    }
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
       for (auto operand : op->getOperands()) {
-        getValueAlias(operand, aliasAnalysis);
+        getValueAlias(operand, *aliasAnalysis);
       }
       for (auto value : op->getResults()) {
-        getValueAlias(value, aliasAnalysis);
+        getValueAlias(value, *aliasAnalysis);
       }
     });
   }

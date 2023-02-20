@@ -9,10 +9,10 @@ using namespace mlir;
 namespace {
 
 struct TestAliasPass
-    : public PassWrapper<TestAliasPass, OperationPass<FuncOp>> {
+    : public PassWrapper<TestAliasPass, OperationPass<func::FuncOp>> {
 
-  // LLVM15+
-  // MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAliasPass);
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAliasPass);
+
   static void print(StringRef name, SmallVector<std::string, 4> &vals,
                     raw_ostream &os) {
     if (vals.empty())
@@ -36,26 +36,27 @@ struct TestAliasPass
   void runOnOperation() override {
     Operation *operation = getOperation();
     auto &os = llvm::errs();
-    auto op_name = SymbolTable::getSymbolName(operation).getValue().str();
-    os << op_name << "\n";
+    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
+    os << opName << "\n";
 
-    SharedMemoryAliasAnalysis analysis(&getContext());
-    analysis.run(operation);
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    SharedMemoryAliasAnalysis *analysis =
+        solver->load<SharedMemoryAliasAnalysis>();
+    if (failed(solver->initializeAndRun(operation)))
+      return signalPassFailure();
 
     AsmState state(operation->getParentOfType<ModuleOp>());
     // Get operation ids of value's aliases
     auto getAllocOpNames = [&](Value value) {
-      LatticeElement<AliasInfo> *latticeElement =
-          analysis.lookupLatticeElement(value);
+      dataflow::Lattice<AliasInfo> *latticeElement =
+          analysis->getLatticeElement(value);
       SmallVector<std::string, 4> opNames;
       if (latticeElement) {
         auto &info = latticeElement->getValue();
-        if (!info.getAllocs().empty()) {
-          for (auto &alias : info.getAllocs()) {
-            auto opName =
-                getValueOperandName(alias.getDefiningOp()->getResult(0), state);
-            opNames.push_back(std::move(opName));
-          }
+        for (auto &alias : info.getAllocs()) {
+          auto opName =
+              getValueOperandName(alias.getDefiningOp()->getResult(0), state);
+          opNames.push_back(std::move(opName));
         }
       }
       // Ensure deterministic output
@@ -64,8 +65,19 @@ struct TestAliasPass
     };
 
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      if (op->getNumResults() < 1)
+      if (op->getNumResults() < 1) {
+        // cond br, br
+        if (auto branch = dyn_cast<BranchOpInterface>(op)) {
+          auto *block = branch->getBlock();
+          for (auto arg : llvm::enumerate(block->getArguments())) {
+            auto operand = block->getArgument(arg.index());
+            auto opNames = getAllocOpNames(operand);
+            auto argName = getValueOperandName(arg.value(), state);
+            print(argName, opNames, os);
+          }
+        }
         return;
+      }
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         for (auto arg : llvm::enumerate(forOp.getRegionIterArgs())) {
           auto operand = forOp.getOpOperandForRegionIterArg(arg.value()).get();

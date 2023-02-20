@@ -19,6 +19,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cmath>
@@ -360,6 +361,8 @@ static std::string GetCheckTypeAbbreviation(Check::FileCheckType Ty) {
     return "bad-not";
   case Check::CheckBadCount:
     return "bad-count";
+  case Check::CheckMisspelled:
+    return "misspelled";
   case Check::CheckNone:
     llvm_unreachable("invalid FileCheckType");
   }

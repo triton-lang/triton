@@ -3,11 +3,11 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
-include "mlir/Dialect/Arithmetic/IR/ArithmeticBase.td"
+include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
+include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
@@ -16,7 +16,9 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonGPU_Dialect, mnemonic, traits>;
 
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [SameOperandsAndResultShape, NoSideEffect]> {
+                                 [SameOperandsAndResultShape,
+                                  SameOperandsAndResultElementType,
+                                  Pure]> {
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
@@ -40,11 +42,24 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait"> {
   }];
 }
 
+def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
+  let summary = "async commit group";
+
+  let assemblyFormat = "attr-dict";
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 80;
+    }
+  }];
+}
+
+
 // Port Arith_CmpIOp & Arith_CmpFOp & Std_SelectOp to TritonGPU.
 // This is needed because these ops don't
 // handle encodings
 // e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td#L111
-def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise, 
+def TTG_CmpIOp : TTG_Op<"cmpi", [Pure, Elementwise,
                                  SameOperandsAndResultShape, 
                                  SameOperandsAndResultEncoding]> {
   let summary = "integer comparison operation";
@@ -58,7 +73,7 @@ def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise,
   let results = (outs TT_BoolLike:$result);
 }
 
-def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise, 
+def TTG_CmpFOp : TTG_Op<"cmpf", [Pure, Elementwise,
                                  SameOperandsAndResultShape, 
                                  SameOperandsAndResultEncoding]> {
   let summary = "floating-point comparison operation";
@@ -73,9 +88,9 @@ def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise,
 }
 
 // TODO: migrate to arith::SelectOp on LLVM16
-def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise, 
-                                 SameOperandsAndResultShape, 
-                                 SameOperandsAndResultEncoding]> {
+def TTG_SelectOp : TTG_Op<"select", [Pure, Elementwise,
+                                     SameOperandsAndResultShape,
+                                     SameOperandsAndResultEncoding]> {
   let summary = "select operation";
 
   let description = [{}];
@@ -173,10 +188,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
     }
   }];
 
-  // The custom parser could be replaced with oilist in LLVM-16
-  let parser = [{ return parseInsertSliceAsyncOp(parser, result); }];
-
-  let printer = [{ return printInsertSliceAsyncOp(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // Allocate shared memory
