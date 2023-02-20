@@ -19,7 +19,7 @@ std::unique_ptr<Pass> createTritonGPUReorderInstructionsPass();
 
 std::unique_ptr<Pass> createTritonGPUDecomposeConversionsPass();
 
-std::unique_ptr<Pass> createTritonGPUCombineOpsPass();
+std::unique_ptr<Pass> createTritonGPURemoveLayoutConversionsPass();
 
 std::unique_ptr<Pass> createTritonGPUVerifier();
 

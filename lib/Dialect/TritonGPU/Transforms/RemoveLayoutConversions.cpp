@@ -763,10 +763,11 @@ public:
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-class TritonGPUCombineOpsPass
-    : public TritonGPUCombineOpsBase<TritonGPUCombineOpsPass> {
+class TritonGPURemoveLayoutConversionsPass
+    : public TritonGPURemoveLayoutConversionsBase<
+          TritonGPURemoveLayoutConversionsPass> {
 public:
-  TritonGPUCombineOpsPass() = default;
+  TritonGPURemoveLayoutConversionsPass() = default;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -793,6 +794,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUCombineOpsPass() {
-  return std::make_unique<TritonGPUCombineOpsPass>();
+std::unique_ptr<Pass> mlir::createTritonGPURemoveLayoutConversionsPass() {
+  return std::make_unique<TritonGPURemoveLayoutConversionsPass>();
 }

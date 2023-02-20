@@ -1423,9 +1423,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUFuseTranspositionsPass());
            })
-      .def("add_tritongpu_combine_pass",
+      .def("add_tritongpu_remove_layout_conversions_pass",
            [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUCombineOpsPass());
+             self.addPass(mlir::createTritonGPURemoveLayoutConversionsPass());
            })
       .def("add_tritongpu_update_mma_for_volta_pass",
            [](mlir::PassManager &self) {

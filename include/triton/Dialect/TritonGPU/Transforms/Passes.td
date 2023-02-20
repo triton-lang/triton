@@ -86,13 +86,13 @@ def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
 
-def TritonGPUCombineOps : Pass<"tritongpu-combine", "mlir::ModuleOp"> {
-  let summary = "combine triton gpu ops";
+def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions", "mlir::ModuleOp"> {
+  let summary = "remove superfluous layout conversions";
 
   let description = [{
   }];
 
-  let constructor = "mlir::createTritonGPUCombineOpsPass()";
+  let constructor = "mlir::createTritonGPURemoveLayoutConversionsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
