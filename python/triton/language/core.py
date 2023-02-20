@@ -255,8 +255,8 @@ class block_type(dtype):
         self.numel = 1
         for s in self.shape:
             self.numel *= s
-            if self.numel > TRITON_MAX_TENSOR_NUMEL:
-                raise ValueError("number of elements must be less than or equal to TRITON_MAX_TENSOR_NUMEL = 131072")
+        if self.numel > TRITON_MAX_TENSOR_NUMEL:
+            raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
 
         self.name = self.__str__()
 
