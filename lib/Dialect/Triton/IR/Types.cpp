@@ -37,3 +37,15 @@ Type PointerType::parse(AsmParser &parser) {
 void PointerType::print(AsmPrinter &printer) const {
   printer << "<" << getPointeeType() << ">";
 }
+
+namespace mlir {
+
+unsigned getPointeeBitWidth(RankedTensorType tensorTy) {
+  auto ptrTy = tensorTy.getElementType().cast<triton::PointerType>();
+  auto pointeeType = ptrTy.getPointeeType();
+  return pointeeType.isa<triton::Float8Type>()
+             ? 8
+             : pointeeType.getIntOrFloatBitWidth();
+}
+
+} // namespace mlir

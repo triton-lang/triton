@@ -179,6 +179,18 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
+    def contains_return_op(self, node):
+        if isinstance(node, ast.Return):
+            return True
+        elif isinstance(node, ast.If):
+            pred = lambda s: self.contains_return_op(s)
+            ret = any(pred(s) for s in node.body)
+            if node.orelse:
+                ret = ret or any(pred(s) for s in node.orelse)
+            return ret
+        else:
+            return False
+
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
 
@@ -475,7 +487,7 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
         if isinstance(cond, triton.language.tensor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
-            if self.scf_stack:
+            if self.scf_stack or not self.contains_return_op(node):
                 self.visit_if_scf(cond, node)
             else:
                 self.visit_if_top_level(cond, node)
@@ -625,29 +637,29 @@ class CodeGenerator(ast.NodeVisitor):
         return [self.visit(dim) for dim in node.dims]
 
     def visit_For(self, node):
-        iterator = self.visit(node.iter.func)
-        if iterator != self.builtins['range']:
-            raise RuntimeError('Only `range` iterator currently supported')
+        IteratorClass = self.visit(node.iter.func)
+        iter_args = [self.visit(arg) for arg in node.iter.args]
+        if IteratorClass == triton.language.static_range:
+            iterator = IteratorClass(*iter_args)
+            static_range = range(iterator.start.value,
+                                 iterator.end.value,
+                                 iterator.step.value)
+            for i in static_range:
+                self.lscope[node.target.id] = triton.language.constexpr(i)
+                self.visit_compound_statement(node.body)
+                for stmt in node.orelse:
+                    ast.NodeVisitor.generic_visit(self, stmt)
+            return
+
+        if IteratorClass != self.builtins['range']:
+            raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
+
         # visit iterator arguments
         # note: only `range` iterator is supported now
-        iter_args = [self.visit(arg) for arg in node.iter.args]
         # collect lower bound (lb), upper bound (ub), and step
         lb = iter_args[0] if len(iter_args) > 1 else self.visit(ast.Num(0))
         ub = iter_args[1] if len(iter_args) > 1 else self.visit(node.iter.args[0])
         step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Num(1))
-        # static for loops: all iterator arguments are constexpr
-        if isinstance(lb, triton.language.constexpr) and \
-           isinstance(ub, triton.language.constexpr) and \
-           isinstance(step, triton.language.constexpr):
-            sta_range = iterator(lb.value, ub.value, step.value)
-            static_unrolling = os.environ.get('TRITON_STATIC_LOOP_UNROLLING', False)
-            if static_unrolling and len(sta_range) <= 10:
-                for i in sta_range:
-                    self.lscope[node.target.id] = triton.language.constexpr(i)
-                    self.visit_compound_statement(node.body)
-                    for stmt in node.orelse:
-                        ast.NodeVisitor.generic_visit(self, stmt)
-                return
         # handle negative constant step (not supported by scf.for in MLIR)
         negative_step = False
         if isinstance(step, triton.language.constexpr) and step.value < 0:
@@ -905,6 +917,13 @@ def kernel_suffix(signature, specialization):
 # ------------------------------------------------------------------------------
 
 
+def parse_mlir_module(path, context):
+    module = _triton.ir.parse_mlir_module(path, context)
+    # module takes ownership of the context
+    module.context = context
+    return module
+
+
 def build_triton_ir(fn, signature, specialization, constants):
     # canonicalize signature
     if isinstance(signature, str):
@@ -947,6 +966,7 @@ def optimize_triton_ir(mod):
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_licm_pass()
+    pm.add_symbol_dce_pass()
     pm.run(mod)
     return mod
 
@@ -1054,18 +1074,14 @@ def ptx_get_version(cuda_version) -> int:
 
 
 def path_to_ptxas():
-    prefixes = [
+    base_dir = os.path.dirname(__file__)
+    paths = [
         os.environ.get("TRITON_PTXAS_PATH", ""),
-        "",
-        "/usr",
-        os.environ.get('CUDA_PATH', default_cuda_dir())
+        os.path.join(base_dir, "third_party", "cuda", "bin", "ptxas")
     ]
-    if not os.getenv("TRITON_IGNORE_BUNDLED_PTXAS"):
-        prefixes.insert(0, os.path.dirname(__file__))
 
-    for prefix in prefixes:
-        ptxas = os.path.join(prefix, "bin", "ptxas")
-        if os.path.exists(ptxas):
+    for ptxas in paths:
+        if os.path.exists(ptxas) and os.path.isfile(ptxas):
             result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
@@ -1206,16 +1222,16 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
       return ptr_info;
     }}
     ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
-    unsigned attr;
-    CUresult status =
-        cuPointerGetAttribute(&attr, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr_info.dev_ptr);
-    if (ptr_info.dev_ptr &&
-        (!(attr == CU_MEMORYTYPE_DEVICE || attr == CU_MEMORYTYPE_UNIFIED) ||
-         !(status == CUDA_SUCCESS))) {{
+    if(!ptr_info.dev_ptr)
+      return ptr_info;
+    uint64_t dev_ptr;
+    int status = cuPointerGetAttribute(&dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
+    if (status == CUDA_ERROR_INVALID_VALUE) {{
         PyErr_Format(PyExc_ValueError,
                      "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
         ptr_info.valid = false;
     }}
+    ptr_info.dev_ptr = dev_ptr;
     return ptr_info;
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
@@ -1277,13 +1293,13 @@ static PyMethodDef ModuleMethods[] = {{
 
 static struct PyModuleDef ModuleDef = {{
   PyModuleDef_HEAD_INIT,
-  \"launcher\",
+  \"__triton_launcher\",
   NULL, //documentation
   -1, //size
   ModuleMethods
 }};
 
-PyMODINIT_FUNC PyInit_launcher(void) {{
+PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
     return NULL;
@@ -1498,14 +1514,14 @@ def make_hash(fn, **kwargs):
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
-# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func,
+# - ^\s*func\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
 # - (public\s+)? : optionally match the keyword public and any following whitespace
 # - (@\w+) : match an @ symbol followed by one or more word characters
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+mlir_prototype_pattern = r'^\s*func\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
     "ttir": mlir_prototype_pattern,
@@ -1541,9 +1557,9 @@ def compile(fn, **kwargs):
     # build compilation stages
     stages = {
         "ast": (lambda path: fn, None),
-        "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+        "ttir": (lambda path: parse_mlir_module(path, context),
                  lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-        "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
+        "ttgir": (lambda path: parse_mlir_module(path, context),
                   lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
         "llir": (lambda path: Path(path).read_text(),
                  lambda src: ttgir_to_llir(src, extern_libs, capability)),
@@ -1638,7 +1654,7 @@ class CompiledKernel:
     def __init__(self, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
-        spec = importlib.util.spec_from_file_location("launcher", so_path)
+        spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")

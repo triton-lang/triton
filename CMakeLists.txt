@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.6)
+
+cmake_policy(SET CMP0116 OLD)
+
 include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -17,7 +20,6 @@ option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
 # Ensure Python3 vars are set correctly
 #  used conditionally in this file and by lit tests
-find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
 set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
@@ -41,8 +43,8 @@ include_directories(${PYBIND11_INCLUDE_DIR})
 
 if(WIN32)
     SET(BUILD_SHARED_LIBS OFF)
-    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps/dlfcn-win32/src)
-    add_subdirectory(deps/dlfcn-win32/src ${CMAKE_BINARY_DIR}/dlfcn-win32)
+    find_package(dlfcn-win32 REQUIRED)
+    set(CMAKE_DL_LIBS dlfcn-win32::dl)
 endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
@@ -72,6 +74,8 @@ if (NOT MLIR_DIR)
       find_package(LLVM 11 REQUIRED COMPONENTS "nvptx;amdgpu")
     endif()
     message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+    # FindLLVM outputs LLVM_LIBRARY_DIRS but we expect LLVM_LIBRARY_DIR here
+    set(LLVM_LIBRARY_DIR ${LLVM_LIBRARY_DIRS})
     if(APPLE)
       set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14")
     endif()
@@ -146,13 +150,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
     if (PYTHON_INCLUDE_DIRS)
       include_directories(${PYTHON_INCLUDE_DIRS})
     else()
+      find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
       include_directories(${Python3_INCLUDE_DIRS})
       link_directories(${Python3_LIBRARY_DIRS})
       link_libraries(${Python3_LIBRARIES})
       add_link_options(${Python3_LINK_OPTIONS})
     endif()
 endif()
-
 
 # # Triton
 # file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
@@ -198,8 +202,7 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
 if(TRITON_BUILD_PYTHON_MODULE)
   add_library(triton SHARED ${PYTHON_SRC})
-
-  target_link_libraries(triton
+  set(TRITON_LIBRARIES
     TritonAnalysis
     TritonTransforms
     TritonGPUTransforms
@@ -210,7 +213,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # optimizations
     MLIRPass
     MLIRTransforms
-    MLIRLLVMIR
+    MLIRLLVMDialect
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRExecutionEngine
@@ -218,16 +221,21 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRNVVMToLLVMIRTranslation
     MLIRIR
   )
-
-  target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-
   if(WIN32)
-      target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} dl) # dl is from dlfcn-win32
+    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${CMAKE_DL_LIBS}
+      ${TRITON_LIBRARIES}
+    )
   elseif(APPLE)
-      target_link_libraries(triton ${LLVM_LIBRARIES} z)
+    target_link_libraries(triton ${LLVM_LIBRARIES} z
+      ${TRITON_LIBRARIES}
+    )
   else()
-      target_link_libraries(triton ${LLVM_LIBRARIES} z stdc++fs)
+    target_link_libraries(triton ${LLVM_LIBRARIES} z stdc++fs
+      ${TRITON_LIBRARIES}
+    )
   endif()
+  
+  target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
