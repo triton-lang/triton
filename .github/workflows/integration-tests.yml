@@ -73,7 +73,7 @@ jobs:
 
       - name: Install Triton
         run: |
-          export PATH=$PATH:`python3 -c "import cmake;print(f'{cmake.CMAKE_BIN_DIR}/cmake')"`
+          export PATH=$PATH:`python3 -c "import cmake;print(cmake.CMAKE_BIN_DIR)"`
           cd python
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
