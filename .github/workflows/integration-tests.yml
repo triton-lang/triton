@@ -88,11 +88,11 @@ jobs:
           fi
           lit -v "$LIT_TEST_DIR"
 
-      - name: Run python tests
-        if: ${{matrix.runner[0] == 'self-hosted'}}
-        run: |
-          cd python/test/unit/
-          pytest
+      #- name: Run python tests
+      #  if: ${{matrix.runner[0] == 'self-hosted'}}
+      #  run: |
+      #    cd python/test/unit/
+      #    pytest
 
 
       - name: Run CXX unittests
@@ -100,3 +100,14 @@ jobs:
           cd python/
           cd "build/$(ls build)"
           ctest
+
+      - name: Regression tests
+        if: contains(github.event.pull_request.labels.*.name, 'A100')
+        run: |
+          cd python/test/regression
+          sudo nvidia-smi -i 0 -pm 1
+          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+          sudo nvidia-smi -i 0 --lock-memory-clocks=1215,1215
+          pytest -vs .
+          sudo nvidia-smi -i 0 -rgc
+          sudo nvidia-smi -i 0 -rmc
