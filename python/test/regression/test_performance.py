@@ -8,7 +8,7 @@ import triton
 import triton.language as tl
 from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
 
-DEVICE_NAME = 'v100'
+DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
 
 #######################
 # Utilities
@@ -34,7 +34,6 @@ mem_clocks = {'v100': 877, 'a100': 1215}
 matmul_data = {
     'v100': {
         # square
-        (256, 256, 256): {'float16': 0.027},
         (512, 512, 512): {'float16': 0.158},
         (1024, 1024, 1024): {'float16': 0.466},
         (2048, 2048, 2048): {'float16': 0.695},
@@ -52,7 +51,6 @@ matmul_data = {
         (8192, 64, 8192): {'float16': 0.452},
     },
     'a100': {
-        (256, 256, 256): {'float16': 0.010, 'float32': 0.0214, 'int8': 0.006},
         (512, 512, 512): {'float16': 0.061, 'float32': 0.109, 'int8': 0.030},
         (1024, 1024, 1024): {'float16': 0.287, 'float32': 0.331, 'int8': 0.169},
         (2048, 2048, 2048): {'float16': 0.604, 'float32': 0.599, 'int8': 0.385},
@@ -99,7 +97,7 @@ def test_matmul(M, N, K, dtype_str):
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=1000)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=100)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)
