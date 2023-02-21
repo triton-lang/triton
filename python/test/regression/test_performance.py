@@ -145,7 +145,6 @@ elementwise_data = {
 def test_elementwise(N):
     torch.manual_seed(0)
     ref_gpu_util = elementwise_data[DEVICE_NAME][N]
-    cur_mem_clock = nvsmi(['clocks.current.memory'])[0]
     max_gpu_perf = get_dram_gbps()
     z = torch.empty((N, ), dtype=torch.float16, device='cuda')
     x = torch.randn_like(z)
