@@ -813,9 +813,8 @@ def view(input, shape, _builder=None):
 
 @builtin
 def reshape(input, shape, _builder=None):
-    # TODO: should be more than just a view
     shape = _shape_check_impl(shape)
-    return semantic.view(input, shape, _builder)
+    return semantic.reshape(input, shape, _builder)
 
 # -----------------------
 # Linear Algebra

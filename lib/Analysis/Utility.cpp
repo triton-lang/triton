@@ -11,14 +11,14 @@ namespace mlir {
 
 bool ReduceOpHelper::isFastReduction() {
   auto srcLayout = srcTy.getEncoding();
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   return axis == triton::gpu::getOrder(srcLayout)[0];
 }
 
 unsigned ReduceOpHelper::getInterWarpSize() {
   auto srcLayout = srcTy.getEncoding();
   auto srcShape = srcTy.getShape();
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSize();
   return std::min(srcReduceDimSize / sizeIntraWarps,
@@ -28,7 +28,7 @@ unsigned ReduceOpHelper::getInterWarpSize() {
 unsigned ReduceOpHelper::getIntraWarpSize() {
   auto srcLayout = srcTy.getEncoding();
   auto srcShape = srcTy.getShape();
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   return std::min(srcReduceDimSize,
                   triton::gpu::getThreadsPerWarp(srcLayout)[axis]);
@@ -36,20 +36,20 @@ unsigned ReduceOpHelper::getIntraWarpSize() {
 
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
   auto srcLayout = srcTy.getEncoding();
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   return triton::gpu::getThreadsPerWarp(srcLayout)[axis] *
          triton::gpu::getWarpsPerCTA(srcLayout)[axis];
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   auto smemShape = convertType<unsigned>(getSrcShape());
   smemShape[axis] = std::min(smemShape[axis], getThreadsReductionAxis());
   return smemShape;
 }
 
 SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
-  auto axis = op.axis();
+  auto axis = op.getAxis();
   SmallVector<SmallVector<unsigned>> smemShapes(3);
 
   auto argLayout = srcTy.getEncoding();
@@ -82,10 +82,10 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     elems = product<unsigned>(smemShape);
   }
 
-  auto tensorType = op.operand().getType().cast<RankedTensorType>();
+  auto tensorType = op.getOperand().getType().cast<RankedTensorType>();
   unsigned bytes = elems * tensorType.getElementTypeBitWidth() / 8;
 
-  if (triton::ReduceOp::withIndex(op.redOp()))
+  if (triton::ReduceOp::withIndex(op.getRedOp()))
     bytes += elems * sizeof(int32_t);
 
   return bytes;
@@ -109,8 +109,7 @@ bool maybeSharedAllocationOp(Operation *op) {
          (dialect->getTypeID() ==
               mlir::TypeID::get<triton::gpu::TritonGPUDialect>() ||
           dialect->getTypeID() == mlir::TypeID::get<triton::TritonDialect>() ||
-          dialect->getTypeID() ==
-              mlir::TypeID::get<arith::ArithmeticDialect>() ||
+          dialect->getTypeID() == mlir::TypeID::get<arith::ArithDialect>() ||
           dialect->getTypeID() == mlir::TypeID::get<tensor::TensorDialect>());
 }
 
@@ -124,12 +123,12 @@ bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
-  auto aElemTy = op.a().getType().cast<RankedTensorType>().getElementType();
-  auto bElemTy = op.b().getType().cast<RankedTensorType>().getElementType();
+  auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
+  auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.allowTF32() && version >= 2;
+    return op.getAllowTF32() && version >= 2;
   }
-  return supportMMA(op.a(), version) && supportMMA(op.b(), version);
+  return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
 
 bool supportMMA(Value value, int version) {
@@ -332,7 +331,8 @@ namespace {
 // Copied from TestDeadCodeAnalysis.cpp, because some dead code analysis
 // interacts with constant propagation, but SparseConstantPropagation
 // doesn't seem to be sufficient.
-struct ConstantAnalysis : public DataFlowAnalysis {
+class ConstantAnalysis : public DataFlowAnalysis {
+public:
   using DataFlowAnalysis::DataFlowAnalysis;
 
   LogicalResult initialize(Operation *top) override {
@@ -354,12 +354,19 @@ struct ConstantAnalysis : public DataFlowAnalysis {
                                        value, op->getDialect())));
       return success();
     }
+    // Dead code analysis requires every operands has initialized ConstantValue
+    // state before it is visited.
+    // https://github.com/llvm/llvm-project/blob/2ec1aba2b69faa1de5f71832a48e25aa3b5d5314/mlir/lib/Analysis/DataFlow/DeadCodeAnalysis.cpp#L322
+    // That's why we need to set all operands to unknown constants.
     setAllToUnknownConstants(op->getResults());
-    for (Region &region : op->getRegions())
-      setAllToUnknownConstants(region.getArguments());
+    for (Region &region : op->getRegions()) {
+      for (Block &block : region.getBlocks())
+        setAllToUnknownConstants(block.getArguments());
+    }
     return success();
   }
 
+private:
   /// Set all given values as not constants.
   void setAllToUnknownConstants(ValueRange values) {
     dataflow::ConstantValue unknownConstant(nullptr, nullptr);

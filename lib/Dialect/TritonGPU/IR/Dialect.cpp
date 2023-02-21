@@ -688,10 +688,10 @@ ParseResult InsertSliceAsyncOp::parse(OpAsmParser &parser,
 
   // Deduce operand_segment_sizes from the number of the operands.
   auto operand_segment_sizesAttrName =
-      InsertSliceAsyncOp::operand_segment_sizesAttrName(result.name);
+      InsertSliceAsyncOp::getOperandSegmentSizesAttrName(result.name);
   result.addAttribute(
       operand_segment_sizesAttrName,
-      parser.getBuilder().getI32VectorAttr({1, 1, 1, hasMask, hasOther}));
+      parser.getBuilder().getDenseI32ArrayAttr({1, 1, 1, hasMask, hasOther}));
   return success();
 }
 
@@ -700,11 +700,11 @@ void InsertSliceAsyncOp::print(OpAsmPrinter &printer) {
   printer << getOperation()->getOperands();
   // "operand_segment_sizes" can be deduced, so we don't print it.
   printer.printOptionalAttrDict(getOperation()->getAttrs(),
-                                {operand_segment_sizesAttrName()});
+                                {getOperandSegmentSizesAttrName()});
   printer << " : ";
-  printer.printStrippedAttrOrType(src().getType());
+  printer.printStrippedAttrOrType(getSrc().getType());
   printer << " -> ";
-  printer.printStrippedAttrOrType(result().getType());
+  printer.printStrippedAttrOrType(getResult().getType());
 }
 
 //===----------------------------------------------------------------------===//

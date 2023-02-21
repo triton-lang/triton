@@ -1,7 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
 #include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM//ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
@@ -83,8 +83,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid",
-                       rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
+    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -116,17 +115,15 @@ public:
     // Step 1: Decompose unoptimized layout conversions to use shared memory
     // Step 2: Decompose insert_slice_async to use load + insert_slice for
     //   pre-Ampere architectures or unsupported vectorized load sizes
-    // Step 3: Allocate shared memories and insert barriers
-    // Step 4: Convert SCF to CFG
+    // Step 3: Convert SCF to CFG
+    // Step 4: Allocate shared memories and insert barriers
     // Step 5: Convert FuncOp to LLVMFuncOp via partial conversion
     // Step 6: Get axis and shared memory info
     // Step 7: Convert the rest of ops via partial conversion
     //
-    // The reason for putting step 3 before step 4 is that the membar
-    // analysis currently only supports SCF but not CFG. The reason for a
-    // separation between 5/7 is that, step 6 is out of the scope of Dialect
-    // Conversion, thus we need to make sure the smem is not revised during the
-    // conversion of step 7.
+    // The reason for a separation between 5/7 is that, step 6 is out of the
+    // scope of Dialect Conversion, thus we need to make sure the smem is not
+    // revised during the conversion of step 7.
 
     // Step 1
     decomposeMmaToDotOperand(mod, numWarps);
@@ -137,26 +134,25 @@ public:
       return signalPassFailure();
 
     // Step 3
+    RewritePatternSet scfPatterns(context);
+    mlir::populateSCFToControlFlowConversionPatterns(scfPatterns);
+    mlir::ConversionTarget scfTarget(*context);
+    scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp, scf::WhileOp,
+                           scf::ExecuteRegionOp>();
+    scfTarget.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    if (failed(applyPartialConversion(mod, scfTarget, std::move(scfPatterns))))
+      return signalPassFailure();
+
+    // Step 4
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
 
-    // Step 4
-    RewritePatternSet scf_patterns(context);
-    mlir::populateSCFToControlFlowConversionPatterns(scf_patterns);
-    mlir::ConversionTarget scf_target(*context);
-    scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
-                            scf::WhileOp, scf::ExecuteRegionOp>();
-    scf_target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    if (failed(
-            applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
-      return signalPassFailure();
-
     // Step 5
-    RewritePatternSet func_patterns(context);
-    func_patterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
+    RewritePatternSet funcPatterns(context);
+    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
     if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(func_patterns))))
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
       return signalPassFailure();
 
     // Step 6 - get axis and shared memory info
@@ -209,8 +205,7 @@ public:
                                  /*benefit=*/10);
 
     // Add arith/math's patterns to help convert scalar expression to LLVM.
-    mlir::arith::populateArithmeticToLLVMConversionPatterns(typeConverter,
-                                                            patterns);
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
@@ -244,7 +239,8 @@ private:
     auto global = b.create<LLVM::GlobalOp>(
         loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
         "global_smem", /*value=*/Attribute(), /*alignment=*/0,
-        mlir::gpu::GPUDialect::getWorkgroupAddressSpace());
+        // Add ROCm support.
+        static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
     SmallVector<LLVM::LLVMFuncOp> funcs;
     mod.walk([&](LLVM::LLVMFuncOp func) { funcs.push_back(func); });
     assert(funcs.size() == 1 &&
@@ -339,8 +335,8 @@ private:
       OpBuilder builder(insertSliceAsyncOp);
 
       // Get the vectorized load size
-      auto src = insertSliceAsyncOp.src();
-      auto dst = insertSliceAsyncOp.dst();
+      auto src = insertSliceAsyncOp.getSrc();
+      auto dst = insertSliceAsyncOp.getDst();
       auto srcTy = src.getType().cast<RankedTensorType>();
       auto dstTy = dst.getType().cast<RankedTensorType>();
       auto srcBlocked =
@@ -368,24 +364,24 @@ private:
       auto tmpTy =
           RankedTensorType::get(srcTy.getShape(), resElemTy, srcBlocked);
       auto loadOp = builder.create<triton::LoadOp>(
-          insertSliceAsyncOp.getLoc(), tmpTy, insertSliceAsyncOp.src(),
-          insertSliceAsyncOp.mask(), insertSliceAsyncOp.other(),
-          insertSliceAsyncOp.cache(), insertSliceAsyncOp.evict(),
-          insertSliceAsyncOp.isVolatile());
+          insertSliceAsyncOp.getLoc(), tmpTy, insertSliceAsyncOp.getSrc(),
+          insertSliceAsyncOp.getMask(), insertSliceAsyncOp.getOther(),
+          insertSliceAsyncOp.getCache(), insertSliceAsyncOp.getEvict(),
+          insertSliceAsyncOp.getIsVolatile());
 
       // insert_slice
-      auto axis = insertSliceAsyncOp.axis();
+      auto axis = insertSliceAsyncOp.getAxis();
       auto intAttr = [&](int64_t v) { return builder.getI64IntegerAttr(v); };
       auto offsets = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(0));
       auto sizes = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(1));
       auto strides = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(1));
-      offsets[axis] = insertSliceAsyncOp.index();
+      offsets[axis] = insertSliceAsyncOp.getIndex();
       for (size_t i = 0; i < dstTy.getRank(); i++) {
         if (i != axis)
           sizes[i] = intAttr(dstTy.getShape()[i]);
       }
       auto insertSliceOp = builder.create<tensor::InsertSliceOp>(
-          insertSliceAsyncOp.getLoc(), loadOp, insertSliceAsyncOp.dst(),
+          insertSliceAsyncOp.getLoc(), loadOp, insertSliceAsyncOp.getDst(),
           offsets, sizes, strides);
 
       // Replace

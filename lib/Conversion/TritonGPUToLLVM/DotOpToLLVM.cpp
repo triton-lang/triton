@@ -21,7 +21,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // D = A * B + C
-    Value A = op.a();
+    Value A = op.getA();
     Value D = op.getResult();
 
     // Here we assume the DotOp's operands always comes from shared memory.
@@ -65,9 +65,9 @@ private:
                          .getEncoding()
                          .cast<MmaEncodingAttr>();
 
-    Value A = op.a();
-    Value B = op.b();
-    Value C = op.c();
+    Value A = op.getA();
+    Value B = op.getB();
+    Value C = op.getC();
 
     MMA16816ConversionHelper mmaHelper(A.getType(), mmaLayout,
                                        getThreadId(rewriter, loc), rewriter,
@@ -81,12 +81,12 @@ private:
            "Both $a and %b should be DotOperand layout.");
 
     Value loadedA, loadedB, loadedC;
-    loadedA = adaptor.a();
-    loadedB = adaptor.b();
-    loadedC = mmaHelper.loadC(op.c(), adaptor.c());
+    loadedA = adaptor.getA();
+    loadedB = adaptor.getB();
+    loadedC = mmaHelper.loadC(op.getC(), adaptor.getC());
 
-    return mmaHelper.convertDot(A, B, C, op.d(), loadedA, loadedB, loadedC, op,
-                                adaptor);
+    return mmaHelper.convertDot(A, B, C, op.getD(), loadedA, loadedB, loadedC,
+                                op, adaptor);
   }
   /// Convert to mma.m8n8k4
   LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adaptor,
@@ -94,8 +94,8 @@ private:
     auto *ctx = op.getContext();
     auto loc = op.getLoc();
 
-    Value A = op.a();
-    Value B = op.b();
+    Value A = op.getA();
+    Value B = op.getB();
     Value D = op.getResult();
     auto mmaLayout = D.getType()
                          .cast<RankedTensorType>()
@@ -129,14 +129,15 @@ private:
     unsigned numN = helper.getNumN(BShape[1], isBRow, isBVec4_);
     unsigned NK = AShape[1];
 
-    auto has = helper.extractLoadedOperand(adaptor.a(), NK, rewriter);
-    auto hbs = helper.extractLoadedOperand(adaptor.b(), NK, rewriter);
+    auto has = helper.extractLoadedOperand(adaptor.getA(), NK, rewriter);
+    auto hbs = helper.extractLoadedOperand(adaptor.getB(), NK, rewriter);
 
     // Initialize accumulators with external values, the acc holds the
     // accumulator value that is shared between the MMA instructions inside a
     // DotOp, we can call the order of the values the accumulator-internal
     // order.
-    SmallVector<Value> acc = getElementsFromStruct(loc, adaptor.c(), rewriter);
+    SmallVector<Value> acc =
+        getElementsFromStruct(loc, adaptor.getC(), rewriter);
     size_t resSize = acc.size();
 
     // The resVals holds the final result of the DotOp.
@@ -192,7 +193,7 @@ private:
           builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
 
       for (auto i = 0; i < 8; i++) {
-        Value elem = extract_val(f32_ty, res, i32_arr_attr(i));
+        Value elem = extract_val(f32_ty, res, i);
         acc[idx[i]] = elem;
       }
     };
@@ -220,9 +221,9 @@ private:
     auto *ctx = rewriter.getContext();
     auto loc = op.getLoc();
 
-    auto A = op.a();
-    auto B = op.b();
-    auto C = op.c();
+    auto A = op.getA();
+    auto B = op.getB();
+    auto C = op.getC();
     auto D = op.getResult();
 
     auto aTensorTy = A.getType().cast<RankedTensorType>();
@@ -235,11 +236,11 @@ private:
     BlockedEncodingAttr dLayout =
         dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
     auto order = dLayout.getOrder();
-    auto cc = getElementsFromStruct(loc, adaptor.c(), rewriter);
+    auto cc = getElementsFromStruct(loc, adaptor.getC(), rewriter);
 
     DotOpFMAConversionHelper helper(dLayout);
-    Value llA = adaptor.a();
-    Value llB = adaptor.b();
+    Value llA = adaptor.getA();
+    Value llB = adaptor.getB();
 
     auto sizePerThread = getSizePerThread(dLayout);
     auto shapePerCTA = getShapePerCTA(dLayout);

@@ -77,6 +77,12 @@ public:
   /// Returns the modify-reference behavior of `op` on `location`.
   ModRefResult getModRef(Operation *op, Value location);
 
+  void setToEntryState(dataflow::Lattice<AliasInfo> *lattice) override {
+    propagateIfChanged(
+        lattice, lattice->join(
+                     AliasInfo::getPessimisticValueState(lattice->getPoint())));
+  }
+
   /// Computes if the alloc set of the results are changed.
   void
   visitOperation(Operation *op,
