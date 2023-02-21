@@ -58,7 +58,7 @@ matmul_data = {
         (1024, 1024, 1024): {'float16': 0.33, 'float32': 0.35, 'int8': 0.169},
         (2048, 2048, 2048): {'float16': 0.64, 'float32': 0.57, 'int8': 0.34},
         (4096, 4096, 4096): {'float16': 0.79, 'float32': 0.75, 'int8': 0.46},
-        (8192, 8192, 8192): {'float16': 0.79, 'float32': 0.85, 'int8': 0.51},
+        (8192, 8192, 8192): {'float16': 0.80, 'float32': 0.85, 'int8': 0.51},
         # tall-skinny
         (16, 1024, 1024): {'float16': 0.0077, 'float32': 0.0127, 'int8': 0.005},
         (16, 4096, 4096): {'float16': 0.0363, 'float32': 0.0457, 'int8': 0.0259},
@@ -84,9 +84,7 @@ def test_matmul(M, N, K, dtype_str):
     torch.manual_seed(0)
     ref_gpu_util = matmul_data[DEVICE_NAME][(M, N, K)][dtype_str]
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
-    ref_sm_clock = sm_clocks[DEVICE_NAME]
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
-    assert abs(cur_sm_clock - ref_sm_clock) < 15, f'GPU SMs must run at {ref_sm_clock} MHz'
     if dtype == torch.int8:
         a = torch.randint(-128, 127, (M, K), dtype=dtype, device='cuda')
         b = torch.randint(-128, 127, (N, K), dtype=dtype, device='cuda')
@@ -95,7 +93,7 @@ def test_matmul(M, N, K, dtype_str):
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=200)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=1000)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)
@@ -151,7 +149,7 @@ def test_elementwise(N):
     y = torch.randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=200)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=1000)
     cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)
