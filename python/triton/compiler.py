@@ -1404,7 +1404,7 @@ def _build(name, src, srcdir):
     # path changes to include 'local'. This change is required to use triton with system-wide python.
     if scheme == 'posix_local':
         scheme = 'posix_prefix'
-    py_include_dir = sys_config.get_paths(scheme=scheme)["include"]
+    py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
     cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
     cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
