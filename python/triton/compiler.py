@@ -989,11 +989,9 @@ def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
     # This may only be the case after the `pipeline` pass has run already
     pm.add_tritongpu_prefetch_pass()
     pm.add_canonicalizer_pass()
-    pm.add_cse_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
+    pm.add_cse_pass()
     pm.add_licm_pass()
-    pm.add_tritongpu_remove_layout_conversions_pass()
-    pm.add_cse_pass()
     pm.add_tritongpu_decompose_conversions_pass()
     if compute_capability // 10 == 7:
         # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
