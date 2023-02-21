@@ -75,7 +75,7 @@ jobs:
           flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
       - name: Regression tests
-        if: contains(runner.labels, 'test')
+        if: ${{ contains(runner.labels, 'A100') }}
         run: |
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
