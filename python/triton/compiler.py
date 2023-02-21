@@ -976,9 +976,14 @@ def ast_to_ttir(fn, signature, specialization, constants):
     return optimize_triton_ir(mod)
 
 
-def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
+def ttir_to_ttgir(mod, num_warps):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
+    pm.run(mod)
+    return mod
+
+def optimize_ttgir(mod, num_stages, compute_capability):
+    pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_coalesce_pass()
     pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
@@ -1558,7 +1563,7 @@ def compile(fn, **kwargs):
         "ttir": (lambda path: parse_mlir_module(path, context),
                  lambda src: ast_to_ttir(src, signature, configs[0], constants)),
         "ttgir": (lambda path: parse_mlir_module(path, context),
-                  lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+                  lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
         "llir": (lambda path: Path(path).read_text(),
                  lambda src: ttgir_to_llir(src, extern_libs, capability)),
         "ptx": (lambda path: Path(path).read_text(),
