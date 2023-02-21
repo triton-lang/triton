@@ -11,6 +11,7 @@ T = TypeVar('T')
 
 TRITON_MAX_TENSOR_NUMEL = 131072
 
+
 def _to_tensor(x, builder):
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
