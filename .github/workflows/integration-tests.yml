@@ -6,6 +6,8 @@ on:
     branches:
       - main
       - triton-mlir
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.ref }}
@@ -21,7 +23,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A10"], ["self-hosted", "V100"], "macos-10.15"]'
+            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], "macos-10.15"]'
           else
             echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]'
           fi
