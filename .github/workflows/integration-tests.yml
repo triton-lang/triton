@@ -92,7 +92,7 @@ jobs:
         if: ${{matrix.runner[0] == 'self-hosted'}}
         run: |
           cd python/test/unit/
-          python3 -m pytest
+          pytest
 
 
       - name: Run CXX unittests
