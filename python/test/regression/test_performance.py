@@ -73,7 +73,7 @@ matmul_data = {
 @pytest.mark.parametrize('M, N, K, dtype_str',
                          [(M, N, K, dtype_str)
                           for M, N, K in matmul_data[DEVICE_NAME].keys()
-                          for dtype_str in ['float16']])
+                          for dtype_str in ['float16', 'float32', 'int8']])
 def test_matmul(M, N, K, dtype_str):
     if dtype_str in ['float32', 'int8'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test float32 & int8 on a100')
@@ -92,7 +92,7 @@ def test_matmul(M, N, K, dtype_str):
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=100)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=200)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)
@@ -151,7 +151,7 @@ def test_elementwise(N):
     y = torch.randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=250)
+    ms = triton.testing.do_bench(fn, percentiles=None, warmup=25, rep=200)
     cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     triton.testing.assert_almost_equal(cur_gpu_util, ref_gpu_util, decimal=2)
