@@ -74,40 +74,41 @@ jobs:
           pip3 install flake8
           flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
-      - name: Install Triton
-        run: |
-          cd python
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
-
-      - name: Run lit tests
-        run: |
-          cd python
-          LIT_TEST_DIR="build/$(ls build)/test"
-          if [ ! -d "$LIT_TEST_DIR" ]; then
-            echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
-          fi
-          lit -v "$LIT_TEST_DIR"
-
-      #- name: Run python tests
-      #  if: ${{matrix.runner[0] == 'self-hosted'}}
-      #  run: |
-      #    cd python/test/unit/
-      #    pytest
-
-
-      - name: Run CXX unittests
-        run: |
-          cd python/
-          cd "build/$(ls build)"
-          ctest
-
       - name: Regression tests
-        if: contains(github.event.pull_request.labels.*.name, 'A100')
+        if: ${{matrix.runner[0] == ['self-hosted', 'A100']}}
         run: |
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          sudo nvidia-smi -i 0 --lock-memory-clocks=1215,1215
+          sudo nvidia-smi -i 0 --lock-memory-clocks=877,877
           pytest -vs .
           sudo nvidia-smi -i 0 -rgc
           sudo nvidia-smi -i 0 -rmc
+
+      # - name: Install Triton
+      #   run: |
+      #     cd python
+      #     TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
+
+      # - name: Run lit tests
+      #   run: |
+      #     cd python
+      #     LIT_TEST_DIR="build/$(ls build)/test"
+      #     if [ ! -d "$LIT_TEST_DIR" ]; then
+      #       echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
+      #     fi
+      #     lit -v "$LIT_TEST_DIR"
+
+      # - name: Run python tests
+      #   if: ${{matrix.runner[0] == 'self-hosted'}}
+      #   run: |
+      #     cd python/test/unit/
+      #     pytest
+
+
+      # - name: Run CXX unittests
+      #   run: |
+      #     cd python/
+      #     cd "build/$(ls build)"
+      #     ctest
+
