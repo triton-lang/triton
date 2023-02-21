@@ -34,15 +34,15 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   // LLVM version in use may not officially support target hardware.
   // Supported versions for LLVM 14 are here:
   // https://github.com/llvm/llvm-project/blob/f28c006a5895fc0e329fe15fead81e37457cb1d1/clang/include/clang/Basic/BuiltinsNVPTX.def
-  int maxPTX = std::min(80, version);
-  int maxCC = std::min(90, cc);
+  int maxPTX = std::min(75, version);
+  int maxCC = std::min(86, cc);
   // options
   auto options = llvm::cl::getRegisteredOptions();
   auto *shortPtr =
       static_cast<llvm::cl::opt<bool> *>(options["nvptx-short-ptr"]);
   assert(shortPtr);
   shortPtr->setValue(true);
-  std::string sm = cc == 90 ? "sm_90a" : "sm_" + std::to_string(cc);
+  std::string sm = "sm_" + std::to_string(maxCC);
   // max PTX version
   int ptxMajor = maxPTX / 10;
   int ptxMinor = maxPTX % 10;

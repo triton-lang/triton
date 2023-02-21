@@ -866,11 +866,8 @@ int computeCapabilityToMMAVersion(int computeCapability) {
     return 1;
   } else if (computeCapability < 90) {
     return 2;
-  } else if (computeCapability < 100) {
-    // FIXME: temporarily add this to pass unis tests
-    return 2;
   } else {
-    assert(false && "computeCapability > 100 not supported");
+    assert(false && "computeCapability > 90 not supported");
     return 3;
   }
 }
