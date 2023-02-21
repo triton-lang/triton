@@ -1316,11 +1316,6 @@ def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
 
 
-def default_cuda_dir():
-    default_dir = "/usr/local/cuda"
-    return os.getenv("CUDA_HOME", default=default_dir)
-
-
 class CacheManager:
 
     def __init__(self, key):
@@ -1378,7 +1373,9 @@ def quiet():
 
 def _build(name, src, srcdir):
     cuda_lib_dirs = libcuda_dirs()
-    cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
+    base_dir = os.path.dirname(__file__)
+    cuda_path = os.path.join(base_dir, "third_party", "cuda")
+
     cu_include_dir = os.path.join(cuda_path, "include")
     triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
     cuda_header = os.path.join(cu_include_dir, "cuda.h")
