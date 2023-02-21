@@ -57,9 +57,9 @@ LogicalResult getOptimizedV100MMaLayout(triton::DotOp dotOp,
                                         MmaEncodingAttr &old,
                                         MmaEncodingAttr &ret) {
   auto *ctx = dotOp->getContext();
-  auto AT = dotOp.a().getType().cast<RankedTensorType>();
-  auto BT = dotOp.b().getType().cast<RankedTensorType>();
-  auto DT = dotOp.d().getType().cast<RankedTensorType>();
+  auto AT = dotOp.getA().getType().cast<RankedTensorType>();
+  auto BT = dotOp.getB().getType().cast<RankedTensorType>();
+  auto DT = dotOp.getD().getType().cast<RankedTensorType>();
   auto shapeA = AT.getShape();
   auto shapeB = BT.getShape();
   if (!DT.getEncoding())

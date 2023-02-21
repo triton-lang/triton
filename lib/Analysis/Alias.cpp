@@ -45,7 +45,7 @@ void SharedMemoryAliasAnalysis::visitOperation(
   }
 
   if (pessimistic) {
-    return markAllPessimisticFixpoint(results);
+    return setAllToEntryStates(results);
   }
   // Join all lattice elements
   for (auto *result : results)

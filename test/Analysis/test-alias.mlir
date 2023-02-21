@@ -84,7 +84,7 @@ func.func @insert_slice(%A : !tt.ptr<f16>, %i1 : i1) {
   %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : index
   %a = tt.load %a_ptr, %mask, %other {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #AL>
-  // CHECK: %3 -> %cst_0
+  // CHECK: %inserted_slice -> %cst_0
   %b = tensor.insert_slice %a into %tensor[%index, 0, 0][1, 16, 16][1, 1, 1]: tensor<16x16xf16, #AL> into tensor<1x16x16xf16, #A_SHARED>
   return
 }
@@ -94,7 +94,7 @@ func.func @extract_slice(%A : !tt.ptr<f16>) {
   // CHECK: %cst -> %cst
   %cst0 = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : index
-  // CHECK-NEXT: %0 -> %cst
+  // CHECK-NEXT: %extracted_slice -> %cst
   %cst1 = tensor.extract_slice %cst0[%index, 0, 0][1, 16, 16][1, 1, 1] : tensor<1x16x16xf16, #A_SHARED> to tensor<16x16xf16, #A_SHARED>
   return
 }
@@ -170,7 +170,7 @@ func.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
     scf.if %i1 {
       %index = arith.constant 8 : index
-      // CHECK-NEXT: %1 -> %cst,%cst_0
+      // CHECK-NEXT: %extracted_slice -> %cst,%cst_0
       %cst0 = tensor.extract_slice %a_shared[%index, 0][1, 32][1, 1] : tensor<128x32xf16, #A_SHARED> to tensor<32xf16, #A_SHARED>
       scf.yield
     }
@@ -179,8 +179,8 @@ func.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B
   return
 }
 
-// CHECK-LABEL: for_if_for
-func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
+// CHECK-LABEL: for_for_if
+func.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // CHECK: %cst -> %cst
   %a_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK-NEXT: %cst_0 -> %cst_0
@@ -211,5 +211,36 @@ func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>
     }
     scf.yield %a_shared, %b_shared, %c_shared_next : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
   }
+  return
+}
+
+// CHECK-LABEL: cf_for
+func.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %arg4: !tt.ptr<f16>) {
+  // CHECK: %cst -> %cst
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #A_SHARED>
+  // CHECK-NEXT: %cst_0 -> %cst_0
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #A_SHARED>
+  gpu.barrier
+  // CHECK-NEXT: %0 -> %0
+  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #A_SHARED>
+  // CHECK-NEXT: %cst_1 -> %cst_1
+  %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #A_SHARED>
+  // CHECK-NEXT: %2 -> %cst,%cst_0,%cst_1
+  // CHECK-NEXT: %3 -> %cst,%cst_0,%cst_1
+  // CHECK-NEXT: %4 -> %cst,%cst_0,%cst_1
+  cf.br ^bb1(%arg0, %cst, %cst_0, %cst_1 : index, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>)
+^bb1(%1: index, %2: tensor<128x32xf16, #A_SHARED>, %3: tensor<128x32xf16, #A_SHARED>, %4: tensor<128x32xf16, #A_SHARED>):  // 2 preds: ^bb0, ^bb2
+  %5 = arith.cmpi slt, %1, %arg1 : index
+  cf.cond_br %5, ^bb2, ^bb3
+^bb2:  // pred: ^bb1
+  %6 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #blocked>
+  gpu.barrier
+  %7 = tt.cat %2, %3 {axis = 0 : i64} : (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) -> tensor<256x32xf16, #blocked>
+  %8 = arith.addi %1, %arg2 : index
+  cf.br ^bb1(%8, %4, %2, %3 : index, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>)
+^bb3:  // pred: ^bb1
+  gpu.barrier
+  // CHECK-NEXT: %9 -> %9
+  %9 = tt.cat %0, %0 {axis = 0 : i64} : (tensor<256x32xf16, #A_SHARED>, tensor<256x32xf16, #A_SHARED>) -> tensor<512x32xf16, #A_SHARED>
   return
 }
