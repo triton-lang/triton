@@ -45,23 +45,26 @@ jobs:
         run: |
           rm -rf ~/.triton/cache/
 
+      - name: Update path
+        run: |
+          export PATH=$PATH:$HOME/.local/bin/
+
       - name: Check imports
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip3 install isort
-          python3 -m isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
+          isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
 
       - name: Check python style
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip3 install autopep8
-          python3 -m autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
+          autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
 
       - name: Check cpp style
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip3 install clang-format
-          export PATH=$PATH:`python3 -c "import clang_format;print(clang_format._get_executable(''))"`
           find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/triton/*" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file --dry-run -Werror -i ||
           (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/triton/*" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
 
@@ -69,18 +72,16 @@ jobs:
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip3 install flake8
-          python3 -m flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
+          flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
       - name: Install Triton
         run: |
-          export PATH=$PATH:`python3 -c "import cmake;print(cmake.CMAKE_BIN_DIR)"`
           cd python
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       - name: Run lit tests
         run: |
           cd python
-          export PATH=$PATH:~/.local/bin/
           LIT_TEST_DIR="build/$(ls build)/test"
           if [ ! -d "$LIT_TEST_DIR" ]; then
             echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
