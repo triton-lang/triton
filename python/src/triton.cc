@@ -1495,9 +1495,7 @@ void init_triton_translation(py::module &m) {
           std::string cmd;
           int err;
           cmd = ptxasPath + " -v --gpu-name=sm_" + std::to_string(capability) +
-                (capability == 90 ? "a " : " ") + _fsrc + " -o " + _fsrc +
-                ".o 2> " + _flog;
-
+                " " + _fsrc + " -o " + _fsrc + ".o 2> " + _flog;
           err = system(cmd.c_str());
           if (err != 0) {
             std::ifstream _log(_flog);
