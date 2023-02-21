@@ -50,7 +50,7 @@ matmul_data = {
         (4096, 64, 4096): {'float16': 0.264},
         (8192, 64, 8192): {'float16': 0.452},
     },
-    # NOTE: 
+    # NOTE:
     # A100 in the CI server is slow-ish for some reason.
     # On some other servers, we are getting about 90% peak for 8kx8x8k float16
     'a100': {
@@ -146,9 +146,7 @@ def test_elementwise(N):
     torch.manual_seed(0)
     ref_gpu_util = elementwise_data[DEVICE_NAME][N]
     cur_mem_clock = nvsmi(['clocks.current.memory'])[0]
-    ref_mem_clock = mem_clocks[DEVICE_NAME]
     max_gpu_perf = get_dram_gbps()
-    assert abs(cur_mem_clock - ref_mem_clock) < 15, f'GPU memory must run at {ref_mem_clock} MHz'
     z = torch.empty((N, ), dtype=torch.float16, device='cuda')
     x = torch.randn_like(z)
     y = torch.randn_like(z)

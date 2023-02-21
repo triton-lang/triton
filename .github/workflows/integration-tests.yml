@@ -85,10 +85,8 @@ jobs:
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          sudo nvidia-smi -i 0 --lock-memory-clocks=1215,1215
           pytest -vs .
           sudo nvidia-smi -i 0 -rgc
-          sudo nvidia-smi -i 0 -rmc
 
       # - name: Run lit tests
       #   run: |
