@@ -4,7 +4,7 @@
 // CHECK: offset = 49152, size = 49152
 // CHECK: size = 98304
 module {
-func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c64_13c64_14c64_15c8(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32) {
+func.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c64_13c64_14c64_15c8(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32) {
     %cst = arith.constant dense<true> : tensor<64x64xi1>
     %c64 = arith.constant 64 : index
     %c0 = arith.constant 0 : index
@@ -22,7 +22,7 @@ func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c6
     %7 = arith.muli %6, %c8_i32 : i32
     %8 = arith.subi %2, %7 : i32
     %9 = arith.cmpi slt, %8, %c8_i32 : i32
-    %10 = select %9, %8, %c8_i32 : i32
+    %10 = arith.select %9, %8, %c8_i32 : i32
     %11 = arith.remsi %0, %10 : i32
     %12 = arith.addi %7, %11 : i32
     %13 = arith.remsi %0, %5 : i32

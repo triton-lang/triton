@@ -20,8 +20,8 @@ bool isZero(mlir::Value val) {
     return true;
   // broadcast(constant_0)
   if (auto bc = val.getDefiningOp<mlir::triton::BroadcastOp>()) {
-    if (mlir::matchPattern(bc.src(), mlir::m_Zero()) ||
-        mlir::matchPattern(bc.src(), mlir::m_AnyZeroFloat()))
+    if (mlir::matchPattern(bc.getSrc(), mlir::m_Zero()) ||
+        mlir::matchPattern(bc.getSrc(), mlir::m_AnyZeroFloat()))
       return true;
   }
   return false;
@@ -48,6 +48,9 @@ DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
   return res;
 }
 
+// TODO(csigg): remove after next LLVM integrate.
+using FastMathFlags = arith::FastMathFlags;
+
 #include "TritonCombine.inc"
 
 } // anonymous namespace
@@ -57,25 +60,26 @@ DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
 class CombineSelectMaskedLoadPattern : public mlir::RewritePattern {
 public:
   CombineSelectMaskedLoadPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::SelectOp::getOperationName(), 3, context,
-                             {triton::LoadOp::getOperationName()}) {}
+      : mlir::RewritePattern(mlir::arith::SelectOp::getOperationName(), 3,
+                             context, {triton::LoadOp::getOperationName()}) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto selectOp = llvm::dyn_cast<mlir::SelectOp>(op);
+    auto selectOp = llvm::dyn_cast<mlir::arith::SelectOp>(op);
     if (!selectOp)
       return mlir::failure();
 
     mlir::Value trueValue = selectOp.getTrueValue();
     mlir::Value falseValue = selectOp.getFalseValue();
+    mlir::Value condSelect = selectOp.getCondition();
 
     auto *loadOpCandidate = trueValue.getDefiningOp();
     auto loadOp = llvm::dyn_cast_or_null<triton::LoadOp>(loadOpCandidate);
     if (!loadOp)
       return mlir::failure();
 
-    mlir::Value mask = loadOp.mask();
+    mlir::Value mask = loadOp.getMask();
     if (!mask)
       return mlir::failure();
 
@@ -85,9 +89,13 @@ public:
     if (!broadcastOp)
       return mlir::failure();
 
+    auto broadcastCond = broadcastOp.getSrc();
+    if (broadcastCond != condSelect)
+      return mlir::failure();
+
     rewriter.replaceOpWithNewOp<triton::LoadOp>(
-        op, loadOp.ptr(), loadOp.mask(), falseValue, loadOp.cache(),
-        loadOp.evict(), loadOp.isVolatile());
+        op, loadOp.getPtr(), loadOp.getMask(), falseValue, loadOp.getCache(),
+        loadOp.getEvict(), loadOp.getIsVolatile());
     return mlir::success();
   }
 };
@@ -102,7 +110,7 @@ struct CanonicalizeMaskedLoadPattern
   mlir::LogicalResult
   matchAndRewrite(triton::LoadOp loadOp,
                   mlir::PatternRewriter &rewriter) const override {
-    auto mask = loadOp.mask();
+    auto mask = loadOp.getMask();
     if (!mask)
       return mlir::failure();
 
@@ -118,14 +126,14 @@ struct CanonicalizeMaskedLoadPattern
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
       rewriter.replaceOpWithNewOp<triton::LoadOp>(
-          loadOp, loadOp.getType(), loadOp.ptr(), Value(), Value(),
-          loadOp.cache(), loadOp.evict(), loadOp.isVolatile());
+          loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
+          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
     } else {
       // mask = splat(0)
 
       // If there's no "other", the value is "undef".  Perhaps we want to
       // optimize it in the future.x
-      auto otherVal = loadOp.other();
+      auto otherVal = loadOp.getOther();
       if (!otherVal)
         return mlir::failure();
       rewriter.replaceOp(loadOp, otherVal);
@@ -149,7 +157,7 @@ struct CanonicalizeMaskedStorePattern
   mlir::LogicalResult
   matchAndRewrite(triton::StoreOp storeOp,
                   mlir::PatternRewriter &rewriter) const override {
-    auto mask = storeOp.mask();
+    auto mask = storeOp.getMask();
     if (!mask)
       return mlir::failure();
 
@@ -164,8 +172,9 @@ struct CanonicalizeMaskedStorePattern
 
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
-      rewriter.replaceOpWithNewOp<triton::StoreOp>(storeOp, storeOp.ptr(),
-                                                   storeOp.value());
+      rewriter.replaceOpWithNewOp<triton::StoreOp>(
+          storeOp, storeOp.getPtr(), storeOp.getValue(), storeOp.getCache(),
+          storeOp.getEvict());
     } else {
       // mask = splat(0)
       rewriter.eraseOp(storeOp);

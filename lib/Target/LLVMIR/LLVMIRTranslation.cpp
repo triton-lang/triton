@@ -14,11 +14,16 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
+#include <dlfcn.h>
 #include <filesystem>
+#include <iterator>
 
 namespace mlir {
 namespace triton {
@@ -26,7 +31,7 @@ namespace triton {
 // Describes NVVM Metadata. It is used to record the nvvm related meta
 // information from mlir module.
 struct NVVMMetadata {
-  int maxntidx{-1};
+  SmallVector<int, 3> maxntid;
   bool isKernel{};
   // Free to extend with other information.
 };
@@ -36,13 +41,26 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
-  if (metadata.maxntidx > 0) {
-    auto warps = llvm::ConstantInt::get(llvm::IntegerType::get(ctx, 32),
-                                        llvm::APInt(32, metadata.maxntidx));
+  if (!metadata.maxntid.empty()) {
+    auto maxntid =
+        llvm::to_vector(llvm::map_range(metadata.maxntid, [&](int value) {
+          return llvm::ConstantInt::get(llvm::IntegerType::get(ctx, 32),
+                                        llvm::APInt(32, value));
+        }));
 
-    llvm::Metadata *md_args[] = {llvm::ValueAsMetadata::get(func),
-                                 llvm::MDString::get(ctx, "maxntidx"),
-                                 llvm::ValueAsMetadata::get(warps)};
+    SmallVector<llvm::Metadata *> md_args = {llvm::ValueAsMetadata::get(func)};
+    if (maxntid.size() > 0) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidx"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[0]));
+    }
+    if (maxntid.size() > 1) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidy"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[1]));
+    }
+    if (maxntid.size() > 2) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidz"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[2]));
+    }
 
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
@@ -67,9 +85,10 @@ extractNVVMMetadata(mlir::ModuleOp module,
     bool hasMetadata{};
 
     // maxntid
-    if (op->hasAttr("nvvm.maxntid")) {
-      auto attr = op->getAttr("nvvm.maxntid");
-      meta.maxntidx = attr.dyn_cast<IntegerAttr>().getInt();
+    if (auto attr = op->getAttrOfType<ArrayAttr>("nvvm.maxntid")) {
+      llvm::transform(attr.getAsValueRange<IntegerAttr>(),
+                      std::back_inserter(meta.maxntid),
+                      [](llvm::APInt value) { return value.getZExtValue(); });
       hasMetadata = true;
     }
 
@@ -116,22 +135,44 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
   }
 
   if (!funcs.empty()) {
-    // When using the Math Dialect, it is possible that some ops (e.g., log) are
-    // lowered to a function call. In this case, we need to link libdevice
-    // using its default path:
-    // [triton root dir]/python/triton/language/libdevice.10.bc
-    // TODO(Keren): handle external linkage other than libdevice?
-    namespace fs = std::filesystem;
     static const std::string libdevice = "libdevice";
-    static const std::filesystem::path path = std::filesystem::path(__FILE__)
-                                                  .parent_path()
-                                                  .parent_path()
-                                                  .parent_path()
-                                                  .parent_path() /
-                                              "python" / "triton" /
-                                              "third_party" / "cuda" / "lib" /
-                                              "libdevice.10.bc";
-    externLibs.try_emplace(libdevice, path.string());
+    namespace fs = std::filesystem;
+    // Search for libdevice relative to its library path if used from Python
+    // Then native code is in `triton/_C/libtriton.so` and libdevice in
+    // `triton/third_party/cuda/lib/libdevice.10.bc`
+    static const auto this_library_path = [] {
+      Dl_info fileinfo;
+      if (dladdr(reinterpret_cast<void *>(&getExternLibs), &fileinfo) == 0) {
+        return std::filesystem::path();
+      }
+      return std::filesystem::path(fileinfo.dli_fname);
+    }();
+    static const auto runtime_path =
+        this_library_path.parent_path().parent_path() / "third_party" / "cuda" /
+        "lib" / "libdevice.10.bc";
+    if (fs::exists(runtime_path)) {
+      externLibs.try_emplace(libdevice, runtime_path.string());
+    } else {
+      // When using the Math Dialect, it is possible that some ops (e.g., log)
+      // are lowered to a function call. In this case, we need to link libdevice
+      // using its default path:
+      // [triton root dir]/python/triton/language/libdevice.10.bc
+      // TODO(Keren): handle external linkage other than libdevice?
+      static const auto this_file_path = std::filesystem::path(__FILE__);
+      static const auto compiletime_path = this_file_path.parent_path()
+                                               .parent_path()
+                                               .parent_path()
+                                               .parent_path() /
+                                           "python" / "triton" / "third_party" /
+                                           "cuda" / "lib" / "libdevice.10.bc";
+      if (!fs::exists(compiletime_path)) {
+        std::string error_msg = "Can't find libdevice at neither " +
+                                runtime_path.string() + " nor " +
+                                compiletime_path.string();
+        llvm::report_fatal_error(error_msg.c_str());
+      }
+      externLibs.try_emplace(libdevice, compiletime_path.string());
+    }
   }
 
   return externLibs;

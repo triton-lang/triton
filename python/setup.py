@@ -65,11 +65,11 @@ def get_llvm_package_info():
         linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
         system_suffix = f"linux-gnu-{linux_suffix}"
     else:
-        raise RuntimeError(f"unsupported system: {system}")
+        return Package("llvm", "LLVM-C.lib", "", "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    name = f'llvm+mlir-14.0.6-x86_64-{system_suffix}-{release_suffix}'
-    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-14.0.6-f28c006a5895/{name}.tar.xz"
+    name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
+    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-17.0.0-37b7a60cd74b/{name}.tar.xz"
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -159,7 +159,11 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
-        triton_cache_path = os.path.join(os.environ["HOME"], ".triton")
+        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
+            os.getenv("HOMEPATH") or None
+        if not user_home:
+            raise RuntimeError("Could not find user home directory")
+        triton_cache_path = os.path.join(user_home, ".triton")
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages(triton_cache_path)
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
@@ -200,12 +204,6 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
 
-package_data = {
-    "triton/ops": ["*.c"],
-    "triton/ops/blocksparse": ["*.c"],
-    "triton/language": ["*.bc"],
-}
-
 download_and_copy_ptxas()
 
 setup(
@@ -222,7 +220,7 @@ setup(
         "torch",
         "lit",
     ],
-    package_data={"triton": ["third_party/*"]},
+    package_data={"triton": ["third_party/**/*"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},

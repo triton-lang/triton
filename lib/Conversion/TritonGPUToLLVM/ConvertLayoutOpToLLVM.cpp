@@ -27,8 +27,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value src = op.src();
-    Value dst = op.result();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstTy = dst.getType().cast<RankedTensorType>();
     Attribute srcLayout = srcTy.getEncoding();
@@ -159,9 +159,6 @@ private:
                       Value smemBase) const {
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
     auto layout = type.getEncoding();
-    auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>();
-    auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>();
-    auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>();
     auto rank = type.getRank();
     auto sizePerThread = getSizePerThread(layout);
     auto accumSizePerThread = product<unsigned>(sizePerThread);
@@ -345,8 +342,8 @@ private:
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    Value src = op.src();
-    Value dst = op.result();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstTy = dst.getType().cast<RankedTensorType>();
     Attribute srcLayout = srcTy.getEncoding();
@@ -396,7 +393,7 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     // unsigned elems = getElemsPerThread(srcTy);
-    auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
+    auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
     unsigned inVec = 0;
     unsigned outVec = 0;
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
@@ -460,8 +457,8 @@ private:
   lowerDistributedToShared(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    Value src = op.src();
-    Value dst = op.result();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
     auto dstTy = dst.getType().cast<RankedTensorType>();
@@ -480,7 +477,7 @@ private:
     auto dstStrides =
         getStridesFromShapeAndOrder(dstShape, outOrd, loc, rewriter);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    storeDistributedToShared(src, adaptor.src(), dstStrides, srcIndices, dst,
+    storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices, dst,
                              smemBase, elemTy, loc, rewriter);
     auto smemObj =
         SharedMemoryObject(smemBase, dstShape, outOrd, loc, rewriter);
@@ -494,8 +491,8 @@ private:
   lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    Value src = op.src();
-    Value dst = op.result();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
     auto dstTensorTy = dst.getType().cast<RankedTensorType>();
     auto srcTensorTy = src.getType().cast<RankedTensorType>();
     auto dotOperandLayout =
@@ -523,10 +520,10 @@ private:
       DotOpFMAConversionHelper helper(blockedLayout);
       auto thread = getThreadId(rewriter, loc);
       if (dotOpLayout.getOpIdx() == 0) { // $a
-        res = helper.loadA(src, adaptor.src(), blockedLayout, thread, loc,
+        res = helper.loadA(src, adaptor.getSrc(), blockedLayout, thread, loc,
                            rewriter);
       } else { // $b
-        res = helper.loadB(src, adaptor.src(), blockedLayout, thread, loc,
+        res = helper.loadB(src, adaptor.getSrc(), blockedLayout, thread, loc,
                            rewriter);
       }
     } else {
@@ -542,15 +539,15 @@ private:
   lowerMmaToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto srcTy = op.src().getType().cast<RankedTensorType>();
-    auto dstTy = op.result().getType().cast<RankedTensorType>();
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+    auto dstTy = op.getResult().getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
     auto dstLayout = dstTy.getEncoding();
     auto srcMmaLayout = srcLayout.cast<MmaEncodingAttr>();
     auto dstDotLayout = dstLayout.cast<DotOperandEncodingAttr>();
     if (isMmaToDotShortcut(srcMmaLayout, dstDotLayout)) {
       // get source values
-      auto vals = getElementsFromStruct(loc, adaptor.src(), rewriter);
+      auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
       unsigned elems = getElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -599,12 +596,12 @@ private:
       ConversionPatternRewriter &rewriter, const MmaEncodingAttr &mmaLayout,
       const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
     auto loc = op.getLoc();
-    Value src = op.src();
-    Value dst = op.result();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
     bool isHMMA = supportMMA(dst, mmaLayout.getVersionMajor());
 
     auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.src(), rewriter);
+        getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
     Value res;
 
     if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2

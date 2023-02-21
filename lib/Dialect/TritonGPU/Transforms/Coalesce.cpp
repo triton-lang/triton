@@ -11,11 +11,6 @@ using namespace mlir::triton;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-int argMax(ArrayRef<int64_t> arr) {
-  auto it = std::max_element(arr.begin(), arr.end());
-  return std::distance(arr.begin(), it);
-}
-
 template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);
@@ -32,7 +27,9 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     auto origType = ptr.getType().cast<RankedTensorType>();
     // Get the shape of the tensor.
     size_t rank = origType.getRank();
-    AxisInfo info = axisInfo.lookupLatticeElement(ptr)->getValue();
+    dataflow::Lattice<AxisInfo> *latticeElement =
+        axisInfo.getLatticeElement(ptr);
+    AxisInfo info = latticeElement ? latticeElement->getValue() : AxisInfo();
     // Get the contiguity order of `ptr`
     auto order = argSort(info.getContiguity());
     // The desired divisibility is the maximum divisibility
@@ -41,11 +38,11 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     SetVector<Value> withSameOrder;
     withSameOrder.insert(ptr);
     if (ptr.getDefiningOp())
-      for (Operation *op : mlir::getSlice(ptr.getDefiningOp())) {
+      for (Operation *op : mlir::multiRootGetSlice(ptr.getDefiningOp())) {
         for (Value val : op->getResults()) {
           if (val.getType() != origType)
             continue;
-          auto valInfo = axisInfo.lookupLatticeElement(val);
+          auto valInfo = axisInfo.getLatticeElement(val);
           auto currOrder = argSort(valInfo->getValue().getContiguity());
           if (order == currOrder)
             withSameOrder.insert(val);
@@ -60,7 +57,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
     unsigned perThread = 1;
     for (Value val : withSameOrder) {
-      AxisInfo info = axisInfo.lookupLatticeElement(val)->getValue();
+      AxisInfo info = axisInfo.getLatticeElement(val)->getValue();
       unsigned maxMultipleBytes = info.getDivisibility(order[0]);
       unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
       unsigned maxContig = info.getContiguity(order[0]);
@@ -128,8 +125,10 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   void runOnOperation() override {
     Operation *op = getOperation();
     // Run axis info analysis
-    AxisInfoAnalysis axisInfo(&getContext());
-    axisInfo.run(op);
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    AxisInfoAnalysis *axisInfo = solver->load<AxisInfoAnalysis>();
+    if (failed(solver->initializeAndRun(op)))
+      return signalPassFailure();
 
     // For each i/o operation, we determine what layout
     // the pointers should have for best memory coalescing
@@ -137,24 +136,24 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     op->walk([&](Operation *curr) {
       Value ptr;
       if (auto op = dyn_cast<triton::LoadOp>(curr))
-        ptr = op.ptr();
+        ptr = op.getPtr();
       if (auto op = dyn_cast<triton::AtomicRMWOp>(curr))
-        ptr = op.ptr();
+        ptr = op.getPtr();
       if (auto op = dyn_cast<triton::AtomicCASOp>(curr))
-        ptr = op.ptr();
+        ptr = op.getPtr();
       if (auto op = dyn_cast<triton::gpu::InsertSliceAsyncOp>(curr))
-        ptr = op.src();
+        ptr = op.getSrc();
       if (auto op = dyn_cast<triton::StoreOp>(curr))
-        ptr = op.ptr();
+        ptr = op.getPtr();
       if (!ptr)
         return;
       RankedTensorType ty = ptr.getType().template dyn_cast<RankedTensorType>();
       if (!ty || !ty.getElementType().isa<PointerType>())
         return;
-      AxisInfo info = axisInfo.lookupLatticeElement(ptr)->getValue();
+      AxisInfo info = axisInfo->getLatticeElement(ptr)->getValue();
       auto mod = curr->getParentOfType<ModuleOp>();
       int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-      auto convertType = getTypeConverter(axisInfo, ptr, numWarps);
+      auto convertType = getTypeConverter(*axisInfo, ptr, numWarps);
       layoutMap[ptr] = convertType;
     });
 
@@ -168,24 +167,24 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     op->walk([&](Operation *curr) {
       OpBuilder builder(curr);
       if (auto load = dyn_cast<triton::LoadOp>(curr)) {
-        coalesceOp<triton::LoadOp>(layoutMap, curr, load.ptr(), builder);
+        coalesceOp<triton::LoadOp>(layoutMap, curr, load.getPtr(), builder);
         return;
       }
       if (auto op = dyn_cast<triton::AtomicRMWOp>(curr)) {
-        coalesceOp<triton::AtomicRMWOp>(layoutMap, curr, op.ptr(), builder);
+        coalesceOp<triton::AtomicRMWOp>(layoutMap, curr, op.getPtr(), builder);
         return;
       }
       if (auto op = dyn_cast<triton::AtomicCASOp>(curr)) {
-        coalesceOp<triton::AtomicCASOp>(layoutMap, curr, op.ptr(), builder);
+        coalesceOp<triton::AtomicCASOp>(layoutMap, curr, op.getPtr(), builder);
         return;
       }
       if (auto load = dyn_cast<triton::gpu::InsertSliceAsyncOp>(curr)) {
-        coalesceOp<triton::gpu::InsertSliceAsyncOp>(layoutMap, curr, load.src(),
-                                                    builder);
+        coalesceOp<triton::gpu::InsertSliceAsyncOp>(layoutMap, curr,
+                                                    load.getSrc(), builder);
         return;
       }
       if (auto store = dyn_cast<triton::StoreOp>(curr)) {
-        coalesceOp<triton::StoreOp>(layoutMap, curr, store.ptr(), builder);
+        coalesceOp<triton::StoreOp>(layoutMap, curr, store.getPtr(), builder);
         return;
       }
     });

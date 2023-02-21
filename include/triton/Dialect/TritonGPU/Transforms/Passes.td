@@ -14,7 +14,7 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithmeticDialect"];
+                           "mlir::arith::ArithDialect"];
 
   let options = [
     Option<"numStages", "num-stages",
@@ -34,7 +34,7 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithmeticDialect"];
+                           "mlir::arith::ArithDialect"];
 }
 
 def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {

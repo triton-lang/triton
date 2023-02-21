@@ -30,7 +30,7 @@ def TritonGPU_Dialect : Dialect {
     }
   }];
   
-
+  let useDefaultAttributePrinterParser = 1;
 }
 
 #endif
