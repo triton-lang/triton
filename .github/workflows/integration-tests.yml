@@ -74,8 +74,12 @@ jobs:
           pip3 install flake8
           flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
+      - name: Install Triton
+        run: |
+          cd python
+          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
+
       - name: Regression tests
-        if: ${{ contains(matrix.runner.labels, 'A100') }}
         run: |
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
@@ -84,11 +88,6 @@ jobs:
           pytest -vs .
           sudo nvidia-smi -i 0 -rgc
           sudo nvidia-smi -i 0 -rmc
-
-      # - name: Install Triton
-      #   run: |
-      #     cd python
-      #     TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       # - name: Run lit tests
       #   run: |
