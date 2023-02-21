@@ -49,13 +49,13 @@ jobs:
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip install isort
-          isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
+          python3 -m isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
 
       - name: Check python style
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip install autopep8
-          autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
+          python3 -m autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
 
       - name: Check cpp style
         if: ${{ matrix.runner != 'macos-10.15' }}
@@ -68,7 +68,7 @@ jobs:
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
           pip install flake8
-          flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
+          python3 -m flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
       - name: Install Triton
         run: |
