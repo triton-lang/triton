@@ -48,31 +48,32 @@ jobs:
       - name: Check imports
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
-          pip install isort
+          pip3 install isort
           python3 -m isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
 
       - name: Check python style
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
-          pip install autopep8
+          pip3 install autopep8
           python3 -m autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
 
       - name: Check cpp style
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
-          pip install clang-format
-          export CLANG_FORMAT=`python3 -c "import clang_format;print(clang_format._get_executable('clang-format'))"`
+          pip3 install clang-format
+          alias clang-format=`python3 -c "import clang_format;print(clang_format._get_executable('clang-format'))"`
           find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/triton/*" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 $CLANG_FORMAT -style=file --dry-run -Werror -i ||
           (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/triton/*" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
 
       - name: Flake8
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
-          pip install flake8
+          pip3 install flake8
           python3 -m flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
       - name: Install Triton
         run: |
+          alias cmake=`python3 -c "import cmake;print(f'{cmake.CMAKE_BIN_DIR}/cmake')"`
           cd python
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
