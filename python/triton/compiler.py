@@ -1316,7 +1316,6 @@ def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
 
 
-
 class CacheManager:
 
     def __init__(self, key):
