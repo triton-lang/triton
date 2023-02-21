@@ -80,6 +80,7 @@ jobs:
       - name: Run lit tests
         run: |
           cd python
+          export PATH=$PATH:~/.local/bin/
           LIT_TEST_DIR="build/$(ls build)/test"
           if [ ! -d "$LIT_TEST_DIR" ]; then
             echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
