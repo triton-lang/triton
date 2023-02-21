@@ -47,7 +47,7 @@ jobs:
 
       - name: Update path
         run: |
-          export PATH=$PATH:$HOME/.local/bin/
+          echo "$HOME/.local/bin/" >> $GITHUB_PATH
 
       - name: Check imports
         if: ${{ matrix.runner != 'macos-10.15' }}
