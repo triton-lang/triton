@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.6)
 
-cmake_policy(SET CMP0116 OLD)
+if(POLICY CMP0116)
+  cmake_policy(SET CMP0116 OLD)
+endif()
 
 include(ExternalProject)
 
