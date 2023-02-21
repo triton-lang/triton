@@ -1,4 +1,4 @@
-// RUN: (triton-opt %s -split-input-file --convert-triton-gpu-to-llvm --pass-pipeline-crash-reproducer=%t 2>/dev/null; true) | FileCheck --check-prefixes=CHECK,GCN %s
+// RUN: (triton-opt %s -split-input-file --convert-triton-gpu-to-llvm --mlir-pass-pipeline-crash-reproducer=%t 2>/dev/null; true) | FileCheck --check-prefixes=CHECK,GCN %s
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<f16, 1>)
@@ -16,9 +16,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_load
   func.func @basic_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
-    // CHECK-NOT: llvm.inline_asm
-    // GCN: llvm.inline_asm
-    // GCN: llvm.inline_asm
+    // PTX: llvm.inline_asm
+    // PTX: llvm.inline_asm
+
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     return
   }
@@ -1163,7 +1166,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32
   func.func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.atomicrmw fadd {{.*}}  monotonic  : f32
+    // GCN: llvm.atomicrmw fadd {{.*}}  monotonic  : !llvm.ptr<f32, 1>, f32
     // PTX: llvm.inline_asm
     // PTX-SAME: atom.global.gpu.add.f32
     %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
