@@ -991,6 +991,7 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm.add_tritongpu_fuse_transpositions_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_tritongpu_prefetch_pass()
+    pm.add_tritongpu_fuse_transpositions_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
     if compute_capability // 10 == 7:

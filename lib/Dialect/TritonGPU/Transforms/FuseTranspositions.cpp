@@ -5,6 +5,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "Utility.h"
 #include <memory>
 
 using namespace mlir;
@@ -141,6 +142,8 @@ public:
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<ConvertTransConvert>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+      signalPassFailure();
+    if (fixupLoops(m).failed())
       signalPassFailure();
   }
 };
