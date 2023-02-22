@@ -1,0 +1,40 @@
+name: Torchinductor
+
+on:
+  workflow_dispatch:
+  #schedule:    
+  #  - cron: "0 0 * * *"
+
+jobs:
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"]]'
+
+  Installation:
+    needs: Runner-Preparation
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Installation
+        id: install
+        run: |
+          ./github/workflows/scripts/install_torchinductor.sh
+
+  Integration-Tests:
+    needs: Installation
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
+    steps:
+      - name: Accuracy
+        run: |
+          ./github/workflows/scripts/run_torchinductor_acc.sh
+      - name: Performance
+        run: |
+          ./github/workflows/scripts/run_torchinductor_perf.sh
