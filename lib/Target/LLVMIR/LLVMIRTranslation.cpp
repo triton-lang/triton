@@ -136,6 +136,12 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
 
   if (!funcs.empty()) {
     static const std::string libdevice = "libdevice";
+    // first search for environmental path
+    std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
+    if (!env_path.empty()) {
+      externLibs.try_emplace(libdevice, env_path);
+      return externLibs;
+    }
     namespace fs = std::filesystem;
     // Search for libdevice relative to its library path if used from Python
     // Then native code is in `triton/_C/libtriton.so` and libdevice in

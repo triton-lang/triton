@@ -16,7 +16,6 @@ import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-from sysconfig import get_paths
 from typing import Any, Callable, Dict, Tuple, Union
 
 import setuptools
@@ -976,32 +975,32 @@ def ast_to_ttir(fn, signature, specialization, constants):
     return optimize_triton_ir(mod)
 
 
-def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
+def ttir_to_ttgir(mod, num_warps):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
+    pm.run(mod)
+    return mod
+
+
+def optimize_ttgir(mod, num_stages, compute_capability):
+    pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_coalesce_pass()
-    # The combine pass converts blocked layout to mma layout
-    # for dot ops so that pipeline can get shared memory swizzled correctly.
-    pm.add_tritongpu_combine_pass(compute_capability)
+    pm.add_tritongpu_coalesce_pass()
+    pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
+    pm.add_tritongpu_remove_layout_conversions_pass()
+    pm.add_tritongpu_fuse_transpositions_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
-    # Prefetch must be done after pipeline pass because pipeline pass
-    # extracts slices from the original tensor.
     pm.add_tritongpu_prefetch_pass()
-    pm.add_canonicalizer_pass()
-    pm.add_cse_pass()
-    pm.add_tritongpu_combine_pass(compute_capability)
-    pm.add_licm_pass()
-    pm.add_tritongpu_combine_pass(compute_capability)
-    pm.add_cse_pass()
+    pm.add_tritongpu_fuse_transpositions_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
     if compute_capability // 10 == 7:
         # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
         # NOTE this pass should be placed after all the passes those modifies mma layout
         pm.add_tritongpu_update_mma_for_volta_pass()
+    pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
-    pm.add_tritongpu_reorder_instructions_pass()
     pm.run(mod)
     return mod
 
@@ -1316,11 +1315,6 @@ def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
 
 
-def default_cuda_dir():
-    default_dir = "/usr/local/cuda"
-    return os.getenv("CUDA_HOME", default=default_dir)
-
-
 class CacheManager:
 
     def __init__(self, key):
@@ -1378,7 +1372,9 @@ def quiet():
 
 def _build(name, src, srcdir):
     cuda_lib_dirs = libcuda_dirs()
-    cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
+    base_dir = os.path.dirname(__file__)
+    cuda_path = os.path.join(base_dir, "third_party", "cuda")
+
     cu_include_dir = os.path.join(cuda_path, "include")
     triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
     cuda_header = os.path.join(cu_include_dir, "cuda.h")
@@ -1396,7 +1392,16 @@ def _build(name, src, srcdir):
         cc = gcc if gcc is not None else clang
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
-    py_include_dir = get_paths()["include"]
+    # This function was renamed and made public in Python 3.10
+    if hasattr(sysconfig, 'get_default_scheme'):
+        scheme = sysconfig.get_default_scheme()
+    else:
+        scheme = sysconfig._get_default_scheme()
+    # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
+    # path changes to include 'local'. This change is required to use triton with system-wide python.
+    if scheme == 'posix_local':
+        scheme = 'posix_prefix'
+    py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
     cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
     cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
@@ -1560,7 +1565,7 @@ def compile(fn, **kwargs):
         "ttir": (lambda path: parse_mlir_module(path, context),
                  lambda src: ast_to_ttir(src, signature, configs[0], constants)),
         "ttgir": (lambda path: parse_mlir_module(path, context),
-                  lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+                  lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
         "llir": (lambda path: Path(path).read_text(),
                  lambda src: ttgir_to_llir(src, extern_libs, capability)),
         "ptx": (lambda path: Path(path).read_text(),
