@@ -27,18 +27,6 @@ struct TestMembarPass
     auto opName = SymbolTable::getSymbolName(operation).getValue().str();
     os << opName << "\n";
 
-    // Lower the module to the cf dialect
-    auto *context = operation->getContext();
-    RewritePatternSet scfPatterns(context);
-    mlir::populateSCFToControlFlowConversionPatterns(scfPatterns);
-    mlir::ConversionTarget scfTarget(*context);
-    scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp, scf::WhileOp,
-                           scf::ExecuteRegionOp>();
-    scfTarget.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    if (failed(applyPartialConversion(operation, scfTarget,
-                                      std::move(scfPatterns))))
-      return signalPassFailure();
-
     // Print all ops after membar pass
     Allocation allocation(operation);
     MembarAnalysis membarPass(&allocation);
