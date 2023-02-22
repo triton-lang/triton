@@ -1210,7 +1210,7 @@ def generate_launcher(constants, signature):
       }}
     }}
     #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
-    void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
+    static void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
       void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
       if(gridX*gridY*gridZ > 0){{
           HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
@@ -1341,7 +1341,7 @@ def generate_launcher(constants, signature):
        }}
     }}
     #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
-    void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
+    static void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
       void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
       if(gridX*gridY*gridZ > 0){{
         CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
