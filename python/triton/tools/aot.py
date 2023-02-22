@@ -42,7 +42,8 @@ if __name__ == '__main__':
         raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
 
     # triton-ir -> triton-gpu-ir
-    module = triton.compiler.ttir_to_ttgir(module, num_warps=4, num_stages=3, compute_capability=args.sm)
+    module = triton.compiler.ttir_to_ttgir(module, num_warps=4)
+    module = triton.compiler.optimize_ttgir(module, num_stages=3, compute_capability=args.sm)
     if args.target == 'triton-gpu-ir':
         print(module.str())
         sys.exit(0)
