@@ -158,12 +158,15 @@ def test_elementwise(N):
 # Flash-Attention
 #######################
 
+
 flash_attention_data = {
     "a100": {
         (4, 48, 4096, 64, 'forward', 'float16'): 0.37,
         (4, 48, 4096, 64, 'backward', 'float16'): 0.25,
     }
 }
+
+
 @pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [[4, 48, 4096, 64]])
 @pytest.mark.parametrize("mode", ['forward', 'backward'])
 @pytest.mark.parametrize("dtype_str", ['float16'])
@@ -187,11 +190,11 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, mode, dtype_str):
         fn = lambda: o.backward(do, retain_graph=True)
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=300)
     # compute flops
-    flops_per_matmul = 2.*Z*H*N_CTX*N_CTX*D_HEAD*0.5
-    total_flops = 2*flops_per_matmul
+    flops_per_matmul = 2. * Z * H * N_CTX * N_CTX * D_HEAD * 0.5
+    total_flops = 2 * flops_per_matmul
     if is_backward:
-        total_flops *= 2.5 # 2.0(bwd) + 0.5(recompute)
-    cur_gpu_perf = total_flops/ms * 1e-9
+        total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
+    cur_gpu_perf = total_flops / ms * 1e-9
     # maximum flops
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
