@@ -115,15 +115,14 @@ public:
     // Step 1: Decompose unoptimized layout conversions to use shared memory
     // Step 2: Decompose insert_slice_async to use load + insert_slice for
     //   pre-Ampere architectures or unsupported vectorized load sizes
-    // Step 3: Convert SCF to CFG
-    // Step 4: Allocate shared memories and insert barriers
-    // Step 5: Convert FuncOp to LLVMFuncOp via partial conversion
-    // Step 6: Get axis and shared memory info
-    // Step 7: Convert the rest of ops via partial conversion
+    // Step 3: Allocate shared memories and insert barriers
+    // Step 4: Convert FuncOp to LLVMFuncOp via partial conversion
+    // Step 5: Get axis and shared memory info
+    // Step 6: Convert the rest of ops via partial conversion
     //
-    // The reason for a separation between 5/7 is that, step 6 is out of the
+    // The reason for a separation between 4/6 is that, step 5 is out of the
     // scope of Dialect Conversion, thus we need to make sure the smem is not
-    // revised during the conversion of step 7.
+    // revised during the conversion of step 6.
 
     // Step 1
     decomposeMmaToDotOperand(mod, numWarps);
@@ -134,28 +133,18 @@ public:
       return signalPassFailure();
 
     // Step 3
-    RewritePatternSet scfPatterns(context);
-    mlir::populateSCFToControlFlowConversionPatterns(scfPatterns);
-    mlir::ConversionTarget scfTarget(*context);
-    scfTarget.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp, scf::WhileOp,
-                           scf::ExecuteRegionOp>();
-    scfTarget.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    if (failed(applyPartialConversion(mod, scfTarget, std::move(scfPatterns))))
-      return signalPassFailure();
-
-    // Step 4
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
 
-    // Step 5
+    // Step 4
     RewritePatternSet funcPatterns(context);
     funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
     if (failed(
             applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
       return signalPassFailure();
 
-    // Step 6 - get axis and shared memory info
+    // Step 5 - get axis and shared memory info
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
     if (failed(solver->initializeAndRun(mod)))
@@ -165,7 +154,7 @@ public:
                  mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
                                         allocation.getSharedMemorySize()));
 
-    // Step 7 - rewrite rest of ops
+    // Step 6 - rewrite rest of ops
     // We set a higher benefit here to ensure triton's patterns runs before
     // arith patterns for some encoding not supported by the community
     // patterns.
