@@ -210,7 +210,7 @@ class _attention(torch.autograd.Function):
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
 
-        h = _fwd_kernel[grid](
+        _fwd_kernel[grid](
             q, k, v, sm_scale,
             L, m,
             o,
@@ -246,7 +246,7 @@ class _attention(torch.autograd.Function):
             do_scaled, delta,
             BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
-        h = _bwd_kernel[(ctx.grid[1],)](
+        _bwd_kernel[(ctx.grid[1],)](
             q, k, v, ctx.sm_scale,
             o, do_scaled,
             dq, dk, dv,
