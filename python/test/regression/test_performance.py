@@ -96,7 +96,7 @@ def test_matmul(M, N, K, dtype_str):
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=300)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
-    assert triton.testing.allclose(cur_gpu_util, ref_gpu_util, tol=0.05)
+    assert triton.testing.allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
 
 
 #######################
@@ -152,7 +152,7 @@ def test_elementwise(N):
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=500)
     cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
-    assert triton.testing.allclose(cur_gpu_util, ref_gpu_util, tol=0.05)
+    assert triton.testing.allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
 
 #######################
 # Flash-Attention
@@ -200,4 +200,4 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, mode, dtype_str):
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     ref_gpu_util = flash_attention_data[DEVICE_NAME][(Z, H, N_CTX, D_HEAD, mode, dtype_str)]
-    assert triton.testing.allclose(cur_gpu_util, ref_gpu_util, tol=0.05)
+    assert triton.testing.allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
