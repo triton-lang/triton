@@ -1298,24 +1298,36 @@ def zeros(shape, dtype):
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
 
+# -----------------------
+# Debugging functions
+# -----------------------
+
+
+@builtin
+def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False):
+    print(*values, sep=sep, end=end, file=file, flush=flush)
+
+
+@builtin
+def static_assert(cond, msg=""):
+    assert cond, msg
+
 
 @builtin
 def device_print(prefix, *args, _builder=None):
     import string
-    new_prefix = prefix
-    if isinstance(prefix, constexpr):
-        new_prefix = prefix.value
-    assert isinstance(new_prefix, str), f"{new_prefix} is not string"
+    prefix = _constexpr_to_value(prefix)
+    assert isinstance(prefix, str), f"{prefix} is not string"
     b_ascii = True
-    for ch in new_prefix:
+    for ch in prefix:
         if ch not in string.printable:
             b_ascii = False
             break
-    assert b_ascii, f"{new_prefix} is not an ascii string"
+    assert b_ascii, f"{prefix} is not an ascii string"
     new_args = []
     for arg in args:
         new_args.append(_to_tensor(arg, _builder))
-    return semantic.device_print(new_prefix, new_args, _builder)
+    return semantic.device_print(prefix, new_args, _builder)
 
 
 @builtin

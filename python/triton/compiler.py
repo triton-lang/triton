@@ -758,6 +758,10 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_keyword(self, node):
         return {node.arg: self.visit(node.value)}
 
+    def visit_Assert(self, node) -> Any:
+        # Convert assert to triton's device_assert which happens on the device
+        return triton.language.core.device_assert(node.test, node.msg, _builder=self.builder)
+
     def visit_Call(self, node):
         fn = self.visit(node.func)
         if isinstance(fn, triton.language.constexpr):
@@ -809,6 +813,9 @@ class CodeGenerator(ast.NodeVisitor):
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
                     for arg in args]
+        if fn.__name__ == 'print':
+            prefix = args[0]
+            return triton.language.core.device_print(prefix, *args[1:], _builder=self.builder)
         return fn(*args, **kws)
 
     def visit_Constant(self, node):
