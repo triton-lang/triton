@@ -49,8 +49,8 @@ struct FpToFpOpConversion
         struct_ty(SmallVector<Type>{fp16x2VecTy, fp16x2VecTy});
     auto fp16x2x2Struct =
         builder.launch(rewriter, loc, fp16x2x2StructTy, false);
-    auto fp16x2Vec0 = extract_val(fp16x2VecTy, fp16x2x2Struct, i32_arr_attr(0));
-    auto fp16x2Vec1 = extract_val(fp16x2VecTy, fp16x2x2Struct, i32_arr_attr(1));
+    auto fp16x2Vec0 = extract_val(fp16x2VecTy, fp16x2x2Struct, 0);
+    auto fp16x2Vec1 = extract_val(fp16x2VecTy, fp16x2x2Struct, 1);
     return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
             extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
             extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
@@ -61,7 +61,6 @@ struct FpToFpOpConversion
   convertFp16x4ToFp8x4(Location loc, ConversionPatternRewriter &rewriter,
                        const Value &v0, const Value &v1, const Value &v2,
                        const Value &v3) {
-    auto ctx = rewriter.getContext();
     auto fp16x2VecTy = vec_ty(f16_ty, 2);
     Value fp16x2Vec0 = undef(fp16x2VecTy);
     Value fp16x2Vec1 = undef(fp16x2VecTy);
@@ -141,8 +140,8 @@ struct FpToFpOpConversion
         struct_ty(SmallVector<Type>{bf16x2VecTy, bf16x2VecTy});
     auto bf16x2x2Struct =
         builder.launch(rewriter, loc, bf16x2x2StructTy, false);
-    auto bf16x2Vec0 = extract_val(bf16x2VecTy, bf16x2x2Struct, i32_arr_attr(0));
-    auto bf16x2Vec1 = extract_val(bf16x2VecTy, bf16x2x2Struct, i32_arr_attr(1));
+    auto bf16x2Vec0 = extract_val(bf16x2VecTy, bf16x2x2Struct, 0);
+    auto bf16x2Vec1 = extract_val(bf16x2VecTy, bf16x2x2Struct, 1);
     return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
             extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
             extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
@@ -153,7 +152,6 @@ struct FpToFpOpConversion
   convertBf16x4ToFp8x4(Location loc, ConversionPatternRewriter &rewriter,
                        const Value &v0, const Value &v1, const Value &v2,
                        const Value &v3) {
-    auto ctx = rewriter.getContext();
     auto bf16x2VecTy = vec_ty(i16_ty, 2);
     Value bf16x2Vec0 = undef(bf16x2VecTy);
     Value bf16x2Vec1 = undef(bf16x2VecTy);
@@ -287,8 +285,9 @@ struct FpToFpOpConversion
   LogicalResult
   matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcTensorType = op.from().getType().cast<mlir::RankedTensorType>();
-    auto dstTensorType = op.result().getType().cast<mlir::RankedTensorType>();
+    auto srcTensorType = op.getFrom().getType().cast<mlir::RankedTensorType>();
+    auto dstTensorType =
+        op.getResult().getType().cast<mlir::RankedTensorType>();
     auto srcEltType = srcTensorType.getElementType();
     auto dstEltType = dstTensorType.getElementType();
     auto loc = op->getLoc();
@@ -325,16 +324,18 @@ struct FpToFpOpConversion
       // Vectorized casting
       assert(elems % 4 == 0 &&
              "FP8 casting only support tensors with 4-aligned sizes");
-      auto elements = getElementsFromStruct(loc, adaptor.from(), rewriter);
+      auto elements = getElementsFromStruct(loc, adaptor.getFrom(), rewriter);
       for (size_t i = 0; i < elems; i += 4) {
         auto converted = convertor(loc, rewriter, elements[i], elements[i + 1],
                                    elements[i + 2], elements[i + 3]);
         resultVals.append(converted);
       }
     } else if (srcEltType.isBF16() && dstEltType.isF32()) {
-      resultVals.emplace_back(convertBf16ToFp32(loc, rewriter, adaptor.from()));
+      resultVals.emplace_back(
+          convertBf16ToFp32(loc, rewriter, adaptor.getFrom()));
     } else if (srcEltType.isF32() && dstEltType.isBF16()) {
-      resultVals.emplace_back(convertFp32ToBf16(loc, rewriter, adaptor.from()));
+      resultVals.emplace_back(
+          convertFp32ToBf16(loc, rewriter, adaptor.getFrom()));
     } else {
       assert(false && "unsupported type casting");
     }
@@ -438,7 +439,7 @@ struct CmpIOpConversion
                             ConversionPatternRewriter &rewriter, Type elemTy,
                             ValueRange operands, Location loc) const {
     return rewriter.create<LLVM::ICmpOp>(
-        loc, elemTy, ArithCmpIPredicateToLLVM(op.predicate()), operands[0],
+        loc, elemTy, ArithCmpIPredicateToLLVM(op.getPredicate()), operands[0],
         operands[1]);
   }
 
@@ -480,7 +481,7 @@ struct CmpFOpConversion
                                    Type elemTy, ValueRange operands,
                                    Location loc) {
     return rewriter.create<LLVM::FCmpOp>(
-        loc, elemTy, ArithCmpFPredicateToLLVM(op.predicate()), operands[0],
+        loc, elemTy, ArithCmpFPredicateToLLVM(op.getPredicate()), operands[0],
         operands[1]);
   }
 
@@ -525,14 +526,14 @@ struct ExtElemwiseOpConversion
   Value createDestOp(triton::ExtElemwiseOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
-    StringRef funcName = op.symbol();
+    StringRef funcName = op.getSymbol();
     if (funcName.empty())
       llvm::errs() << "ExtElemwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetFuncOp(rewriter, op, funcName, funcType);
-    return call(funcOp, operands).getResult(0);
+    return rewriter.create<LLVM::CallOp>(loc, funcOp, operands).getResult();
   }
 
 private:
@@ -554,9 +555,9 @@ private:
     mlir::OpBuilder b(op->getParentOfType<LLVMFuncOp>());
     auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
     ret.getOperation()->setAttr(
-        "libname", StringAttr::get(op->getContext(), op.libname()));
+        "libname", StringAttr::get(op->getContext(), op.getLibname()));
     ret.getOperation()->setAttr(
-        "libpath", StringAttr::get(op->getContext(), op.libpath()));
+        "libpath", StringAttr::get(op->getContext(), op.getLibpath()));
     return ret;
   }
 };

@@ -9,6 +9,8 @@ from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
+TRITON_MAX_TENSOR_NUMEL = 131072
+
 
 def _to_tensor(x, builder):
     if isinstance(x, bool):
@@ -254,6 +256,8 @@ class block_type(dtype):
         self.numel = 1
         for s in self.shape:
             self.numel *= s
+        if self.numel > TRITON_MAX_TENSOR_NUMEL:
+            raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
 
         self.name = self.__str__()
 
@@ -549,7 +553,10 @@ class tensor:
     @builtin
     def __rshift__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
-        return semantic.lshr(self, other, _builder)
+        if self.dtype.is_int_signed():
+            return semantic.ashr(self, other, _builder)
+        else:
+            return semantic.lshr(self, other, _builder)
 
     # comparison operators
 
@@ -699,12 +706,13 @@ def num_programs(axis, _builder=None):
 @builtin
 def arange(start, end, _builder=None):
     """
-    Returns contiguous values within the open interval [:code:`start`, :code:`end`).
+    Returns contiguous values within the left-closed and right-open interval [:code:`start`, :code:`end`). \
+    End - Start must be less than or equal to TRITON_MAX_TENSOR_NUMEL = 131072
 
     :param start: Start of the interval. Must be a power of two.
-    :type start: int
-    :param stop: End of the interval. Must be a power of two >= start.
-    :type stop: int
+    :type start: int32
+    :param end: End of the interval. Must be a power of two > start.
+    :type end: int32
     """
     start = _constexpr_to_value(start)
     end = _constexpr_to_value(end)
@@ -810,9 +818,8 @@ def view(input, shape, _builder=None):
 
 @builtin
 def reshape(input, shape, _builder=None):
-    # TODO: should be more than just a view
     shape = _shape_check_impl(shape)
-    return semantic.view(input, shape, _builder)
+    return semantic.reshape(input, shape, _builder)
 
 # -----------------------
 # Linear Algebra
@@ -870,7 +877,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
 
 
 @builtin
-def store(pointer, value, mask=None, _builder=None):
+def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -887,7 +894,9 @@ def store(pointer, value, mask=None, _builder=None):
     value = _to_tensor(value, _builder)
     if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
-    return semantic.store(pointer, value, mask, _builder)
+    cache_modifier = _constexpr_to_value(cache_modifier)
+    eviction_policy = _constexpr_to_value(eviction_policy)
+    return semantic.store(pointer, value, mask, cache_modifier, eviction_policy, _builder)
 
 
 # -----------------------

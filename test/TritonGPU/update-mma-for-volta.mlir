@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-combine -tritongpu-update-mma-for-volta 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-fuse-transposition -tritongpu-update-mma-for-volta 2>&1 | FileCheck %s
 
 // -----
 
@@ -12,16 +12,16 @@
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0, isMMAv1Row=false}>
 // It creates a new MMA layout to fit with $a and $b's dot_operand, and get the right warpsPerCTA
 // The ID of this MMA instance should be 0.
-// CHECK: [[new_mma:#mma.*]] = #triton_gpu.mma<{versionMajor = 1, versionMinor = 3, warpsPerCTA = [4, 2]}>
+// CHECK: [[$new_mma:#mma.*]] = #triton_gpu.mma<{versionMajor = 1, versionMinor = 3, warpsPerCTA = [4, 2]}>
 module attributes {"triton_gpu.num-warps" = 16 : i32} {
   // CHECK-LABEL: dot_mmav1
-  func @dot_mmav1(%A: tensor<64x64xf16, #blocked0>, %B: tensor<64x64xf16, #blocked0>) -> tensor<64x64xf32, #blocked0> {
+  func.func @dot_mmav1(%A: tensor<64x64xf16, #blocked0>, %B: tensor<64x64xf16, #blocked0>) -> tensor<64x64xf32, #blocked0> {
     %C = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked0>
     %AA = triton_gpu.convert_layout %A : (tensor<64x64xf16, #blocked0>) -> tensor<64x64xf16, #dot_operand_a>
     %BB = triton_gpu.convert_layout %B : (tensor<64x64xf16, #blocked0>) -> tensor<64x64xf16, #dot_operand_b>
     %CC = triton_gpu.convert_layout %C : (tensor<64x64xf32, #blocked0>) -> tensor<64x64xf32, #mma0>
 
-    // CHECK: {{.*}} = tt.dot {{.*}}, {{.*}}, %cst {allowTF32 = true} : tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = [[new_mma]], isMMAv1Row = true}>> * tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = [[new_mma]], isMMAv1Row = true}>> -> tensor<64x64xf32, [[new_mma]]>
+    // CHECK: {{.*}} = tt.dot {{.*}}, {{.*}}, %cst {allowTF32 = true} : tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = [[$new_mma]], isMMAv1Row = true}>> * tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = [[$new_mma]], isMMAv1Row = true}>> -> tensor<64x64xf32, [[$new_mma]]>
     %D = tt.dot %AA, %BB, %CC {allowTF32 = true} : tensor<64x64xf16, #dot_operand_a> * tensor<64x64xf16, #dot_operand_b> -> tensor<64x64xf32, #mma0>
     %res = triton_gpu.convert_layout %D : (tensor<64x64xf32, #mma0>) -> tensor<64x64xf32, #blocked0>
 
@@ -40,8 +40,8 @@ module attributes {"triton_gpu.num-warps" = 16 : i32} {
 #mma1 = #triton_gpu.mma<{versionMajor=1, versionMinor=16, warpsPerCTA=[4,4]}>
 
 // Will still get two MMA layouts
-// CHECK: [[new_mma:#mma.*]] = #triton_gpu.mma<{versionMajor = 1, versionMinor = 3, warpsPerCTA = [4, 2]}>
-// CHECK: [[new_mma1:#mma.*]] = #triton_gpu.mma<{versionMajor = 1, versionMinor = 19, warpsPerCTA = [4, 2]}>
+// CHECK-DAG: [[$new_mma:#mma.*]] = #triton_gpu.mma<{versionMajor = 1, versionMinor = 3, warpsPerCTA = [4, 2]}>
+// CHECK-DAG: [[$new_mma1:#mma.*]] = #triton_gpu.mma<{versionMajor = 1, versionMinor = 19, warpsPerCTA = [4, 2]}>
 
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma0, isMMAv1Row=true}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0, isMMAv1Row=false}>
@@ -50,7 +50,7 @@ module attributes {"triton_gpu.num-warps" = 16 : i32} {
 
 module attributes {"triton_gpu.num-warps" = 16 : i32} {
   // CHECK-LABEL: dot_mmav1
-  func @dot_mmav1(%A: tensor<64x64xf16, #blocked0>, %B: tensor<64x64xf16, #blocked0>) -> tensor<64x64xf32, #blocked0> {
+  func.func @dot_mmav1(%A: tensor<64x64xf16, #blocked0>, %B: tensor<64x64xf16, #blocked0>) -> tensor<64x64xf32, #blocked0> {
     %C = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked0>
     %AA = triton_gpu.convert_layout %A : (tensor<64x64xf16, #blocked0>) -> tensor<64x64xf16, #dot_operand_a>
     %BB = triton_gpu.convert_layout %B : (tensor<64x64xf16, #blocked0>) -> tensor<64x64xf16, #dot_operand_b>
@@ -60,8 +60,8 @@ module attributes {"triton_gpu.num-warps" = 16 : i32} {
     %BB1 = triton_gpu.convert_layout %B : (tensor<64x64xf16, #blocked0>) -> tensor<64x64xf16, #dot_operand_b1>
     %CC1 = triton_gpu.convert_layout %C : (tensor<64x64xf32, #blocked0>) -> tensor<64x64xf32, #mma1>
 
-    // CHECK: {{.*}} = tt.dot {{.*}}, {{.*}}, {{.*}} {allowTF32 = true} : tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = [[new_mma]], isMMAv1Row = true}>> * tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = [[new_mma]], isMMAv1Row = true}>> -> tensor<64x64xf32, [[new_mma]]>
-    // CHECK: {{.*}} = tt.dot {{.*}}, {{.*}}, {{.*}} {allowTF32 = true} : tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = [[new_mma1]], isMMAv1Row = true}>> * tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = [[new_mma1]], isMMAv1Row = true}>> -> tensor<64x64xf32, [[new_mma1]]>
+    // CHECK: {{.*}} = tt.dot {{.*}}, {{.*}}, {{.*}} {allowTF32 = true} : tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = [[$new_mma]], isMMAv1Row = true}>> * tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = [[$new_mma]], isMMAv1Row = true}>> -> tensor<64x64xf32, [[$new_mma]]>
+    // CHECK: {{.*}} = tt.dot {{.*}}, {{.*}}, {{.*}} {allowTF32 = true} : tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = [[$new_mma1]], isMMAv1Row = true}>> * tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = [[$new_mma1]], isMMAv1Row = true}>> -> tensor<64x64xf32, [[$new_mma1]]>
     %D = tt.dot %AA, %BB, %CC {allowTF32 = true} : tensor<64x64xf16, #dot_operand_a> * tensor<64x64xf16, #dot_operand_b> -> tensor<64x64xf32, #mma0>
     %D1 = tt.dot %AA1, %BB1, %CC1 {allowTF32 = true} : tensor<64x64xf16, #dot_operand_a1> * tensor<64x64xf16, #dot_operand_b1> -> tensor<64x64xf32, #mma1>
     %res = triton_gpu.convert_layout %D : (tensor<64x64xf32, #mma0>) -> tensor<64x64xf32, #blocked0>
