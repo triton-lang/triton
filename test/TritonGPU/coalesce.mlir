@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-coalesce -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-coalesce | FileCheck %s
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
