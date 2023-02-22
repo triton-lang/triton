@@ -981,6 +981,7 @@ def ttir_to_ttgir(mod, num_warps):
     pm.run(mod)
     return mod
 
+
 def optimize_ttgir(mod, num_stages, compute_capability):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
