@@ -94,6 +94,10 @@ def assert_almost_equal(x, y, decimal=2, err_msg=''):
 
 
 def allclose(x, y, tol=1e-2):
+    if not isinstance(x, torch.Tensor):
+        x = torch.tensor(x)
+    if not isinstance(y, torch.Tensor):
+        y = torch.tensor(y)
     if x.dtype != y.dtype:
         raise RuntimeError(f'{x.dtype} did not match with {x.dtype}')
     if x.shape != y.shape:
