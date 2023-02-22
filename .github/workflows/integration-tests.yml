@@ -100,3 +100,12 @@ jobs:
           cd python/
           cd "build/$(ls build)"
           ctest
+
+      - name: Regression tests
+        if: ${{ contains(matrix.runner, 'A100') }}
+        run: |
+          cd python/test/regression
+          sudo nvidia-smi -i 0 -pm 1
+          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+          pytest -vs .
+          sudo nvidia-smi -i 0 -rgc
