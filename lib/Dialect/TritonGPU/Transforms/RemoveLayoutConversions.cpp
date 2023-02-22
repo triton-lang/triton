@@ -22,7 +22,6 @@
 
 using namespace mlir;
 namespace {
-#include "TritonGPUCombine.inc"
 using triton::DotOp;
 using triton::gpu::ConvertLayoutOp;
 using triton::gpu::DotOperandEncodingAttr;
