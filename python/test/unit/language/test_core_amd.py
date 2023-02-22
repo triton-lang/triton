@@ -1037,8 +1037,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
                           for shape in [(64, 64, 64)]
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
                           for allow_tf32 in [True, False]
-                          # for dtype in ['float16', 'float32']
-                          for dtype in ['float32']
+                          for dtype in ['float16', 'float32']
                           if not (allow_tf32 and (dtype in ['float16']))] +
 
                          [(*shape_nw, col_a, col_b, 'none', allow_tf32, dtype)
@@ -1054,8 +1053,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
                           for allow_tf32 in [True]
                           for col_a in [True, False]
                           for col_b in [True, False]
-                          #for dtype in ['int8', 'float16', 'float32']])
-                          for dtype in ['float32']])
+                          for dtype in ['int8', 'float16', 'float32']])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
