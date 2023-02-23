@@ -1,6 +1,7 @@
 #include "TritonGPUToLLVM.h"
 #include "DotOpHelpers.h"
 #include "Utility.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -250,7 +251,7 @@ struct AssertOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto ctx = rewriter.getContext();
-    auto elems = getElementsFromStruct(loc, adaptor.condition(), rewriter);
+    auto elems = getElementsFromStruct(loc, adaptor.getCondition(), rewriter);
     auto elemTy = elems[0].getType();
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
@@ -264,8 +265,8 @@ struct AssertOpConversion
         return failure();
       }
     }
-    llAssert(op, condition, adaptor.message(), adaptor.file(), adaptor.func(),
-             adaptor.line(), rewriter);
+    llAssert(op, condition, adaptor.getMessage(), adaptor.getFile(),
+             adaptor.getFunc(), adaptor.getLine(), rewriter);
     rewriter.eraseOp(op);
     return success();
   }
@@ -308,9 +309,9 @@ struct AssertOpConversion
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<BranchOp>(loc, thenBlock);
+    rewriter.create<cf::BranchOp>(loc, thenBlock);
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<CondBranchOp>(loc, condition, ifBlock, thenBlock);
+    rewriter.create<cf::CondBranchOp>(loc, condition, ifBlock, thenBlock);
   }
 
   static LLVM::LLVMFuncOp
