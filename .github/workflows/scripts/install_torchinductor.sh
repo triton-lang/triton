@@ -42,7 +42,7 @@ cd "$ROOT" || exit
 cd python || exit
 rm -rf build
 pip3 install -e .
-pip uninstall pytorch-triton
+pip uninstall pytorch-triton -y
 
 # clean up cache
 rm -rf /tmp/torchinductor_root/

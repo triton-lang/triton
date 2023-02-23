@@ -24,6 +24,7 @@ jobs:
       - name: Environment
         run: |
           source /opt/torchinductor_venv/bin/activate
+          ./.github/workflows/scripts/install_triton.sh
       - name: Performance
         run: |
           ./.github/workflows/scripts/run_torchinductor_perf.sh
