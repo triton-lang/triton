@@ -238,6 +238,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 endif()
 
+if (APPLE)
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-fvisibility=hidden")
+else()
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
+endif()
+
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
     set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
     # Check if the platform is MacOS
