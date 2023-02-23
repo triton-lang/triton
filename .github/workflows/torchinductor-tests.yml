@@ -21,7 +21,7 @@ jobs:
       - name: Installation
         id: install
         run: |
-          ./github/workflows/scripts/install_torchinductor.sh
+          ./.github/workflows/scripts/install_torchinductor.sh
 
   Integration-Tests:
     needs: Installation
@@ -32,7 +32,7 @@ jobs:
     steps:
       - name: Accuracy
         run: |
-          ./github/workflows/scripts/run_torchinductor_acc.sh
+          ./.github/workflows/scripts/run_torchinductor_acc.sh
       - name: Performance
         run: |
-          ./github/workflows/scripts/run_torchinductor_perf.sh
+          ./.github/workflows/scripts/run_torchinductor_perf.sh

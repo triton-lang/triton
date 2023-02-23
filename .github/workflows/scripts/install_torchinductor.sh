@@ -8,7 +8,7 @@ python3 -m venv /opt/torchinductor_venv
 # shellcheck source=/dev/null
 source /opt/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
-source ./github/workflows/scripts/common.sh
+source ./.github/workflows/scripts/common.sh
 
 # pytorch nightly
 cd "$PYTORCH_DIR" || exit
