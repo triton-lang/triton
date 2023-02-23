@@ -147,6 +147,12 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
 
   if (!funcs.empty()) {
     static const std::string libdevice = "libdevice";
+    // first search for environmental path
+    std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
+    if (!env_path.empty()) {
+      externLibs.try_emplace(libdevice, env_path);
+      return externLibs;
+    }
     namespace fs = std::filesystem;
     // Search for libdevice relative to its library path if used from Python
     // Then native code is in `triton/_C/libtriton.so` and libdevice in
@@ -302,12 +308,17 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnChange=*/true,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
+  pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
   // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass()); // Simplify the IR to improve readability.
   pm.addPass(mlir::createSymbolDCEPass());
   pm.addPass(mlir::createCanonicalizerPass());
+#ifdef USE_ROCM
+  pm.addPass(mlir::createConvertSCFToCFPass());
+  pm.addPass(createConvertControlFlowToLLVMPass());
+#endif
 
   if (failed(pm.run(module))) {
     llvm::errs() << "Pass execution failed";

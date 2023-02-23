@@ -1034,7 +1034,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
 
 @pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype",
                          [(*shape, 4, False, False, epilogue, allow_tf32, dtype)
-                          for shape in [(64, 64, 64)]
+                          for shape in [(64, 64, 64), (16, 16, 16)]
                           for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
                           for allow_tf32 in [True, False]
                           for dtype in ['float16', 'float32']
@@ -1063,6 +1063,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
             pytest.skip("Only test int8 on devices with sm >= 80")
         elif dtype == 'float32' and allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
+    if capability[0] == 7:
+        if (M, N, K, num_warps) == (128, 256, 32, 8):
+            pytest.skip("shared memory out of resource")
 
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
@@ -1298,18 +1301,18 @@ def test_noop(device='cuda'):
     kernel[(1, )](x)
 
 
-@pytest.mark.parametrize("device", ['cuda', 'cpu'])
+@pytest.mark.parametrize("device", ['cuda', 'cpu', 'cpu_pinned'])
 def test_pointer_arguments(device):
     @triton.jit
     def kernel(x):
         pass
-    x = torch.empty(1024, device=device)
-    result = True
-    try:
-        kernel[(1,)](x)
-    except ValueError:
-        result = True if device == 'cpu' else False
-    assert result
+    pin_memory = 'pinned' in device
+    x = torch.empty(1024, device=device.split('_')[0], pin_memory=pin_memory)
+    if device == "cpu":
+        with pytest.raises(ValueError):
+            kernel[(1,)](x)
+    else:
+        kernel[(1, )](x)
 
 
 @pytest.mark.parametrize("value, value_type", [

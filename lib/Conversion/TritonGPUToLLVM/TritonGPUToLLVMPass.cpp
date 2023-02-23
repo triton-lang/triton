@@ -128,16 +128,13 @@ public:
     // Step 2: Decompose insert_slice_async to use load + insert_slice for
     //   pre-Ampere architectures or unsupported vectorized load sizes
     // Step 3: Allocate shared memories and insert barriers
-    // Step 4: Convert SCF to CFG
-    // Step 5: Convert FuncOp to LLVMFuncOp via partial conversion
-    // Step 6: Get axis and shared memory info
-    // Step 7: Convert the rest of ops via partial conversion
+    // Step 4: Convert FuncOp to LLVMFuncOp via partial conversion
+    // Step 5: Get axis and shared memory info
+    // Step 6: Convert the rest of ops via partial conversion
     //
-    // The reason for putting step 3 before step 4 is that the membar
-    // analysis currently only supports SCF but not CFG. The reason for a
-    // separation between 5/7 is that, step 6 is out of the scope of Dialect
-    // Conversion, thus we need to make sure the smem is not revised during the
-    // conversion of step 7.
+    // The reason for a separation between 4/6 is that, step 5 is out of the
+    // scope of Dialect Conversion, thus we need to make sure the smem is not
+    // revised during the conversion of step 6.
 
     // Step 1
     decomposeMmaToDotOperand(mod, numWarps);
@@ -153,24 +150,13 @@ public:
     membarPass.run();
 
     // Step 4
-    RewritePatternSet scf_patterns(context);
-    mlir::populateSCFToControlFlowConversionPatterns(scf_patterns);
-    mlir::ConversionTarget scf_target(*context);
-    scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
-                            scf::WhileOp, scf::ExecuteRegionOp>();
-    scf_target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    RewritePatternSet funcPatterns(context);
+    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
     if (failed(
-            applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
       return signalPassFailure();
 
-    // Step 5
-    RewritePatternSet func_patterns(context);
-    func_patterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
-    if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(func_patterns))))
-      return signalPassFailure();
-
-    // Step 6 - get axis and shared memory info
+    // Step 5 - get axis and shared memory info
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
     if (failed(solver->initializeAndRun(mod)))
@@ -180,7 +166,7 @@ public:
                  mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
                                         allocation.getSharedMemorySize()));
 
-    // Step 7 - rewrite rest of ops
+    // Step 6 - rewrite rest of ops
     // We set a higher benefit here to ensure triton's patterns runs before
     // arith patterns for some encoding not supported by the community
     // patterns.
@@ -222,30 +208,16 @@ public:
     // Add arith/math's patterns to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          patterns);
 #ifdef USE_ROCM
     mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns, mlir::gpu::amd::HIP);
 #else
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
 #endif
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
-
-    // Take care of scf pattern introduced by LoadStoreOp
-#ifdef USE_ROCM
-    RewritePatternSet scf_patterns_extra(context);
-    mlir::populateSCFToControlFlowConversionPatterns(scf_patterns_extra);
-    if (failed(
-            applyPartialConversion(mod, scf_target, std::move(scf_patterns_extra))))
-      return signalPassFailure();
-    RewritePatternSet patterns_extra(context);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns_extra);
-    if (failed(
-            applyPartialConversion(mod, target, std::move(patterns_extra))))
-      return signalPassFailure();
-#endif
   }
 
 private:

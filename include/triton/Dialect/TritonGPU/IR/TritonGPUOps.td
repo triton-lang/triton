@@ -7,7 +7,7 @@ include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td" // NoMemoryEffect
+include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
@@ -18,12 +18,14 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,
-                                  NoMemoryEffect]> {
+                                  Pure]> {
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
 
   let results = (outs TT_Tensor:$result);
+
+  let hasCanonicalizeMethod = 1;
 
   let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
@@ -59,7 +61,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 // This is needed because these ops don't
 // handle encodings
 // e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td#L111
-def TTG_CmpIOp : TTG_Op<"cmpi", [NoMemoryEffect, Elementwise,
+def TTG_CmpIOp : TTG_Op<"cmpi", [Pure, Elementwise,
                                  SameOperandsAndResultShape, 
                                  SameOperandsAndResultEncoding]> {
   let summary = "integer comparison operation";
@@ -73,7 +75,7 @@ def TTG_CmpIOp : TTG_Op<"cmpi", [NoMemoryEffect, Elementwise,
   let results = (outs TT_BoolLike:$result);
 }
 
-def TTG_CmpFOp : TTG_Op<"cmpf", [NoMemoryEffect, Elementwise,
+def TTG_CmpFOp : TTG_Op<"cmpf", [Pure, Elementwise,
                                  SameOperandsAndResultShape, 
                                  SameOperandsAndResultEncoding]> {
   let summary = "floating-point comparison operation";
@@ -88,7 +90,7 @@ def TTG_CmpFOp : TTG_Op<"cmpf", [NoMemoryEffect, Elementwise,
 }
 
 // TODO: migrate to arith::SelectOp on LLVM16
-def TTG_SelectOp : TTG_Op<"select", [NoMemoryEffect, Elementwise,
+def TTG_SelectOp : TTG_Op<"select", [Pure, Elementwise,
                                      SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding]> {
   let summary = "select operation";
