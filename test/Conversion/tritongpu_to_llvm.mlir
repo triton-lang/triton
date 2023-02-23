@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm | FileCheck --check-prefixes=CHECK,GCN %s
+// RUN: (triton-opt %s -split-input-file --convert-triton-gpu-to-llvm --mlir-pass-pipeline-crash-reproducer=%t 2>/dev/null; true) | FileCheck --check-prefixes=CHECK,GCN %s
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<f16, 1>)
@@ -16,9 +16,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_load
   func.func @basic_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
-    // CHECK-NOT: llvm.inline_asm
-    // GCN: llvm.inline_asm
-    // GCN: llvm.inline_asm
+    // PTX: llvm.inline_asm
+    // PTX: llvm.inline_asm
+
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
     %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     return
   }
@@ -537,9 +540,11 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: basic_async_wait
+  // PTX-LABEL: basic_async_wait
+  // This test is disabled for GCN target, because it is PTX specific
+  // GCN-NOT: basic_async_wait
   func.func @basic_async_wait() {
-    // CHECK: cp.async.wait_group 0x4
+    // PTX: cp.async.wait_group 0x4
     triton_gpu.async_wait {num = 4: i32}
     return
   }
@@ -614,12 +619,21 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %tensor = triton_gpu.alloc_tensor : tensor<2x16x64xf32, #A>
     %index = arith.constant 1 : i32
 
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, 0x10
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, 0x10
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
-    // CHECK-SAME: cp.async.commit_group
+    // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
+    // TODO: Fix AMD compilation.
+    // last operation (commit_group) is still emitted by AMD pipeline,
+    // It is left to catch changes in AMD compilation pipeline.
+
+    // PTX: llvm.inline_asm has_side_effects asm_dialect = att
+    // PTX-SAME: cp.async.cg.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x10, 0x10
+    // PTX: llvm.inline_asm has_side_effects asm_dialect = att
+    // PTX-SAME: cp.async.cg.shared.global [ ${{.*}} + 16 ], [ ${{.*}} + 0 ], 0x10, 0x10
+    // PTX: llvm.inline_asm has_side_effects asm_dialect = att
+    // PTX-SAME: cp.async.commit_group
+
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.store {{.*}} : !llvm.ptr<vector<8xf32>, 3>
+    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f32>, #AL> -> tensor<2x16x64xf32, #A>
     triton_gpu.async_commit_group
     return
@@ -656,16 +670,25 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %tensor = triton_gpu.alloc_tensor : tensor<2x16x32xf32, #A>
     %index = arith.constant 1 : i32
 
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.commit_group
+    // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
+    // TODO: Fix AMD compilation.
+    // last operation (commit_group) is still emitted by AMD pipeline,
+    // It is left to catch changes in AMD compilation pipeline.
+
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.commit_group
+
+    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-4: llvm.store {{.*}} : !llvm.ptr<vector<1xf32>, 3>
+    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x32x!tt.ptr<f32>, #AL> -> tensor<2x16x32xf32, #A>
     triton_gpu.async_commit_group
     return
@@ -701,33 +724,37 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %tensor = triton_gpu.alloc_tensor : tensor<2x32x32xf32, #A>
     %index = arith.constant 1 : i32
 
-    // TODO: split CHECK tags below in PTX and GCN specific tags in case they fail for AMD GPU.
-    // Code below is working for PTX target, but not for AMD GPU.
-    // Failure of below checks probably mean that someone
-    // impelemented related operations for AMD GPU target.
+    // This test is PTX specific, GCN targets decompose async operations into oridinary load/stores.
+    // TODO: Fix AMD compilation.
+    // last operation (commit_group) is still emitted by AMD pipeline,
+    // It is left to catch changes in AMD compilation pipeline.
     //
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.mlir.constant(16 : i32) : i32
-    // CHECK: llvm.mul
-    // CHECK: llvm.add
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: cp.async.commit_group
+    // PTX: llvm.mlir.constant(0 : i32) : i32
+    // PTX: llvm.mlir.constant(16 : i32) : i32
+    // PTX: llvm.mul
+    // PTX: llvm.add
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x4, 0x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: cp.async.commit_group
+
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN-COUNT-8: llvm.store {{.*}} : !llvm.ptr<vector<1xf32>, 3>
+    // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> tensor<2x32x32xf32, #A>
     triton_gpu.async_commit_group
     return
@@ -874,22 +901,24 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma0}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
-  // CHECK-LABEL: convert_dot
+  // PTX-LABEL: convert_dot
+  // This test is disabled for GCN target, because it is PTX specific
+  // GCN-NOT: convert_dot
   func.func @convert_dot(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
     %AA = triton_gpu.convert_layout %A : (tensor<16x16xf16, #blocked0>) -> tensor<16x16xf16, #shared0>
     %BB = triton_gpu.convert_layout %B : (tensor<16x16xf16, #blocked0>) -> tensor<16x16xf16, #shared0>
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: ldmatrix.sync.aligned.m8n8.x4
+    // PTX: llvm.inline_asm
+    // PTX-SAME: ldmatrix.sync.aligned.m8n8.x4
     %AA_DOT = triton_gpu.convert_layout %AA : (tensor<16x16xf16, #shared0>) -> tensor<16x16xf16, #dot_operand_a>
     %BB_DOT = triton_gpu.convert_layout %BB : (tensor<16x16xf16, #shared0>) -> tensor<16x16xf16, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma0>
 
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+    // PTX: llvm.inline_asm
+    // PTX-SAME: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+    // PTX: llvm.inline_asm
+    // PTX-SAME: mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
     %D = tt.dot %AA_DOT, %BB_DOT, %cst0 {allowTF32 = true, transA = false, transB = false} : tensor<16x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #mma0>
 
     return
@@ -1019,8 +1048,11 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  // PTX-LABEL: matmul_kernel_dot_operand_layout
+  // This test is disabled for GCN target, because it is PTX specific
+  // GCN-NOT: matmul_kernel_dot_operand_layout
   func.func @matmul_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
-  %a:tensor<128x32xf16, #shared>, %b:tensor<32x256xf16, #shared>) {
+    %a:tensor<128x32xf16, #shared>, %b:tensor<32x256xf16, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
     // PTX: ldmatrix.sync.aligned.m8n8.x4.shared.b16
     %a_mat = triton_gpu.convert_layout %a : (tensor<128x32xf16, #shared>) -> tensor<128x32xf16, #dot_operand_a>
@@ -1045,6 +1077,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma, isMMAv1Row=true}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma, isMMAv1Row=true}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  // PTX-LABEL: matmul884_kernel_dot_operand_layout
+  // This test is disabled for GCN target, because it is PTX specific
+  // GCN-NOT: matmul884_kernel_dot_operand_layout
   func.func @matmul884_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:tensor<32x64xf16, #shared0>, %b:tensor<64x64xf16, #shared1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #mma>
@@ -1091,27 +1126,29 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: matmul_tf32dot
+  // PTX-LABEL: matmul_tf32dot
+  // This test is disabled for GCN target, because it is PTX specific
+  // GCN-NOT: matmul_tf32dot
   func.func @matmul_tf32dot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:tensor<32x16xf32, #shared>, %b:tensor<16x32xf32, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // CHECK-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // CHECK-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
+    // PTX: llvm.inline_asm
+    // PTX-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
+    // PTX-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
+    // PTX: llvm.inline_asm
+    // PTX-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
+    // PTX-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
     %a_mat = triton_gpu.convert_layout %a : (tensor<32x16xf32, #shared>) -> tensor<32x16xf32, #dot_operand_a>
     %b_mat = triton_gpu.convert_layout %b : (tensor<16x32xf32, #shared>) -> tensor<16x32xf32, #dot_operand_b>
 
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
+    // PTX: llvm.inline_asm
+    // PTX-SAME: mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
+    // PTX: llvm.inline_asm
+    // PTX-SAME: mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
+    // PTX: llvm.inline_asm
+    // PTX-SAME: mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
+    // PTX: llvm.inline_asm
+    // PTX-SAME: mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32
     %28 = tt.dot %a_mat, %b_mat, %cst {allowTF32 = true, transA = false, transB = false} : tensor<32x16xf32, #dot_operand_a> * tensor<16x32xf32, #dot_operand_b> -> tensor<32x32xf32, #mma>
     %38 = triton_gpu.convert_layout %28 : (tensor<32x32xf32, #mma>) -> tensor<32x32xf32, #blocked>
 
@@ -1129,7 +1166,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32
   func.func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.atomicrmw fadd {{.*}}  monotonic  : f32
+    // GCN: llvm.atomicrmw fadd {{.*}}  monotonic  : !llvm.ptr<f32, 1>, f32
     // PTX: llvm.inline_asm
     // PTX-SAME: atom.global.gpu.add.f32
     %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>

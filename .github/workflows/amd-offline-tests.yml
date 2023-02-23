@@ -1,0 +1,48 @@
+name: AMD Offline Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - triton-mlir
+
+jobs:
+  Integration-Tests:
+    runs-on: "ubuntu-latest"
+
+    container:
+      image: rocm/rocm-terminal
+      options: --user root
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Prerequisite
+        run: |
+          # remove system cmake to use python cmake instead
+          apt remove -y cmake
+          pip3 install cmake
+          apt update
+          apt install -y libpython3.8-dev
+
+      - name: Install Triton
+        run: |
+          cd python
+          DEBUG=TRUE TRITON_USE_ROCM=TRUE TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e .
+
+      - name: Run lit tests
+        run: |
+          cd python
+          LIT_TEST_DIR="build/$(ls build)/test"
+          if [ ! -d "$LIT_TEST_DIR" ]; then
+            echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
+          fi
+          lit -v "$LIT_TEST_DIR"
+
+      - name: Run CXX unittests
+        run: |
+          cd python/
+          cd "build/$(ls build)"
+          ctest
