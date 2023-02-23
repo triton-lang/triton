@@ -16,7 +16,6 @@ import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-from sysconfig import get_paths
 from typing import Any, Callable, Dict, Tuple, Union
 
 import setuptools
@@ -981,32 +980,32 @@ def ast_to_ttir(fn, signature, specialization, constants):
     return optimize_triton_ir(mod)
 
 
-def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
+def ttir_to_ttgir(mod, num_warps):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
+    pm.run(mod)
+    return mod
+
+
+def optimize_ttgir(mod, num_stages, compute_capability):
+    pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_coalesce_pass()
-    # The combine pass converts blocked layout to mma layout
-    # for dot ops so that pipeline can get shared memory swizzled correctly.
-    pm.add_tritongpu_combine_pass(compute_capability)
+    pm.add_tritongpu_coalesce_pass()
+    pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
+    pm.add_tritongpu_remove_layout_conversions_pass()
+    pm.add_tritongpu_fuse_transpositions_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
-    # Prefetch must be done after pipeline pass because pipeline pass
-    # extracts slices from the original tensor.
     pm.add_tritongpu_prefetch_pass()
-    pm.add_canonicalizer_pass()
-    pm.add_cse_pass()
-    pm.add_tritongpu_combine_pass(compute_capability)
-    pm.add_licm_pass()
-    pm.add_tritongpu_combine_pass(compute_capability)
-    pm.add_cse_pass()
+    pm.add_tritongpu_fuse_transpositions_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
     if compute_capability // 10 == 7:
         # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
         # NOTE this pass should be placed after all the passes those modifies mma layout
         pm.add_tritongpu_update_mma_for_volta_pass()
+    pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
-    pm.add_tritongpu_reorder_instructions_pass()
     pm.run(mod)
     return mod
 
@@ -1459,11 +1458,6 @@ def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
 
 
-def default_cuda_dir():
-    default_dir = "/usr/local/cuda"
-    return os.getenv("CUDA_HOME", default=default_dir)
-
-
 class CacheManager:
 
     def __init__(self, key):
@@ -1537,14 +1531,15 @@ def _build(name, src, srcdir):
         hip_include_dir = os.path.join(hip_home_dirs(), "include")
     else:
         cuda_lib_dirs = libcuda_dirs()
-        cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
+        base_dir = os.path.dirname(__file__)
+        cuda_path = os.path.join(base_dir, "third_party", "cuda")
+
         cu_include_dir = os.path.join(cuda_path, "include")
         triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
         cuda_header = os.path.join(cu_include_dir, "cuda.h")
         triton_cuda_header = os.path.join(triton_include_dir, "cuda.h")
         if not os.path.exists(cuda_header) and os.path.exists(triton_cuda_header):
             cu_include_dir = triton_include_dir
-
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -1556,7 +1551,17 @@ def _build(name, src, srcdir):
         cc = gcc if gcc is not None else clang
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
-    py_include_dir = get_paths()["include"]
+    # This function was renamed and made public in Python 3.10
+    if hasattr(sysconfig, 'get_default_scheme'):
+        scheme = sysconfig.get_default_scheme()
+    else:
+        scheme = sysconfig._get_default_scheme()
+    # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
+    # path changes to include 'local'. This change is required to use triton with system-wide python.
+    if scheme == 'posix_local':
+        scheme = 'posix_prefix'
+    py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
+
     if torch.version.hip is not None:
         ret = subprocess.check_call([cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{hip_lib_dir}", "-lamdhip64", "-o", so])
     else:
@@ -1751,30 +1756,30 @@ def compile(fn, **kwargs):
             raise RuntimeError('gfx_arch is None (not specified)')
         stages = {
             "ast": (lambda path: fn, None),
-            "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                    lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-            "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                    lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+            "ttir": (lambda path: parse_mlir_module(path, context),
+                     lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+            "ttgir": (lambda path: parse_mlir_module(path, context),
+                      lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
             "llir": (lambda path: Path(path).read_text(),
-                    lambda src: ttgir_to_llir(src, extern_libs, capability)),
+                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
             "amdgcn": (lambda path: Path(path).read_text(),
-                    lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch, 
-                                                        gfx_arch_full_details[0], 
+                       lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch,
+                                                        gfx_arch_full_details[0],
                                                         gfx_arch_full_details[2])),
         }
     else:
         stages = {
             "ast": (lambda path: fn, None),
-            "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                    lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-            "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                    lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
+            "ttir": (lambda path: parse_mlir_module(path, context),
+                     lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+            "ttgir": (lambda path: parse_mlir_module(path, context),
+                      lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
             "llir": (lambda path: Path(path).read_text(),
-                    lambda src: ttgir_to_llir(src, extern_libs, capability)),
+                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
             "ptx": (lambda path: Path(path).read_text(),
                     lambda src: llir_to_ptx(src, capability)),
             "cubin": (lambda path: Path(path).read_bytes(),
-                    lambda src: ptx_to_cubin(src, capability))
+                      lambda src: ptx_to_cubin(src, capability))
         }
 
     # find out the signature of the function

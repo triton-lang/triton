@@ -62,9 +62,9 @@ class Autotuner(KernelInterface):
             self.hook(args)
             self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         try:
-            return do_bench(kernel_call)
+            return do_bench(kernel_call, percentiles=(0.5, 0.2, 0.8))
         except OutOfResources:
-            return float('inf')
+            return (float('inf'), float('inf'), float('inf'))
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))

@@ -337,7 +337,8 @@ namespace {
 // Copied from TestDeadCodeAnalysis.cpp, because some dead code analysis
 // interacts with constant propagation, but SparseConstantPropagation
 // doesn't seem to be sufficient.
-struct ConstantAnalysis : public DataFlowAnalysis {
+class ConstantAnalysis : public DataFlowAnalysis {
+public:
   using DataFlowAnalysis::DataFlowAnalysis;
 
   LogicalResult initialize(Operation *top) override {
@@ -359,12 +360,19 @@ struct ConstantAnalysis : public DataFlowAnalysis {
                                        value, op->getDialect())));
       return success();
     }
+    // Dead code analysis requires every operands has initialized ConstantValue
+    // state before it is visited.
+    // https://github.com/llvm/llvm-project/blob/2ec1aba2b69faa1de5f71832a48e25aa3b5d5314/mlir/lib/Analysis/DataFlow/DeadCodeAnalysis.cpp#L322
+    // That's why we need to set all operands to unknown constants.
     setAllToUnknownConstants(op->getResults());
-    for (Region &region : op->getRegions())
-      setAllToUnknownConstants(region.getArguments());
+    for (Region &region : op->getRegions()) {
+      for (Block &block : region.getBlocks())
+        setAllToUnknownConstants(block.getArguments());
+    }
     return success();
   }
 
+private:
   /// Set all given values as not constants.
   void setAllToUnknownConstants(ValueRange values) {
     dataflow::ConstantValue unknownConstant(nullptr, nullptr);

@@ -1462,7 +1462,7 @@ void init_triton_ir(py::module &&m) {
       .def(
           "add_sccp_pass",
           [](mlir::PassManager &self) { self.addPass(mlir::createSCCPPass()); })
-      .def("add_coalesce_pass",
+      .def("add_tritongpu_coalesce_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUCoalescePass());
            })
@@ -1501,10 +1501,18 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUPrefetchPass());
            })
-      .def("add_tritongpu_combine_pass",
+      .def("add_tritongpu_accelerate_matmul_pass",
            [](mlir::PassManager &self, int computeCapability) {
              self.addPass(
-                 mlir::createTritonGPUCombineOpsPass(computeCapability));
+                 mlir::createTritonGPUAccelerateMatmulPass(computeCapability));
+           })
+      .def("add_tritongpu_fuse_transpositions_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUFuseTranspositionsPass());
+           })
+      .def("add_tritongpu_remove_layout_conversions_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPURemoveLayoutConversionsPass());
            })
       .def("add_tritongpu_update_mma_for_volta_pass",
            [](mlir::PassManager &self) {

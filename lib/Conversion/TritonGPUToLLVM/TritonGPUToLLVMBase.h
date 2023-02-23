@@ -291,10 +291,10 @@ public:
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       // extract multi dimensional index for current element
       auto idx = srcIndices[elemIdx];
-      Value idxCol = idx[inOrder[0]]; // contiguous dimension
-      Value idxRow = idx[inOrder[1]]; // discontiguous dimension
-      Value strideCol = srcStrides[inOrder[0]];
-      Value strideRow = srcStrides[inOrder[1]];
+      Value idxCol = idx[outOrder[0]]; // contiguous dimension
+      Value idxRow = idx[outOrder[1]]; // discontiguous dimension
+      Value strideCol = srcStrides[outOrder[0]];
+      Value strideRow = srcStrides[outOrder[1]];
       // extract dynamic/static offset for immediate offseting
       unsigned immedateOffCol = 0;
       if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
@@ -338,7 +338,7 @@ public:
       Value currPtr = gep(dstPtrTy, dstPtrBase, offset);
       // compute immediate offset
       Value immedateOff =
-          add(mul(i32_val(immedateOffRow), srcStrides[inOrder[1]]),
+          add(mul(i32_val(immedateOffRow), srcStrides[outOrder[1]]),
               i32_val(immedateOffCol));
       ret[elemIdx] = gep(dstPtrTy, currPtr, immedateOff);
     }
