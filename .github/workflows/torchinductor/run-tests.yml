@@ -24,10 +24,10 @@ jobs:
       - name: Environment
         run: |
           source /opt/torchinductor_venv/bin/activate
-          ./.github/workflows/scripts/install_triton.sh
+          ./.github/workflows/torchinductor/scripts/install_triton.sh
       - name: Performance
         run: |
-          ./.github/workflows/scripts/run_torchinductor_perf.sh
+          ./.github/workflows/torchinductor/scripts/run_torchinductor_perf.sh
       - name: Accuracy
         run: |
-          ./.github/workflows/scripts/run_torchinductor_acc.sh
+          ./.github/workflows/torchinductor/scripts/run_torchinductor_acc.sh

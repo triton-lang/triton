@@ -4,7 +4,7 @@
 ROOT="$(pwd)"
 
 # shellcheck source=/dev/null
-source ./.github/workflows/scripts/common.sh
+source ./.github/workflows/torchinductor/scripts/common.sh
 
 cd "$PYTORCH_DIR" || exit
 TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc
@@ -23,9 +23,9 @@ done
 cd "$ROOT" || exit
 for model in "${MODELS[@]}"; do
   echo "Checking accuracy test for $model"
-  python .github/workflows/scripts/check_acc.py "$TEST_REPORTS_DIR"/inference_"$model".csv
-  python .github/workflows/scripts/check_acc.py "$TEST_REPORTS_DIR"/training_"$model".csv
-  python .github/workflows/scripts/check_acc.py "$TEST_REPORTS_DIR"/dynamic_shapes_"$model".csv
+  python .github/workflows/torchinductor/scripts/check_acc.py "$TEST_REPORTS_DIR"/inference_"$model".csv
+  python .github/workflows/torchinductor/scripts/check_acc.py "$TEST_REPORTS_DIR"/training_"$model".csv
+  python .github/workflows/torchinductor/scripts/check_acc.py "$TEST_REPORTS_DIR"/dynamic_shapes_"$model".csv
 done
 
 # go back to where we started

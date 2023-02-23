@@ -4,7 +4,7 @@
 ROOT="$(pwd)"
 
 # shellcheck source=/dev/null
-source ./.github/workflows/scripts/common.sh
+source ./.github/workflows/torchinductor/scripts/common.sh
 
 # build our own triton
 cd python || exit
