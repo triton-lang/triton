@@ -14,8 +14,7 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
 
 
 @pytest.mark.parametrize("func_type, data_type",
-                         [("device_print", data_type) for data_type in torch_types] +
-                         [("print", "int32"), ("static_print", "int32")])
+                         [("device_print", data_type) for data_type in torch_types] + [("print", "int32"), ("static_print", "int32")])
 def test_print(func_type: str, data_type: str):
     proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE, shell=False)
     outs, _ = proc.communicate()
