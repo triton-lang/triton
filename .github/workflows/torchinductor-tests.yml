@@ -21,6 +21,9 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
     steps:
+      - name: Environment
+        run: |
+          source /opt/torchinductor_venv/bin/activate
       - name: Performance
         run: |
           ./.github/workflows/scripts/run_torchinductor_perf.sh
