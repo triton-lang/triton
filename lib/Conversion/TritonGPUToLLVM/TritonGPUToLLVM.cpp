@@ -94,13 +94,13 @@ struct BroadcastOpConversion
   }
 };
 
-struct PrintfOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::PrintfOp> {
+struct PrintOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::PrintOp> {
   using ConvertTritonGPUOpToLLVMPattern<
-      triton::PrintfOp>::ConvertTritonGPUOpToLLVMPattern;
+      triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::PrintfOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     SmallVector<Value, 16> operands;
@@ -596,7 +596,7 @@ namespace LLVM {
 
 void vprintf(StringRef msg, ValueRange args,
              ConversionPatternRewriter &rewriter) {
-  PrintfOpConversion::llPrintf(msg, args, rewriter);
+  PrintOpConversion::llPrintf(msg, args, rewriter);
 }
 
 void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
@@ -633,6 +633,6 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
-  patterns.add<PrintfOpConversion>(typeConverter, benefit);
+  patterns.add<PrintOpConversion>(typeConverter, benefit);
   patterns.add<AssertOpConversion>(typeConverter, benefit);
 }

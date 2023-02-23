@@ -1229,7 +1229,7 @@ def device_print(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.
     new_args = []
     for arg in args:
         new_args.append(arg.handle)
-    return tl.tensor(builder.create_printf(prefix, new_args), tl.void)
+    return tl.tensor(builder.create_print(prefix, new_args), tl.void)
 
 
 def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: int, builder: ir.builder) -> tl.tensor:

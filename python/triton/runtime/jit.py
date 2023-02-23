@@ -157,7 +157,8 @@ class JITFunction(KernelInterface[T]):
             return False
         divisible_by_16 = {i for i, arg in enumerate(args) if is_divisible_by_16(arg) and i not in self.do_not_specialize}
         equal_to_1 = {i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize}
-        return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])(tuple(divisible_by_16), tuple(equal_to_1))
+        assert_enabled = os.environ.get("TRITON_ASSERT_ENABLED", "0") == "1"
+        return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1", "asssert_enabled"])(tuple(divisible_by_16), tuple(equal_to_1), assert_enabled)
         # return _triton.code_gen.instance_descriptor(divisible_by_16, equal_to_1)
 
     @staticmethod

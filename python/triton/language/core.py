@@ -1304,13 +1304,13 @@ def zeros_like(input):
 
 
 @builtin
-def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False):
-    print(*values, sep=sep, end=end, file=file, flush=flush)
+def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
+    pass
 
 
 @builtin
-def static_assert(cond, msg=""):
-    assert cond, msg
+def static_assert(cond, msg="", _builder=None):
+    pass
 
 
 @builtin

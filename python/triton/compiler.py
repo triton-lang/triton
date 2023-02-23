@@ -123,10 +123,13 @@ class CodeGenerator(ast.NodeVisitor):
             'min': triton.language.minimum,
             'float': float,
             'int': int,
-            'print': print,
+            'print': triton.language.core.device_print,
             'isinstance': isinstance,
             'getattr': getattr,
         }
+        self.static_functions = [
+            'static_print', 'static_assert'
+        ]
         self.scf_stack = []
         # SSA-construction
         # name => triton.language.tensor
@@ -759,8 +762,10 @@ class CodeGenerator(ast.NodeVisitor):
         return {node.arg: self.visit(node.value)}
 
     def visit_Assert(self, node) -> Any:
+        test = self.visit(node.test)
+        msg = self.visit(node.msg)
         # Convert assert to triton's device_assert which happens on the device
-        return triton.language.core.device_assert(node.test, node.msg, _builder=self.builder)
+        return triton.language.core.device_assert(test, msg, _builder=self.builder)
 
     def visit_Call(self, node):
         fn = self.visit(node.func)
@@ -770,6 +775,15 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
+        if fn.__name__ == 'print':
+            fn = self.builtins['print']
+        elif fn.__name__ in self.static_functions:
+            if fn.__name__ == "static_print":
+                print(*args, **kws)
+                return
+            elif fn.__name__ == "static_assert":
+                assert args[0], args[1]
+                return
         if isinstance(fn, triton.runtime.JITFunction):
             from inspect import getcallargs
             args = getcallargs(fn.fn, *args, **kws)
@@ -813,9 +827,6 @@ class CodeGenerator(ast.NodeVisitor):
         if fn in self.builtins.values():
             args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
                     for arg in args]
-        if fn.__name__ == 'print':
-            prefix = args[0]
-            return triton.language.core.device_print(prefix, *args[1:], _builder=self.builder)
         return fn(*args, **kws)
 
     def visit_Constant(self, node):

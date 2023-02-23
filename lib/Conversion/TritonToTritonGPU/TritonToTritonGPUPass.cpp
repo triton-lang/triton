@@ -443,15 +443,14 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   }
 };
 
-struct TritonPrintfPattern : public OpConversionPattern<triton::PrintfOp> {
-  using OpConversionPattern<triton::PrintfOp>::OpConversionPattern;
+struct TritonPrintfPattern : public OpConversionPattern<triton::PrintOp> {
+  using OpConversionPattern<triton::PrintOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::PrintfOp op,
-                  typename triton::PrintfOp::Adaptor adaptor,
+  matchAndRewrite(triton::PrintOp op, typename triton::PrintOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<triton::PrintfOp>(op, op.getPrefixAttr(),
-                                                  adaptor.getOperands());
+    rewriter.replaceOpWithNewOp<triton::PrintOp>(op, op.getPrefixAttr(),
+                                                 adaptor.getOperands());
     return success();
   }
 };

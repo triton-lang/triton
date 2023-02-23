@@ -1326,11 +1326,11 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::arith::SelectOp>(loc, condition,
                                                        trueValue, falseValue);
            })
-      .def("create_printf",
+      .def("create_print",
            [](mlir::OpBuilder &self, const std::string &prefix,
               const std::vector<mlir::Value> &values) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::PrintfOp>(
+             self.create<mlir::triton::PrintOp>(
                  loc,
                  mlir::StringAttr::get(self.getContext(),
                                        llvm::StringRef(prefix)),
