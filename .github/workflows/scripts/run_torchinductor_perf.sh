@@ -1,8 +1,10 @@
 #!/bin/bash
 
-TEST_REPORTS_DIR=/tmp/torchinductor_root/acc
-PYTORCH_DIR=/tmp/pytorch
-TRITON_DIR=/tmp/triton
+# remember where we started
+ROOT="$(pwd)"
+
+# shellcheck source=/dev/null
+source ./common.sh
 
 cd "$PYTORCH_DIR" || exit
 mkdir -p "$TEST_REPORTS_DIR"
@@ -26,3 +28,6 @@ for model in "${MODELS[@]}"; do
   python .github/workflows/scripts/check_acc.py "$TEST_REPORTS_DIR"/training_"$model".csv
   python .github/workflows/scripts/check_acc.py "$TEST_REPORTS_DIR"/dynamic_shapes_"$model".csv
 done
+
+# go back to where we started
+cd "$ROOT" || exit
