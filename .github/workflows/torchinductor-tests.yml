@@ -21,9 +21,9 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
     steps:
-      - name: Accuracy
-        run: |
-          ./.github/workflows/scripts/run_torchinductor_acc.sh
       - name: Performance
         run: |
           ./.github/workflows/scripts/run_torchinductor_perf.sh
+      - name: Accuracy
+        run: |
+          ./.github/workflows/scripts/run_torchinductor_acc.sh
