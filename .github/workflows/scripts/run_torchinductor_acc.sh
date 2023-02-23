@@ -7,9 +7,8 @@ ROOT="$(pwd)"
 source ./common.sh
 
 cd "$PYTORCH_DIR" || exit
+TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc
 mkdir -p "$TEST_REPORTS_DIR"
-
-MODELS=(timm huggingface torchbench)
 
 for model in "${MODELS[@]}"; do
   echo "Running performance test for $model"
