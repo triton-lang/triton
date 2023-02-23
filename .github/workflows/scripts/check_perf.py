@@ -46,3 +46,5 @@ def main():
     baseline = parse_output(args.baseline)
     new = parse_output(args.new)
     compare(baseline, new, args.threshold)
+
+main()
