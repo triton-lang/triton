@@ -238,9 +238,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 endif()
 
-if (APPLE)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-fvisibility=hidden")
-else()
+if (UNIX AND NOT APPLE)
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
 endif()
 
