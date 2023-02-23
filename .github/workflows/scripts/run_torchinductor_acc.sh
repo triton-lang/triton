@@ -4,7 +4,7 @@
 ROOT="$(pwd)"
 
 # shellcheck source=/dev/null
-source ./common.sh
+source ./.github/workflows/scripts/common.sh
 
 cd "$PYTORCH_DIR" || exit
 TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc
