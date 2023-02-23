@@ -8,7 +8,7 @@ python3 -m venv /opt/torchinductor_venv
 # shellcheck source=/dev/null
 source /opt/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
-source ./common.sh
+source ./github/workflows/scripts/common.sh
 
 # pytorch nightly
 cd "$PYTORCH_DIR" || exit
@@ -38,7 +38,7 @@ pip install -e .
 cd ..
 
 # build our own triton
-cd "$TRITON_DIR" || exit
+cd "$ROOT" || exit
 cd python || exit
 rm -rf build
 pip3 install -e .

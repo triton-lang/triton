@@ -21,7 +21,7 @@ for model in "${MODELS[@]}"; do
     --output "$TEST_REPORTS_DIR"/dynamic_shapes_"$model".csv
 done
 
-cd "$TRITON_DIR" || exit
+cd "$ROOT" || exit
 for model in "${MODELS[@]}"; do
   echo "Checking accuracy test for $model"
   python .github/workflows/scripts/check_acc.py "$TEST_REPORTS_DIR"/inference_"$model".csv

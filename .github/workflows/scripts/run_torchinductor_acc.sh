@@ -17,7 +17,7 @@ for model in "${MODELS[@]}"; do
     --device cuda --inductor --amp --output "$TEST_REPORTS_DIR"/"$model".csv
 done
 
-cd "$TRITON_DIR" || exit
+cd "$ROOT" || exit
 for model in "${MODELS[@]}"; do
   echo "Checking performance test for $model"
   python .github/workflows/scripts/check_perf.py "$TEST_REPORTS_DIR"/"$model".csv

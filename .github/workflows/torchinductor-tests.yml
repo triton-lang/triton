@@ -2,8 +2,6 @@ name: Torchinductor
 
 on:
   workflow_dispatch:
-  #schedule:    
-  #  - cron: "0 0 * * *"
 
 jobs:
   Runner-Preparation:
@@ -23,8 +21,7 @@ jobs:
       - name: Installation
         id: install
         run: |
-          cd ./github/workflows/scripts
-          ./install_torchinductor.sh
+          ./github/workflows/scripts/install_torchinductor.sh
 
   Integration-Tests:
     needs: Installation
@@ -35,7 +32,7 @@ jobs:
     steps:
       - name: Accuracy
         run: |
-          ./run_torchinductor_acc.sh
+          ./github/workflows/scripts/run_torchinductor_acc.sh
       - name: Performance
         run: |
-          ./run_torchinductor_perf.sh
+          ./github/workflows/scripts/run_torchinductor_perf.sh
