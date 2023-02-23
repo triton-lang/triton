@@ -12,19 +12,10 @@ jobs:
       - name: Prepare runner matrix
         id: set-matrix
         run: |
-          echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"]]'
-
-  Installation:
-    needs: Runner-Preparation
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - name: Installation
-        id: install
-        run: |
-          ./.github/workflows/scripts/install_torchinductor.sh
+          echo '::set-output name=matrix::[["self-hosted", "A100"]]'
 
   Integration-Tests:
-    needs: Installation
+    needs: Runner-Preparation
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
