@@ -5,7 +5,8 @@ import triton
 
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
-def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+def test_op(Z, H, N_CTX, D_HEAD, dtype):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
@@ -21,7 +22,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     for z in range(Z):
         for h in range(H):
             p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).half()
+    p = torch.softmax(p.float(), dim=-1).to(dtype)
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
     ref_out.backward(dout)
