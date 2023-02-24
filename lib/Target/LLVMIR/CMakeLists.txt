@@ -6,7 +6,7 @@ add_mlir_translation_library(TritonLLVMIR
 
         LINK_LIBS PUBLIC
         MLIRIR
-        MLIRLLVMIR
+        MLIRLLVMDialect
         MLIRSupport
         MLIRTargetLLVMIRExport
         )

@@ -6,5 +6,9 @@ add_mlir_library(TritonAnalysis
   Utility.cpp
 
   DEPENDS
+  TritonTableGen
   TritonGPUAttrDefsIncGen
+
+  LINK_LIBS PUBLIC
+  MLIRAnalysis
 )

@@ -3,7 +3,7 @@
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
-#include "mlir/Parser.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
@@ -15,7 +15,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
-#include "triton/driver/llvm.h"
+#include "triton/Target/PTX/PTXTranslation.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
@@ -36,9 +36,9 @@ OwningOpRef<ModuleOp> loadMLIRModule(llvm::StringRef inputFilename,
   }
 
   mlir::DialectRegistry registry;
-  registry.insert<TritonDialect, triton::gpu::TritonGPUDialect,
-                  mlir::math::MathDialect, arith::ArithmeticDialect,
-                  StandardOpsDialect, scf::SCFDialect>();
+  registry
+      .insert<TritonDialect, triton::gpu::TritonGPUDialect,
+              mlir::math::MathDialect, arith::ArithDialect, scf::SCFDialect>();
 
   context.appendDialectRegistry(registry);
 
@@ -50,7 +50,8 @@ OwningOpRef<ModuleOp> loadMLIRModule(llvm::StringRef inputFilename,
     context.loadAllAvailableDialects();
     context.allowUnregisteredDialects();
 
-    OwningOpRef<ModuleOp> module(parseSourceFile(sourceMgr, &context));
+    OwningOpRef<ModuleOp> module =
+        parseSourceFile<ModuleOp>(sourceMgr, &context);
     if (!module) {
       llvm::errs() << "Parse MLIR file failed.";
       return nullptr;
@@ -116,8 +117,8 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   if (targetKind == "llvmir")
     llvm::outs() << *llvmir << '\n';
   else if (targetKind == "ptx")
-    llvm::outs() << ::triton::driver::llir_to_ptx(
-        llvmir.get(), SMArch.getValue(), ptxVersion.getValue());
+    llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
+                                                   ptxVersion.getValue());
 
   return success();
 }

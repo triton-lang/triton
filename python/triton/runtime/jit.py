@@ -195,7 +195,7 @@ class JITFunction(KernelInterface[T]):
         return signature
 
     def _make_constants(self, constexpr_key):
-        constants = {i: k for i, k in zip(self.constexprs, constexpr_key)}
+        constants = dict(zip(self.constexprs, constexpr_key))
         return constants
 
     def _call_hook(self, key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
@@ -241,9 +241,9 @@ class JITFunction(KernelInterface[T]):
         src = f"""
 def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
     sig_key =  {sig_keys},
-    constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else tuple()}
-    spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else tuple()}
-    key = (version_key, sig_key, constexpr_key, spec_key)
+    constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
+    spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
+    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_stages)
     if not extern_libs is None:
       key = (key, tuple(extern_libs.items()))
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
@@ -298,10 +298,10 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         # function signature information
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
-        self.has_defaults = any([v.default != inspect._empty for v in signature.parameters.values()])
+        self.has_defaults = any(v.default != inspect._empty for v in signature.parameters.values())
         # specialization hints
         self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
-        self.do_not_specialize = set([self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize])
+        self.do_not_specialize = {self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize}
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]

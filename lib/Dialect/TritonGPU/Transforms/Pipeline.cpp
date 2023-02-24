@@ -1,5 +1,8 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -62,13 +65,13 @@ class LoopPipeliner {
   DenseMap<Value, SmallVector<Value>> valueMapping;
 
   /// Block arguments that loads depend on
-  DenseSet<BlockArgument> depArgs;
+  SetVector<BlockArgument> depArgs;
 
   /// Operations (inside the loop body) that loads depend on
-  DenseSet<Operation *> depOps;
+  SetVector<Operation *> depOps;
 
   /// collect values that v depends on and are defined inside the loop
-  void collectDeps(Value v, int stages, DenseSet<Value> &deps);
+  void collectDeps(Value v, int stages, SetVector<Value> &deps);
 
   void setValueMapping(Value origin, Value newValue, int stage);
 
@@ -112,7 +115,7 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
   return valueMapping[origin][stage];
 }
 
-void LoopPipeliner::collectDeps(Value v, int stages, DenseSet<Value> &deps) {
+void LoopPipeliner::collectDeps(Value v, int stages, SetVector<Value> &deps) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return;
@@ -158,20 +161,37 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 LogicalResult LoopPipeliner::initialize() {
   Block *loop = forOp.getBody();
 
+  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+  AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
+  if (failed(solver->initializeAndRun(forOp->getParentOfType<ModuleOp>()))) {
+    return failure();
+  }
+
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> allLoads;
   for (Operation &op : *loop)
-    if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
-      allLoads.push_back(loadOp);
+    if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
+      auto ptr = loadOp.getPtr();
+      unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
+      auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+      if (!tensorTy)
+        continue;
+      auto ty = tensorTy.getElementType()
+                    .cast<triton::PointerType>()
+                    .getPointeeType();
+      unsigned width = vec * ty.getIntOrFloatBitWidth();
+      if (width >= 32)
+        allLoads.push_back(loadOp);
+    }
 
   // Early stop: no need to continue if there is no load in the loop.
   if (allLoads.empty())
     return failure();
 
   // load => values that it depends on
-  DenseMap<Value, DenseSet<Value>> loadDeps;
+  DenseMap<Value, SetVector<Value>> loadDeps;
   for (triton::LoadOp loadOp : allLoads) {
-    DenseSet<Value> deps;
+    SetVector<Value> deps;
     for (Value op : loadOp->getOperands())
       collectDeps(op, numStages - 1, deps);
     loadDeps[loadOp] = deps;
@@ -195,6 +215,20 @@ LogicalResult LoopPipeliner::initialize() {
     if (isCandidate && loadOp.getResult().hasOneUse()) {
       isCandidate = false;
       Operation *use = *loadOp.getResult().getUsers().begin();
+
+      // advance to the first conversion as long
+      // as the use resides in shared memory and it has
+      // a single use itself
+      while (use) {
+        if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
+          break;
+        auto tensorType =
+            use->getResult(0).getType().dyn_cast<RankedTensorType>();
+        if (!tensorType.getEncoding().isa<ttg::SharedEncodingAttr>())
+          break;
+        use = *use->getResult(0).getUsers().begin();
+      }
+
       if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
         if (auto tensorType = convertLayout.getResult()
                                   .getType()
@@ -284,7 +318,7 @@ void LoopPipeliner::emitPrologue() {
         }
         // load => copy async
         if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(op)) {
-          Value mask = lookupOrDefault(loadOp.mask(), stage);
+          Value mask = lookupOrDefault(loadOp.getMask(), stage);
           Value newMask;
           if (mask) {
             Value splatCond = builder.create<triton::SplatOp>(
@@ -298,10 +332,11 @@ void LoopPipeliner::emitPrologue() {
           // TODO: check if the hardware supports async copy
           newOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
               op->getLoc(), loadsBuffer[loadOp].getType(),
-              lookupOrDefault(loadOp.ptr(), stage),
+              lookupOrDefault(loadOp.getPtr(), stage),
               loadStageBuffer[loadOp][stage], pipelineIterIdx, newMask,
-              lookupOrDefault(loadOp.other(), stage), loadOp.cache(),
-              loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+              lookupOrDefault(loadOp.getOther(), stage), loadOp.getCache(),
+              loadOp.getEvict(), loadOp.getIsVolatile(), /*axis*/ 0);
+          builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
           loadStageBuffer[loadOp].push_back(newOp->getResult(0));
         } else
           llvm_unreachable("This should be LoadOp");
@@ -319,6 +354,9 @@ void LoopPipeliner::emitPrologue() {
       }
 
       // Update mapping of results
+      // if (stage == numStages - 2)
+      //   continue;
+
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
         Value originalResult = op->getResult(dstIdx);
         // copy_async will update the value of its only use
@@ -348,10 +386,14 @@ void LoopPipeliner::emitPrologue() {
                                    loads.size() * (numStages - 2));
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (Value loadOp : loads) {
+    auto bufferType = loadStageBuffer[loadOp][numStages - 1]
+                          .getType()
+                          .cast<RankedTensorType>();
+    auto bufferShape = bufferType.getShape();
     auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
-    sliceType =
-        RankedTensorType::get(sliceType.getShape(), sliceType.getElementType(),
-                              loadsBufferType[loadOp].getEncoding());
+    sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]},
+                                      sliceType.getElementType(),
+                                      loadsBufferType[loadOp].getEncoding());
     Value extractSlice = builder.create<tensor::ExtractSliceOp>(
         loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][numStages - 1],
         SmallVector<OpFoldResult>{int_attr(0), int_attr(0), int_attr(0)},
@@ -383,7 +425,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   //   (original args)
   //   (insertSliceAsync buffer at stage numStages - 1) for each load
   //   (extracted tensor) for each load
-  //   (depArgs at stage numStages - 1)
+  //   (depArgs at stage numStages - 2)
   //   (iv at stage numStages - 2)
   //   (pipeline iteration index)
   //   (loop iteration index)
@@ -404,7 +446,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   size_t depArgsBeginIdx = newLoopArgs.size();
   for (BlockArgument depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
+    newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
   }
 
   size_t nextIVIdx = newLoopArgs.size();
@@ -422,7 +464,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   // 2. body of the new ForOp
   builder.setInsertionPointToStart(newForOp.getBody());
-  BlockAndValueMapping mapping;
+  IRMapping mapping;
   for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
@@ -459,14 +501,16 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   }
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
          "depOps contains invalid values");
-  BlockAndValueMapping nextMapping;
+  IRMapping nextMapping;
   DenseMap<BlockArgument, Value> depArgsMapping;
   size_t argIdx = 0;
   for (BlockArgument arg : depArgs) {
-    nextMapping.map(arg,
-                    newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx]);
+    BlockArgument nextArg =
+        newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
+    nextMapping.map(arg, nextArg);
     ++argIdx;
   }
+
   // Special handling for iv & loop condition
   Value nextIV = builder.create<arith::AddIOp>(
       newForOp.getInductionVar().getLoc(),
@@ -491,12 +535,31 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   extractSliceIndex = builder.create<arith::IndexCastOp>(
       extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex);
 
+  for (Operation *op : orderedDeps)
+    if (!loads.contains(op->getResult(0))) {
+      Operation *nextOp = builder.clone(*op, nextMapping);
+
+      auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
+        for (OpOperand &operand : originYield->getOpOperands()) {
+          if (operand.get() == op->getResult(dstIdx)) {
+            size_t originIdx = operand.getOperandNumber();
+            size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
+            BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
+            nextMapping.map(forOp.getRegionIterArgs()[originIdx],
+                            nextOp->getResult(dstIdx));
+            depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+          }
+        }
+      }
+    }
+
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
     // Update loading mask
     if (loads.contains(op->getResult(0))) {
       auto loadOp = llvm::cast<triton::LoadOp>(op);
-      Value mask = loadOp.mask();
+      Value mask = loadOp.getMask();
       Value newMask;
       if (mask) {
         Value splatCond = builder.create<triton::SplatOp>(
@@ -507,22 +570,27 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         // once
         if (!(forOp.isDefinedOutsideOfLoop(mask) && nextMapping.contains(mask)))
           nextMapping.map(mask, newMask);
-        newMask = nextMapping.lookupOrDefault(loadOp.mask());
+        newMask = nextMapping.lookupOrDefault(loadOp.getMask());
       } else
         newMask = builder.create<triton::SplatOp>(
             loadOp.getLoc(), getI1SameShape(loadOp), nextLoopCond);
       Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
           op->getLoc(), loadsBuffer[loadOp].getType(),
-          nextMapping.lookupOrDefault(loadOp.ptr()),
+          nextMapping.lookupOrDefault(loadOp.getPtr()),
           newForOp.getRegionIterArgs()[bufferIdx + nextBuffers.size()],
           insertSliceIndex, newMask,
-          nextMapping.lookupOrDefault(loadOp.other()), loadOp.cache(),
-          loadOp.evict(), loadOp.isVolatile(), /*axis*/ 0);
+          nextMapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
+          loadOp.getEvict(), loadOp.getIsVolatile(), /*axis*/ 0);
+      builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
       nextBuffers.push_back(insertAsyncOp);
+      // ExtractSlice
+      auto bufferType = insertAsyncOp.getType().cast<RankedTensorType>();
+      auto bufferShape = bufferType.getShape();
       auto sliceType = loadsMapping[loadOp].getType().cast<RankedTensorType>();
-      sliceType = RankedTensorType::get(sliceType.getShape(),
+      sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]},
                                         sliceType.getElementType(),
                                         loadsBufferType[loadOp].getEncoding());
+
       nextOp = builder.create<tensor::ExtractSliceOp>(
           op->getLoc(), sliceType, insertAsyncOp,
           SmallVector<OpFoldResult>{extractSliceIndex, int_attr(0),
@@ -532,19 +600,19 @@ scf::ForOp LoopPipeliner::createNewForOp() {
                                     int_attr(sliceType.getShape()[1])},
           SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
       extractSlices.push_back(nextOp->getResult(0));
-    } else
-      nextOp = builder.clone(*op, nextMapping);
-    // Update mapping of results
-    for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
-      nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
-      // If this is a loop-carried value, update the mapping for yield
-      auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      for (OpOperand &operand : originYield->getOpOperands()) {
-        if (operand.get() == op->getResult(dstIdx)) {
-          size_t originIdx = operand.getOperandNumber();
-          size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
-          BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
-          depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+
+      // Update mapping of results
+      for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
+        nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
+        // If this is a loop-carried value, update the mapping for yield
+        auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        for (OpOperand &operand : originYield->getOpOperands()) {
+          if (operand.get() == op->getResult(dstIdx)) {
+            size_t originIdx = operand.getOperandNumber();
+            size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
+            BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
+            depArgsMapping[newArg] = nextOp->getResult(dstIdx);
+          }
         }
       }
     }
@@ -556,8 +624,8 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       if (auto dotOp = llvm::dyn_cast<triton::DotOp>(&op)) {
         builder.setInsertionPoint(&op);
         auto dotType = dotOp.getType().cast<RankedTensorType>();
-        Value a = dotOp.a();
-        Value b = dotOp.b();
+        Value a = dotOp.getA();
+        Value b = dotOp.getB();
         auto layoutCast = [&](Value dotOperand, int opIdx) -> Value {
           auto tensorType = dotOperand.getType().cast<RankedTensorType>();
           if (!tensorType.getEncoding().isa<ttg::DotOperandEncodingAttr>()) {

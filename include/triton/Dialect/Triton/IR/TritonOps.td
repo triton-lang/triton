@@ -6,10 +6,10 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
+include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
-include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
+include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 
 //
@@ -29,7 +29,7 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 //   extui, extsi, tructi
 def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape,
                                          SameOperandsAndResultEncoding,
-                                         NoSideEffect,
+                                         Pure,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast int64 to pointer";
 
@@ -42,7 +42,7 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape,
 
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
                                          SameOperandsAndResultEncoding,
-                                         NoSideEffect,
+                                         Pure,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast pointer to int64";
 
@@ -56,7 +56,7 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
 // arith.bitcast doesn't support pointers
 def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
-                                     NoSideEffect,
+                                     Pure,
                                      /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Cast between types of the same bitwidth";
 
@@ -71,7 +71,7 @@ def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape,
 
 def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
-                                     NoSideEffect,
+                                     Pure,
                                      DeclareOpInterfaceMethods<CastOpInterface>]> {
     let summary = "Floating point casting for custom types";
 
@@ -95,9 +95,9 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
 //
 
 def TT_AddPtrOp : TT_Op<"addptr",
-                     [NoSideEffect,
-                     SameOperandsAndResultShape,
-                     SameOperandsAndResultEncoding,
+                     [Pure,
+                      SameOperandsAndResultShape,
+                      SameOperandsAndResultEncoding,
                       TypesMatchWith<"result type matches ptr type",
                                      "result", "ptr", "$_self">]> {
     let arguments = (ins TT_PtrLike:$ptr, TT_IntLike:$offset);
@@ -141,11 +141,7 @@ def TT_LoadOp : TT_Op<"load",
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
     ];
 
-    // let assemblyFormat = "operands attr-dict `:` type($result)";
-    let parser = [{ return mlir::triton::parseLoadOp(parser, result); }];
-
-    let printer = [{ return mlir::triton::printLoadOp(p, *this); }];
-
+    let hasCustomAssemblyFormat = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -161,17 +157,16 @@ def TT_StoreOp : TT_Op<"store",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "store";
 
-    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask);
+    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
+                     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+                     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
 
     let builders = [
-        OpBuilder<(ins "Value":$ptr, "Value":$value)>,
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict)>,
     ];
 
-    // let assemblyFormat = "operands attr-dict `:` type($value)";
-    let parser = [{ return mlir::triton::parseStoreOp(parser, result); }];
-
-    let printer = [{ return mlir::triton::printStoreOp(p, *this); }];
-
+    let hasCustomAssemblyFormat = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -227,8 +222,9 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
 //
 // Shape Manipulation Ops
 //
-def TT_SplatOp : TT_Op<"splat", [NoSideEffect,
-                                 SameOperandsAndResultElementType]> {
+def TT_SplatOp : TT_Op<"splat", [Pure,
+                                 SameOperandsAndResultElementType,
+                                 SameOperandsAndResultEncoding]> {
     let summary = "splat";
 
     let arguments = (ins TT_Type:$src);
@@ -240,7 +236,7 @@ def TT_SplatOp : TT_Op<"splat", [NoSideEffect,
     let hasFolder = 1;
 }
 
-def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect,
+def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
                                             DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                             SameOperandsAndResultElementType]> {
     let summary = "expand_dims";
@@ -252,7 +248,8 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [NoSideEffect,
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
-def TT_ViewOp : TT_Op<"view", [NoSideEffect,
+// view is not `pure` because it may reorder elements
+def TT_ViewOp : TT_Op<"view", [NoMemoryEffect,
                                SameOperandsAndResultElementType]> {
     let summary = "view";
 
@@ -264,8 +261,9 @@ def TT_ViewOp : TT_Op<"view", [NoSideEffect,
 
 }
 
-def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
-                                         SameOperandsAndResultElementType]> {
+def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
+                                         SameOperandsAndResultElementType,
+                                         SameOperandsAndResultEncoding]> {
     let summary = "broadcast. No left-padding as of now.";
 
     let arguments = (ins TT_Type:$src);
@@ -277,7 +275,8 @@ def TT_BroadcastOp : TT_Op<"broadcast", [NoSideEffect,
     let hasFolder = 1;
 }
 
-def TT_CatOp : TT_Op<"cat", [NoSideEffect,
+// cat is not `pure` because it may reorder elements
+def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
                              SameOperandsAndResultElementType]> {
     let summary = "concatenate 2 tensors";
 
@@ -288,7 +287,8 @@ def TT_CatOp : TT_Op<"cat", [NoSideEffect,
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
 }
 
-def TT_TransOp : TT_Op<"trans", [NoSideEffect,
+def TT_TransOp : TT_Op<"trans", [Pure,
+                                 DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                  SameOperandsAndResultElementType]> {
 
     let summary = "transpose a tensor";
@@ -303,7 +303,7 @@ def TT_TransOp : TT_Op<"trans", [NoSideEffect,
 //
 // SPMD Ops
 //
-def TT_GetProgramIdOp : TT_Op<"get_program_id", [NoSideEffect]> {
+def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -311,7 +311,7 @@ def TT_GetProgramIdOp : TT_Op<"get_program_id", [NoSideEffect]> {
     let assemblyFormat = "attr-dict `:` type($result)";
 }
 
-def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
+def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
     let arguments = (ins I32Attr:$axis);
 
     let results = (outs I32:$result);
@@ -322,7 +322,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [NoSideEffect]> {
 //
 // Dot Op
 //
-def TT_DotOp : TT_Op<"dot", [NoSideEffect,
+def TT_DotOp : TT_Op<"dot", [Pure,
                              DeclareOpInterfaceMethods<InferTypeOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
@@ -342,7 +342,7 @@ def TT_DotOp : TT_Op<"dot", [NoSideEffect,
 //
 // Reduce Op
 //
-def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
+def TT_ReduceOp : TT_Op<"reduce", [Pure,
                                    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "reduce";
 
@@ -366,7 +366,7 @@ def TT_ReduceOp : TT_Op<"reduce", [NoSideEffect,
 //
 // External elementwise op
 //
-def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [NoSideEffect, Elementwise, SameOperandsAndResultShape,
+def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [Pure, Elementwise, SameOperandsAndResultShape,
                                               SameOperandsAndResultEncoding,
                                               SameVariadicOperandSize]> {
     let summary = "ext_elemwise";
@@ -388,7 +388,7 @@ def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [NoSideEffect, Elementwise, SameOpe
 // Make Range Op
 //
 // TODO: should have ConstantLike as Trait
-def TT_MakeRangeOp : TT_Op<"make_range", [NoSideEffect]> {
+def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     let summary = "make range";
 
     let description = [{

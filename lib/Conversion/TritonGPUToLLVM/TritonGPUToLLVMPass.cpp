@@ -1,10 +1,11 @@
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
-#include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
+#include "mlir/Analysis/DataFlowFramework.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM//ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -40,7 +41,6 @@ public:
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
-    addIllegalDialect<mlir::StandardOpsDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -51,7 +51,7 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
-    addIllegalOp<mlir::FuncOp>();
+    addIllegalOp<mlir::func::FuncOp>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -69,7 +69,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
       : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
 
   LogicalResult
-  matchAndRewrite(FuncOp funcOp, OpAdaptor adaptor,
+  matchAndRewrite(func::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
     if (!newFuncOp)
@@ -83,8 +83,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid",
-                       rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
+    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -117,23 +116,21 @@ public:
     // Step 2: Decompose insert_slice_async to use load + insert_slice for
     //   pre-Ampere architectures or unsupported vectorized load sizes
     // Step 3: Allocate shared memories and insert barriers
-    // Step 4: Convert SCF to CFG
-    // Step 5: Convert FuncOp to LLVMFuncOp via partial conversion
-    // Step 6: Get axis and shared memory info
-    // Step 7: Convert the rest of ops via partial conversion
+    // Step 4: Convert FuncOp to LLVMFuncOp via partial conversion
+    // Step 5: Get axis and shared memory info
+    // Step 6: Convert the rest of ops via partial conversion
     //
-    // The reason for putting step 3 before step 4 is that the membar
-    // analysis currently only supports SCF but not CFG. The reason for a
-    // separation between 5/7 is that, step 6 is out of the scope of Dialect
-    // Conversion, thus we need to make sure the smem is not revised during the
-    // conversion of step 7.
+    // The reason for a separation between 4/6 is that, step 5 is out of the
+    // scope of Dialect Conversion, thus we need to make sure the smem is not
+    // revised during the conversion of step 6.
 
     // Step 1
     decomposeMmaToDotOperand(mod, numWarps);
     decomposeBlockedToDotOperand(mod);
 
     // Step 2
-    decomposeInsertSliceAsyncOp(mod);
+    if (failed(decomposeInsertSliceAsyncOp(mod)))
+      return signalPassFailure();
 
     // Step 3
     Allocation allocation(mod);
@@ -141,32 +138,23 @@ public:
     membarPass.run();
 
     // Step 4
-    RewritePatternSet scf_patterns(context);
-    mlir::populateLoopToStdConversionPatterns(scf_patterns);
-    mlir::ConversionTarget scf_target(*context);
-    scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
-                            scf::WhileOp, scf::ExecuteRegionOp>();
-    scf_target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    RewritePatternSet funcPatterns(context);
+    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
     if (failed(
-            applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
       return signalPassFailure();
 
-    // Step 5
-    RewritePatternSet func_patterns(context);
-    func_patterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
-    if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(func_patterns))))
+    // Step 5 - get axis and shared memory info
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
+    if (failed(solver->initializeAndRun(mod)))
       return signalPassFailure();
-
-    // Step 6 - get axis and shared memory info
-    AxisInfoAnalysis axisInfoAnalysis(mod.getContext());
-    axisInfoAnalysis.run(mod);
     initSharedMemory(allocation.getSharedMemorySize(), typeConverter);
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
                                         allocation.getSharedMemorySize()));
 
-    // Step 7 - rewrite rest of ops
+    // Step 6 - rewrite rest of ops
     // We set a higher benefit here to ensure triton's patterns runs before
     // arith patterns for some encoding not supported by the community
     // patterns.
@@ -178,38 +166,38 @@ public:
 
     // Normal conversions
     populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
-                                    axisInfoAnalysis, &allocation, smem,
+                                    *axisInfoAnalysis, &allocation, smem,
                                     indexCacheInfo, /*benefit=*/10);
     // ConvertLayoutOp
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                          axisInfoAnalysis, &allocation, smem,
+                                          *axisInfoAnalysis, &allocation, smem,
                                           indexCacheInfo, /*benefit=*/10);
     // DotOp
     populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                axisInfoAnalysis, &allocation, smem,
+                                *axisInfoAnalysis, &allocation, smem,
                                 /*benefit=*/10);
     // ElementwiseOp
     populateElementwiseOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                        axisInfoAnalysis, &allocation, smem,
+                                        *axisInfoAnalysis, &allocation, smem,
                                         /*benefit=*/10);
     // LoadStoreOp
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                      axisInfoAnalysis, &allocation, smem,
+                                      *axisInfoAnalysis, &allocation, smem,
                                       indexCacheInfo, /*benefit=*/10);
     // ReduceOp
     populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                   axisInfoAnalysis, &allocation, smem,
+                                   *axisInfoAnalysis, &allocation, smem,
                                    indexCacheInfo, /*benefit=*/10);
     // ViewOp
     populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                 axisInfoAnalysis, &allocation, smem,
+                                 *axisInfoAnalysis, &allocation, smem,
                                  /*benefit=*/10);
 
     // Add arith/math's patterns to help convert scalar expression to LLVM.
-    mlir::arith::populateArithmeticToLLVMConversionPatterns(typeConverter,
-                                                            patterns);
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::populateStdToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
@@ -240,7 +228,8 @@ private:
     auto global = b.create<LLVM::GlobalOp>(
         loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
         "global_smem", /*value=*/Attribute(), /*alignment=*/0,
-        mlir::gpu::GPUDialect::getWorkgroupAddressSpace());
+        // Add ROCm support.
+        static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
     SmallVector<LLVM::LLVMFuncOp> funcs;
     mod.walk([&](LLVM::LLVMFuncOp func) { funcs.push_back(func); });
     assert(funcs.size() == 1 &&
@@ -306,9 +295,11 @@ private:
     });
   }
 
-  void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
-    AxisInfoAnalysis axisInfoAnalysis(mod.getContext());
-    axisInfoAnalysis.run(mod);
+  LogicalResult decomposeInsertSliceAsyncOp(ModuleOp mod) const {
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
+    if (failed(solver->initializeAndRun(mod)))
+      return failure();
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
     // have thorough analysis on async wait. Currently, we decompose
@@ -333,8 +324,8 @@ private:
       OpBuilder builder(insertSliceAsyncOp);
 
       // Get the vectorized load size
-      auto src = insertSliceAsyncOp.src();
-      auto dst = insertSliceAsyncOp.dst();
+      auto src = insertSliceAsyncOp.getSrc();
+      auto dst = insertSliceAsyncOp.getDst();
       auto srcTy = src.getType().cast<RankedTensorType>();
       auto dstTy = dst.getType().cast<RankedTensorType>();
       auto srcBlocked =
@@ -342,7 +333,7 @@ private:
       auto resSharedLayout =
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
-      unsigned inVec = axisInfoAnalysis.getPtrVectorSize(src);
+      unsigned inVec = axisInfoAnalysis->getPtrContiguity(src);
       unsigned outVec = resSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       auto maxBitWidth =
@@ -362,30 +353,35 @@ private:
       auto tmpTy =
           RankedTensorType::get(srcTy.getShape(), resElemTy, srcBlocked);
       auto loadOp = builder.create<triton::LoadOp>(
-          insertSliceAsyncOp.getLoc(), tmpTy, insertSliceAsyncOp.src(),
-          insertSliceAsyncOp.mask(), insertSliceAsyncOp.other(),
-          insertSliceAsyncOp.cache(), insertSliceAsyncOp.evict(),
-          insertSliceAsyncOp.isVolatile());
+          insertSliceAsyncOp.getLoc(), tmpTy, insertSliceAsyncOp.getSrc(),
+          insertSliceAsyncOp.getMask(), insertSliceAsyncOp.getOther(),
+          insertSliceAsyncOp.getCache(), insertSliceAsyncOp.getEvict(),
+          insertSliceAsyncOp.getIsVolatile());
 
       // insert_slice
-      auto axis = insertSliceAsyncOp.axis();
+      auto axis = insertSliceAsyncOp.getAxis();
       auto intAttr = [&](int64_t v) { return builder.getI64IntegerAttr(v); };
       auto offsets = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(0));
       auto sizes = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(1));
       auto strides = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(1));
-      offsets[axis] = insertSliceAsyncOp.index();
+      offsets[axis] = insertSliceAsyncOp.getIndex();
       for (size_t i = 0; i < dstTy.getRank(); i++) {
         if (i != axis)
           sizes[i] = intAttr(dstTy.getShape()[i]);
       }
       auto insertSliceOp = builder.create<tensor::InsertSliceOp>(
-          insertSliceAsyncOp.getLoc(), loadOp, insertSliceAsyncOp.dst(),
+          insertSliceAsyncOp.getLoc(), loadOp, insertSliceAsyncOp.getDst(),
           offsets, sizes, strides);
 
       // Replace
       insertSliceAsyncOp.replaceAllUsesWith(insertSliceOp.getResult());
       insertSliceAsyncOp.erase();
       decomposed = true;
+    });
+
+    mod.walk([&](triton::gpu::AsyncCommitGroupOp asyncCommitGroupOp) -> void {
+      if (!triton::gpu::AsyncCommitGroupOp::isSupported(computeCapability))
+        asyncCommitGroupOp.erase();
     });
 
     mod.walk([&](triton::gpu::AsyncWaitOp asyncWaitOp) -> void {
@@ -395,11 +391,11 @@ private:
       } else if (decomposed) {
         // Wait for all previous async ops
         OpBuilder builder(asyncWaitOp);
-        auto newAsyncWaitOp =
-            builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
+        builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
         asyncWaitOp.erase();
       }
     });
+    return success();
   }
 };
 

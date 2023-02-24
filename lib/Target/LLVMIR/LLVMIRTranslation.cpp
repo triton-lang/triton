@@ -14,10 +14,16 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
+#include <dlfcn.h>
+#include <filesystem>
+#include <iterator>
 
 namespace mlir {
 namespace triton {
@@ -25,56 +31,70 @@ namespace triton {
 // Describes NVVM Metadata. It is used to record the nvvm related meta
 // information from mlir module.
 struct NVVMMetadata {
-  int maxntidx{-1};
-  bool is_kernel{};
+  SmallVector<int, 3> maxntid;
+  bool isKernel{};
   // Free to extend with other information.
 };
 
 // Add the nvvm related metadata to LLVM IR.
-void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
+static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
-  if (metadata.maxntidx > 0) {
-    auto i32_ty = llvm::IntegerType::get(ctx, 32);
-    auto warps =
-        llvm::ConstantInt::get(i32_ty, llvm::APInt(32, metadata.maxntidx));
+  if (!metadata.maxntid.empty()) {
+    auto maxntid =
+        llvm::to_vector(llvm::map_range(metadata.maxntid, [&](int value) {
+          return llvm::ConstantInt::get(llvm::IntegerType::get(ctx, 32),
+                                        llvm::APInt(32, value));
+        }));
 
-    llvm::Metadata *md_args[] = {llvm::ValueAsMetadata::get(func),
-                                 llvm::MDString::get(ctx, "maxntidx"),
-                                 llvm::ValueAsMetadata::get(warps)};
+    SmallVector<llvm::Metadata *> md_args = {llvm::ValueAsMetadata::get(func)};
+    if (maxntid.size() > 0) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidx"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[0]));
+    }
+    if (maxntid.size() > 1) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidy"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[1]));
+    }
+    if (maxntid.size() > 2) {
+      md_args.push_back(llvm::MDString::get(ctx, "maxntidz"));
+      md_args.push_back(llvm::ValueAsMetadata::get(maxntid[2]));
+    }
 
     module->getOrInsertNamedMetadata("nvvm.annotations")
         ->addOperand(llvm::MDNode::get(ctx, md_args));
   }
 
-  if (metadata.is_kernel) {
-    llvm::Metadata *md_args[] = {
+  if (metadata.isKernel) {
+    llvm::Metadata *mdArgs[] = {
         llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
         llvm::ValueAsMetadata::get(
             llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
     module->getOrInsertNamedMetadata("nvvm.annotations")
-        ->addOperand(llvm::MDNode::get(ctx, md_args));
+        ->addOperand(llvm::MDNode::get(ctx, mdArgs));
   }
 }
 
-void extractNVVMMetadata(mlir::ModuleOp module,
-                         llvm::DenseMap<llvm::StringRef, NVVMMetadata> *dic) {
+static void
+extractNVVMMetadata(mlir::ModuleOp module,
+                    llvm::DenseMap<llvm::StringRef, NVVMMetadata> *dic) {
   for (auto op : module.getOps<LLVM::LLVMFuncOp>()) {
     NVVMMetadata meta;
 
     bool hasMetadata{};
 
     // maxntid
-    if (op->hasAttr("nvvm.maxntid")) {
-      auto attr = op->getAttr("nvvm.maxntid");
-      meta.maxntidx = attr.dyn_cast<IntegerAttr>().getInt();
+    if (auto attr = op->getAttrOfType<ArrayAttr>("nvvm.maxntid")) {
+      llvm::transform(attr.getAsValueRange<IntegerAttr>(),
+                      std::back_inserter(meta.maxntid),
+                      [](llvm::APInt value) { return value.getZExtValue(); });
       hasMetadata = true;
     }
 
     // kernel
     if (op->hasAttr("nvvm.kernel")) {
-      meta.is_kernel = true;
+      meta.isKernel = true;
       hasMetadata = true;
     }
 
@@ -83,13 +103,138 @@ void extractNVVMMetadata(mlir::ModuleOp module,
   }
 }
 
+static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
+  std::map<std::string, std::string> externLibs;
+  SmallVector<LLVM::LLVMFuncOp> funcs;
+  module.walk([&](LLVM::LLVMFuncOp func) {
+    if (func.isExternal())
+      funcs.push_back(func);
+  });
+
+  for (auto &func : funcs) {
+    if (func.getOperation()->hasAttr("libname")) {
+      auto name =
+          func.getOperation()->getAttr("libname").dyn_cast<StringAttr>();
+      auto path =
+          func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
+      if (name) {
+        std::string libName = name.str();
+        externLibs[libName] = path.str();
+      }
+    }
+  }
+
+  if (module.getOperation()->hasAttr("triton_gpu.externs")) {
+    auto dict = module.getOperation()
+                    ->getAttr("triton_gpu.externs")
+                    .dyn_cast<DictionaryAttr>();
+    for (auto &attr : dict) {
+      externLibs[attr.getName().strref().trim().str()] =
+          attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
+    }
+  }
+
+  if (!funcs.empty()) {
+    static const std::string libdevice = "libdevice";
+    // first search for environmental path
+    std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
+    if (!env_path.empty()) {
+      externLibs.try_emplace(libdevice, env_path);
+      return externLibs;
+    }
+    namespace fs = std::filesystem;
+    // Search for libdevice relative to its library path if used from Python
+    // Then native code is in `triton/_C/libtriton.so` and libdevice in
+    // `triton/third_party/cuda/lib/libdevice.10.bc`
+    static const auto this_library_path = [] {
+      Dl_info fileinfo;
+      if (dladdr(reinterpret_cast<void *>(&getExternLibs), &fileinfo) == 0) {
+        return std::filesystem::path();
+      }
+      return std::filesystem::path(fileinfo.dli_fname);
+    }();
+    static const auto runtime_path =
+        this_library_path.parent_path().parent_path() / "third_party" / "cuda" /
+        "lib" / "libdevice.10.bc";
+    if (fs::exists(runtime_path)) {
+      externLibs.try_emplace(libdevice, runtime_path.string());
+    } else {
+      // When using the Math Dialect, it is possible that some ops (e.g., log)
+      // are lowered to a function call. In this case, we need to link libdevice
+      // using its default path:
+      // [triton root dir]/python/triton/language/libdevice.10.bc
+      // TODO(Keren): handle external linkage other than libdevice?
+      static const auto this_file_path = std::filesystem::path(__FILE__);
+      static const auto compiletime_path = this_file_path.parent_path()
+                                               .parent_path()
+                                               .parent_path()
+                                               .parent_path() /
+                                           "python" / "triton" / "third_party" /
+                                           "cuda" / "lib" / "libdevice.10.bc";
+      if (!fs::exists(compiletime_path)) {
+        std::string error_msg = "Can't find libdevice at neither " +
+                                runtime_path.string() + " nor " +
+                                compiletime_path.string();
+        llvm::report_fatal_error(error_msg.c_str());
+      }
+      externLibs.try_emplace(libdevice, compiletime_path.string());
+    }
+  }
+
+  return externLibs;
+}
+
+static void linkLibdevice(llvm::Module &module) {
+  // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
+  // this will enable fast math path in libdevice
+  // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
+  // sqrt.approx.ftz.f32
+  auto &ctx = module.getContext();
+  llvm::Type *i32 = llvm::Type::getInt32Ty(ctx);
+  llvm::Metadata *mdFour =
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(i32, 4));
+  llvm::Metadata *mdName = llvm::MDString::get(ctx, "nvvm-reflect-ftz");
+  llvm::Metadata *mdOne =
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::getSigned(i32, 1));
+  llvm::MDNode *reflect = llvm::MDNode::get(ctx, {mdFour, mdName, mdOne});
+  module.addModuleFlag(reflect);
+}
+
+static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
+                          llvm::StringRef path) {
+  llvm::SMDiagnostic err;
+  auto &ctx = module.getContext();
+
+  auto extMod = llvm::parseIRFile(path, err, ctx);
+  if (!extMod) {
+    llvm::errs() << "Failed to load " << path;
+    return true;
+  }
+
+  extMod->setTargetTriple(module.getTargetTriple());
+  extMod->setDataLayout(module.getDataLayout());
+
+  if (llvm::Linker::linkModules(module, std::move(extMod),
+                                llvm::Linker::Flags::LinkOnlyNeeded)) {
+    llvm::errs() << "Failed to link " << path;
+    return true;
+  }
+
+  if (name == "libdevice") {
+    linkLibdevice(module);
+  } else {
+    assert(false && "unknown extern lib: ");
+  }
+
+  return false;
+}
+
 std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
-  auto context = module->getContext();
   DialectRegistry registry;
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
-  context->appendDialectRegistry(registry);
+  module->getContext()->appendDialectRegistry(registry);
 
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
   extractNVVMMetadata(module, &nvvmMetadata);
@@ -98,6 +243,20 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   if (!llvmModule) {
     llvm::errs() << "Failed to emit LLVM IR\n";
     return nullptr;
+  }
+
+  // Link external libraries before perform optimizations
+  // Note from libdevice users guide:
+  // https://docs.nvidia.com/cuda/libdevice-users-guide/basic-usage.html
+  // The standard process for linking with libdevice is to first link it with
+  // the target module, then run the standard LLVM optimization and code
+  // generation passes. This allows the optimizers to inline and perform
+  // analyses on the used library functions, and eliminate any used functions as
+  // dead code.
+  auto externLibs = getExternLibs(module);
+  for (auto &lib : externLibs) {
+    if (linkExternLib(*llvmModule, lib.first, lib.second))
+      return nullptr;
   }
 
   auto optPipeline = mlir::makeOptimizingTransformer(
@@ -135,6 +294,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnChange=*/true,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
+  pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
   // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createCanonicalizerPass());
@@ -147,49 +307,12 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
-  std::map<std::string, std::string> externLibs;
-  SmallVector<LLVM::LLVMFuncOp> funcs;
-  module.walk([&](LLVM::LLVMFuncOp func) {
-    if (func.isExternal())
-      funcs.push_back(func);
-  });
-
-  for (auto &func : funcs) {
-    if (func.getOperation()->hasAttr("libname")) {
-      auto name =
-          func.getOperation()->getAttr("libname").dyn_cast<StringAttr>();
-      auto path =
-          func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
-      if (name) {
-        std::string lib_name = name.str();
-        externLibs[lib_name] = path.str();
-      }
-    }
-  }
-
-  if (module.getOperation()->hasAttr("triton_gpu.externs")) {
-    auto dict = module.getOperation()
-                    ->getAttr("triton_gpu.externs")
-                    .dyn_cast<DictionaryAttr>();
-    for (auto &attr : dict) {
-      externLibs[attr.getName().strref().trim().str()] =
-          attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
-    }
-  }
-
-  auto llvmir = translateLLVMToLLVMIR(llvmContext, module);
-  if (!llvmir) {
+  auto llvmIR = translateLLVMToLLVMIR(llvmContext, module);
+  if (!llvmIR) {
     llvm::errs() << "Translate to LLVM IR failed";
     return nullptr;
   }
-
-  llvm::SMDiagnostic err;
-  for (auto &lib : externLibs) {
-    if (linkExternLib(*llvmir, lib.second))
-      return nullptr;
-  }
-
-  return llvmir;
+  return llvmIR;
 }
 
 void addExternalLibs(mlir::ModuleOp &module,
@@ -209,28 +332,6 @@ void addExternalLibs(mlir::ModuleOp &module,
 
   DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
   module.getOperation()->setAttr("triton_gpu.externs", dict);
-}
-
-bool linkExternLib(llvm::Module &module, llvm::StringRef path) {
-  llvm::SMDiagnostic err;
-  auto &ctx = module.getContext();
-
-  auto extMod = llvm::parseIRFile(path, err, ctx);
-  if (!extMod) {
-    llvm::errs() << "Failed to load " << path;
-    return true;
-  }
-
-  extMod->setTargetTriple(module.getTargetTriple());
-  extMod->setDataLayout(module.getDataLayout());
-
-  if (llvm::Linker::linkModules(module, std::move(extMod),
-                                llvm::Linker::Flags::LinkOnlyNeeded)) {
-    llvm::errs() << "Failed to link " << path;
-    return true;
-  }
-
-  return false;
 }
 
 } // namespace triton

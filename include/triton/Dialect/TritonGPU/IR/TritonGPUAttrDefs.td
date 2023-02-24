@@ -1,6 +1,7 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
+include "mlir/IR/AttrTypeBase.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 
@@ -95,9 +96,6 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
           bool is_row = order[0] != 0;
           bool is_vec4 = opIdx == 0 ? !is_row && (shape[order[0]] <= 16) :
               is_row && (shape[order[0]] <= 16);
-          // TODO[Superjomn]: Support the case when is_vec4=false later
-          // Currently, we only support ld.v2, for the mma layout varies with different ld vector width.
-          is_vec4 = true;
           int pack_size = opIdx == 0 ? ((is_row || is_vec4) ? 1 : 2) :
                                        ((is_row && !is_vec4) ? 2 : 1);
           int rep = 2 * pack_size;
@@ -135,12 +133,11 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
-
-
     }]>
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration;
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -278,6 +275,7 @@ for
     // ArrayRefParameter<"unsigned">:$sizePerCTA
   );
 
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -376,33 +374,58 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   );
 
   let builders = [
-    // specific for MMAV1(Volta)
+     // Specially for MMAV1(Volta)
+    AttrBuilder<(ins "int":$versionMajor,
+                     "int":$numWarps,
+                     "int":$id), [{
+      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
+      SmallVector<unsigned> wpt({static_cast<unsigned>(numWarps), 1});
+      int versionMinor = 0;
+
+      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
+      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
+        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
+
+      return $_get(context, versionMajor, versionMinor, wpt);
+    }]>,
+
+    // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "ArrayRef<unsigned>":$warpsPerCTA,
                      "ArrayRef<int64_t>":$shapeA,
                      "ArrayRef<int64_t>":$shapeB,
                      "bool":$isARow,
-                     "bool":$isBRow), [{
-      assert(versionMajor == 1 && "Only MMAv1 has multiple versionMinor.");
+                     "bool":$isBRow,
+                     "int":$id), [{
+      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
+      // 3-bits to encode the MMA ID to make each unique
       int versionMinor = (isARow * (1<<0)) |\
                          (isBRow * (1<<1)) |\
                          (isAVec4 * (1<<2)) |\
                          (isBVec4 * (1<<3));
+
+      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
+      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
+        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
+
       return $_get(context, versionMajor, versionMinor, warpsPerCTA);
     }]>
-
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     bool isVolta() const;
     bool isAmpere() const;
-    // Get [isARow, isBRow, isAVec4, isBVec4] from versionMinor
-    std::tuple<bool, bool, bool, bool> decodeVoltaLayoutStates() const;
+    // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
+    std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
+    // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
+    // Here 5 bits can hold 32 IDs in a single module.
+    static constexpr int numBitsToHoldMmaV1ID{5};
   }];
 
+  let hasCustomAssemblyFormat = 1;
 }
 
 def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
@@ -437,6 +460,8 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
   }];
+
+  let hasCustomAssemblyFormat = 1;
 }
 
 def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
@@ -473,6 +498,7 @@ section 9.7.13.4.1 for more details.
 
   ];
 
+  let hasCustomAssemblyFormat = 1;
   let extraClassDeclaration = extraBaseClassDeclaration;
 }
 

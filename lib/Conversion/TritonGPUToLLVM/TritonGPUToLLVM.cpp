@@ -11,11 +11,11 @@ using ::mlir::LLVM::getStructFromElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
-struct ReturnOpConversion : public ConvertOpToLLVMPattern<::mlir::ReturnOp> {
-  using ConvertOpToLLVMPattern<ReturnOp>::ConvertOpToLLVMPattern;
+struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
+  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(ReturnOp op, OpAdaptor adaptor,
+  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     unsigned numArguments = op.getNumOperands();
 
@@ -54,9 +54,9 @@ struct BroadcastOpConversion
     // regardless of the order of the layout
     //
     Location loc = op->getLoc();
-    Value src = adaptor.src();
-    Value result = op.result();
-    auto srcTy = op.src().getType().cast<RankedTensorType>();
+    Value src = adaptor.getSrc();
+    Value result = op.getResult();
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto resultTy = result.getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
@@ -69,10 +69,12 @@ struct BroadcastOpConversion
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
     SmallVector<Value> srcVals = getElementsFromStruct(loc, src, rewriter);
+
     DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
+
     SmallVector<Value> resultVals;
     for (size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
@@ -81,7 +83,9 @@ struct BroadcastOpConversion
           offset[j] = 0;
       resultVals.push_back(srcValues.lookup(offset));
     }
+
     auto llvmStructTy = getTypeConverter()->convertType(resultTy);
+
     Value resultStruct =
         getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
     rewriter.replaceOp(op, {resultStruct});
@@ -107,7 +111,7 @@ struct PrintfOpConversion
     }
     std::string formatStr;
     llvm::raw_string_ostream os(formatStr);
-    os << op.prefix();
+    os << op.getPrefix();
     if (!operands.empty()) {
       os << getFormatSubstr(operands[0]);
     }
@@ -285,20 +289,20 @@ struct MakeRangeOpConversion
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto rankedTy = op.result().getType().dyn_cast<RankedTensorType>();
+    auto rankedTy = op.getResult().getType().dyn_cast<RankedTensorType>();
     auto shape = rankedTy.getShape();
     auto layout = rankedTy.getEncoding();
 
     auto elemTy = rankedTy.getElementType();
     assert(elemTy.isInteger(32));
-    Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.start());
+    Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
     auto idxs = emitIndices(loc, rewriter, layout, shape);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
     // Unexpected behavior for make range, but generally OK when followed by
     // expand dims + broadcast. very weird behavior otherwise potentially.
-    for (const auto multiDim : llvm::enumerate(idxs)) {
+    for (const auto &multiDim : llvm::enumerate(idxs)) {
       assert(multiDim.value().size() == 1);
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
@@ -319,10 +323,10 @@ struct GetProgramIdOpConversion
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(op.axis() < 3);
+    assert(op.getAxis() < 3);
 
     Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(
-        loc, rewriter.getIndexType(), dims[op.axis()]);
+        loc, rewriter.getIndexType(), dims[op.getAxis()]);
     auto llvmIndexTy = getTypeConverter()->getIndexType();
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
         op, TypeRange{llvmIndexTy}, ValueRange{blockId});
@@ -343,10 +347,10 @@ struct GetNumProgramsOpConversion
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(op.axis() < 3);
+    assert(op.getAxis() < 3);
 
     Value blockId = rewriter.create<::mlir::gpu::GridDimOp>(
-        loc, rewriter.getIndexType(), dims[op.axis()]);
+        loc, rewriter.getIndexType(), dims[op.getAxis()]);
     auto llvmIndexTy = getTypeConverter()->getIndexType();
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
         op, TypeRange{llvmIndexTy}, ValueRange{blockId});
@@ -375,8 +379,8 @@ struct AddPtrOpConversion
           getTypeConverter()->convertType(resultTensorTy.getElementType());
       SmallVector<Type> types(elems, elemTy);
       Type structTy = LLVM::LLVMStructType::getLiteral(getContext(), types);
-      auto ptrs = getElementsFromStruct(loc, adaptor.ptr(), rewriter);
-      auto offsets = getElementsFromStruct(loc, adaptor.offset(), rewriter);
+      auto ptrs = getElementsFromStruct(loc, adaptor.getPtr(), rewriter);
+      auto offsets = getElementsFromStruct(loc, adaptor.getOffset(), rewriter);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
@@ -386,7 +390,7 @@ struct AddPtrOpConversion
     } else {
       assert(resultTy.isa<triton::PointerType>());
       Type llResultTy = getTypeConverter()->convertType(resultTy);
-      Value result = gep(llResultTy, adaptor.ptr(), adaptor.offset());
+      Value result = gep(llResultTy, adaptor.getPtr(), adaptor.getOffset());
       rewriter.replaceOp(op, result);
     }
     return success();
@@ -436,7 +440,7 @@ struct ExtractSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = extract_slice %src[%offsets]
     Location loc = op->getLoc();
-    auto srcTy = op.source().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
     assert(op.hasUnitStride() &&
@@ -445,13 +449,13 @@ struct ExtractSliceOpConversion
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
     auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, adaptor.source(), rewriter);
+        getSharedMemoryObjectFromStruct(loc, adaptor.getSource(), rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
     for (auto i = 0; i < mixedOffsets.size(); ++i) {
       if (op.isDynamicOffset(i))
-        opOffsetVals.emplace_back(adaptor.offsets()[i]);
+        opOffsetVals.emplace_back(adaptor.getOffsets()[i]);
       else
         opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
       offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));
@@ -472,7 +476,6 @@ struct ExtractSliceOpConversion
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-    auto resTy = op.getType().dyn_cast<RankedTensorType>();
     smemObj = SharedMemoryObject(gep(elemPtrTy, smemObj.base, offset),
                                  strideVals, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
@@ -505,6 +508,47 @@ struct AsyncWaitOpConversion
   }
 };
 
+struct AsyncCommitGroupOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncCommitGroupOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    PTXBuilder ptxBuilder;
+    ptxBuilder.create<>("cp.async.commit_group")->operator()();
+    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+namespace mlir {
+namespace LLVM {
+
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter) {
+  PrintfOpConversion::llPrintf(msg, args, rewriter);
+}
+
+void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
+                   std::string elem_repr, ConversionPatternRewriter &builder) {
+  std::string fmt = info + " t-%d ";
+  std::vector<Value> new_arr({thread});
+  for (int i = 0; i < arr.size(); ++i) {
+    fmt += elem_repr + ((i == arr.size() - 1) ? "" : ", ");
+    new_arr.push_back(arr[i]);
+  }
+
+  vprintf(fmt, new_arr, builder);
+}
+
+} // namespace LLVM
+} // namespace mlir
+
 void populateTritonGPUToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
@@ -514,6 +558,7 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AllocTensorOpConversion>(typeConverter, allocation, smem,
                                         benefit);
+  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
 
