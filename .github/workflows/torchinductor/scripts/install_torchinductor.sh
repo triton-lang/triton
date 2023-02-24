@@ -4,7 +4,6 @@
 ROOT="$(pwd)"
 
 # torchinductor venv 
-touch /opt/test
 python3 -m venv /opt/torchinductor_venv
 # shellcheck source=/dev/null
 source /opt/torchinductor_venv/bin/activate
