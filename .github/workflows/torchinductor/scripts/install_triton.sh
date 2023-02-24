@@ -8,9 +8,10 @@ source ./.github/workflows/torchinductor/scripts/common.sh
 
 # build our own triton
 cd python || exit
+pip3 install --pre torch torchtext torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118
 rm -rf build
 pip3 install -e .
-pip uninstall pytorch-triton -y
+pip3 uninstall pytorch-triton -y
 
 # clean up cache
 rm -rf /tmp/torchinductor_root/

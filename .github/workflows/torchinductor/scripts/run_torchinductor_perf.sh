@@ -13,14 +13,14 @@ mkdir -p "$TEST_REPORTS_DIR"
 
 for model in "${MODELS[@]}"; do
   echo "Running performance test for $model"
-  python benchmarks/dynamo/"$model".py --ci --training --performance --disable-cudagraphs\
+  python3 benchmarks/dynamo/"$model".py --ci --training --performance --disable-cudagraphs\
     --device cuda --inductor --amp --output "$TEST_REPORTS_DIR"/"$model".csv
 done
 
 cd "$ROOT" || exit
 for model in "${MODELS[@]}"; do
   echo "Checking performance test for $model"
-  python "$INDUCTOR"/scripts/check_perf.py --new "$TEST_REPORTS_DIR"/"$model".csv --baseline "$INDUCTOR"/data/"$model".csv
+  python3 "$INDUCTOR"/scripts/check_perf.py --new "$TEST_REPORTS_DIR"/"$model".csv --baseline "$INDUCTOR"/data/"$model".csv
 done
 
 # go back to where we started

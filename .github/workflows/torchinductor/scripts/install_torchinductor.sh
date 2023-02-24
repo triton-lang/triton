@@ -28,13 +28,13 @@ pip3 install expecttest
 pip3 install pyyaml
 git clone https://github.com/pytorch/benchmark.git
 cd benchmark || exit
-python install.py
+python3 install.py
 cd ..
 
 # timm
 git clone https://github.com/huggingface/pytorch-image-models.git
 cd pytorch-image-models || exit
-pip install -e .
+pip3 install -e .
 cd ..
 
 # build our own triton
@@ -42,7 +42,7 @@ cd "$ROOT" || exit
 cd python || exit
 rm -rf build
 pip3 install -e .
-pip uninstall pytorch-triton -y
+pip3 uninstall pytorch-triton -y
 
 # clean up cache
 rm -rf /tmp/torchinductor_root/
