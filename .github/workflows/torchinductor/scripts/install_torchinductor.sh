@@ -11,9 +11,9 @@ source /opt/torchinductor_venv/bin/activate
 source ./.github/workflows/torchinductor/scripts/common.sh
 
 # pytorch nightly
-cd "$PYTORCH_DIR"/.. || exit
 pip3 install --force-reinstall --pre torch torchtext torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118
 # pytorch source to get torchbench for dynamo
+cd /opt || exit
 git clone --recursive https://github.com/pytorch/pytorch
 cd pytorch || exit
 # if you are updating an existing checkout
