@@ -24,6 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
       - name: Packages
+        run: |
           ./.github/workflows/torchinductor/scripts/install_torchinductor.sh
       - name: Environment
         run: |
