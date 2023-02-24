@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+      - name: Packages
+          ./.github/workflows/torchinductor/scripts/install_torchinductor.sh
       - name: Environment
         run: |
           source /opt/torchinductor_venv/bin/activate
