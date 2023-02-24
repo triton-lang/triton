@@ -156,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -221,6 +221,7 @@ def matmul_kernel(
         # error or (worse!) incorrect results.
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
+        b = b * 2
         # We accumulate along the K dimension
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block
@@ -268,7 +269,7 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    matmul_kernel[grid](
+    h =matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -276,6 +277,7 @@ def matmul(a, b, activation=None):
         c.stride(0), c.stride(1),
         ACTIVATION=activation,
     )
+    print(h.asm["ttir"])
     return c
 
 
