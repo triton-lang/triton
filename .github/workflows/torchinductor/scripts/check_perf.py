@@ -29,7 +29,8 @@ def compare(baseline: dict, new: dict, threshold: float) -> bool:
         baseline_speedup = baseline[key].speedup
         new_speedup = new[key].speedup
         if new_speedup < baseline_speedup * (1 - threshold):
-            print(f"New benchmark {key} is slower than baseline: {new_speedup} vs {baseline_speedup}")
+            print(
+                f"New benchmark {key} is slower than baseline: {new_speedup} vs {baseline_speedup}")
         elif new_speedup > baseline_speedup * (1 + threshold):
             print(
                 f"New benchmark {key} is faster than baseline: {new_speedup} vs {baseline_speedup}")
