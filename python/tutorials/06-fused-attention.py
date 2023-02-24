@@ -223,6 +223,7 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=2,
         )
+        # print(h.asm["ttgir"])
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.grid = grid
@@ -260,6 +261,7 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
             num_stages=1,
         )
+        # print(h.asm["ttgir"])
         return dq, dk, dv, None
 
 
