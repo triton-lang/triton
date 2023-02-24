@@ -4,7 +4,7 @@ from collections import namedtuple
 
 # Create a named tuple for the output of the benchmark
 BenchmarkOutput = namedtuple(
-    'BenchmarkOutput', ['dev', 'name', 'batch_size', 'speedup', 'compilation_latency'])
+    'BenchmarkOutput', ['dev', 'name', 'batch_size', 'speedup'])
 
 
 def parse_output(file_path: str) -> dict:
@@ -18,9 +18,7 @@ def parse_output(file_path: str) -> dict:
             name = row[1]
             batch_size = row[2]
             speedup = float(row[3])
-            compilation_latency = float(row[5])
-            entries[name] = BenchmarkOutput(
-                dev, name, batch_size, speedup, compilation_latency)
+            entries[name] = BenchmarkOutput(dev, name, batch_size, speedup)
     return entries
 
 
@@ -31,7 +29,8 @@ def compare(baseline: dict, new: dict, threshold: float) -> bool:
         baseline_speedup = baseline[key].speedup
         new_speedup = new[key].speedup
         if new_speedup < baseline_speedup * (1 - threshold):
-            print(f"New benchmark {key} is slower than baseline")
+            print(
+                f"New benchmark {key} is slower than baseline: {new_speedup} vs {baseline_speedup}")
         elif new_speedup > baseline_speedup * (1 + threshold):
             print(
                 f"New benchmark {key} is faster than baseline: {new_speedup} vs {baseline_speedup}")
@@ -46,5 +45,6 @@ def main():
     baseline = parse_output(args.baseline)
     new = parse_output(args.new)
     compare(baseline, new, args.threshold)
+
 
 main()
