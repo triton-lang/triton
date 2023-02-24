@@ -4,6 +4,7 @@
 ROOT="$(pwd)"
 
 # torchinductor venv 
+whoami
 python3 -m venv /opt/torchinductor_venv
 # shellcheck source=/dev/null
 source /opt/torchinductor_venv/bin/activate
