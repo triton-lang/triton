@@ -20,11 +20,8 @@ endif()
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 
-# Enable TRITON_USE_ROCM for ROCm support
-find_package(HIP)
-if(HIP_FOUND)
-  set(TRITON_USE_ROCM ON)
-endif()
+# Force TRITON_USE_ROCM for ROCm support
+set(TRITON_USE_ROCM ON)
 
 # Ensure Python3 vars are set correctly
 #  used conditionally in this file and by lit tests
