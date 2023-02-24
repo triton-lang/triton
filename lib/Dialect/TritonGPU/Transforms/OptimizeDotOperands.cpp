@@ -130,35 +130,30 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto convertLayoutOp = cast<triton::gpu::ConvertLayoutOp>(op);
-    auto retTy =
-        convertLayoutOp.getResult().getType().dyn_cast<RankedTensorType>();
+    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
     if (!retTy)
       return failure();
     if (!isa<triton::gpu::DotOperandEncodingAttr>(retTy.getEncoding()))
       return failure();
-    Operation *argOp = convertLayoutOp.getOperand().getDefiningOp();
+    //
+    Operation *argOp = cvt.getOperand().getDefiningOp();
+    //
     if (!argOp)
       return failure();
-    if (argOp->getNumOperands() != 1)
-      return failure();
-    if (!isPure(argOp))
+    //
+    SetVector<Operation *> processed;
+    SetVector<Attribute> layout;
+    llvm::MapVector<Value, Attribute> toConvert;
+    int numCvts = simulateBackwardRematerialization(
+        cvt, processed, layout, toConvert, retTy.getEncoding());
+    if (numCvts > 1 || toConvert.size() == 1)
       return failure();
 
-    if (!argOp->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-        !argOp->hasTrait<mlir::OpTrait::Elementwise>())
-      return failure();
-
-    PatternRewriter::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointAfter(convertLayoutOp);
-    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        convertLayoutOp.getLoc(), convertLayoutOp.getOperand().getType(),
-        argOp->getOperand(0));
-    auto newOp = rewriter.clone(*argOp);
-    newOp->setOperand(0, newCvt.getResult());
-    newOp->getResult(0).setType(convertLayoutOp.getResult().getType());
-    rewriter.replaceOp(convertLayoutOp, newOp->getResult(0));
-    return success();
+    IRMapping mapping;
+    rematerializeConversionChain(toConvert, rewriter, processed, mapping);
+    rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
+    return mlir::success();
   }
 };
 

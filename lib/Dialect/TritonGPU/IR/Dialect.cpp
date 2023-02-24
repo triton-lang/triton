@@ -46,17 +46,18 @@ namespace gpu {
 // so that all distributed layouts implement
 // these utilities
 
-unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
+unsigned getElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
+                           Type eltTy) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    return blockedLayout.getElemsPerThread(shape);
+    return blockedLayout.getElemsPerThread(shape, eltTy);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    return sliceLayout.getElemsPerThread(shape);
+    return sliceLayout.getElemsPerThread(shape, eltTy);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    return mmaLayout.getElemsPerThread(shape);
+    return mmaLayout.getElemsPerThread(shape, eltTy);
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
-    return sharedLayout.getElemsPerThread(shape);
+    return sharedLayout.getElemsPerThread(shape, eltTy);
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
-    return dotLayout.getElemsPerThread(shape);
+    return dotLayout.getElemsPerThread(shape, eltTy);
   } else {
     assert(0 && "getElemsPerThread not implemented");
     return 0;
@@ -68,7 +69,8 @@ unsigned getElemsPerThread(Type type) {
       type.isa<triton::PointerType>())
     return 1;
   auto tensorType = type.cast<RankedTensorType>();
-  return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape());
+  return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape(),
+                           tensorType.getElementType());
 }
 
 SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout) {
@@ -330,7 +332,8 @@ SliceEncodingAttr BlockedEncodingAttr::squeeze(int axis) {
   return SliceEncodingAttr::get(getContext(), axis, *this);
 }
 
-unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+unsigned BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
+                                                Type eltTy) const {
   size_t rank = shape.size();
   auto sizePerThread = getSizePerThread();
   auto warpsPerCTA = getWarpsPerCTA();
@@ -365,12 +368,14 @@ SliceEncodingAttr::paddedShape<unsigned>(ArrayRef<unsigned> shape) const;
 template SmallVector<int64_t>
 SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
 
-unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+unsigned SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
+                                              Type eltTy) const {
   auto parent = getParent();
-  return ::getElemsPerThread(parent, paddedShape(shape));
+  return ::getElemsPerThread(parent, paddedShape(shape), eltTy);
 }
 
-unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
+                                            Type eltTy) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mma layout");
   assert((isVolta() || isAmpere()) && "Only version 1 and 2 is supported");
@@ -401,18 +406,43 @@ unsigned MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return res;
 }
 
-unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
-  // TODO:
-  assert(0 && "SharedEncodingAttr::getElemsPerThread not implemented");
+unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
+                                               Type eltTy) const {
+  llvm_unreachable("Unexpected shared layout");
   return 0;
 }
 
-unsigned
-DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
-  if (auto blockedLayout = getParent().dyn_cast<BlockedEncodingAttr>()) {
-    return blockedLayout.getElemsPerThread(shape);
-  }
-  assert(0 && "DotOperandEncodingAttr::getElemsPerThread not implemented");
+unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
+                                                   Type eltTy) const {
+  // if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
+  //   int wptM = mmaParent.getWarpsPerCTA()[0];
+  //   int wptN = mmaParent.getWarpsPerCTA()[1];
+  //   if (mmaParent.isAmpere()) {
+  //     int m = 16;
+  //     int n = 16;
+  //     int k = 4 * 64 / nbits;
+  //     if (getOpIdx() == 0) {
+  //       return 4 * repM * repK;
+  //     }
+  //     if (getOpIdx() == 1)
+  //       return MMA16816ConversionHelper::getBNumElemsPerThread(tensorTy,
+  //       wptN);
+  //   }
+  //   if (mmaParent.isVolta()) {
+  //     DotOpMmaV1ConversionHelper helper(mmaLayout);
+  //     bool isRow = getIsMMAv1Row().cast<BoolAttr>().getValue();
+  //     auto [isARow, isBRow, isAVec4, isBVec4, _0] =
+  //     decodeVoltaLayoutStates(); if (layout.getOpIdx() == 0) {
+  //       DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
+  //       return helper.numElemsPerThreadA(shape, isARow, isAVec4, aParam.vec);
+  //     } else {
+  //       DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+  //       return helper.numElemsPerThreadB(shape, isBRow, isBVec4, bParam.vec);
+  //     }
+  //     llvm_unreachable("unknown mma version")
+  //   }
+  // }
+  llvm_unreachable("DotOperandEncodingAttr::getElemsPerThread not implemented");
   return 0;
 }
 
