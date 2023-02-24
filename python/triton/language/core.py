@@ -553,7 +553,6 @@ class tensor:
         other = _to_tensor(other, _builder)
         return semantic.or_(other, self, _builder)
 
-
     @builtin
     def __xor__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
