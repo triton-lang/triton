@@ -5,6 +5,8 @@ ROOT="$(pwd)"
 INDUCTOR="$ROOT"/.github/workflows/torchinductor
 
 # shellcheck source=/dev/null
+source /opt/torchinductor_venv/bin/activate
+# shellcheck source=/dev/null
 source "$INDUCTOR"/scripts/common.sh
 
 cd "$PYTORCH_DIR" || exit
