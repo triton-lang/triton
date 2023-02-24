@@ -419,6 +419,9 @@ class constexpr:
     def __or__(self, other):
         return constexpr(self.value | other.value)
 
+    def __xor__(self, other):
+        return constexpr(self.value ^ other.value)
+
     def logical_or(self, other):
         return constexpr(self.value or other.value)
 
@@ -536,9 +539,20 @@ class tensor:
         return semantic.and_(self, other, _builder)
 
     @builtin
+    def __rand__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.and_(other, self, _builder)
+
+    @builtin
     def __or__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.or_(self, other, _builder)
+
+    @builtin
+    def __ror__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.or_(other, self, _builder)
+
 
     @builtin
     def __xor__(self, other, _builder=None):
@@ -546,9 +560,19 @@ class tensor:
         return semantic.xor_(self, other, _builder)
 
     @builtin
+    def __rxor__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.xor_(other, self, _builder)
+
+    @builtin
     def __lshift__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.shl(self, other, _builder)
+
+    @builtin
+    def __rlshift__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.shl(other, self, _builder)
 
     @builtin
     def __rshift__(self, other, _builder=None):
@@ -557,6 +581,14 @@ class tensor:
             return semantic.ashr(self, other, _builder)
         else:
             return semantic.lshr(self, other, _builder)
+
+    @builtin
+    def __rrshift__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        if self.dtype.is_int_signed():
+            return semantic.ashr(other, self, _builder)
+        else:
+            return semantic.lshr(other, self, _builder)
 
     # comparison operators
 
