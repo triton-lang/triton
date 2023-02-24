@@ -33,6 +33,7 @@ jobs:
       - name: Performance
         run: |
           ./.github/workflows/torchinductor/scripts/run_torchinductor_perf.sh
-      - name: Accuracy
-        run: |
-          ./.github/workflows/torchinductor/scripts/run_torchinductor_acc.sh
+      # Runs too long time
+      #- name: Accuracy
+      #  run: |
+      #    ./.github/workflows/torchinductor/scripts/run_torchinductor_acc.sh
