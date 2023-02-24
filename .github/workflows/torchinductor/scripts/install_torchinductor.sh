@@ -22,8 +22,8 @@ git submodule sync
 git submodule update --init --recursive
 cd ..
 
-# expecttest
-pip3 install expecttest
+# required packages
+pip3 install expecttest psutil
 
 # torchbench
 pip3 install pyyaml
