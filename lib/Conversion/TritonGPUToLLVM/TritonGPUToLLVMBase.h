@@ -152,12 +152,11 @@ struct CacheKeyDenseMapInfo {
   }
   static IndexCacheKeyT getTombstoneKey() {
     auto *pointer = llvm::DenseMapInfo<void *>::getTombstoneKey();
-    SmallVector<int64_t> tombstoneShape = {std::numeric_limits<int64_t>::max()};
-    Type tombstoneEltType;
+    auto tombstone = llvm::DenseMapInfo<RankedTensorType>::getTombstoneKey();
 
     return std::make_pair(
         mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
-        RankedTensorType::get(tombstoneShape, tombstoneEltType));
+        tombstone);
   }
   static unsigned getHashValue(IndexCacheKeyT key) {
     auto shape = key.second.getShape();

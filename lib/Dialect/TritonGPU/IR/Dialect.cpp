@@ -414,35 +414,28 @@ unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 
 unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                                    Type eltTy) const {
-  // if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
-  //   int wptM = mmaParent.getWarpsPerCTA()[0];
-  //   int wptN = mmaParent.getWarpsPerCTA()[1];
-  //   if (mmaParent.isAmpere()) {
-  //     int m = 16;
-  //     int n = 16;
-  //     int k = 4 * 64 / nbits;
-  //     if (getOpIdx() == 0) {
-  //       return 4 * repM * repK;
-  //     }
-  //     if (getOpIdx() == 1)
-  //       return MMA16816ConversionHelper::getBNumElemsPerThread(tensorTy,
-  //       wptN);
-  //   }
-  //   if (mmaParent.isVolta()) {
-  //     DotOpMmaV1ConversionHelper helper(mmaLayout);
-  //     bool isRow = getIsMMAv1Row().cast<BoolAttr>().getValue();
-  //     auto [isARow, isBRow, isAVec4, isBVec4, _0] =
-  //     decodeVoltaLayoutStates(); if (layout.getOpIdx() == 0) {
-  //       DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
-  //       return helper.numElemsPerThreadA(shape, isARow, isAVec4, aParam.vec);
-  //     } else {
-  //       DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
-  //       return helper.numElemsPerThreadB(shape, isBRow, isBVec4, bParam.vec);
-  //     }
-  //     llvm_unreachable("unknown mma version")
-  //   }
-  // }
-  llvm_unreachable("DotOperandEncodingAttr::getElemsPerThread not implemented");
+  if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
+    int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
+    int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
+    if (mmaParent.isAmpere()) {
+      int shapePerWarpM = 16;
+      int shapePerWarpN = 8;
+      int shapePerWarpK = 4 * 64 / eltTy.getIntOrFloatBitWidth();
+      int shapePerCTAM = shapePerWarpM * warpsPerCTAM;
+      int shapePerCTAN = shapePerWarpN * warpsPerCTAN;
+      if (getOpIdx() == 0) {
+        int repM = std::max<int>(1, shape[0] / shapePerCTAM);
+        int repK = std::max<int>(1, shape[1] / shapePerWarpK);
+        return 4 * repM * repK;
+      }
+      if (getOpIdx() == 1) {
+        int repN = std::max<int>(1, shape[1] / shapePerCTAN);
+        int repK = std::max<int>(1, shape[0] / shapePerWarpK);
+        return 4 * std::max(repN / 2, 1) * repK;
+      }
+    }
+  }
+  llvm_unreachable("unknown mma version");
   return 0;
 }
 
