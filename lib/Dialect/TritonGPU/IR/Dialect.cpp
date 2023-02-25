@@ -418,20 +418,21 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
     if (mmaParent.isAmpere()) {
+      int bitwidth = eltTy.getIntOrFloatBitWidth();
       int shapePerWarpM = 16;
       int shapePerWarpN = 8;
-      int shapePerWarpK = 4 * 64 / eltTy.getIntOrFloatBitWidth();
+      int shapePerWarpK = 4 * 64 / bitwidth;
       int shapePerCTAM = shapePerWarpM * warpsPerCTAM;
       int shapePerCTAN = shapePerWarpN * warpsPerCTAN;
       if (getOpIdx() == 0) {
         int repM = std::max<int>(1, shape[0] / shapePerCTAM);
         int repK = std::max<int>(1, shape[1] / shapePerWarpK);
-        return 4 * repM * repK;
+        return 4 * repM * repK * (32 / bitwidth);
       }
       if (getOpIdx() == 1) {
         int repN = std::max<int>(1, shape[1] / shapePerCTAN);
         int repK = std::max<int>(1, shape[0] / shapePerWarpK);
-        return 4 * std::max(repN / 2, 1) * repK;
+        return 4 * std::max(repN / 2, 1) * repK * (32 / bitwidth);
       }
     }
   }

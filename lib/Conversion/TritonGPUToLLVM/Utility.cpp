@@ -13,6 +13,8 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
   }
 
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
+  // llvm::outs() << structType.cast<LLVM::LLVMStructType>().getBody().size()
+  //              << " " << resultVals.size() << "\n";
   for (const auto &v : llvm::enumerate(resultVals)) {
     assert(v.value() && "can not insert null values");
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());

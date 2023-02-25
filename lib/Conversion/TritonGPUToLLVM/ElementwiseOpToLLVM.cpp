@@ -1,4 +1,5 @@
 #include "ElementwiseOpToLLVM.h"
+#include "mlir/IR/TypeUtilities.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -381,6 +382,8 @@ public:
       if (!bool(resultVals[i]))
         return failure();
     }
+    // post-process
+    resultVals = rerollValues(rewriter, loc, resultVals, structTy);
     Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
     rewriter.replaceOp(op, view);
 
@@ -388,12 +391,49 @@ public:
   }
 
 protected:
+  SmallVector<Value> unrollValues(ConversionPatternRewriter &rewriter,
+                                  Location loc,
+                                  const SmallVector<Value> &vals) const {
+    auto vecTy = dyn_cast<VectorType>(vals[0].getType());
+    if (!vecTy)
+      return vals;
+    SmallVector<Value> ret;
+    for (Value val : vals)
+      for (int k = 0; k < vecTy.getNumElements(); k++)
+        ret.push_back(extract_element(val, i32_val(k)));
+    return ret;
+  }
+
+  SmallVector<Value> rerollValues(ConversionPatternRewriter &rewriter,
+                                  Location loc, const SmallVector<Value> &vals,
+                                  Type destType) const {
+    auto structTy = destType.dyn_cast<LLVM::LLVMStructType>();
+    if (!structTy)
+      return vals;
+    auto vecTy = structTy.getBody()[0].dyn_cast<VectorType>();
+    if (!vecTy)
+      return vals;
+    size_t vecWidth = vecTy.getNumElements();
+    SmallVector<Value> ret;
+    for (int i = 0; i < vals.size(); i += vecWidth) {
+      Value vec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+      for (int k = 0; k < vecWidth; k++)
+        vec = insert_element(vec, vals[i + k], i32_val(k));
+      ret.push_back(vec);
+    }
+    return ret;
+  }
+
   SmallVector<SmallVector<Value>>
   getOperands(ConversionPatternRewriter &rewriter, OpAdaptor adaptor,
               const unsigned elems, Location loc) const {
     SmallVector<SmallVector<Value>> operands(elems);
     for (auto operand : adaptor.getOperands()) {
       auto sub_operands = getElementsFromStruct(loc, operand, rewriter);
+      sub_operands = unrollValues(rewriter, loc, sub_operands);
+      // llvm::outs() << elems << " " << operand << "\n";
+      assert(sub_operands.size() == elems &&
+             "number of operands should be equal to number of elements");
       for (size_t i = 0; i < elems; ++i) {
         operands[i].push_back(sub_operands[i]);
       }
@@ -854,8 +894,8 @@ void populateElementwiseOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<FpToFpOpConversion>(typeConverter, benefit);
 
   patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
-  // ExpOpConversionApprox will try using ex2.approx if the input type is FP32.
-  // For FP64 input type, ExpOpConversionApprox will return failure and
+  // ExpOpConversionApprox will try using ex2.approx if the input type is
+  // FP32. For FP64 input type, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
