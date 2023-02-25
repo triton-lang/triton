@@ -160,11 +160,11 @@ private:
     indexSmemBase = bitcast(indexSmemBase, indexPtrTy);
 
     unsigned srcElems = getElemsPerThread(srcTy);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
     auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
 
     SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForLayout(srcLayout, srcShape);
+        emitOffsetForLayout(srcLayout, srcTy);
 
     std::map<SmallVector<unsigned>, Value> accs;
     std::map<SmallVector<unsigned>, Value> accIndices;
@@ -247,8 +247,7 @@ private:
       auto resultShape = resultTy.getShape();
 
       unsigned resultElems = getElemsPerThread(resultTy);
-      auto resultIndices =
-          emitIndices(loc, rewriter, resultLayout, resultShape);
+      auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
       assert(resultIndices.size() == resultElems);
 
       SmallVector<Value> resultVals(resultElems);
@@ -310,11 +309,11 @@ private:
     unsigned sizeInterWarps = helper.getInterWarpSize();
 
     unsigned srcElems = getElemsPerThread(srcTy);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
     auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
 
     SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForLayout(srcLayout, srcShape);
+        emitOffsetForLayout(srcLayout, srcTy);
 
     std::map<SmallVector<unsigned>, Value> accs;
     std::map<SmallVector<unsigned>, Value> accIndices;
@@ -448,8 +447,7 @@ private:
       auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
       auto resultShape = resultTy.getShape();
       unsigned resultElems = getElemsPerThread(resultTy);
-      auto resultIndices =
-          emitIndices(loc, rewriter, resultLayout, resultShape);
+      auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
       assert(resultIndices.size() == resultElems);
 
       SmallVector<Value> resultVals(resultElems);

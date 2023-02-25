@@ -141,25 +141,28 @@ protected:
   }
 };
 
-using IndexCacheKeyT = std::pair<Attribute, SmallVector<int64_t>>;
+using IndexCacheKeyT = std::pair<Attribute, RankedTensorType>;
 
 struct CacheKeyDenseMapInfo {
   static IndexCacheKeyT getEmptyKey() {
     auto *pointer = llvm::DenseMapInfo<void *>::getEmptyKey();
     return std::make_pair(
         mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
-        SmallVector<int64_t>{});
+        RankedTensorType());
   }
   static IndexCacheKeyT getTombstoneKey() {
     auto *pointer = llvm::DenseMapInfo<void *>::getTombstoneKey();
+    SmallVector<int64_t> tombstoneShape = {std::numeric_limits<int64_t>::max()};
+    Type tombstoneEltType;
+
     return std::make_pair(
         mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
-        SmallVector<int64_t>{std::numeric_limits<int64_t>::max()});
+        RankedTensorType::get(tombstoneShape, tombstoneEltType));
   }
   static unsigned getHashValue(IndexCacheKeyT key) {
-    return llvm::hash_combine(
-        mlir::hash_value(key.first),
-        llvm::hash_combine_range(key.second.begin(), key.second.end()));
+    auto shape = key.second.getShape();
+    return llvm::hash_combine(mlir::hash_value(key.first),
+                              mlir::hash_value(key.second));
   }
   static bool isEqual(IndexCacheKeyT LHS, IndexCacheKeyT RHS) {
     return LHS == RHS;
@@ -282,7 +285,7 @@ public:
     auto inOrder = triton::gpu::getOrder(srcEncoding);
     auto outOrder = triton::gpu::getOrder(resSharedLayout);
     // tensor indices held by the current thread, as LLVM values
-    auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcShape);
+    auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcTy);
     // return values
     DenseMap<unsigned, Value> ret;
     // cache for non-immediate offsets
@@ -499,8 +502,8 @@ public:
   SmallVector<Value> emitBaseIndexForLayout(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const Attribute &layout,
-                                            ArrayRef<int64_t> shape) const {
-    IndexCacheKeyT key = std::make_pair(layout, llvm::to_vector(shape));
+                                            RankedTensorType type) const {
+    IndexCacheKeyT key = std::make_pair(layout, type);
     auto cache = indexCacheInfo.baseIndexCache;
     assert(cache && "baseIndexCache is nullptr");
     auto insertPt = indexCacheInfo.indexInsertPoint;
@@ -512,12 +515,12 @@ public:
       SmallVector<Value> result;
       if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
         result =
-            emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, shape);
+            emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, type);
       } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
         if (mmaLayout.isVolta())
-          result = emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, shape);
+          result = emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, type);
         if (mmaLayout.isAmpere())
-          result = emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, shape);
+          result = emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, type);
       } else {
         llvm_unreachable("unsupported emitBaseIndexForLayout");
       }
@@ -528,14 +531,14 @@ public:
   }
 
   SmallVector<SmallVector<unsigned>>
-  emitOffsetForLayout(const Attribute &layout, ArrayRef<int64_t> shape) const {
+  emitOffsetForLayout(const Attribute &layout, RankedTensorType type) const {
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
-      return emitOffsetForBlockedLayout(blockedLayout, shape);
+      return emitOffsetForBlockedLayout(blockedLayout, type);
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       if (mmaLayout.isVolta())
-        return emitOffsetForMmaLayoutV1(mmaLayout, shape);
+        return emitOffsetForMmaLayoutV1(mmaLayout, type);
       if (mmaLayout.isAmpere())
-        return emitOffsetForMmaLayoutV2(mmaLayout, shape);
+        return emitOffsetForMmaLayoutV2(mmaLayout, type);
     }
     llvm_unreachable("unsupported emitOffsetForLayout");
   }
@@ -546,8 +549,8 @@ public:
   SmallVector<SmallVector<Value>> emitIndices(Location loc,
                                               ConversionPatternRewriter &b,
                                               const Attribute &layout,
-                                              ArrayRef<int64_t> shape) const {
-    IndexCacheKeyT key(layout, llvm::to_vector(shape));
+                                              RankedTensorType type) const {
+    IndexCacheKeyT key(layout, type);
     auto cache = indexCacheInfo.indexCache;
     assert(cache && "indexCache is nullptr");
     auto insertPt = indexCacheInfo.indexInsertPoint;
@@ -558,11 +561,11 @@ public:
       restoreInsertionPointIfSet(insertPt, b);
       SmallVector<SmallVector<Value>> result;
       if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
-        result = emitIndicesForDistributedLayout(loc, b, blocked, shape);
+        result = emitIndicesForDistributedLayout(loc, b, blocked, type);
       } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
-        result = emitIndicesForDistributedLayout(loc, b, mma, shape);
+        result = emitIndicesForDistributedLayout(loc, b, mma, type);
       } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
-        result = emitIndicesForSliceLayout(loc, b, slice, shape);
+        result = emitIndicesForSliceLayout(loc, b, slice, type);
       } else {
         llvm_unreachable(
             "emitIndices for layouts other than blocked & slice not "
@@ -591,11 +594,10 @@ private:
   // -----------------------------------------------------------------------
 
   // Get an index-base for each dimension for a \param blocked_layout.
-  SmallVector<Value>
-  emitBaseIndexForBlockedLayout(Location loc,
-                                ConversionPatternRewriter &rewriter,
-                                const BlockedEncodingAttr &blocked_layout,
-                                ArrayRef<int64_t> shape) const {
+  SmallVector<Value> emitBaseIndexForBlockedLayout(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const BlockedEncodingAttr &blocked_layout, RankedTensorType type) const {
+    auto shape = type.getShape();
     Value threadId = getThreadId(rewriter, loc);
     Value warpSize = idx_val(32);
     Value laneId = urem(threadId, warpSize);
@@ -635,7 +637,8 @@ private:
 
   SmallVector<SmallVector<unsigned>>
   emitOffsetForBlockedLayout(const BlockedEncodingAttr &blockedLayout,
-                             ArrayRef<int64_t> shape) const {
+                             RankedTensorType type) const {
+    auto shape = type.getShape();
     auto sizePerThread = blockedLayout.getSizePerThread();
     auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
     auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
@@ -664,7 +667,7 @@ private:
                                   threadOffset * sizePerThread[k] + elemOffset);
     }
 
-    unsigned elemsPerThread = blockedLayout.getElemsPerThread(shape);
+    unsigned elemsPerThread = triton::gpu::getElemsPerThread(type);
     unsigned totalSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<SmallVector<unsigned>> reorderedOffset(elemsPerThread);
     for (unsigned n = 0; n < elemsPerThread; ++n) {
@@ -692,8 +695,8 @@ private:
   SmallVector<Value>
   emitBaseIndexForMmaLayoutV1(Location loc, ConversionPatternRewriter &rewriter,
                               const MmaEncodingAttr &mmaLayout,
-                              ArrayRef<int64_t> shape) const {
-
+                              RankedTensorType type) const {
+    auto shape = type.getShape();
     auto wpt = mmaLayout.getWarpsPerCTA();
     auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
     auto [isARow, isBRow, isAVec4, isBVec4, id] =
@@ -756,7 +759,8 @@ private:
 
   SmallVector<SmallVector<unsigned>>
   emitOffsetForMmaLayoutV1(const MmaEncodingAttr &mmaLayout,
-                           ArrayRef<int64_t> shape) const {
+                           RankedTensorType type) const {
+    auto shape = type.getShape();
 
     auto [isARow, isBRow, isAVec4, isBVec4, id] =
         mmaLayout.decodeVoltaLayoutStates();
@@ -796,7 +800,8 @@ private:
   SmallVector<Value>
   emitBaseIndexForMmaLayoutV2(Location loc, ConversionPatternRewriter &rewriter,
                               const MmaEncodingAttr &mmaLayout,
-                              ArrayRef<int64_t> shape) const {
+                              RankedTensorType type) const {
+    auto shape = type.getShape();
     auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
     assert(_warpsPerCTA.size() == 2);
     SmallVector<Value> warpsPerCTA = {idx_val(_warpsPerCTA[0]),
@@ -819,7 +824,8 @@ private:
 
   SmallVector<SmallVector<unsigned>>
   emitOffsetForMmaLayoutV2(const MmaEncodingAttr &mmaLayout,
-                           ArrayRef<int64_t> shape) const {
+                           RankedTensorType type) const {
+    auto shape = type.getShape();
     SmallVector<SmallVector<unsigned>> ret;
 
     for (unsigned i = 0; i < shape[0]; i += getShapePerCTA(mmaLayout)[0]) {
@@ -837,13 +843,14 @@ private:
   // [elemsPerThread X rank] index matrix.
   SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
       Location loc, ConversionPatternRewriter &rewriter,
-      const Attribute &layout, ArrayRef<int64_t> shape) const {
+      const Attribute &layout, RankedTensorType type) const {
     // step 1, delinearize threadId to get the base index
-    auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, shape);
+    auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, type);
     // step 2, get offset of each element
-    auto offset = emitOffsetForLayout(layout, shape);
+    auto offset = emitOffsetForLayout(layout, type);
     // step 3, add offset to base, and reorder the sequence of indices to
     // guarantee that elems in the same sizePerThread are adjacent in order
+    auto shape = type.getShape();
     unsigned rank = shape.size();
     unsigned elemsPerThread = offset.size();
     SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
@@ -857,11 +864,13 @@ private:
   SmallVector<SmallVector<Value>>
   emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
                             const SliceEncodingAttr &sliceLayout,
-                            ArrayRef<int64_t> shape) const {
-    auto parent = sliceLayout.getParent();
+                            RankedTensorType type) const {
+    auto parentEncoding = sliceLayout.getParent();
     unsigned dim = sliceLayout.getDim();
-    auto parentIndices =
-        emitIndices(loc, rewriter, parent, sliceLayout.paddedShape(shape));
+    auto parentShape = sliceLayout.paddedShape(type.getShape());
+    RankedTensorType parentTy = RankedTensorType::get(
+        parentShape, type.getElementType(), parentEncoding);
+    auto parentIndices = emitIndices(loc, rewriter, parentEncoding, parentTy);
     unsigned numIndices = parentIndices.size();
     SmallVector<SmallVector<Value>> resultIndices;
     for (unsigned i = 0; i < numIndices; ++i) {
