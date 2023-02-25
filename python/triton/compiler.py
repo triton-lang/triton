@@ -1161,7 +1161,7 @@ def generate_launcher(constants, signature):
             "int64_t": "L",
         }[ty]
 
-    format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()]) + "O"
+    format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
     src = f"""
@@ -1246,9 +1246,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *compiled_kernel = NULL;
-  PyObject *constants = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())}, &constants)) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
 
@@ -1604,7 +1603,7 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+        metadata = {"num_warps": num_warps, "num_stages": num_stages, "constants": constants, "ctime": dict()}
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
@@ -1656,7 +1655,7 @@ class CompiledKernel:
         self.shared = metadata["shared"]
         self.num_warps = metadata["num_warps"]
         self.num_stages = metadata["num_stages"]
-        self.constexpr = metadata["constexpr"]
+        self.constants = metadata["constants"]
         # initialize asm dict
         self.asm = asm
         # binaries are lazily initialized
@@ -1692,7 +1691,7 @@ class CompiledKernel:
             if stream is None:
                 stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args, self.constexpr)
+                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
 
     def get_sass(self, fun=None):
