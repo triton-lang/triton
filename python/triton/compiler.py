@@ -1367,7 +1367,8 @@ def _build(name, src, srcdir):
     cuda_lib_dirs = libcuda_dirs()
     cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
     cu_include_dir = os.path.join(cuda_path, "include")
-    triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
+    base_dir = os.path.dirname(__file__)
+    triton_include_dir = os.path.join(base_dir, "third_party/cuda/include")
     cuda_header = os.path.join(cu_include_dir, "cuda.h")
     triton_cuda_header = os.path.join(triton_include_dir, "cuda.h")
     if not os.path.exists(cuda_header) and os.path.exists(triton_cuda_header):
