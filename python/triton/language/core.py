@@ -12,7 +12,7 @@ T = TypeVar('T')
 TRITON_MAX_TENSOR_NUMEL = 131072
 
 
-def _to_tensor(x: Tensorable, builder) -> tensor:
+def _to_tensor(x: TensorConvertible, builder) -> tensor:
     if isinstance(x, bool):
         return tensor(builder.get_int1(x), int1)
     # Note: compile-time const integers are represented by unsigned values
@@ -688,7 +688,7 @@ class tensor:
             return semantic.bitcast(self, dtype, _builder)
         return semantic.cast(self, dtype, _builder)
 
-Tensorable = Union[bool, float, int, tensor, constexpr]
+TensorConvertible = Union[bool, float, int, tensor, constexpr]
 
 # -----------------------
 # SPMD Programming Model
@@ -880,7 +880,7 @@ def dot(input, other, allow_tf32=True, _builder=None):
 
 
 @builtin
-def load(pointer: tensor, mask: Optional[Tensorable]=None, other: Optional[Tensorable]=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None) -> tensor:
+def load(pointer: tensor, mask: Optional[TensorConvertible]=None, other: Optional[TensorConvertible]=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None) -> tensor:
     """
     Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -909,7 +909,7 @@ def load(pointer: tensor, mask: Optional[Tensorable]=None, other: Optional[Tenso
 
 
 @builtin
-def store(pointer: tensor, value, mask: Optional[Tensorable]=None, cache_modifier="", eviction_policy="", _builder=None) -> tensor:
+def store(pointer: tensor, value, mask: Optional[TensorConvertible]=None, cache_modifier="", eviction_policy="", _builder=None) -> tensor:
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -958,7 +958,7 @@ def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
 @builtin
 @_add_atomic_docstr("compare-and-swap")
-def atomic_cas(pointer: tensor, cmp: Tensorable, val: Tensorable, _builder=None) -> tensor:
+def atomic_cas(pointer: tensor, cmp: TensorConvertible, val: TensorConvertible, _builder=None) -> tensor:
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
     return semantic.atomic_cas(pointer, cmp, val, _builder)
@@ -966,49 +966,49 @@ def atomic_cas(pointer: tensor, cmp: Tensorable, val: Tensorable, _builder=None)
 
 @builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
+def atomic_xchg(pointer: tensor, val: TensorConvertible, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_xchg(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
+def atomic_add(pointer: tensor, val: TensorConvertible, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_add(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
+def atomic_max(pointer: tensor, val: TensorConvertible, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_max(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
+def atomic_min(pointer: tensor, val: TensorConvertible, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_min(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
+def atomic_and(pointer: tensor, val: TensorConvertible, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_and(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
+def atomic_or(pointer: tensor, val: TensorConvertible, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_or(pointer, val, mask, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _builder=None) -> tensor:
+def atomic_xor(pointer: tensor, val: TensorConvertible, mask: Optional[tensor]=None, _builder=None) -> tensor:
     val = _to_tensor(val, _builder)
     return semantic.atomic_xor(pointer, val, mask, _builder)
 
@@ -1019,7 +1019,7 @@ def atomic_xor(pointer: tensor, val: Tensorable, mask: Optional[tensor]=None, _b
 
 
 @builtin
-def where(condition: Tensorable, x: Tensorable, y: Tensorable, _builder=None) -> tensor:
+def where(condition: TensorConvertible, x: TensorConvertible, y: TensorConvertible, _builder=None) -> tensor:
     """
     Returns a tensor of elements from either :code:`x` or :code:`y`, depending on :code:`condition`.
 
@@ -1046,7 +1046,7 @@ def where(condition: Tensorable, x: Tensorable, y: Tensorable, _builder=None) ->
 # -----------------------
 
 @builtin
-def umulhi(x: Tensorable, y: Tensorable, _builder=None) -> tensor:
+def umulhi(x: TensorConvertible, y: TensorConvertible, _builder=None) -> tensor:
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return semantic.umulhi(x, y, _builder)
@@ -1281,7 +1281,7 @@ def ravel(x) -> tensor:
 
 
 @triton.jit
-def swizzle2d(i, j, size_i, size_j, size_g: Tensorable) -> tuple[tensor, tensor]:
+def swizzle2d(i, j, size_i, size_j, size_g: TensorConvertible) -> tuple[tensor, tensor]:
     """
     Transforms indices of a row-major size_i*size_j matrix into those
     of one where indices are row major for each group of size_j rows.
