@@ -34,7 +34,10 @@ public:
       return convertTritonTensorType(type);
     });
     // Internally store float8 as int8
-    addConversion([&](triton::Float8Type type) -> llvm::Optional<Type> {
+    addConversion([&](Float8E4M3FNType type) -> llvm::Optional<Type> {
+      return IntegerType::get(type.getContext(), 8);
+    });
+    addConversion([&](Float8E5M2Type type) -> llvm::Optional<Type> {
       return IntegerType::get(type.getContext(), 8);
     });
     // Internally store bfloat16 as int16
@@ -102,23 +105,16 @@ public:
             // pack & unpack vectors of sub-word integers
             // Note: this needs to be synced with
             //       DotOpMmaV2ConversionHelper::loadX4
-            if (elemTy.isa<IntegerType>() &&
-                (elemTy.getIntOrFloatBitWidth() == 8 ||
-                 elemTy.getIntOrFloatBitWidth() == 16))
-              targetTy = IntegerType::get(ctx, 32);
+            // if (elemTy.isa<IntegerType>() &&
+            //     (elemTy.getIntOrFloatBitWidth() == 8 ||
+            //      elemTy.getIntOrFloatBitWidth() == 16))
+            //   targetTy = IntegerType::get(ctx, 32);
           } else {
             assert(false && "Unsupported element type");
           }
-          if (dotOpLayout.getOpIdx() == 0) { // $a
-            auto elems =
-                MMA16816ConversionHelper::getANumElemsPerThread(type, wpt[0]);
-            return struct_ty(SmallVector<Type>(elems, targetTy));
-          }
-          if (dotOpLayout.getOpIdx() == 1) { // $b
-            auto elems =
-                MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt[1]);
-            return struct_ty(SmallVector<Type>(elems, targetTy));
-          }
+          auto elems =
+              getElemsPerThread(type) / (32 / elemTy.getIntOrFloatBitWidth());
+          return struct_ty(SmallVector<Type>(elems, targetTy));
         }
 
         if (mmaLayout.isVolta()) {

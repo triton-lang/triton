@@ -296,27 +296,29 @@ struct FpToFpOpConversion
     SmallVector<Value> resultVals;
 
     // Select convertor
-    if (srcEltType.isa<triton::Float8Type>() ||
-        dstEltType.isa<triton::Float8Type>()) {
+    bool isSrcFloat8E4M3 = srcEltType.isFloat8E4M3FN();
+    bool isDstFloat8E4M3 = dstEltType.isFloat8E4M3FN();
+
+    if (isSrcFloat8E4M3 || isDstFloat8E4M3) {
       std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                        const Value &, const Value &,
                                        const Value &, const Value &)>
           convertor;
-      if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF16()) {
+      if (isSrcFloat8E4M3 && dstEltType.isF16()) {
         convertor = convertFp8x4ToFp16x4;
-      } else if (srcEltType.isF16() && dstEltType.isa<triton::Float8Type>()) {
+      } else if (srcEltType.isF16() && isDstFloat8E4M3) {
         convertor = convertFp16x4ToFp8x4;
-      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isBF16()) {
+      } else if (isSrcFloat8E4M3 && dstEltType.isBF16()) {
         convertor = convertFp8x4ToBf16x4;
-      } else if (srcEltType.isBF16() && dstEltType.isa<triton::Float8Type>()) {
+      } else if (srcEltType.isBF16() && isDstFloat8E4M3) {
         convertor = convertBf16x4ToFp8x4;
-      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF32()) {
+      } else if (isSrcFloat8E4M3 && dstEltType.isF32()) {
         convertor = convertFp8x4ToFp32x4;
-      } else if (srcEltType.isF32() && dstEltType.isa<triton::Float8Type>()) {
+      } else if (srcEltType.isF32() && isDstFloat8E4M3) {
         convertor = convertFp32x4ToFp8x4;
-      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF64()) {
+      } else if (isSrcFloat8E4M3 && dstEltType.isF64()) {
         convertor = convertFp8x4ToFp64x4;
-      } else if (srcEltType.isF64() && dstEltType.isa<triton::Float8Type>()) {
+      } else if (srcEltType.isF64() && isDstFloat8E4M3) {
         convertor = convertFp64x4ToFp8x4;
       } else {
         assert(false && "unsupported fp8 casting");
@@ -325,7 +327,8 @@ struct FpToFpOpConversion
       // Vectorized casting
       assert(elems % 4 == 0 &&
              "FP8 casting only support tensors with 4-aligned sizes");
-      auto elements = getElementsFromStruct(loc, adaptor.getFrom(), rewriter);
+      auto elements =
+          getElementsFromStruct(loc, adaptor.getFrom(), rewriter, true);
       for (size_t i = 0; i < elems; i += 4) {
         auto converted = convertor(loc, rewriter, elements[i], elements[i + 1],
                                    elements[i + 2], elements[i + 3]);
@@ -345,7 +348,7 @@ struct FpToFpOpConversion
     auto convertedDstTensorType =
         this->getTypeConverter()->convertType(dstTensorType);
     auto result = getStructFromElements(loc, resultVals, rewriter,
-                                        convertedDstTensorType);
+                                        convertedDstTensorType, true);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -364,6 +367,7 @@ public:
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << op << "\n";
     auto resultTy = op.getType();
     Location loc = op->getLoc();
 
@@ -374,6 +378,7 @@ public:
     Type structTy = this->getTypeConverter()->convertType(resultTy);
 
     auto *concreteThis = static_cast<const ConcreteT *>(this);
+    llvm::outs() << elems << "\n";
     auto operands = getOperands(rewriter, adaptor, elems, loc);
     SmallVector<Value> resultVals(elems);
     for (unsigned i = 0; i < elems; ++i) {
@@ -400,6 +405,7 @@ public:
         getStructFromElements(loc, resultVals, rewriter, structTy, true);
     rewriter.replaceOp(op, view);
 
+    llvm::outs() << "done\n";
     return success();
   }
 

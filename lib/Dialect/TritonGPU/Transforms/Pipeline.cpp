@@ -182,6 +182,7 @@ LogicalResult LoopPipeliner::initialize() {
                     .cast<triton::PointerType>()
                     .getPointeeType();
       unsigned width = vec * ty.getIntOrFloatBitWidth();
+      llvm::outs() << vec << " " << ty.getIntOrFloatBitWidth() << "\n";
       if (width >= 32)
         allLoads.push_back(loadOp);
     }
