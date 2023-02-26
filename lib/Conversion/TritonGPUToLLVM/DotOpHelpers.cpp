@@ -789,20 +789,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
   auto resTy = matTy.cast<LLVM::LLVMStructType>();
   Type elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
 
-  // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
-  // instructions to pack & unpack sub-word integers. A workaround is to
-  // store the results of ldmatrix in i32
-  if (auto vecElemTy = elemTy.dyn_cast<VectorType>()) {
-    Type elemElemTy = vecElemTy.getElementType();
-    if (auto intTy = elemElemTy.dyn_cast<IntegerType>()) {
-      if (intTy.getWidth() <= 16) {
-        elemTy = rewriter.getI32Type();
-        resTy =
-            LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, elemTy));
-      }
-    }
-  }
-
   if (canUseLdmatrix) {
     Value sOffset =
         mul(i32_val(matIdx[order[1]] * sMatStride * sMatShape), sStride);
