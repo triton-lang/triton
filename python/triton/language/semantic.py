@@ -478,6 +478,12 @@ def not_equal(input: tl.tensor,
 def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
     if not isinstance(start, int) or not isinstance(end, int):
         raise ValueError("arange's arguments must be of type tl.constexpr")
+    is_start_int64 = bool(start >> 32)
+    is_end_int64 = bool(end >> 32)
+    if is_start_int64 or is_end_int64:
+        raise ValueError("arange must fit in int32")
+    if end <= start:
+        raise ValueError("arange's end argument must be greater than the start argument")
 
     shape = [end - start]
     ret_ty = tl.block_type(tl.int32, shape)
@@ -647,6 +653,8 @@ def cast(input: tl.tensor,
          dst_ty: tl.dtype,
          builder: ir.builder) -> tl.tensor:
     src_ty = input.type
+    if isinstance(dst_ty, tl.constexpr):
+        dst_ty = dst_ty.value
     if src_ty.is_block():
         dst_ty = tl.block_type(dst_ty, input.type.get_block_shapes())
     if src_ty == dst_ty:

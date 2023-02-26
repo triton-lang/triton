@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
 
   // TODO: register Triton & TritonGPU passes
   mlir::DialectRegistry registry;
-  registry.insert<mlir::triton::TritonDialect,
+  registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
                   mlir::triton::gpu::TritonGPUDialect, mlir::func::FuncDialect,
                   mlir::math::MathDialect, mlir::arith::ArithDialect,
                   mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();

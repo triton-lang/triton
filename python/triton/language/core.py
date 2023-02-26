@@ -9,6 +9,8 @@ from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
+TRITON_MAX_TENSOR_NUMEL = 131072
+
 
 def _to_tensor(x: Tensorable, builder) -> tensor:
     if isinstance(x, bool):
@@ -254,6 +256,8 @@ class block_type(dtype):
         self.numel = 1
         for s in self.shape:
             self.numel *= s
+        if self.numel > TRITON_MAX_TENSOR_NUMEL:
+            raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
 
         self.name = self.__str__()
 
@@ -415,6 +419,9 @@ class constexpr:
     def __or__(self, other):
         return constexpr(self.value | other.value)
 
+    def __xor__(self, other):
+        return constexpr(self.value ^ other.value)
+
     def logical_or(self, other):
         return constexpr(self.value or other.value)
 
@@ -532,9 +539,19 @@ class tensor:
         return semantic.and_(self, other, _builder)
 
     @builtin
+    def __rand__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.and_(other, self, _builder)
+
+    @builtin
     def __or__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.or_(self, other, _builder)
+
+    @builtin
+    def __ror__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.or_(other, self, _builder)
 
     @builtin
     def __xor__(self, other, _builder=None):
@@ -542,9 +559,19 @@ class tensor:
         return semantic.xor_(self, other, _builder)
 
     @builtin
+    def __rxor__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.xor_(other, self, _builder)
+
+    @builtin
     def __lshift__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.shl(self, other, _builder)
+
+    @builtin
+    def __rlshift__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.shl(other, self, _builder)
 
     @builtin
     def __rshift__(self, other, _builder=None):
@@ -553,6 +580,14 @@ class tensor:
             return semantic.ashr(self, other, _builder)
         else:
             return semantic.lshr(self, other, _builder)
+
+    @builtin
+    def __rrshift__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        if self.dtype.is_int_signed():
+            return semantic.ashr(other, self, _builder)
+        else:
+            return semantic.lshr(other, self, _builder)
 
     # comparison operators
 
@@ -703,12 +738,13 @@ def num_programs(axis, _builder=None):
 @builtin
 def arange(start, end, _builder=None):
     """
-    Returns contiguous values within the open interval [:code:`start`, :code:`end`).
+    Returns contiguous values within the left-closed and right-open interval [:code:`start`, :code:`end`). \
+    End - Start must be less than or equal to TRITON_MAX_TENSOR_NUMEL = 131072
 
     :param start: Start of the interval. Must be a power of two.
-    :type start: int
-    :param stop: End of the interval. Must be a power of two >= start.
-    :type stop: int
+    :type start: int32
+    :param end: End of the interval. Must be a power of two > start.
+    :type end: int32
     """
     start = _constexpr_to_value(start)
     end = _constexpr_to_value(end)
