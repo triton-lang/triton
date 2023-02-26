@@ -928,7 +928,7 @@ def build_triton_ir(fn, signature, specialization, constants):
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     context = _triton.ir.context()
-    context.load_triton()
+    context.initialize()
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
     constants = {cst_key(key): value for key, value in constants.items()}

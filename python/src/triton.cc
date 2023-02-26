@@ -117,13 +117,16 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<mlir::MLIRContext>(m, "context")
       .def(py::init<>())
-      .def("load_triton", [](mlir::MLIRContext &self) {
-        self.getOrLoadDialect<mlir::triton::TritonDialect>();
-        // we load LLVM because the frontend uses LLVM.undef for
-        // some placeholders
-        self.getOrLoadDialect<mlir::triton::TritonDialect>();
-        self.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-        self.getOrLoadDialect<mlir::gpu::GPUDialect>();
+      .def("initialize", [](mlir::MLIRContext &self) {
+        mlir::DialectRegistry registry;
+        registry.insert<mlir::triton::TritonDialect,
+                        mlir::triton::gpu::TritonGPUDialect,
+                        mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+                        mlir::math::MathDialect, mlir::arith::ArithDialect,
+                        mlir::func::FuncDialect, mlir::scf::SCFDialect,
+                        mlir::DLTIDialect, mlir::cf::ControlFlowDialect>();
+        self.appendDialectRegistry(registry);
+        self.loadAllAvailableDialects();
       });
   // .def(py::init([](){
   //   mlir::MLIRContext context;
@@ -394,7 +397,7 @@ void init_triton_ir(py::module &&m) {
                         mlir::triton::gpu::TritonGPUDialect,
                         mlir::math::MathDialect, mlir::arith::ArithDialect,
                         mlir::func::FuncDialect, mlir::scf::SCFDialect,
-                        mlir::cf::ControlFlowDialect>();
+                        mlir::DLTIDialect, mlir::cf::ControlFlowDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
 
@@ -452,7 +455,7 @@ void init_triton_ir(py::module &&m) {
              // set data layout
              llvm::SmallVector<mlir::DataLayoutEntryInterface> entries;
              entries.push_back(mlir::DataLayoutEntryAttr::get(
-                 self.getStringAttr("index"), self.getI32IntegerAttr(32)));
+                 self.getIndexType(), self.getI32IntegerAttr(64)));
              auto dlSpec = mlir::DataLayoutSpecAttr::get(context, entries);
              ret->setAttr(mlir::DLTIDialect::kDataLayoutAttrName, dlSpec);
              return ret;
