@@ -821,7 +821,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
 
     // The result type is 4xi32, each i32 is composed of 2xf16
     // elements (adjacent two columns in a row) or a single f32 element.
-    Value resV4 = builder.launch(rewriter, loc, resTy);
+    Value resV4 = builder.launch(rewriter, loc, matTy);
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else if (elemBytes == 4 && needTrans) { // Use lds.32 to load tf32 matrices
@@ -853,7 +853,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     return {retElems[0], retElems[1], retElems[2], retElems[3]};
   } else if (elemBytes == 1 && needTrans) { // work with int8
     // Can't use i32 here. Use LLVM's VectorType
-    elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
+    // elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
     std::array<std::array<Value, 4>, 2> ptrs;
     ptrs[0] = {
         getPtr(ptrIdx),
@@ -912,8 +912,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
       }
     }
 
-    return {bitcast(i8v4Elems[0], i32_ty), bitcast(i8v4Elems[1], i32_ty),
-            bitcast(i8v4Elems[2], i32_ty), bitcast(i8v4Elems[3], i32_ty)};
+    return {i8v4Elems[0], i8v4Elems[1], i8v4Elems[2], i8v4Elems[3]};
   }
 
   assert(false && "Invalid smem load");

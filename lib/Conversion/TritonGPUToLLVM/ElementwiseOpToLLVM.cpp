@@ -286,6 +286,7 @@ struct FpToFpOpConversion
   LogicalResult
   matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << op << "\n";
     auto srcTensorType = op.getFrom().getType().cast<mlir::RankedTensorType>();
     auto dstTensorType =
         op.getResult().getType().cast<mlir::RankedTensorType>();
@@ -334,6 +335,7 @@ struct FpToFpOpConversion
                                    elements[i + 2], elements[i + 3]);
         resultVals.append(converted);
       }
+
     } else if (srcEltType.isBF16() && dstEltType.isF32()) {
       resultVals.emplace_back(
           convertBf16ToFp32(loc, rewriter, adaptor.getFrom()));
@@ -345,6 +347,7 @@ struct FpToFpOpConversion
     }
 
     assert(resultVals.size() == elems);
+    llvm::outs() << resultVals[0] << "\n";
     auto convertedDstTensorType =
         this->getTypeConverter()->convertType(dstTensorType);
     auto result = getStructFromElements(loc, resultVals, rewriter,
@@ -367,7 +370,6 @@ public:
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    llvm::outs() << op << "\n";
     auto resultTy = op.getType();
     Location loc = op->getLoc();
 
@@ -378,7 +380,6 @@ public:
     Type structTy = this->getTypeConverter()->convertType(resultTy);
 
     auto *concreteThis = static_cast<const ConcreteT *>(this);
-    llvm::outs() << elems << "\n";
     auto operands = getOperands(rewriter, adaptor, elems, loc);
     SmallVector<Value> resultVals(elems);
     for (unsigned i = 0; i < elems; ++i) {
@@ -404,8 +405,6 @@ public:
     Value view =
         getStructFromElements(loc, resultVals, rewriter, structTy, true);
     rewriter.replaceOp(op, view);
-
-    llvm::outs() << "done\n";
     return success();
   }
 
