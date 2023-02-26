@@ -221,7 +221,7 @@ def matmul_kernel(
         # error or (worse!) incorrect results.
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
-        b = b.to(tl.float8, bitcast=True).to(tl.float16)
+        # b = b.to(tl.float8, bitcast=True).to(tl.float16)
         # We accumulate along the K dimension
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block
@@ -288,7 +288,9 @@ def matmul(a, b, activation=None):
 
 torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randint(-128, 127, (512, 512), dtype=torch.int8, device='cuda')
+# b = torch.randint(-128, 127, (512, 512), dtype=torch.int8, device='cuda')
+b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+
 b = b.t()
 triton_output = matmul(a, b, activation=None)
 torch_output = torch.matmul(a, b)
