@@ -361,6 +361,32 @@ def TT_ReduceOp : TT_Op<"reduce", [NoMemoryEffect,
     }];
 }
 
+
+//
+// Scan Op
+//
+def TT_ScanOp : TT_Op<"scan", [NoMemoryEffect,
+                                   DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+  let summary = "scan";
+
+  let arguments = (ins TT_ScanOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);
+
+  let results = (outs TT_Type:$result);
+
+  let builders = [
+    OpBuilder<(ins "triton::ScanOp":$redOp, "Value":$operand, "int":$axis)>,
+  ];
+
+  let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
+
+  let extraClassDeclaration = [{
+    // This member function is marked static because we need to call it before the ScanOp
+    // is constructed, see the implementation of create_reduce in triton.cc.
+    static bool withIndex(mlir::triton::ScanOp scanOp);
+  }];
+}
+
+
 //
 // External elementwise op
 //

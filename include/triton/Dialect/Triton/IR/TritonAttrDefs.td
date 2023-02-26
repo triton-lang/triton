@@ -47,6 +47,20 @@ def TT_RedOpAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+
+// reduction
+def TT_ScanOpAttr : I32EnumAttr<
+                       /*name*/"ScanOp", /*summary*/"",
+                       /*case*/
+                       [
+                         I32EnumAttrCase</*sym*/"ADD", 1, /*str*/"add">,
+                         I32EnumAttrCase<"MIN", 2, "min">,
+                         I32EnumAttrCase<"MAX", 3, "max">,
+                       ]> {
+  let cppNamespace = "::mlir::triton";
+}
+
+
 // atomic
 def TT_AtomicRMWAttr : I32EnumAttr<
     "RMWOp", "",

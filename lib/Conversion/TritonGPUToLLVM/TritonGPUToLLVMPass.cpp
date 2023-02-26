@@ -20,6 +20,7 @@
 #include "ElementwiseOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
 #include "ReduceOpToLLVM.h"
+#include "ScanOpToLLVM.h"
 #include "TritonGPUToLLVM.h"
 #include "TypeConverter.h"
 #include "ViewOpToLLVM.h"
@@ -202,6 +203,12 @@ public:
     populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                    *axisInfoAnalysis, &allocation, smem,
                                    indexCacheInfo, /*benefit=*/10);
+
+    // ScanOp
+    populateScanOpToLLVMPatterns(typeConverter, patterns, numWarps,
+                                   *axisInfoAnalysis, &allocation, smem,
+                                   indexCacheInfo, /*benefit=*/10);
+
     // ViewOp
     populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
                                  *axisInfoAnalysis, &allocation, smem,
