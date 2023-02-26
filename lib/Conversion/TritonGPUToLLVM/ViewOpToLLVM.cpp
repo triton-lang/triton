@@ -18,27 +18,6 @@ struct SplatOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::SplatOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  static SmallVector<Value> rerollValues(ConversionPatternRewriter &rewriter,
-                                         Location loc,
-                                         const SmallVector<Value> &vals,
-                                         Type destType) {
-    auto structTy = destType.dyn_cast<LLVM::LLVMStructType>();
-    if (!structTy)
-      return vals;
-    auto vecTy = structTy.getBody()[0].dyn_cast<VectorType>();
-    if (!vecTy)
-      return vals;
-    size_t vecWidth = vecTy.getNumElements();
-    SmallVector<Value> ret;
-    for (int i = 0; i < vals.size(); i += vecWidth) {
-      Value vec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-      for (int k = 0; k < vecWidth; k++)
-        vec = insert_element(vec, vals[i + k], i32_val(k));
-      ret.push_back(vec);
-    }
-    return ret;
-  }
-
   // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
   // LLVM::StructType value.
   //
@@ -55,9 +34,7 @@ struct SplatOpConversion
     size_t elemsPerThread = getElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
     Type structTy = typeConverter->convertType(resType);
-    elems = rerollValues(rewriter, loc, elems, structTy);
-
-    return getStructFromElements(loc, elems, rewriter, structTy);
+    return getStructFromElements(loc, elems, rewriter, structTy, true);
   }
 
   LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,

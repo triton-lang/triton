@@ -167,10 +167,11 @@ using namespace mlir::triton;
 
 Value getStructFromElements(Location loc, ValueRange resultVals,
                             ConversionPatternRewriter &rewriter,
-                            Type structType);
+                            Type structType, bool packVectors = false);
 
 SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
-                                         ConversionPatternRewriter &rewriter);
+                                         ConversionPatternRewriter &rewriter,
+                                         bool unpackVectors = false);
 
 /// Create a 32-bit integer constant.
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v);

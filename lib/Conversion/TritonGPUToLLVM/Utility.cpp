@@ -5,16 +5,52 @@ namespace mlir {
 namespace LLVM {
 using namespace mlir::triton;
 
+SmallVector<Value> unpackVectorData(ConversionPatternRewriter &rewriter,
+                                    Location loc,
+                                    SmallVector<Value> const &vals) {
+  auto vecTy = dyn_cast<VectorType>(vals[0].getType());
+  if (!vecTy)
+    return vals;
+  SmallVector<Value> ret;
+  for (Value val : vals)
+    for (int k = 0; k < vecTy.getNumElements(); k++)
+      ret.push_back(extract_element(val, i32_val(k)));
+  return ret;
+}
+
+SmallVector<Value> packVectorData(ConversionPatternRewriter &rewriter,
+                                  Location loc, SmallVector<Value> const &vals,
+                                  Type destType) {
+  auto structTy = destType.dyn_cast<LLVM::LLVMStructType>();
+  if (!structTy)
+    return vals;
+  auto vecTy = structTy.getBody()[0].dyn_cast<VectorType>();
+  if (!vecTy)
+    return vals;
+  size_t vecWidth = vecTy.getNumElements();
+  SmallVector<Value> ret;
+  for (int i = 0; i < vals.size(); i += vecWidth) {
+    Value vec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+    for (int k = 0; k < vecWidth; k++)
+      vec = insert_element(vec, vals[i + k], i32_val(k));
+    ret.push_back(vec);
+  }
+  return ret;
+}
+
 Value getStructFromElements(Location loc, ValueRange resultVals,
                             ConversionPatternRewriter &rewriter,
-                            Type structType) {
+                            Type structType, bool packVectors) {
+
   if (!structType.isa<LLVM::LLVMStructType>()) {
     return *resultVals.begin();
   }
-
+  SmallVector<Value> _resultVals;
+  if (packVectors) {
+    _resultVals = packVectorData(rewriter, loc, resultVals, structType);
+    resultVals = _resultVals;
+  }
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  // llvm::outs() << structType.cast<LLVM::LLVMStructType>().getBody().size()
-  //              << " " << resultVals.size() << "\n";
   for (const auto &v : llvm::enumerate(resultVals)) {
     assert(v.value() && "can not insert null values");
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
@@ -23,7 +59,8 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
 }
 
 SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
-                                         ConversionPatternRewriter &rewriter) {
+                                         ConversionPatternRewriter &rewriter,
+                                         bool unpackVectors) {
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
       llvmStruct.getType().isa<triton::PointerType>() ||
       llvmStruct.getType().isa<LLVM::LLVMPointerType>())
@@ -35,6 +72,8 @@ SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
     Type type = types[i];
     results[i] = extract_val(type, llvmStruct, i);
   }
+  if (unpackVectors)
+    results = unpackVectorData(rewriter, loc, results);
   return results;
 }
 

@@ -382,55 +382,34 @@ public:
       if (!bool(resultVals[i]))
         return failure();
     }
-    // post-process
-    resultVals = rerollValues(rewriter, loc, resultVals, structTy);
-    Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
+    if (isa<arith::ExtFOp>(op)) {
+      SmallVector<Value> reorderedVals;
+      for (unsigned i = 0; i < resultVals.size(); i += 8) {
+        reorderedVals.push_back(resultVals[i]);
+        reorderedVals.push_back(resultVals[i + 1]);
+        reorderedVals.push_back(resultVals[i + 4]);
+        reorderedVals.push_back(resultVals[i + 5]);
+        reorderedVals.push_back(resultVals[i + 2]);
+        reorderedVals.push_back(resultVals[i + 3]);
+        reorderedVals.push_back(resultVals[i + 6]);
+        reorderedVals.push_back(resultVals[i + 7]);
+      }
+      resultVals = reorderedVals;
+    }
+    Value view =
+        getStructFromElements(loc, resultVals, rewriter, structTy, true);
     rewriter.replaceOp(op, view);
 
     return success();
   }
 
 protected:
-  SmallVector<Value> unrollValues(ConversionPatternRewriter &rewriter,
-                                  Location loc,
-                                  const SmallVector<Value> &vals) const {
-    auto vecTy = dyn_cast<VectorType>(vals[0].getType());
-    if (!vecTy)
-      return vals;
-    SmallVector<Value> ret;
-    for (Value val : vals)
-      for (int k = 0; k < vecTy.getNumElements(); k++)
-        ret.push_back(extract_element(val, i32_val(k)));
-    return ret;
-  }
-
-  SmallVector<Value> rerollValues(ConversionPatternRewriter &rewriter,
-                                  Location loc, const SmallVector<Value> &vals,
-                                  Type destType) const {
-    auto structTy = destType.dyn_cast<LLVM::LLVMStructType>();
-    if (!structTy)
-      return vals;
-    auto vecTy = structTy.getBody()[0].dyn_cast<VectorType>();
-    if (!vecTy)
-      return vals;
-    size_t vecWidth = vecTy.getNumElements();
-    SmallVector<Value> ret;
-    for (int i = 0; i < vals.size(); i += vecWidth) {
-      Value vec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-      for (int k = 0; k < vecWidth; k++)
-        vec = insert_element(vec, vals[i + k], i32_val(k));
-      ret.push_back(vec);
-    }
-    return ret;
-  }
-
   SmallVector<SmallVector<Value>>
   getOperands(ConversionPatternRewriter &rewriter, OpAdaptor adaptor,
               const unsigned elems, Location loc) const {
     SmallVector<SmallVector<Value>> operands(elems);
     for (auto operand : adaptor.getOperands()) {
-      auto sub_operands = getElementsFromStruct(loc, operand, rewriter);
-      sub_operands = unrollValues(rewriter, loc, sub_operands);
+      auto sub_operands = getElementsFromStruct(loc, operand, rewriter, true);
       // llvm::outs() << elems << " " << operand << "\n";
       assert(sub_operands.size() == elems &&
              "number of operands should be equal to number of elements");
