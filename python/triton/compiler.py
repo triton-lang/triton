@@ -1530,7 +1530,22 @@ arg_type_pattern = {
 }
 
 
+def _get_jsonable_constants(constants):
+    def _is_jsonable(x):
+        try:
+            json.dumps(x)
+            return True
+        except (TypeError, OverflowError):
+            return False
+    serialized_constants = {}
+    for constant in constants:
+        if _is_jsonable(constants[constant]):
+            serialized_constants[constant] = constants[constant]
+    return serialized_constants
+
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+
+
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
@@ -1603,7 +1618,7 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        metadata = {"num_warps": num_warps, "num_stages": num_stages, "constants": constants, "ctime": dict()}
+        metadata = {"num_warps": num_warps, "num_stages": num_stages, "constants": _get_jsonable_constants(constants), "ctime": dict()}
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
