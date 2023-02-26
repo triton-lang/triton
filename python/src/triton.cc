@@ -13,6 +13,7 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
@@ -445,8 +446,16 @@ void init_triton_ir(py::module &&m) {
                              ret::reference)
       .def("create_module",
            [](mlir::OpBuilder &self) -> mlir::ModuleOp {
+             auto context = self.getContext();
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::ModuleOp>(loc);
+             auto ret = self.create<mlir::ModuleOp>(loc);
+             // set data layout
+             llvm::SmallVector<mlir::DataLayoutEntryInterface> entries;
+             entries.push_back(mlir::DataLayoutEntryAttr::get(
+                 self.getStringAttr("index"), self.getI32IntegerAttr(32)));
+             auto dlSpec = mlir::DataLayoutSpecAttr::get(context, entries);
+             ret->setAttr(mlir::DLTIDialect::kDataLayoutAttrName, dlSpec);
+             return ret;
            })
       .def("ret",
            [](mlir::OpBuilder &self, std::vector<mlir::Value> &vals) -> void {
