@@ -194,7 +194,7 @@ inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
   //  // Case 4: The targeEncoding may expose more vectorization opportunities
   //  return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
   //}
-  return false;
+  return true;
 }
 
 inline bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
