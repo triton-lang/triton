@@ -67,9 +67,10 @@ private:
     Value B = op.getB();
     Value C = op.getC();
 
-    MMA16816ConversionHelper mmaHelper(A.getType(), mmaLayout,
+    MMA16816ConversionHelper mmaHelper(op, mmaLayout,
                                        getThreadId(rewriter, loc), rewriter,
                                        getTypeConverter(), loc);
+
 
     auto ATensorTy = A.getType().cast<RankedTensorType>();
     auto BTensorTy = B.getType().cast<RankedTensorType>();

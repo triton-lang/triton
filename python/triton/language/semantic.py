@@ -1051,6 +1051,7 @@ def atomic_xchg(ptr: tl.tensor,
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         allow_tf32: bool,
+        allow_f16_acc: bool,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     assert lhs.dtype == rhs.dtype, "lhs and rhs must have the same dtype!"
@@ -1063,8 +1064,8 @@ def dot(lhs: tl.tensor,
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     else:
-        _0 = builder.get_fp32(0)
-        ret_scalar_ty = tl.float32
+        _0 = builder.get_fp16(0) if allow_f16_acc else builder.get_fp32(0)
+        ret_scalar_ty = tl.float16 if allow_f16_acc else tl.float32
     M = lhs.type.shape[0]
     N = rhs.type.shape[1]
     _0 = builder.create_splat(_0, [M, N])
