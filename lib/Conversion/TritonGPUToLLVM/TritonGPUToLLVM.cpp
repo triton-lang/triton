@@ -325,11 +325,9 @@ struct GetProgramIdOpConversion
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
 
-    Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(
-        loc, rewriter.getIndexType(), dims[op.getAxis()]);
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-    rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
-        op, TypeRange{llvmIndexTy}, ValueRange{blockId});
+    Value blockId =
+        rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxis()]);
+    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
     return success();
   }
 

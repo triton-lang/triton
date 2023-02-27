@@ -15,6 +15,8 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int computeCapability = 80);
 
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonFuncToLLVMPass();
+
 } // namespace triton
 
 } // namespace mlir

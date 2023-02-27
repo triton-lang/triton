@@ -49,4 +49,14 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
     ];
 }
 
+def ConvertTritonFuncToLLVM : Pass<"convert-triton-func-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Convert Triton functions to LLVM";
+
+    let description = [{
+      Handles pointers and annotations
+    }];
+
+    let constructor = "mlir::triton::createConvertTritonFuncToLLVMPass()";
+}
+
 #endif

@@ -565,7 +565,7 @@ struct AtomicRMWOpConversion
         auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, idx_val(ii));
+              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
       } else {
         PTXBuilder ptxBuilderMemfence;

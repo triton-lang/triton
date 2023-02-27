@@ -625,49 +625,6 @@ void populateSCFPatterns(TritonGPUTypeConverter &typeConverter,
                SCFConditionPattern>(typeConverter, context);
 }
 
-// CF
-
-class CFBranchPattern : public OpConversionPattern<cf::BranchOp> {
-public:
-  using OpConversionPattern<cf::BranchOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(cf::BranchOp op, cf::BranchOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<cf::BranchOp>(op, op.getSuccessor(),
-                                              adaptor.getOperands());
-    return success();
-  }
-};
-
-class CFCondBranchPattern : public OpConversionPattern<cf::CondBranchOp> {
-public:
-  using OpConversionPattern<cf::CondBranchOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(cf::CondBranchOp op, cf::CondBranchOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto converter = getTypeConverter();
-    auto newOp = rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
-        op, adaptor.getCondition(), op.getTrueDest(),
-        adaptor.getTrueDestOperands(), op.getFalseDest(),
-        adaptor.getFalseDestOperands());
-
-    if (failed(rewriter.convertRegionTypes(newOp.getTrueDest()->getParent(),
-                                           *converter)))
-      return failure();
-    if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(),
-                                           *converter)))
-      return failure();
-    return success();
-  }
-};
-
-void populateCFPatterns(TritonGPUTypeConverter &typeConverter,
-                        RewritePatternSet &patterns) {
-  MLIRContext *context = patterns.getContext();
-  patterns.add<CFBranchPattern, CFCondBranchPattern>(typeConverter, context);
-}
 //
 
 class ConvertTritonToTritonGPU
@@ -693,7 +650,6 @@ public:
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);
-    populateCFPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();

@@ -24,6 +24,8 @@
 #include "TypeConverter.h"
 #include "ViewOpToLLVM.h"
 
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -72,8 +74,9 @@ struct FuncOpConversion : public FuncOpConversionBase {
   matchAndRewrite(func::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
-    if (!newFuncOp)
+    if (!newFuncOp) {
       return failure();
+    }
 
     auto ctx = funcOp->getContext();
 
@@ -138,11 +141,6 @@ public:
     membarPass.run();
 
     // Step 4
-    RewritePatternSet funcPatterns(context);
-    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
-    if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
-      return signalPassFailure();
 
     // Step 5 - get axis and shared memory info
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
@@ -194,11 +192,11 @@ public:
                                  /*benefit=*/10);
 
     // Add arith/math's patterns to help convert scalar expression to LLVM.
-    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
@@ -399,6 +397,87 @@ private:
   }
 };
 
+struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
+  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    unsigned numArguments = op.getNumOperands();
+
+    // Currently, Triton kernel function always return nothing.
+    // TODO(Superjomn) add support for non-inline device function
+    if (numArguments > 0) {
+      return rewriter.notifyMatchFailure(
+          op, "Only kernel function with nothing returned is supported.");
+    }
+
+    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
+                                                op->getAttrs());
+    return success();
+  }
+};
+
+class CFBranchPattern : public OpConversionPattern<cf::BranchOp> {
+public:
+  using OpConversionPattern<cf::BranchOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(cf::BranchOp op, cf::BranchOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<cf::BranchOp>(op, op.getSuccessor(),
+                                              adaptor.getOperands());
+    return success();
+  }
+};
+
+class CFCondBranchPattern : public OpConversionPattern<cf::CondBranchOp> {
+public:
+  using OpConversionPattern<cf::CondBranchOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(cf::CondBranchOp op, cf::CondBranchOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto converter = getTypeConverter();
+    auto newOp = rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
+        op, adaptor.getCondition(), op.getTrueDest(),
+        adaptor.getTrueDestOperands(), op.getFalseDest(),
+        adaptor.getFalseDestOperands());
+
+    if (failed(rewriter.convertRegionTypes(newOp.getTrueDest()->getParent(),
+                                           *converter)))
+      return failure();
+    if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(),
+                                           *converter)))
+      return failure();
+    return success();
+  }
+};
+
+class ConvertTritonFuncToLLVM
+    : public ConvertTritonFuncToLLVMBase<ConvertTritonFuncToLLVM> {
+public:
+  void runOnOperation() override {
+    MLIRContext *context = &getContext();
+    ModuleOp mod = getOperation();
+    mlir::LowerToLLVMOptions option(context);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option);
+
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+
+    RewritePatternSet funcPatterns(context);
+    TritonLLVMFunctionConversionTarget funcTarget(*context);
+    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
+    funcPatterns.add<ReturnOpConversion>(typeConverter);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          funcPatterns);
+
+    if (failed(
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      return signalPassFailure();
+  }
+};
+
 } // anonymous namespace
 
 namespace mlir {
@@ -407,6 +486,10 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int computeCapability) {
   return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability);
+}
+
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonFuncToLLVMPass() {
+  return std::make_unique<::ConvertTritonFuncToLLVM>();
 }
 
 } // namespace triton

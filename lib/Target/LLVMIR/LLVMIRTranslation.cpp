@@ -294,18 +294,32 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnChange=*/true,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
+  mlir::ConvertControlFlowToLLVMPassOptions cfOpt;
+  mlir::ArithToLLVMConversionPassOptions arithOpt;
+  mlir::ConvertFuncToLLVMPassOptions funcOpt;
+  mlir::ConvertIndexToLLVMPassOptions indexOpt;
+  cfOpt.indexBitwidth = 32;
+  arithOpt.indexBitwidth = 64;
+  funcOpt.indexBitwidth = 32;
   pm.addPass(mlir::createConvertSCFToCFPass());
+  pm.addPass(mlir::triton::createConvertTritonFuncToLLVMPass());
+  pm.addPass(mlir::createArithToLLVMConversionPass(arithOpt));
+  // pm.addPass(mlir::createConvertIndexToLLVMPass(indexOpt));
+  // pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
-  // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
-  pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(mlir::createCSEPass()); // Simplify the IR to improve readability.
-  pm.addPass(mlir::createSymbolDCEPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
+  // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
+  // pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass()); // Simplify the IR to improve readability
+  pm.addPass(mlir::createSymbolDCEPass());
+
   if (failed(pm.run(module))) {
+    llvm::outs() << module << "\n";
     llvm::errs() << "Pass execution failed";
     return nullptr;
   }
+  llvm::outs() << module << "\n";
 
   auto llvmIR = translateLLVMToLLVMIR(llvmContext, module);
   if (!llvmIR) {
