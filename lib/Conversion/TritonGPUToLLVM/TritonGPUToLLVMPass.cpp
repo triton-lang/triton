@@ -195,7 +195,8 @@ public:
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+    // mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
+    // patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))

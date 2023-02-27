@@ -347,11 +347,10 @@ struct GetNumProgramsOpConversion
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
 
-    Value blockId = rewriter.create<::mlir::gpu::GridDimOp>(
-        loc, rewriter.getIndexType(), dims[op.getAxis()]);
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-    rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
-        op, TypeRange{llvmIndexTy}, ValueRange{blockId});
+    Value blockId =
+        rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
+    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
+
     return success();
   }
 
@@ -452,9 +451,22 @@ struct ExtractSliceOpConversion
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
     for (auto i = 0; i < mixedOffsets.size(); ++i) {
-      if (op.isDynamicOffset(i))
-        opOffsetVals.emplace_back(adaptor.getOffsets()[i]);
-      else
+      if (op.isDynamicOffset(i)) {
+        // A little hacky here, but couldn't find any other way:
+        // Before we codegen TritonGPUToLLVM, we are using int64 indices
+        // But for TritonGPU codegen we want int32 indices. Which means
+        // %tmp = builtin.unrealized_conversion_cast %622 : i64 to index
+        // %offset = builtin.unrealized_conversion_cast %623 : index to i32
+        auto off = adaptor.getOffsets()[i];
+        // off = rewriter
+        //           .create<UnrealizedConversionCastOp>(loc, TypeRange{i64_ty},
+        //                                               ValueRange{off})
+        //           .getResult(0);
+        // off = rewriter.create<arith::TruncIOp>(loc, i32_ty, off);
+        llvm::outs() << off << "\n";
+
+        opOffsetVals.emplace_back(off);
+      } else
         opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
       offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));
     }
