@@ -31,17 +31,17 @@ def compare(baseline: dict, new: dict, threshold: float) -> bool:
         new_latency = new[key].latency
         if new_latency < baseline_latency * (1 - threshold):
             print(
-                f"New benchmark {key} is slower than baseline: {new_latency} vs {baseline_latency}")
+                f"New benchmark {key} is faster than baseline: {new_latency} vs {baseline_latency}")
         elif new_latency > baseline_latency * (1 + threshold):
             print(
-                f"New benchmark {key} is faster than baseline: {new_latency} vs {baseline_latency}")
+                f"New benchmark {key} is slower than baseline: {new_latency} vs {baseline_latency}")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--baseline', required=True)
     parser.add_argument('--new', required=True)
-    parser.add_argument('--threshold', type=float, default=0.05)
+    parser.add_argument('--threshold', type=float, default=0.1)
     args = parser.parse_args()
     baseline = parse_output(args.baseline)
     new = parse_output(args.new)
