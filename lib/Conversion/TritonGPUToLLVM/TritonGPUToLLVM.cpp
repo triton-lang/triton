@@ -325,8 +325,9 @@ struct GetProgramIdOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
-    rewriter.replaceOpWithNewOp<::mlir::gpu::BlockIdOp>(op, i32_ty,
-                                                        dims[op.getAxis()]);
+    auto blockIdOp =
+        rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxis()]);
+    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockIdOp);
     return success();
   }
 
@@ -345,12 +346,9 @@ struct GetNumProgramsOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
-
-    Value blockId = rewriter.create<::mlir::gpu::GridDimOp>(
-        loc, rewriter.getIndexType(), dims[op.getAxis()]);
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-    rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
-        op, TypeRange{i32_ty}, ValueRange{blockId});
+    auto gridDimOp =
+        rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
+    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, gridDimOp);
     return success();
   }
 
