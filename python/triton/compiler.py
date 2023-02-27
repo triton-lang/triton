@@ -674,8 +674,8 @@ class CodeGenerator(ast.NodeVisitor):
         ub = self.builder.create_to_index(ub)
         step = self.builder.create_to_index(step)
         # Create placeholder for the loop induction variable
-        iv = self.builder.create_undef(self.builder.get_int32_ty())
-        self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+        iv = self.builder.create_undef(self.builder.get_int64_ty())
+        self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int64))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -736,7 +736,7 @@ class CodeGenerator(ast.NodeVisitor):
                 ub_si = self.builder.create_index_to_si(ub)
                 iv = self.builder.create_sub(ub_si, iv)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
-            self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+            self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int64))
 
         # update lscope & local_defs (ForOp defines new values)
         for i, name in enumerate(names):
@@ -958,6 +958,7 @@ def build_triton_ir(fn, signature, specialization, constants):
 
 
 def optimize_triton_ir(mod):
+    print(str(mod))
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()

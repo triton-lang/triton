@@ -90,9 +90,6 @@
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
 #define int_val(width, val)                                                    \
   LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
-#define idx_val(...)                                                           \
-  LLVM::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
-                            __VA_ARGS__)
 #define tid_val() getThreadId(rewriter, loc)
 
 // Attributes

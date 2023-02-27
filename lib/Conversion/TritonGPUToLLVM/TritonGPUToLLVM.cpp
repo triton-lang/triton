@@ -295,7 +295,8 @@ struct MakeRangeOpConversion
 
     auto elemTy = rankedTy.getElementType();
     assert(elemTy.isInteger(32));
-    Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
+    Value start = rewriter.create<LLVM::ConstantOp>(
+        loc, elemTy, rewriter.getI32IntegerAttr(op.getStart()));
     auto idxs = emitIndices(loc, rewriter, layout, shape);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
@@ -324,12 +325,8 @@ struct GetProgramIdOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
-
-    Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(
-        loc, rewriter.getIndexType(), dims[op.getAxis()]);
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-    rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
-        op, TypeRange{llvmIndexTy}, ValueRange{blockId});
+    rewriter.replaceOpWithNewOp<::mlir::gpu::BlockIdOp>(op, i32_ty,
+                                                        dims[op.getAxis()]);
     return success();
   }
 
@@ -353,7 +350,7 @@ struct GetNumProgramsOpConversion
         loc, rewriter.getIndexType(), dims[op.getAxis()]);
     auto llvmIndexTy = getTypeConverter()->getIndexType();
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
-        op, TypeRange{llvmIndexTy}, ValueRange{blockId});
+        op, TypeRange{i32_ty}, ValueRange{blockId});
     return success();
   }
 

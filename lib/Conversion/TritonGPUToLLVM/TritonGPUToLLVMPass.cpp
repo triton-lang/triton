@@ -105,7 +105,6 @@ public:
     ModuleOp mod = getOperation();
 
     mlir::LowerToLLVMOptions option(context);
-    option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMFunctionConversionTarget funcTarget(*context);
     TritonLLVMConversionTarget target(*context);
