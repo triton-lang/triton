@@ -124,6 +124,7 @@ void init_triton_ir(py::module &&m) {
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
         self.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
         self.getOrLoadDialect<mlir::gpu::GPUDialect>();
+        self.getOrLoadDialect<mlir::tensor::TensorDialect>();
       });
   // .def(py::init([](){
   //   mlir::MLIRContext context;
@@ -898,23 +899,27 @@ void init_triton_ir(py::module &&m) {
 #ifdef USE_ROCM
              mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
              unsigned typeWidth = elementType.getIntOrFloatBitWidth();
-             // Should be replaced to tensor::SplatOp in LLVM 16
              auto constValue = self.create<mlir::arith::ConstantIntOp>(
                  loc, typeWidth, elementType);
-             auto splatValue = self.create<mlir::triton::SplatOp>(
-                 loc, lhs.getType(), constValue);
-
              auto zeroConst =
                  self.create<mlir::arith::ConstantIntOp>(loc, 0, elementType);
-             auto zeroValue = self.create<mlir::triton::SplatOp>(
-                 loc, lhs.getType(), zeroConst);
-
-             auto cmpValue = self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::slt, rhs, splatValue);
-
-             auto shiftValue = self.create<mlir::arith::ShLIOp>(loc, lhs, rhs);
-             return mlir::Value(self.create<mlir::arith::SelectOp>(
-                 loc, cmpValue, shiftValue, zeroValue));
+             if (lhs.getType().isIntOrIndex()) {
+               auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                   loc, mlir::arith::CmpIPredicate::ult, rhs, constValue);
+               auto shiftValue = self.create<mlir::arith::ShLIOp>(loc, lhs, rhs);
+               return mlir::Value(self.create<mlir::arith::SelectOp>(
+                   loc, cmpValue, shiftValue, zeroConst));
+             } else {
+               auto splatValue = self.create<mlir::tensor::SplatOp>(
+                   loc, lhs.getType(), constValue);
+               auto zeroValue = self.create<mlir::tensor::SplatOp>(
+                   loc, lhs.getType(), zeroConst);
+               auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                   loc, mlir::arith::CmpIPredicate::ult, rhs, splatValue);
+               auto shiftValue = self.create<mlir::arith::ShLIOp>(loc, lhs, rhs);
+               return mlir::Value(self.create<mlir::arith::SelectOp>(
+                   loc, cmpValue, shiftValue, zeroValue));
+             }
 #else
              return mlir::Value(
                  self.create<mlir::arith::ShLIOp>(loc, lhs, rhs));
@@ -927,23 +932,27 @@ void init_triton_ir(py::module &&m) {
 #ifdef USE_ROCM
              mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
              unsigned typeWidth = elementType.getIntOrFloatBitWidth();
-             // Should be replaced to tensor::SplatOp in LLVM 16
              auto constValue = self.create<mlir::arith::ConstantIntOp>(
                  loc, typeWidth, elementType);
-             auto splatValue = self.create<mlir::triton::SplatOp>(
-                 loc, lhs.getType(), constValue);
-
              auto zeroConst =
                  self.create<mlir::arith::ConstantIntOp>(loc, 0, elementType);
-             auto zeroValue = self.create<mlir::triton::SplatOp>(
-                 loc, lhs.getType(), zeroConst);
-
-             auto cmpValue = self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::slt, rhs, splatValue);
-
-             auto shiftValue = self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs);
-             return mlir::Value(self.create<mlir::arith::SelectOp>(
-                 loc, cmpValue, shiftValue, zeroValue));
+             if (lhs.getType().isIntOrIndex()) {
+               auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                   loc, mlir::arith::CmpIPredicate::ult, rhs, constValue);
+               auto shiftValue = self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs);
+               return mlir::Value(self.create<mlir::arith::SelectOp>(
+                   loc, cmpValue, shiftValue, zeroConst));
+             } else {
+               auto splatValue = self.create<mlir::tensor::SplatOp>(
+                   loc, lhs.getType(), constValue);
+               auto zeroValue = self.create<mlir::tensor::SplatOp>(
+                   loc, lhs.getType(), zeroConst);
+               auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                   loc, mlir::arith::CmpIPredicate::ult, rhs, splatValue);
+               auto shiftValue = self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs);
+               return mlir::Value(self.create<mlir::arith::SelectOp>(
+                   loc, cmpValue, shiftValue, zeroValue));
+             }
 #else
              return mlir::Value(
                  self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs));
@@ -956,36 +965,42 @@ void init_triton_ir(py::module &&m) {
 #ifdef USE_ROCM
              mlir::Type elementType = getElementTypeOrSelf(lhs.getType());
              unsigned typeWidth = elementType.getIntOrFloatBitWidth();
-             // Should be replaced to tensor::SplatOp in LLVM 16
              auto constValue = self.create<mlir::arith::ConstantIntOp>(
                  loc, typeWidth, elementType);
-             auto splatValue = self.create<mlir::triton::SplatOp>(
-                 loc, lhs.getType(), constValue);
-
              auto zeroConst =
                  self.create<mlir::arith::ConstantIntOp>(loc, 0, elementType);
-             auto zeroValue = self.create<mlir::triton::SplatOp>(
-                 loc, lhs.getType(), zeroConst);
-
              uint64_t ones_val = 0xFFFFFFFFFFFFFFFF;
              auto onesConst =
                  self.create<mlir::arith::ConstantIntOp>(loc, ones_val, elementType);
-             auto onesValue = self.create<mlir::triton::SplatOp>(
-                 loc, lhs.getType(), onesConst);
-
-             auto negativeCmpValue = self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::slt, lhs, zeroValue);
-             auto otherValue = mlir::Value(self.create<mlir::arith::SelectOp>(
-                 loc, negativeCmpValue, onesValue, zeroValue));
-
-             auto cmpValue = self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::slt, rhs, splatValue);
-
-             auto shiftValue = self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs);
-             return mlir::Value(self.create<mlir::arith::SelectOp>(
-                 loc, cmpValue, shiftValue, otherValue));
+             if (lhs.getType().isIntOrIndex()) {
+               auto negativeCmpValue = self.create<mlir::arith::CmpIOp>(
+                   loc, mlir::arith::CmpIPredicate::slt, lhs, zeroConst);
+               auto otherValue = mlir::Value(self.create<mlir::arith::SelectOp>(
+                   loc, negativeCmpValue, onesConst, zeroConst));
+               auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                   loc, mlir::arith::CmpIPredicate::ult, rhs, constValue);
+               auto shiftValue = self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs);
+               return mlir::Value(self.create<mlir::arith::SelectOp>(
+                   loc, cmpValue, shiftValue, otherValue));
+             } else {
+               auto splatValue = self.create<mlir::tensor::SplatOp>(
+                   loc, lhs.getType(), constValue);
+               auto zeroValue = self.create<mlir::tensor::SplatOp>(
+                   loc, lhs.getType(), zeroConst);
+               auto onesValue = self.create<mlir::tensor::SplatOp>(
+                   loc, lhs.getType(), onesConst);
+               auto negativeCmpValue = self.create<mlir::arith::CmpIOp>(
+                   loc, mlir::arith::CmpIPredicate::slt, lhs, zeroValue);
+               auto otherValue = mlir::Value(self.create<mlir::arith::SelectOp>(
+                   loc, negativeCmpValue, onesValue, zeroValue));
+               auto cmpValue = self.create<mlir::arith::CmpIOp>(
+                   loc, mlir::arith::CmpIPredicate::ult, rhs, splatValue);
+               auto shiftValue = self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs);
+               return mlir::Value(self.create<mlir::arith::SelectOp>(
+                   loc, cmpValue, shiftValue, otherValue));
+             }
 #else
-                  return mlir::Value(
+             return mlir::Value(
                  self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs));
 #endif
            })
