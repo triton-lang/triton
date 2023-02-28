@@ -170,10 +170,10 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 }
 
 inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
-  // Case 1: A size 1 tensor is not expensive since all threads will load the
-  // same
-  if (isSingleValue(op->getOperand(0)))
-    return false;
+  //// Case 1: A size 1 tensor is not expensive since all threads will load the
+  //// same
+  //if (isSingleValue(op->getOperand(0)))
+  //  return false;
   //auto ptr = op->getOperand(0);
   //// Case 2: We assume that `evict_last` loads/stores have high hit rate
   //if (auto load = dyn_cast<triton::LoadOp>(op))
