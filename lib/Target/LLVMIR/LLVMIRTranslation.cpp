@@ -302,21 +302,16 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::triton::createConvertTritonFuncToLLVMPass());
   pm.addPass(mlir::createArithToLLVMConversionPass(arithOpt));
-  // pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
+  pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
   pm.addPass(mlir::createCanonicalizerPass());
-
-  // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
-  // pm.addPass(mlir::createCanonicalizerPass());
   // Simplify the IR
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createSymbolDCEPass());
 
   if (failed(pm.run(module))) {
-    llvm::outs() << module << "\n";
     llvm::errs() << "Pass execution failed";
     return nullptr;
   }
-  llvm::outs() << module << "\n";
 
   auto llvmIR = translateLLVMToLLVMIR(llvmContext, module);
   if (!llvmIR) {
