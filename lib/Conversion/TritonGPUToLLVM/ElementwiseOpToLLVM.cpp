@@ -273,7 +273,7 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.rn.f32.f16");
+    auto &cvt = *builder.create("cvt.f32.f16");
     auto res = builder.newOperand("=r");
     auto operand = builder.newOperand(v, "h");
     cvt(res, operand);
@@ -297,7 +297,7 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.rn.f16.f32");
+    auto &cvt = *builder.create("cvt.f16.f32");
     auto res = builder.newOperand("=h");
     auto operand = builder.newOperand(v, "r");
     cvt(res, operand);
@@ -769,6 +769,8 @@ struct ExtFOpConversion
       auto outElemTy = getElementType(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
       return FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0]);
+    } else if (inElemTy.isF16() && elemTy.isF32()) {
+      return FpToFpOpConversion::convertFp16ToFp32(loc, rewriter, operands[0]);
     } else {
       return rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0]);
     }
@@ -790,6 +792,8 @@ struct TruncFOpConversion
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
       return FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, operands[0]);
+    } else if (outElemTy.isF16() && elemTy.isF32()) {
+      return FpToFpOpConversion::convertFp32ToFp16(loc, rewriter, operands[0]);
     } else {
       return rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0]);
     }
