@@ -1196,6 +1196,7 @@ def generate_launcher(constants, signature):
     #define __HIP_PLATFORM_AMD__
     #include <hip/hip_runtime.h>
     #include <Python.h>
+    #include <stdio.h>
     static inline void gpuAssert(hipError_t code, const char *file, int line)
     {{
       if (code != HIP_SUCCESS)
@@ -1203,8 +1204,7 @@ def generate_launcher(constants, signature):
          const char* prefix = "Triton Error [HIP]: ";
          const char* str = hipGetErrorString(code);
          char err[1024] = {{0}};
-         strcat(err, prefix);
-         strcat(err, str);
+         snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str );
          PyErr_SetString(PyExc_RuntimeError, err);
       }}
     }}
@@ -1930,22 +1930,23 @@ class CompiledKernel:
         if self.cu_module is not None:
             return
         device = torch.cuda.current_device()
-        global cuda_utils
-        global hip_utils
         if torch.version.hip is not None:
+            global hip_utils
             init_hip_utils()
+            max_shared = hip_utils.get_device_properties(device)["max_shared_mem"]
+            if self.shared > max_shared:
+                raise OutOfResources(self.shared, max_shared, "shared memory")
             mod, func, n_regs, n_spills = hip_utils.load_binary(self.metadata["name"], self.asm["hsaco_path"], self.shared, device)
-            self.cu_module = mod
-            self.cu_function = func
         else:
+            global cuda_utils
             init_cuda_utils()
             max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
             if self.shared > max_shared:
                 raise OutOfResources(self.shared, max_shared, "shared memory")
             mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
-            # print(self.shared, n_regs, n_spills)
-            self.cu_module = mod
-            self.cu_function = func
+        # print(self.shared, n_regs, n_spills)
+        self.cu_module = mod
+        self.cu_function = func
 
     def __getattribute__(self, name):
         if name == 'c_wrapper':
@@ -2150,14 +2151,31 @@ class HIPUtils(object):
         {{
           if (code != HIP_SUCCESS)
           {{
-             const char* prefix = "Triton Error [CUDA]: ";
+             const char* prefix = "Triton Error [HIP]: ";
              const char* str = hipGetErrorString(code);
              char err[1024] = {0};
-             strcat(err, prefix);
-             strcat(err, str);
+             snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str );
              PyErr_SetString(PyExc_RuntimeError, err);
           }}
         }}
+
+        #define HIP_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if(PyErr_Occurred()) return NULL; }
+
+        static PyObject* getDeviceProperties(PyObject* self, PyObject* args){
+            int device_id;
+            if(!PyArg_ParseTuple(args, "i", &device_id))
+                return NULL;
+
+            hipDeviceProp_t props;
+            HIP_CHECK(hipGetDeviceProperties(&props, device_id));
+
+            // create a struct to hold device properties
+            return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem", props.sharedMemPerBlock,
+                                       "multiprocessor_count", props.multiProcessorCount,
+                                       "sm_clock_rate", props.clockRate,
+                                       "mem_clock_rate", props.memoryClockRate,
+                                       "mem_bus_width", props.memoryBusWidth);
+        }
 
         static PyObject* loadBinary(PyObject* self, PyObject* args) {
             const char* name;
@@ -2213,6 +2231,7 @@ class HIPUtils(object):
 
         static PyMethodDef ModuleMethods[] = {
           {"load_binary", loadBinary, METH_VARARGS, "Load provided hsaco into HIP driver"},
+          {"get_device_properties", getDeviceProperties, METH_VARARGS, "Get the properties for a given device"},
           {NULL, NULL, 0, NULL} // sentinel
         };
 
@@ -2252,4 +2271,4 @@ class HIPUtils(object):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
-        # self.get_device_properties = mod.get_device_properties
+        self.get_device_properties = mod.get_device_properties
