@@ -37,6 +37,73 @@ using namespace mlir::triton;
 
 namespace {
 
+class TritonLLVMFunctionConversionTarget : public ConversionTarget {
+public:
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
+      : ConversionTarget(ctx) {
+    addLegalDialect<index::IndexDialect>();
+    addLegalDialect<LLVM::LLVMDialect>();
+    addLegalDialect<NVVM::NVVMDialect>();
+    addIllegalOp<mlir::func::FuncOp>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
+
+struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
+  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    unsigned numArguments = op.getNumOperands();
+
+    // Currently, Triton kernel function always return nothing.
+    // TODO(Superjomn) add support for non-inline device function
+    if (numArguments > 0) {
+      return rewriter.notifyMatchFailure(
+          op, "Only kernel function with nothing returned is supported.");
+    }
+
+    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
+                                                op->getAttrs());
+    return success();
+  }
+};
+
+/// FuncOp legalization pattern that converts MemRef arguments to pointers to
+/// MemRef descriptors (LLVM struct data types) containing all the MemRef type
+/// information.
+struct FuncOpConversion : public FuncOpConversionBase {
+  FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
+                   PatternBenefit benefit)
+      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
+
+  LogicalResult
+  matchAndRewrite(func::FuncOp funcOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
+    if (!newFuncOp) {
+      return failure();
+    }
+
+    auto ctx = funcOp->getContext();
+
+    // Set an attribute to indicate this function is a kernel entry.
+    newFuncOp->setAttr("nvvm.kernel",
+                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
+
+    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+    // for `nvvm.annotation` metadata.
+    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
+
+    rewriter.eraseOp(funcOp);
+    return success();
+  }
+
+private:
+  int numWarps{0};
+};
+
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
@@ -64,7 +131,6 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     mlir::LowerToLLVMOptions option(context);
-    option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMConversionTarget target(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
@@ -79,6 +145,16 @@ public:
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
+
+    /* lower functions */
+    TritonLLVMFunctionConversionTarget funcTarget(*context);
+    RewritePatternSet funcPatterns(context);
+    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
+    funcPatterns.add<ReturnOpConversion>(typeConverter, /*benefit=*/1);
+    if (failed(
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      return signalPassFailure();
+
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
     if (failed(solver->initializeAndRun(mod)))
@@ -89,6 +165,7 @@ public:
                                         allocation.getSharedMemorySize()));
 
     /* rewrite ops */
+    option.overrideIndexBitwidth(32);
     RewritePatternSet patterns(context);
     // TritonGPU lowering patterns
     OpBuilder::InsertPoint indexInsertPoint;
@@ -109,6 +186,8 @@ public:
     populatePatterns1(populateLoadStoreOpToLLVMPatterns);
     populatePatterns1(populateReduceOpToLLVMPatterns);
     populatePatterns2(populateViewOpToLLVMPatterns);
+    patterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
+    patterns.add<ReturnOpConversion>(typeConverter);
     // Native lowering patterns
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
@@ -312,82 +391,23 @@ private:
   }
 };
 
-struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
-  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    unsigned numArguments = op.getNumOperands();
-
-    // Currently, Triton kernel function always return nothing.
-    // TODO(Superjomn) add support for non-inline device function
-    if (numArguments > 0) {
-      return rewriter.notifyMatchFailure(
-          op, "Only kernel function with nothing returned is supported.");
-    }
-
-    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
-                                                op->getAttrs());
-    return success();
-  }
-};
-
-/// FuncOp legalization pattern that converts MemRef arguments to pointers to
-/// MemRef descriptors (LLVM struct data types) containing all the MemRef type
-/// information.
-struct FuncOpConversion : public FuncOpConversionBase {
-  FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
-
-  LogicalResult
-  matchAndRewrite(func::FuncOp funcOp, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
-    if (!newFuncOp) {
-      return failure();
-    }
-
-    auto ctx = funcOp->getContext();
-
-    // Set an attribute to indicate this function is a kernel entry.
-    newFuncOp->setAttr("nvvm.kernel",
-                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-
-    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-    // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
-
-    rewriter.eraseOp(funcOp);
-    return success();
-  }
-
-private:
-  int numWarps{0};
-};
-
-bool hasIndexResultOrOperand(Operation *op) {
-  if (!op)
-    return false;
-  bool hasRetIndex = llvm::find_if(op->getResultTypes(), [](Type type) {
-                       return type.isIndex();
-                     }) != op->getResultTypes().end();
-  bool hasArgIndex = llvm::find_if(op->getOperandTypes(), [](Type type) {
-                       return type.isIndex();
-                     }) != op->getOperandTypes().end();
-  return !hasRetIndex && !hasArgIndex;
-}
-
-class TritonLLVMFunctionConversionTarget : public ConversionTarget {
+class TritonArithToIndexConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
+  static bool hasIndexResultOrOperand(Operation *op) {
+    if (!op)
+      return false;
+    bool hasRetIndex = llvm::find_if(op->getResultTypes(), [](Type type) {
+                         return type.isIndex();
+                       }) != op->getResultTypes().end();
+    bool hasArgIndex = llvm::find_if(op->getOperandTypes(), [](Type type) {
+                         return type.isIndex();
+                       }) != op->getOperandTypes().end();
+    return !hasRetIndex && !hasArgIndex;
+  }
+
+  explicit TritonArithToIndexConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
-    addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<NVVM::NVVMDialect>();
-    addIllegalOp<mlir::func::FuncOp>();
-    addLegalOp<mlir::UnrealizedConversionCastOp>();
     addDynamicallyLegalDialect<arith::ArithDialect>(hasIndexResultOrOperand);
   }
 };
@@ -413,48 +433,22 @@ LogicalResult replaceArithCmpWithIndexCmp(arith::CmpIOp op,
   return success();
 }
 
-// mlir::LogicalResult (*replaceIndexCast)(OpType, mlir::PatternRewriter &) =
-//     &replaceArithWithIndex<arith::IndexCastOp, index::CastSOp>;
-
 class ConvertTritonFuncToLLVM
     : public ConvertTritonFuncToLLVMBase<ConvertTritonFuncToLLVM> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-    mlir::LowerToLLVMOptions option(context);
-    option.overrideIndexBitwidth(32);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    TritonLLVMFunctionConversionTarget target(*context);
-    {
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      RewritePatternSet patterns(context);
-      patterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
-      patterns.add<ReturnOpConversion>(typeConverter);
-      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                            patterns);
-      patterns.add(replaceArithWithIndex<arith::IndexCastOp, index::CastSOp>);
-      patterns.add(replaceArithWithIndex<arith::ConstantOp, index::ConstantOp>);
-      patterns.add(replaceArithWithIndex<arith::AddIOp, index::AddOp>);
-      patterns.add(replaceArithCmpWithIndexCmp);
-
-      if (failed(applyPartialConversion(mod, target, std::move(patterns)))) {
-        // llvm::outs() << mod << "\n";
-        return signalPassFailure();
-      }
+    TritonArithToIndexConversionTarget target(*context);
+    RewritePatternSet patterns(context);
+    patterns.add(replaceArithWithIndex<arith::IndexCastOp, index::CastSOp>);
+    patterns.add(replaceArithWithIndex<arith::ConstantOp, index::ConstantOp>);
+    patterns.add(replaceArithWithIndex<arith::AddIOp, index::AddOp>);
+    patterns.add(replaceArithCmpWithIndexCmp);
+    if (failed(applyPartialConversion(mod, target, std::move(patterns)))) {
+      return signalPassFailure();
     }
-    // {
-    //   RewritePatternSet patterns(context);
-    //   TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    //   // LLVMTypeConverter typeConverter(context, option);
-    //   // RewritePatternSet patterns(context);
-    //   // mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
-    //   //                                                    patterns);
-    //   // patterns.add<OverridePattern<arith::TruncFOp>>(typeConverter);
-    //   if (failed(applyPartialConversion(mod, target, std::move(patterns)))) {
-    //     return signalPassFailure();
-    //   }
-    // }
   }
 };
 

@@ -294,11 +294,9 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnChange=*/true,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
-  mlir::ConvertIndexToLLVMPassOptions indexOptions;
-  indexOptions.indexBitwidth = 32;
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::triton::createConvertTritonFuncToLLVMPass());
-  pm.addPass(mlir::createConvertIndexToLLVMPass(indexOptions));
+  pm.addPass(mlir::createConvertIndexToLLVMPass());
   pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createCanonicalizerPass());
