@@ -131,6 +131,7 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     mlir::LowerToLLVMOptions option(context);
+    option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMConversionTarget target(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
@@ -147,13 +148,18 @@ public:
     membarPass.run();
 
     /* lower functions */
-    TritonLLVMFunctionConversionTarget funcTarget(*context);
-    RewritePatternSet funcPatterns(context);
-    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
-    funcPatterns.add<ReturnOpConversion>(typeConverter, /*benefit=*/1);
-    if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
-      return signalPassFailure();
+    {
+      mlir::LowerToLLVMOptions option(context);
+      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
+      RewritePatternSet funcPatterns(context);
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
+                                         /*benefit=*/1);
+      funcPatterns.add<ReturnOpConversion>(typeConverter);
+      if (failed(
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+        return signalPassFailure();
+    }
 
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
@@ -165,7 +171,6 @@ public:
                                         allocation.getSharedMemorySize()));
 
     /* rewrite ops */
-    option.overrideIndexBitwidth(32);
     RewritePatternSet patterns(context);
     // TritonGPU lowering patterns
     OpBuilder::InsertPoint indexInsertPoint;
@@ -186,8 +191,6 @@ public:
     populatePatterns1(populateLoadStoreOpToLLVMPatterns);
     populatePatterns1(populateReduceOpToLLVMPatterns);
     populatePatterns2(populateViewOpToLLVMPatterns);
-    patterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
-    patterns.add<ReturnOpConversion>(typeConverter);
     // Native lowering patterns
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
