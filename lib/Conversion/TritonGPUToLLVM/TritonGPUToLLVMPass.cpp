@@ -156,6 +156,8 @@ public:
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          /*benefit=*/1);
       funcPatterns.add<ReturnOpConversion>(typeConverter);
+      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                            funcPatterns);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
@@ -192,8 +194,6 @@ public:
     populatePatterns1(populateReduceOpToLLVMPatterns);
     populatePatterns2(populateViewOpToLLVMPatterns);
     // Native lowering patterns
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
