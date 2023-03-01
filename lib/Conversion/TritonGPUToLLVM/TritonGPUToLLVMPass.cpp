@@ -7,6 +7,8 @@
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -365,34 +367,54 @@ private:
   int numWarps{0};
 };
 
+bool hasIndexResultOrOperand(Operation *op) {
+  if (!op)
+    return false;
+  bool hasRetIndex = llvm::find_if(op->getResultTypes(), [](Type type) {
+                       return type.isIndex();
+                     }) != op->getResultTypes().end();
+  bool hasArgIndex = llvm::find_if(op->getOperandTypes(), [](Type type) {
+                       return type.isIndex();
+                     }) != op->getOperandTypes().end();
+  return !hasRetIndex && !hasArgIndex;
+}
+
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
+    addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
     addIllegalOp<mlir::func::FuncOp>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+    addDynamicallyLegalDialect<arith::ArithDialect>(hasIndexResultOrOperand);
   }
 };
 
-// There are some patterns that NVPTX can't codegen. We
-// make sure that arith doesn't generate them by providing a dummy pattern
-// with a higher benefit.
-template <class T> struct OverridePattern : public ConvertOpToLLVMPattern<T> {
+#undef add
 
-  using ConvertOpToLLVMPattern<T>::ConvertOpToLLVMPattern;
-  using OpAdaptor = typename T::Adaptor;
+template <class SrcOp, class DstOp>
+LogicalResult replaceArithWithIndex(SrcOp op, PatternRewriter &rewriter) {
+  // if (!hasIndexResultOrOperand(&*op))
+  //   return failure();
+  rewriter.replaceOpWithNewOp<DstOp>(op, op->getResultTypes(),
+                                     op->getOperands(), op->getAttrs());
+  return success();
+}
 
-  OverridePattern(LLVMTypeConverter &converter)
-      : ConvertOpToLLVMPattern<T>(converter, 100) {}
+LogicalResult replaceArithCmpWithIndexCmp(arith::CmpIOp op,
+                                          PatternRewriter &rewriter) {
+  // if (!hasIndexResultOrOperand(&*op))
+  //   return failure();
+  rewriter.replaceOpWithNewOp<index::CmpOp>(
+      op, op.getResult().getType(), (index::IndexCmpPredicate)op.getPredicate(),
+      op.getOperand(0), op.getOperand(1));
+  return success();
+}
 
-  LogicalResult
-  matchAndRewrite(arith::TruncFOp funcOp, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    return success();
-  }
-};
+// mlir::LogicalResult (*replaceIndexCast)(OpType, mlir::PatternRewriter &) =
+//     &replaceArithWithIndex<arith::IndexCastOp, index::CastSOp>;
 
 class ConvertTritonFuncToLLVM
     : public ConvertTritonFuncToLLVMBase<ConvertTritonFuncToLLVM> {
@@ -410,18 +432,28 @@ public:
       patterns.add<ReturnOpConversion>(typeConverter);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             patterns);
-      if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+      patterns.add(replaceArithWithIndex<arith::IndexCastOp, index::CastSOp>);
+      patterns.add(replaceArithWithIndex<arith::ConstantOp, index::ConstantOp>);
+      patterns.add(replaceArithWithIndex<arith::AddIOp, index::AddOp>);
+      patterns.add(replaceArithCmpWithIndexCmp);
+
+      if (failed(applyPartialConversion(mod, target, std::move(patterns)))) {
+        // llvm::outs() << mod << "\n";
         return signalPassFailure();
+      }
     }
-    {
-      LLVMTypeConverter typeConverter(context, option);
-      RewritePatternSet patterns(context);
-      mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
-                                                         patterns);
-      patterns.add<OverridePattern<arith::TruncFOp>>(typeConverter);
-      if (failed(applyPartialConversion(mod, target, std::move(patterns))))
-        return signalPassFailure();
-    }
+    // {
+    //   RewritePatternSet patterns(context);
+    //   TritonGPUToLLVMTypeConverter typeConverter(context, option);
+    //   // LLVMTypeConverter typeConverter(context, option);
+    //   // RewritePatternSet patterns(context);
+    //   // mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
+    //   //                                                    patterns);
+    //   // patterns.add<OverridePattern<arith::TruncFOp>>(typeConverter);
+    //   if (failed(applyPartialConversion(mod, target, std::move(patterns)))) {
+    //     return signalPassFailure();
+    //   }
+    // }
   }
 };
 
