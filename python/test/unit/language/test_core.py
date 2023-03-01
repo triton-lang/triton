@@ -1418,7 +1418,8 @@ def test_vectorization_hints(has_hints):
 
     @triton.jit
     def _kernel(dst, src, off, N, BLOCK_SIZE: tl.constexpr, HINT: tl.constexpr):
-        offsets = tl.program_id(0) * BLOCK_SIZE + tl.load(off) + tl.arange(0, BLOCK_SIZE)
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        offsets = offsets + tl.load(off)
         if HINT:
             tl.max_contiguous(tl.multiple_of(offsets, 1024), 1024)
         x = tl.load(src + offsets, mask=offsets < N)
