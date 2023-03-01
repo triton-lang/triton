@@ -135,24 +135,24 @@ struct FpToFpOpConversion
     auto *i = builder.newOperand(fp8x4Vec, "r");
     call({o0, o1, i}, /* onlyAttachMLIRArgs */ true);
 
-    auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+    auto bf16x2VecTy = vec_ty(i16_ty, 2);
     auto bf16x2x2StructTy =
         struct_ty(SmallVector<Type>{bf16x2VecTy, bf16x2VecTy});
     auto bf16x2x2Struct =
         builder.launch(rewriter, loc, bf16x2x2StructTy, false);
     auto bf16x2Vec0 = extract_val(bf16x2VecTy, bf16x2x2Struct, 0);
     auto bf16x2Vec1 = extract_val(bf16x2VecTy, bf16x2x2Struct, 1);
-    return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
-            extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
-            extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
-            extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
+    return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
+            extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
+            extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
+            extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
   }
 
   static SmallVector<Value>
   convertBf16x4ToFp8x4(Location loc, ConversionPatternRewriter &rewriter,
                        const Value &v0, const Value &v1, const Value &v2,
                        const Value &v3) {
-    auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+    auto bf16x2VecTy = vec_ty(i16_ty, 2);
     Value bf16x2Vec0 = undef(bf16x2VecTy);
     Value bf16x2Vec1 = undef(bf16x2VecTy);
     bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v0, i32_val(0));
@@ -279,7 +279,7 @@ struct FpToFpOpConversion
     cvt(res, operand);
     // TODO: This is a hack to get the right type. We should be able to invoke
     // the type converter
-    return builder.launch(rewriter, loc, bf16_ty, false);
+    return builder.launch(rewriter, loc, i16_ty, false);
   }
 
   LogicalResult
@@ -615,7 +615,7 @@ struct FMulOpConversion
       auto lhs = builder.newOperand(operands[0], "h");
       auto rhs = builder.newOperand(operands[1], "h");
       fMul({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-      return builder.launch(rewriter, loc, bf16_ty, false);
+      return builder.launch(rewriter, loc, i16_ty, false);
     } else {
       return rewriter.create<LLVM::FMulOp>(loc, elemTy, operands[0],
                                            operands[1]);
@@ -645,7 +645,7 @@ struct FAddOpConversion
       auto lhs = builder.newOperand(operands[0], "h");
       auto rhs = builder.newOperand(operands[1], "h");
       fAdd({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-      return builder.launch(rewriter, loc, bf16_ty, false);
+      return builder.launch(rewriter, loc, i16_ty, false);
     } else {
       return rewriter.create<LLVM::FAddOp>(loc, elemTy, operands[0],
                                            operands[1]);
@@ -675,7 +675,7 @@ struct FSubOpConversion
       auto lhs = builder.newOperand(operands[0], "h");
       auto rhs = builder.newOperand(operands[1], "h");
       fSub({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-      return builder.launch(rewriter, loc, bf16_ty, false);
+      return builder.launch(rewriter, loc, i16_ty, false);
     } else {
       return rewriter.create<LLVM::FSubOp>(loc, elemTy, operands[0],
                                            operands[1]);

@@ -48,6 +48,9 @@ public:
   }
 };
 
+using FPTruncLowering =
+    VectorConvertToLLVMPattern<LLVM::FPTruncOp, arith::TruncFOp>;
+
 class ConvertTritonGPUToLLVM
     : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
 
@@ -373,95 +376,21 @@ public:
   }
 };
 
-template <typename OpTy, typename ExtCastTy>
-struct IndexCastOpLowering : public ConvertOpToLLVMPattern<OpTy> {
-  using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
+// There are some patterns that NVPTX can't codegen. We
+// make sure that arith doesn't generate them by providing a dummy pattern
+// with a higher benefit.
+template <class T> struct OverridePattern : public ConvertOpToLLVMPattern<T> {
 
-  LogicalResult matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const {
-    Type resultType = op.getResult().getType();
-    Type targetElementType =
-        this->typeConverter->convertType(getElementTypeOrSelf(resultType));
-    Type sourceElementType =
-        this->typeConverter->convertType(getElementTypeOrSelf(op.getIn()));
-    unsigned targetBits = targetElementType.getIntOrFloatBitWidth();
-    unsigned sourceBits = sourceElementType.getIntOrFloatBitWidth();
+  using ConvertOpToLLVMPattern<T>::ConvertOpToLLVMPattern;
+  using OpAdaptor = typename T::Adaptor;
 
-    if (targetBits == sourceBits) {
-      rewriter.replaceOp(op, adaptor.getIn());
-      return success();
-    }
+  OverridePattern(LLVMTypeConverter &converter)
+      : ConvertOpToLLVMPattern<T>(converter, 100) {}
 
-    // Handle the scalar and 1D vector cases.
-    Type operandType = adaptor.getIn().getType();
-    if (!operandType.isa<LLVM::LLVMArrayType>()) {
-      Type targetType = this->typeConverter->convertType(resultType);
-      if (targetBits < sourceBits)
-        rewriter.replaceOpWithNewOp<LLVM::TruncOp>(op, targetType,
-                                                   adaptor.getIn());
-      else
-        rewriter.replaceOpWithNewOp<ExtCastTy>(op, targetType, adaptor.getIn());
-      return success();
-    }
-
-    if (!resultType.isa<VectorType>())
-      return rewriter.notifyMatchFailure(op, "expected vector result type");
-
-    return LLVM::detail::handleMultidimensionalVectors(
-        op.getOperation(), adaptor.getOperands(), *(this->getTypeConverter()),
-        [&](Type llvm1DVectorTy, ValueRange operands) -> Value {
-          typename OpTy::Adaptor adaptor(operands);
-          if (targetBits < sourceBits) {
-            return rewriter.create<LLVM::TruncOp>(op.getLoc(), llvm1DVectorTy,
-                                                  adaptor.getIn());
-          }
-          return rewriter.create<ExtCastTy>(op.getLoc(), llvm1DVectorTy,
-                                            adaptor.getIn());
-        },
-        rewriter);
-  }
-};
-
-using IndexCastOpSILowering =
-    IndexCastOpLowering<arith::IndexCastOp, LLVM::SExtOp>;
-using IndexCastOpUILowering =
-    IndexCastOpLowering<arith::IndexCastUIOp, LLVM::ZExtOp>;
-
-template <typename LLVMPredType, typename PredType>
-static LLVMPredType convertCmpPredicate(PredType pred) {
-  return static_cast<LLVMPredType>(pred);
-}
-
-struct CmpIOpLowering : public ConvertOpToLLVMPattern<arith::CmpIOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(arith::CmpIOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const {
-    Type operandType = adaptor.getLhs().getType();
-    Type resultType = op.getResult().getType();
-
-    // Handle the scalar and 1D vector cases.
-    if (!operandType.isa<LLVM::LLVMArrayType>()) {
-      rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(
-          op, typeConverter->convertType(resultType),
-          convertCmpPredicate<LLVM::ICmpPredicate>(op.getPredicate()),
-          adaptor.getLhs(), adaptor.getRhs());
-      return success();
-    }
-
-    if (!resultType.isa<VectorType>())
-      return rewriter.notifyMatchFailure(op, "expected vector result type");
-
-    return LLVM::detail::handleMultidimensionalVectors(
-        op.getOperation(), adaptor.getOperands(), *getTypeConverter(),
-        [&](Type llvm1DVectorTy, ValueRange operands) {
-          OpAdaptor adaptor(operands);
-          return rewriter.create<LLVM::ICmpOp>(
-              op.getLoc(), llvm1DVectorTy,
-              convertCmpPredicate<LLVM::ICmpPredicate>(op.getPredicate()),
-              adaptor.getLhs(), adaptor.getRhs());
-        },
-        rewriter);
+  LogicalResult
+  matchAndRewrite(arith::TruncFOp funcOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    return success();
   }
 };
 
@@ -472,24 +401,27 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     mlir::LowerToLLVMOptions option(context);
-    TritonGPUToLLVMTypeConverter typeConverter(context, option);
-
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-
-    RewritePatternSet patterns(context);
     TritonLLVMFunctionConversionTarget target(*context);
-    patterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
-    patterns.add<ReturnOpConversion>(typeConverter);
-    patterns.add<IndexCastOpSILowering>(typeConverter);
-    patterns.add<IndexCastOpUILowering>(typeConverter);
-    patterns.add<CmpIOpLowering>(typeConverter);
-    patterns.add<VectorConvertToLLVMPattern<arith::AddIOp, LLVM::AddOp>>(
-        typeConverter);
-
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          patterns);
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
-      return signalPassFailure();
+    {
+      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      RewritePatternSet patterns(context);
+      patterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
+      patterns.add<ReturnOpConversion>(typeConverter);
+      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                            patterns);
+      if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+        return signalPassFailure();
+    }
+    {
+      LLVMTypeConverter typeConverter(context, option);
+      RewritePatternSet patterns(context);
+      mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
+                                                         patterns);
+      patterns.add<OverridePattern<arith::TruncFOp>>(typeConverter);
+      if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+        return signalPassFailure();
+    }
   }
 };
 

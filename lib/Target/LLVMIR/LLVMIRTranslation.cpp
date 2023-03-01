@@ -296,7 +296,6 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::triton::createConvertTritonFuncToLLVMPass());
-  pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
   pm.addPass(mlir::createCanonicalizerPass());
   // Simplify the IR
