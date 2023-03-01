@@ -702,7 +702,6 @@ struct InsertSliceAsyncOpConversion
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
     Value llIndex = adaptor.getIndex();
-    llvm::outs() << llIndex << "\n";
 
     // %src
     auto srcElems = getLLVMElems(src, llSrc, rewriter, loc);
