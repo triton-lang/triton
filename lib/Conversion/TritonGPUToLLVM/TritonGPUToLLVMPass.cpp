@@ -106,43 +106,23 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMFunctionConversionTarget funcTarget(*context);
     TritonLLVMConversionTarget target(*context);
-
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
-    // Step 1: Decompose unoptimized layout conversions to use shared memory
-    // Step 2: Decompose insert_slice_async to use load + insert_slice for
-    //   pre-Ampere architectures or unsupported vectorized load sizes
-    // Step 3: Allocate shared memories and insert barriers
-    // Step 4: Convert FuncOp to LLVMFuncOp via partial conversion
-    // Step 5: Get axis and shared memory info
-    // Step 6: Convert the rest of ops via partial conversion
-    //
-    // The reason for a separation between 4/6 is that, step 5 is out of the
-    // scope of Dialect Conversion, thus we need to make sure the smem is not
-    // revised during the conversion of step 6.
-
-    // Step 1
+    /* preprocess */
     decomposeMmaToDotOperand(mod, numWarps);
     decomposeBlockedToDotOperand(mod);
-
-    // Step 2
     if (failed(decomposeInsertSliceAsyncOp(mod)))
       return signalPassFailure();
 
-    // Step 3
+    /* allocate shared memory and set barrier */
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
-
-    // Step 4
-
-    // Step 5 - get axis and shared memory info
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
     if (failed(solver->initializeAndRun(mod)))
@@ -152,53 +132,32 @@ public:
                  mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
                                         allocation.getSharedMemorySize()));
 
-    // Step 6 - rewrite rest of ops
-    // We set a higher benefit here to ensure triton's patterns runs before
-    // arith patterns for some encoding not supported by the community
-    // patterns.
+    /* rewrite ops */
+    RewritePatternSet patterns(context);
+    // TritonGPU lowering patterns
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
         &baseIndexCache, &indexCache, &indexInsertPoint};
-
-    RewritePatternSet patterns(context);
-
-    // Normal conversions
-    populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
-                                    *axisInfoAnalysis, &allocation, smem,
-                                    indexCacheInfo, /*benefit=*/10);
-    // ConvertLayoutOp
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                          *axisInfoAnalysis, &allocation, smem,
-                                          indexCacheInfo, /*benefit=*/10);
-    // DotOp
-    populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                *axisInfoAnalysis, &allocation, smem,
-                                /*benefit=*/10);
-    // ElementwiseOp
-    populateElementwiseOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                        *axisInfoAnalysis, &allocation, smem,
-                                        /*benefit=*/10);
-    // LoadStoreOp
-    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                      *axisInfoAnalysis, &allocation, smem,
-                                      indexCacheInfo, /*benefit=*/10);
-    // ReduceOp
-    populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                   *axisInfoAnalysis, &allocation, smem,
-                                   indexCacheInfo, /*benefit=*/10);
-    // ViewOp
-    populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                 *axisInfoAnalysis, &allocation, smem,
-                                 /*benefit=*/10);
-
-    // Add arith/math's patterns to help convert scalar expression to LLVM.
+    auto populatePatterns1 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, *axisInfoAnalysis,
+                   &allocation, smem, indexCacheInfo, /*benefit*/ 1);
+    };
+    auto populatePatterns2 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, *axisInfoAnalysis,
+                   &allocation, smem, /*benefit*/ 1);
+    };
+    populatePatterns1(populateTritonGPUToLLVMPatterns);
+    populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
+    populatePatterns2(populateDotOpToLLVMPatterns);
+    populatePatterns2(populateElementwiseOpToLLVMPatterns);
+    populatePatterns1(populateLoadStoreOpToLLVMPatterns);
+    populatePatterns1(populateReduceOpToLLVMPatterns);
+    populatePatterns2(populateViewOpToLLVMPatterns);
+    // Native lowering patterns
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-    // mlir::arith::populateArithToLLVMConversionPatterns(typeConverter,
-    // patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
   }
@@ -419,42 +378,6 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
   }
 };
 
-class CFBranchPattern : public OpConversionPattern<cf::BranchOp> {
-public:
-  using OpConversionPattern<cf::BranchOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(cf::BranchOp op, cf::BranchOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<cf::BranchOp>(op, op.getSuccessor(),
-                                              adaptor.getOperands());
-    return success();
-  }
-};
-
-class CFCondBranchPattern : public OpConversionPattern<cf::CondBranchOp> {
-public:
-  using OpConversionPattern<cf::CondBranchOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(cf::CondBranchOp op, cf::CondBranchOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto converter = getTypeConverter();
-    auto newOp = rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
-        op, adaptor.getCondition(), op.getTrueDest(),
-        adaptor.getTrueDestOperands(), op.getFalseDest(),
-        adaptor.getFalseDestOperands());
-
-    if (failed(rewriter.convertRegionTypes(newOp.getTrueDest()->getParent(),
-                                           *converter)))
-      return failure();
-    if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(),
-                                           *converter)))
-      return failure();
-    return success();
-  }
-};
-
 class ConvertTritonFuncToLLVM
     : public ConvertTritonFuncToLLVMBase<ConvertTritonFuncToLLVM> {
 public:
@@ -466,15 +389,13 @@ public:
 
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
-    RewritePatternSet funcPatterns(context);
-    TritonLLVMFunctionConversionTarget funcTarget(*context);
-    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
-    funcPatterns.add<ReturnOpConversion>(typeConverter);
+    RewritePatternSet patterns(context);
+    TritonLLVMFunctionConversionTarget target(*context);
+    patterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
+    patterns.add<ReturnOpConversion>(typeConverter);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          funcPatterns);
-
-    if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+                                                          patterns);
+    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
   }
 };
