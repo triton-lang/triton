@@ -1738,8 +1738,9 @@ def test_libdevice_scalar(dtype_str, expr, lib_path):
 # test control flow
 # -----------------------
 
+
 def test_for_iv_int64():
-    
+
     @triton.jit
     def kernel(Out, lo, hi):
         acc = 0
@@ -1747,13 +1748,13 @@ def test_for_iv_int64():
         for i in range(lo, hi):
             acc += i
         tl.store(Out, acc)
-   
+
     lo = 2**35
     hi = 2**35 + 20
     out = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
     kernel[(1,)](out, lo, hi)
     assert out[0] == sum(range(lo, hi))
-        
+
 
 def test_if_else():
 
