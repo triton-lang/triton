@@ -269,11 +269,35 @@ struct FpToFpOpConversion
     return builder.launch(rewriter, loc, f32_ty, false);
   }
 
+  static Value convertFp16ToFp32(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 const Value &v) {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.rn.f32.f16");
+    auto res = builder.newOperand("=r");
+    auto operand = builder.newOperand(v, "h");
+    cvt(res, operand);
+    return builder.launch(rewriter, loc, f32_ty, false);
+  }
+
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     PTXBuilder builder;
     auto &cvt = *builder.create("cvt.rn.bf16.f32");
+    auto res = builder.newOperand("=h");
+    auto operand = builder.newOperand(v, "r");
+    cvt(res, operand);
+    // TODO: This is a hack to get the right type. We should be able to invoke
+    // the type converter
+    return builder.launch(rewriter, loc, i16_ty, false);
+  }
+
+  static Value convertFp32ToFp16(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 const Value &v) {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.rn.f16.f32");
     auto res = builder.newOperand("=h");
     auto operand = builder.newOperand(v, "r");
     cvt(res, operand);
@@ -336,6 +360,12 @@ struct FpToFpOpConversion
     } else if (srcEltType.isF32() && dstEltType.isBF16()) {
       resultVals.emplace_back(
           convertFp32ToBf16(loc, rewriter, adaptor.getFrom()));
+    } else if (srcEltType.isF16() && dstEltType.isF32()) {
+      resultVals.emplace_back(
+          convertFp16ToFp32(loc, rewriter, adaptor.getFrom()));
+    } else if (srcEltType.isF32() && dstEltType.isF16()) {
+      resultVals.emplace_back(
+          convertFp32ToFp16(loc, rewriter, adaptor.getFrom()));
     } else {
       assert(false && "unsupported type casting");
     }
