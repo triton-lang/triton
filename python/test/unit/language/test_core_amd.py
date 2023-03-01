@@ -1475,7 +1475,7 @@ def test_value_specialization_overflow(value: int, overflow: bool, device='cuda'
 # test constexpr
 # ----------------
 
-@pytest.mark.parametrize("op", ['+', '-', '*', '/', '%', '<', '>'])
+@pytest.mark.parametrize("op", ['+', '-', '*', '/', '%', '<', '>', '<<', '>>', '&', '^', '|'])
 @pytest.mark.parametrize("is_lhs_constexpr", [False, True])
 @pytest.mark.parametrize("is_rhs_constexpr", [True, False])
 def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr):
@@ -1487,11 +1487,17 @@ def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr):
         z = GENERATE_TEST_HERE
         tl.store(Z, z)
 
-    x_str = "3.14" if is_lhs_constexpr else "x"
-    y_str = "4.13" if is_rhs_constexpr else "y"
+    if op in ['<<', '>>', '&', '^', '|']:  # int op
+        x_str = "3" if is_lhs_constexpr else "x"
+        y_str = "4" if is_rhs_constexpr else "y"
+        x = numpy_random((1,), dtype_str="int32")
+        y = numpy_random((1,), dtype_str="int32")
+    else:
+        x_str = "3.14" if is_lhs_constexpr else "x"
+        y_str = "4.13" if is_rhs_constexpr else "y"
+        x = numpy_random((1,), dtype_str="float32")
+        y = numpy_random((1,), dtype_str="float32")
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f"{x_str} {op} {y_str}"})
-    x = numpy_random((1,), dtype_str="float32")
-    y = numpy_random((1,), dtype_str="float32")
     z = np.array(eval(f"{x_str} {op} {y_str}"))
     x_tri = to_triton(x)
     y_tri = to_triton(y)
