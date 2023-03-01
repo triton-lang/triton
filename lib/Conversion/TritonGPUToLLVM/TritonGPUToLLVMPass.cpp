@@ -423,6 +423,7 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     mlir::LowerToLLVMOptions option(context);
+    option.overrideIndexBitwidth(32);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     TritonLLVMFunctionConversionTarget target(*context);
     {
