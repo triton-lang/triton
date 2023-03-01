@@ -29,6 +29,7 @@ int main(int argc, char **argv) {
   mlir::test::registerTestMembarPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
+  mlir::triton::registerConvertTritonFuncToLLVMPass();
 
   // TODO: register Triton & TritonGPU passes
   mlir::DialectRegistry registry;
