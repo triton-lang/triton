@@ -4,6 +4,7 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM//ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -387,6 +388,7 @@ public:
     TritonLLVMFunctionConversionTarget target(*context);
     patterns.add<FuncOpConversion>(typeConverter, numWarps, 1);
     patterns.add<ReturnOpConversion>(typeConverter);
+
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
