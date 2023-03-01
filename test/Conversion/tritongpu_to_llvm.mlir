@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --convert-triton-func-to-llvm --convert-triton-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm | FileCheck %s
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<f16, 1>)
