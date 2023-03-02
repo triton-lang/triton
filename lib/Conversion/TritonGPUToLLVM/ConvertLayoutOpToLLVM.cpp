@@ -68,7 +68,7 @@ private:
           elemId, getSizePerThread(layout), getOrder(layout));
       for (unsigned d = 0; d < rank; ++d) {
         multiDimOffset[d] = add(multiDimOffsetFirstElem[d],
-                                idx_val(multiDimCTAInRepId[d] * shapePerCTA[d] +
+                                i32_val(multiDimCTAInRepId[d] * shapePerCTA[d] +
                                         multiDimElemId[d]));
       }
       return multiDimOffset;
@@ -93,21 +93,21 @@ private:
       SmallVector<Value> mmaColIdx(4);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
-      Value warpSize = idx_val(32);
+      Value warpSize = i32_val(32);
       Value laneId = urem(threadId, warpSize);
       Value warpId = udiv(threadId, warpSize);
       // TODO: fix the bug in MMAEncodingAttr document
       SmallVector<Value> multiDimWarpId(2);
-      multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
-      multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
-      Value _1 = idx_val(1);
-      Value _2 = idx_val(2);
-      Value _4 = idx_val(4);
-      Value _8 = idx_val(8);
-      Value _16 = idx_val(16);
+      multiDimWarpId[0] = urem(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
+      multiDimWarpId[1] = udiv(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
+      Value _1 = i32_val(1);
+      Value _2 = i32_val(2);
+      Value _4 = i32_val(4);
+      Value _8 = i32_val(8);
+      Value _16 = i32_val(16);
       if (mmaLayout.isAmpere()) {
-        multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
-        multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 8));
+        multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
+        multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
         Value mmaGrpId = udiv(laneId, _4);
         Value mmaGrpIdP8 = add(mmaGrpId, _8);
         Value mmaThreadIdInGrp = urem(laneId, _4);
@@ -131,9 +131,9 @@ private:
         multiDimOffset[0] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
         multiDimOffset[1] = elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
         multiDimOffset[0] = add(
-            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+            multiDimOffset[0], i32_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
         multiDimOffset[1] = add(
-            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+            multiDimOffset[1], i32_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
       } else if (mmaLayout.isVolta()) {
         auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
             mmaLayout.decodeVoltaLayoutStates();
@@ -212,13 +212,13 @@ private:
               currVal = zext(llvmElemTy, currVal);
             else if (isPtr)
               currVal = ptrtoint(llvmElemTy, currVal);
-            valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
+            valVec = insert_element(vecTy, valVec, currVal, i32_val(v));
           }
           store(valVec, ptr);
         } else {
           Value valVec = load(ptr);
           for (unsigned v = 0; v < vec; ++v) {
-            Value currVal = extract_element(llvmElemTy, valVec, idx_val(v));
+            Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
             if (isInt1)
               currVal = icmp_ne(currVal,
                                 rewriter.create<LLVM::ConstantOp>(
@@ -322,13 +322,13 @@ private:
         Value valVec = undef(vecTy);
         for (unsigned v = 0; v < vec; ++v) {
           auto currVal = coord2valT[elemId + v].second;
-          valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
+          valVec = insert_element(vecTy, valVec, currVal, i32_val(v));
         }
         store(valVec, ptr);
       } else {
         Value valVec = load(ptr);
         for (unsigned v = 0; v < vec; ++v) {
-          Value currVal = extract_element(elemTy, valVec, idx_val(v));
+          Value currVal = extract_element(elemTy, valVec, i32_val(v));
           vals[elemId + v] = currVal;
         }
       }

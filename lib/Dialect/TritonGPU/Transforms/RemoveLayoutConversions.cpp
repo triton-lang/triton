@@ -202,7 +202,7 @@ inline bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
     return true;
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return expensiveLoadOrStore(op, targetEncoding);
-  if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
+  if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))
     return true;

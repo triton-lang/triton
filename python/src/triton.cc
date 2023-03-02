@@ -13,6 +13,8 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
@@ -119,6 +121,7 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<>())
       .def("load_triton", [](mlir::MLIRContext &self) {
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
+        self.getOrLoadDialect<mlir::index::IndexDialect>();
         // we load LLVM because the frontend uses LLVM.undef for
         // some placeholders
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
@@ -393,8 +396,8 @@ void init_triton_ir(py::module &&m) {
         registry.insert<mlir::triton::TritonDialect,
                         mlir::triton::gpu::TritonGPUDialect,
                         mlir::math::MathDialect, mlir::arith::ArithDialect,
-                        mlir::func::FuncDialect, mlir::scf::SCFDialect,
-                        mlir::cf::ControlFlowDialect>();
+                        mlir::index::IndexDialect, mlir::func::FuncDialect,
+                        mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
 
@@ -807,7 +810,7 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &input) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::IndexCastOp>(
-                 loc, self.getI32Type(), input);
+                 loc, self.getI64Type(), input);
            })
       .def("create_fmul",
            [](mlir::OpBuilder &self, mlir::Value &lhs,

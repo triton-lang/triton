@@ -9,6 +9,8 @@ include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
+include "mlir/Interfaces/DestinationStyleOpInterface.td"
+include "mlir/Interfaces/ViewLikeInterface.td"
 
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 
@@ -104,6 +106,69 @@ def TTG_SelectOp : TTG_Op<"select", [Pure, Elementwise,
   let results = (outs TT_Tensor:$result);
 }
 
+
+
+def TTG_ExtractSliceOp : TTG_Op<"extract_slice",
+                                [AttrSizedOperandSegments,
+                                 ResultsAreSharedEncoding,
+                                 Pure,
+                                 OffsetSizeAndStrideOpInterface
+                                 ]> {
+  let summary = "extract slice operation";
+  let description = [{
+    same as tensor.extract_slice, but with int32 index. The motivations for re-implementing it are:
+    We reimplement ExtractSliceOp with int32 index, because:
+    - we want to enforce int32 indexing on GPUs since Triton tensors fit in SRAM
+    - we still want to use indexWidth = 64 when lowering to LLVM because our loops can have
+      64-bit induction variables and scf.for uses indexType for bounds/ivs
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$source,
+    Variadic<I32>:$offsets,
+    Variadic<I32>:$sizes,
+    Variadic<I32>:$strides,
+    DenseI64ArrayAttr:$static_offsets,
+    DenseI64ArrayAttr:$static_sizes,
+    DenseI64ArrayAttr:$static_strides
+  );
+  let results = (outs AnyRankedTensor:$result);
+
+  let builders = [
+    // Build an ExtractSliceOp with mixed static and dynamic entries and custom
+    // result type. If the type passed is nullptr, it is inferred.
+    OpBuilder<(ins "RankedTensorType":$resultType, "Value":$source,
+      "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
+      "ArrayRef<OpFoldResult>":$strides,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
+  ];
+
+  let extraClassDeclaration = [{
+    /// Return the number of leading operands before the `offsets`, `sizes` and
+    /// and `strides` operands.
+    static unsigned getOffsetSizeAndStrideStartOperandIndex() { return 1; }
+
+    /// Returns the type of the base tensor operand.
+    RankedTensorType getSourceType() {
+      return getSource().getType().cast<RankedTensorType>();
+    }
+
+    std::array<unsigned, 3> getArrayAttrMaxRanks() {
+      unsigned rank = getSourceType().getRank();
+      return {rank, rank, rank};
+    }
+  }];
+
+  let assemblyFormat = [{
+    $source ``
+    custom<DynamicIndexList>($offsets, $static_offsets)
+    custom<DynamicIndexList>($sizes, $static_sizes)
+    custom<DynamicIndexList>($strides, $static_strides)
+    attr-dict `:` type($source) `to` type($result)
+  }];
+}
+
+//
 
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
