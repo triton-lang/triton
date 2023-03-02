@@ -1,6 +1,5 @@
 import multiprocessing
 import os
-import re
 import shutil
 from collections import namedtuple
 
