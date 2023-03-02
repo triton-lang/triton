@@ -27,6 +27,11 @@ cd "$ROOT" || exit
 for model in "${MODELS[@]}"; do
   echo "Checking performance test for $model"
   python3 "$INDUCTOR"/scripts/check_perf.py --new "$TEST_REPORTS_DIR"/"$model".csv --baseline "$INDUCTOR"/data/"$model".csv
+  EXIT_STATUS=$?
+  if [ "$EXIT_STATUS" -ne 0 ]; then
+    echo "Performance test for $model failed"
+    exit "$EXIT_STATUS"
+  fi
 done
 
 # unlock GPU clocks
