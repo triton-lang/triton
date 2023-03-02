@@ -980,7 +980,7 @@ struct SExtOpConversion
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
     PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.u32.u16");
+    auto &cvt = *builder.create("cvt.s32.s16");
     auto res = builder.newOperand("=r");
     auto operand = builder.newOperand(operands[0], "h");
     cvt(res, operand);
@@ -1007,7 +1007,7 @@ struct ZExtOpConversion
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
     PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.s32.s16");
+    auto &cvt = *builder.create("cvt.u32.u16");
     auto res = builder.newOperand("=r");
     auto operand = builder.newOperand(operands[0], "h");
     cvt(res, operand);
