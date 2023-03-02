@@ -742,6 +742,7 @@ class CodeGenerator(ast.NodeVisitor):
             iv = self.builder.create_int_cast(iv, iv_ir_type, True)
             if negative_step:
                 ub_si = self.builder.create_index_to_si(ub)
+                ub_si = self.builder.create_int_cast(ub_si, iv_ir_type, True)
                 iv = self.builder.create_sub(ub_si, iv)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
             self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
