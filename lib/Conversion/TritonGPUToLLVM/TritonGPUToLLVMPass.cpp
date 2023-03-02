@@ -394,67 +394,6 @@ private:
   }
 };
 
-class TritonArithToIndexConversionTarget : public ConversionTarget {
-public:
-  static bool hasIndexResultOrOperand(Operation *op) {
-    if (!op)
-      return false;
-    bool hasRetIndex = llvm::find_if(op->getResultTypes(), [](Type type) {
-                         return type.isIndex();
-                       }) != op->getResultTypes().end();
-    bool hasArgIndex = llvm::find_if(op->getOperandTypes(), [](Type type) {
-                         return type.isIndex();
-                       }) != op->getOperandTypes().end();
-    return !hasRetIndex && !hasArgIndex;
-  }
-
-  explicit TritonArithToIndexConversionTarget(MLIRContext &ctx)
-      : ConversionTarget(ctx) {
-    addLegalDialect<index::IndexDialect>();
-    addDynamicallyLegalDialect<arith::ArithDialect>(hasIndexResultOrOperand);
-  }
-};
-
-#undef add
-
-template <class SrcOp, class DstOp>
-LogicalResult replaceArithWithIndex(SrcOp op, PatternRewriter &rewriter) {
-  // if (!hasIndexResultOrOperand(&*op))
-  //   return failure();
-  rewriter.replaceOpWithNewOp<DstOp>(op, op->getResultTypes(),
-                                     op->getOperands(), op->getAttrs());
-  return success();
-}
-
-LogicalResult replaceArithCmpWithIndexCmp(arith::CmpIOp op,
-                                          PatternRewriter &rewriter) {
-  // if (!hasIndexResultOrOperand(&*op))
-  //   return failure();
-  rewriter.replaceOpWithNewOp<index::CmpOp>(
-      op, op.getResult().getType(), (index::IndexCmpPredicate)op.getPredicate(),
-      op.getOperand(0), op.getOperand(1));
-  return success();
-}
-
-class ConvertTritonFuncToLLVM
-    : public ConvertTritonFuncToLLVMBase<ConvertTritonFuncToLLVM> {
-public:
-  void runOnOperation() override {
-    MLIRContext *context = &getContext();
-    ModuleOp mod = getOperation();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    TritonArithToIndexConversionTarget target(*context);
-    RewritePatternSet patterns(context);
-    patterns.add(replaceArithWithIndex<arith::IndexCastOp, index::CastSOp>);
-    patterns.add(replaceArithWithIndex<arith::ConstantOp, index::ConstantOp>);
-    patterns.add(replaceArithWithIndex<arith::AddIOp, index::AddOp>);
-    patterns.add(replaceArithCmpWithIndexCmp);
-    if (failed(applyPartialConversion(mod, target, std::move(patterns)))) {
-      return signalPassFailure();
-    }
-  }
-};
-
 } // anonymous namespace
 
 namespace mlir {
@@ -463,10 +402,6 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int computeCapability) {
   return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability);
-}
-
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonFuncToLLVMPass() {
-  return std::make_unique<::ConvertTritonFuncToLLVM>();
 }
 
 } // namespace triton

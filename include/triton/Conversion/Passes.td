@@ -49,14 +49,18 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
     ];
 }
 
-def ConvertTritonFuncToLLVM : Pass<"convert-triton-func-to-llvm", "mlir::ModuleOp"> {
-    let summary = "Convert Triton functions to LLVM";
+def TritonConvertArithToIndex : Pass<"triton-convert-arith-to-index", "mlir::ModuleOp"> {
+
+    let summary = "Convert arith to index";
+    
+    let constructor = "mlir::triton::createTritonConvertArithToIndexPass()";
 
     let description = [{
-      Handles pointers and annotations
+      Convert arith operation on index values to corresponding ops in the index dialect.
+      We need this because SCFToCF conversion currently generates arith ops on indices.
     }];
 
-    let constructor = "mlir::triton::createConvertTritonFuncToLLVMPass()";
+    let dependentDialects = ["mlir::arith::ArithDialect"];
 }
 
 #endif
