@@ -492,7 +492,8 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
 
 def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
     if isinstance(value, tl.tensor):
-        # size 1 tensor
+        assert value.numel.value == 1, "only accepts size-1 tensor"
+        value = cast(value, dtype, builder)
         ret_ty = tl.block_type(value.dtype, shape)
         return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
     else:

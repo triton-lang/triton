@@ -761,7 +761,7 @@ def _shape_check_impl(shape):
 
 
 @builtin
-def full(shape, value, dtype=None, _builder=None):
+def full(shape, value, dtype, _builder=None):
     """
     Returns a tensor filled with the scalar value for the given :code:`shape` and :code:`dtype`.
 
