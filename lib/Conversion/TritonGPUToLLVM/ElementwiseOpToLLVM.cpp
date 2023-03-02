@@ -269,6 +269,17 @@ struct FpToFpOpConversion
     return builder.launch(rewriter, loc, f32_ty, false);
   }
 
+  static Value convertFp16ToFp32(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 const Value &v) {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.f32.f16");
+    auto res = builder.newOperand("=r");
+    auto operand = builder.newOperand(v, "h");
+    cvt(res, operand);
+    return builder.launch(rewriter, loc, f32_ty, false);
+  }
+
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
@@ -280,6 +291,17 @@ struct FpToFpOpConversion
     // TODO: This is a hack to get the right type. We should be able to invoke
     // the type converter
     return builder.launch(rewriter, loc, i16_ty, false);
+  }
+
+  static Value convertFp32ToFp16(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 const Value &v) {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.rn.f16.f32");
+    auto res = builder.newOperand("=h");
+    auto operand = builder.newOperand(v, "r");
+    cvt(res, operand);
+    return builder.launch(rewriter, loc, f16_ty, false);
   }
 
   LogicalResult
@@ -336,6 +358,12 @@ struct FpToFpOpConversion
     } else if (srcEltType.isF32() && dstEltType.isBF16()) {
       resultVals.emplace_back(
           convertFp32ToBf16(loc, rewriter, adaptor.getFrom()));
+    } else if (srcEltType.isF16() && dstEltType.isF32()) {
+      resultVals.emplace_back(
+          convertFp16ToFp32(loc, rewriter, adaptor.getFrom()));
+    } else if (srcEltType.isF32() && dstEltType.isF16()) {
+      resultVals.emplace_back(
+          convertFp32ToFp16(loc, rewriter, adaptor.getFrom()));
     } else {
       assert(false && "unsupported type casting");
     }
@@ -859,4 +887,155 @@ void populateElementwiseOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
+}
+
+struct FPExtOpConversion
+    : ElementwiseOpConversionBase<LLVM::FPExtOp, FPExtOpConversion> {
+  using Base = ElementwiseOpConversionBase<LLVM::FPExtOp, FPExtOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::FPExtOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isF32() && srcTy.isF16()) {
+      return false;
+    }
+    return true;
+  }
+
+  Value createDestOp(LLVM::FPExtOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    return FpToFpOpConversion::convertFp16ToFp32(loc, rewriter, operands[0]);
+  }
+};
+
+struct FPTruncOpConversion
+    : ElementwiseOpConversionBase<LLVM::FPTruncOp, FPTruncOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<LLVM::FPTruncOp, FPTruncOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::FPTruncOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isF16() && srcTy.isF32()) {
+      return false;
+    }
+    return true;
+  }
+
+  Value createDestOp(LLVM::FPTruncOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    return FpToFpOpConversion::convertFp32ToFp16(loc, rewriter, operands[0]);
+  }
+};
+
+struct TruncOpConversion
+    : ElementwiseOpConversionBase<LLVM::TruncOp, TruncOpConversion> {
+  using Base = ElementwiseOpConversionBase<LLVM::TruncOp, TruncOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::TruncOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isInteger(16) && srcTy.isInteger(32)) {
+      return false;
+    }
+    return true;
+  }
+
+  Value createDestOp(LLVM::TruncOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.u16.u32");
+    auto res = builder.newOperand("=h");
+    auto operand = builder.newOperand(operands[0], "r");
+    cvt(res, operand);
+    return builder.launch(rewriter, loc, i16_ty, false);
+  }
+};
+
+struct SExtOpConversion
+    : ElementwiseOpConversionBase<LLVM::SExtOp, SExtOpConversion> {
+  using Base = ElementwiseOpConversionBase<LLVM::SExtOp, SExtOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::SExtOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isInteger(32) && srcTy.isInteger(16)) {
+      return false;
+    }
+    return true;
+  }
+
+  Value createDestOp(LLVM::SExtOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.s32.s16");
+    auto res = builder.newOperand("=r");
+    auto operand = builder.newOperand(operands[0], "h");
+    cvt(res, operand);
+    return builder.launch(rewriter, loc, i32_ty, false);
+  }
+};
+
+struct ZExtOpConversion
+    : ElementwiseOpConversionBase<LLVM::ZExtOp, ZExtOpConversion> {
+  using Base = ElementwiseOpConversionBase<LLVM::ZExtOp, ZExtOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::ZExtOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isInteger(32) && srcTy.isInteger(16)) {
+      return false;
+    }
+    return true;
+  }
+
+  Value createDestOp(LLVM::ZExtOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.u32.u16");
+    auto res = builder.newOperand("=r");
+    auto operand = builder.newOperand(operands[0], "h");
+    cvt(res, operand);
+    return builder.launch(rewriter, loc, i32_ty, false);
+  }
+};
+
+bool isLegalElementwiseOp(Operation *op) {
+  if (isa<LLVM::FPExtOp>(op)) {
+    return FPExtOpConversion::isLegalOp(cast<LLVM::FPExtOp>(op));
+  } else if (isa<LLVM::FPTruncOp>(op)) {
+    return FPTruncOpConversion::isLegalOp(cast<LLVM::FPTruncOp>(op));
+  } else if (isa<LLVM::TruncOp>(op)) {
+    return TruncOpConversion::isLegalOp(cast<LLVM::TruncOp>(op));
+  } else if (isa<LLVM::SExtOp>(op)) {
+    return SExtOpConversion::isLegalOp(cast<LLVM::SExtOp>(op));
+  } else if (isa<LLVM::ZExtOp>(op)) {
+    return ZExtOpConversion::isLegalOp(cast<LLVM::ZExtOp>(op));
+  }
+  return true;
+}
+
+void populateElementwiseOpToPTXPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                        RewritePatternSet &patterns,
+                                        PatternBenefit benefit) {
+  patterns.add<FPExtOpConversion>(typeConverter, benefit);
+  patterns.add<FPTruncOpConversion>(typeConverter, benefit);
+  patterns.add<TruncOpConversion>(typeConverter, benefit);
+  patterns.add<SExtOpConversion>(typeConverter, benefit);
+  patterns.add<ZExtOpConversion>(typeConverter, benefit);
 }

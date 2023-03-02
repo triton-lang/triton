@@ -1,6 +1,5 @@
 import multiprocessing
 import os
-import re
 import shutil
 from collections import namedtuple
 
@@ -105,33 +104,6 @@ def test_specialize(mode):
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1,)](x, i, BLOCK=512)
     assert counter == target
-
-
-@pytest.mark.parametrize("value, value_type", [
-    (-1, 'i32'), (0, 'i32'), (1, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
-    (2**32, 'i64'), (2**63 - 1, 'i64'), (-2**63, 'i64'),
-    (2**31, 'u32'), (2**32 - 1, 'u32'), (2**63, 'u64'), (2**64 - 1, 'u64')
-])
-def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
-
-    @triton.jit
-    def kernel(VALUE, X):
-        pass
-
-    cache_str = None
-
-    def get_cache_str(*args, **kwargs):
-        nonlocal cache_str
-        cache_str = kwargs["repr"]
-    triton.JITFunction.cache_hook = get_cache_str
-    reset_tmp_dir()
-    x = torch.tensor([3.14159], device='cuda')
-    kernel[(1, )](value, x)
-    triton.JITFunction.cache_hook = None
-
-    cache_str_match = re.match(r".*VALUE: (\w+).*", cache_str)
-    spec_type = None if cache_str_match is None else cache_str_match.group(1)
-    assert spec_type == value_type
 
 
 def test_constexpr_not_callable() -> None:

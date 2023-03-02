@@ -851,7 +851,7 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
     return mlir::success();
   }
   // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
-  auto extract_slice = dyn_cast<tensor::ExtractSliceOp>(arg);
+  auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
   if (extract_slice) {
     if (!isSharedEncoding(op->getResult(0))) {
       return mlir::failure();
@@ -872,7 +872,7 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
     rewriter.setInsertionPoint(extract_slice);
     auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), newType, extract_slice.getSource());
-    rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(
+    rewriter.replaceOpWithNewOp<triton::gpu::ExtractSliceOp>(
         op, resType, newArg.getResult(), extract_slice.offsets(),
         extract_slice.sizes(), extract_slice.strides(),
         extract_slice.static_offsets(), extract_slice.static_sizes(),
@@ -921,6 +921,29 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
       return mlir::success();
     }
   return mlir::failure();
+}
+
+//===----------------------------------------------------------------------===//
+
+/// Build an ExtractSliceOp with mixed static and dynamic entries and custom
+/// result type. If the type passed is nullptr, it is inferred.
+void ExtractSliceOp::build(OpBuilder &b, OperationState &result,
+                           RankedTensorType resultType, Value source,
+                           ArrayRef<OpFoldResult> offsets,
+                           ArrayRef<OpFoldResult> sizes,
+                           ArrayRef<OpFoldResult> strides,
+                           ArrayRef<NamedAttribute> attrs) {
+  SmallVector<int64_t> staticOffsets, staticSizes, staticStrides;
+  SmallVector<Value> dynamicOffsets, dynamicSizes, dynamicStrides;
+  dispatchIndexOpFoldResults(offsets, dynamicOffsets, staticOffsets);
+  dispatchIndexOpFoldResults(sizes, dynamicSizes, staticSizes);
+  dispatchIndexOpFoldResults(strides, dynamicStrides, staticStrides);
+  auto sourceRankedTensorType = source.getType().cast<RankedTensorType>();
+  build(b, result, resultType, source, dynamicOffsets, dynamicSizes,
+        dynamicStrides, b.getDenseI64ArrayAttr(staticOffsets),
+        b.getDenseI64ArrayAttr(staticSizes),
+        b.getDenseI64ArrayAttr(staticStrides));
+  result.addAttributes(attrs);
 }
 
 //===----------------------------------------------------------------------===//

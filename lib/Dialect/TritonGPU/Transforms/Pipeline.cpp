@@ -394,7 +394,7 @@ void LoopPipeliner::emitPrologue() {
     sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]},
                                       sliceType.getElementType(),
                                       loadsBufferType[loadOp].getEncoding());
-    Value extractSlice = builder.create<tensor::ExtractSliceOp>(
+    Value extractSlice = builder.create<triton::gpu::ExtractSliceOp>(
         loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][numStages - 1],
         SmallVector<OpFoldResult>{int_attr(0), int_attr(0), int_attr(0)},
         SmallVector<OpFoldResult>{int_attr(1),
@@ -532,8 +532,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   Value extractSliceIndex = builder.create<arith::RemSIOp>(
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
-  extractSliceIndex = builder.create<arith::IndexCastOp>(
-      extractSliceIndex.getLoc(), builder.getIndexType(), extractSliceIndex);
 
   for (Operation *op : orderedDeps)
     if (!loads.contains(op->getResult(0))) {
@@ -591,7 +589,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
                                         sliceType.getElementType(),
                                         loadsBufferType[loadOp].getEncoding());
 
-      nextOp = builder.create<tensor::ExtractSliceOp>(
+      nextOp = builder.create<triton::gpu::ExtractSliceOp>(
           op->getLoc(), sliceType, insertAsyncOp,
           SmallVector<OpFoldResult>{extractSliceIndex, int_attr(0),
                                     int_attr(0)},

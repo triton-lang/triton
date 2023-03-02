@@ -4,8 +4,11 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM//ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -24,31 +27,21 @@
 #include "TypeConverter.h"
 #include "ViewOpToLLVM.h"
 
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
 #define GEN_PASS_CLASSES
 #include "triton/Conversion/Passes.h.inc"
 
-namespace mlir {
-
-class TritonLLVMConversionTarget : public ConversionTarget {
-public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx)
-      : ConversionTarget(ctx) {
-    addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<NVVM::NVVMDialect>();
-    addIllegalDialect<triton::TritonDialect>();
-    addIllegalDialect<triton::gpu::TritonGPUDialect>();
-    addIllegalDialect<mlir::gpu::GPUDialect>();
-    addLegalOp<mlir::UnrealizedConversionCastOp>();
-  }
-};
+namespace {
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
+    addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
     addIllegalOp<mlir::func::FuncOp>();
@@ -56,9 +49,36 @@ public:
   }
 };
 
-} // namespace mlir
+class TritonPTXConversionTarget : public ConversionTarget {
+public:
+  explicit TritonPTXConversionTarget(MLIRContext &ctx) : ConversionTarget(ctx) {
+    addDynamicallyLegalDialect<LLVM::LLVMDialect>(
+        [&](Operation *op) { return isLegalElementwiseOp(op); });
+    addLegalDialect<NVVM::NVVMDialect>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
 
-namespace {
+struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
+  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    unsigned numArguments = op.getNumOperands();
+
+    // Currently, Triton kernel function always return nothing.
+    // TODO(Superjomn) add support for non-inline device function
+    if (numArguments > 0) {
+      return rewriter.notifyMatchFailure(
+          op, "Only kernel function with nothing returned is supported.");
+    }
+
+    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
+                                                op->getAttrs());
+    return success();
+  }
+};
 
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
@@ -72,8 +92,9 @@ struct FuncOpConversion : public FuncOpConversionBase {
   matchAndRewrite(func::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
-    if (!newFuncOp)
+    if (!newFuncOp) {
       return failure();
+    }
 
     auto ctx = funcOp->getContext();
 
@@ -93,6 +114,22 @@ private:
   int numWarps{0};
 };
 
+class TritonLLVMConversionTarget : public ConversionTarget {
+public:
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx)
+      : ConversionTarget(ctx) {
+    addLegalDialect<LLVM::LLVMDialect>();
+    addLegalDialect<NVVM::NVVMDialect>();
+    addIllegalDialect<triton::TritonDialect>();
+    addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addIllegalDialect<mlir::gpu::GPUDialect>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
+
+using FPTruncLowering =
+    VectorConvertToLLVMPattern<LLVM::FPTruncOp, arith::TruncFOp>;
+
 class ConvertTritonGPUToLLVM
     : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
 
@@ -103,48 +140,39 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMFunctionConversionTarget funcTarget(*context);
     TritonLLVMConversionTarget target(*context);
-
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
-    // Step 1: Decompose unoptimized layout conversions to use shared memory
-    // Step 2: Decompose insert_slice_async to use load + insert_slice for
-    //   pre-Ampere architectures or unsupported vectorized load sizes
-    // Step 3: Allocate shared memories and insert barriers
-    // Step 4: Convert FuncOp to LLVMFuncOp via partial conversion
-    // Step 5: Get axis and shared memory info
-    // Step 6: Convert the rest of ops via partial conversion
-    //
-    // The reason for a separation between 4/6 is that, step 5 is out of the
-    // scope of Dialect Conversion, thus we need to make sure the smem is not
-    // revised during the conversion of step 6.
-
-    // Step 1
+    /* preprocess */
     decomposeMmaToDotOperand(mod, numWarps);
     decomposeBlockedToDotOperand(mod);
-
-    // Step 2
     if (failed(decomposeInsertSliceAsyncOp(mod)))
       return signalPassFailure();
 
-    // Step 3
+    /* allocate shared memory and set barrier */
     Allocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
 
-    // Step 4
-    RewritePatternSet funcPatterns(context);
-    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, /*benefit=*/1);
-    if (failed(
-            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
-      return signalPassFailure();
+    /* lower functions */
+    {
+      mlir::LowerToLLVMOptions option(context);
+      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
+      RewritePatternSet funcPatterns(context);
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
+                                         /*benefit=*/1);
+      funcPatterns.add<ReturnOpConversion>(typeConverter);
+      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                            funcPatterns);
+      if (failed(
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+        return signalPassFailure();
+    }
 
-    // Step 5 - get axis and shared memory info
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
     if (failed(solver->initializeAndRun(mod)))
@@ -154,53 +182,43 @@ public:
                  mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
                                         allocation.getSharedMemorySize()));
 
-    // Step 6 - rewrite rest of ops
-    // We set a higher benefit here to ensure triton's patterns runs before
-    // arith patterns for some encoding not supported by the community
-    // patterns.
+    /* rewrite ops */
+    RewritePatternSet patterns(context);
+    // TritonGPU lowering patterns
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
         &baseIndexCache, &indexCache, &indexInsertPoint};
-
-    RewritePatternSet patterns(context);
-
-    // Normal conversions
-    populateTritonGPUToLLVMPatterns(typeConverter, patterns, numWarps,
-                                    *axisInfoAnalysis, &allocation, smem,
-                                    indexCacheInfo, /*benefit=*/10);
-    // ConvertLayoutOp
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                          *axisInfoAnalysis, &allocation, smem,
-                                          indexCacheInfo, /*benefit=*/10);
-    // DotOp
-    populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                *axisInfoAnalysis, &allocation, smem,
-                                /*benefit=*/10);
-    // ElementwiseOp
-    populateElementwiseOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                        *axisInfoAnalysis, &allocation, smem,
-                                        /*benefit=*/10);
-    // LoadStoreOp
-    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                      *axisInfoAnalysis, &allocation, smem,
-                                      indexCacheInfo, /*benefit=*/10);
-    // ReduceOp
-    populateReduceOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                   *axisInfoAnalysis, &allocation, smem,
-                                   indexCacheInfo, /*benefit=*/10);
-    // ViewOp
-    populateViewOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                 *axisInfoAnalysis, &allocation, smem,
-                                 /*benefit=*/10);
-
-    // Add arith/math's patterns to help convert scalar expression to LLVM.
-    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          patterns);
+    auto populatePatterns1 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, *axisInfoAnalysis,
+                   &allocation, smem, indexCacheInfo, /*benefit*/ 1);
+    };
+    auto populatePatterns2 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, *axisInfoAnalysis,
+                   &allocation, smem, /*benefit*/ 1);
+    };
+    populatePatterns1(populateTritonGPUToLLVMPatterns);
+    populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
+    populatePatterns2(populateDotOpToLLVMPatterns);
+    populatePatterns2(populateElementwiseOpToLLVMPatterns);
+    populatePatterns1(populateLoadStoreOpToLLVMPatterns);
+    populatePatterns1(populateReduceOpToLLVMPatterns);
+    populatePatterns2(populateViewOpToLLVMPatterns);
+    // Native lowering patterns
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+      return signalPassFailure();
+
+    // Use our custom converters to convert some operations to PTX to avoid
+    // using NVPTX for two reasons:
+    // 1. NVPTX backend is flaky on data types like float16 and bfloat16
+    // 2. In some cases, we may generate faster PTX code than NVPTX backend
+    TritonPTXConversionTarget ptxTarget(*context);
+    RewritePatternSet ptxPatterns(context);
+    // Add patterns to convert LLVM to PTX
+    populateElementwiseOpToPTXPatterns(typeConverter, ptxPatterns,
+                                       /*benefits=*/10);
+
+    if (failed(applyPartialConversion(mod, ptxTarget, std::move(ptxPatterns))))
       return signalPassFailure();
   }
 

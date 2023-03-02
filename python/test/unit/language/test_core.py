@@ -1524,7 +1524,7 @@ def test_pointer_arguments(device):
 
 @pytest.mark.parametrize("value, value_type", [
     (-1, 'i32'), (0, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
-    (2**31, 'u32'), (2**32 - 1, 'u32'), (2**32, 'i64'), (2**63 - 1, 'i64'),
+    (2**31, 'i64'), (2**32 - 1, 'i64'), (2**32, 'i64'), (2**63 - 1, 'i64'),
     (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')
 ])
 def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
@@ -1784,6 +1784,23 @@ def test_libdevice_scalar(dtype_str, expr, lib_path):
 # -----------------------
 
 
+def test_for_iv_int64():
+
+    @triton.jit
+    def kernel(Out, lo, hi):
+        acc = 0
+        acc = acc.to(tl.int64)
+        for i in range(lo, hi):
+            acc += i
+        tl.store(Out, acc)
+
+    lo = 2**35
+    hi = 2**35 + 20
+    out = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
+    kernel[(1,)](out, lo, hi)
+    assert out[0] == sum(range(lo, hi))
+
+
 def test_if_else():
 
     @triton.jit
@@ -2017,3 +2034,42 @@ def test_load_scalar_with_mask():
     Out = torch.empty_like(Index, device='cuda')
     kernel[(1,)](Input, Index, Out, Index.numel())
     assert Out.data[0] == 0
+
+
+# This test is used to test our own PTX codegen for float16 and int16 conversions
+# maybe delete it later after ptxas has been fixed
+@pytest.mark.parametrize("dtype_str", ['float16', 'int16'])
+def test_ptx_cast(dtype_str):
+    @triton.jit
+    def kernel(in_ptr0, out_ptr2, xnumel, rnumel, dtype: tl.constexpr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)[:, None]
+        xmask = xindex < xnumel
+        rbase = tl.arange(0, RBLOCK)[None, :]
+        x0 = xindex
+        _tmp4 = (tl.zeros([XBLOCK, RBLOCK], dtype) - 10000).to(dtype)
+        for roffset in range(0, rnumel, RBLOCK):
+            rindex = roffset + rbase
+            rmask = rindex < rnumel
+            r1 = rindex
+            tmp0 = tl.load(in_ptr0 + (r1 + (197 * x0)), rmask & xmask).to(dtype)
+            tmp1 = 2
+            tmp2 = tmp0 * tmp1
+            tmp3 = tmp2.to(dtype)
+            tmp5 = _tmp4 < tmp3
+            _tmp4 = tl.where(rmask & xmask & tmp5, tmp3, _tmp4)
+            tl.store(out_ptr2 + (r1 + (197 * x0) + tl.zeros([XBLOCK, RBLOCK], tl.int32)), _tmp4, rmask & xmask)
+
+    torch.manual_seed(123)
+    if dtype_str == 'int16':
+        torch_dtype = torch.int16
+        triton_dtype = tl.int32
+    else:
+        torch_dtype = torch.float16
+        triton_dtype = tl.float32
+
+    s0 = 4
+    buf11 = -torch.ones((6 * s0, 197, 197), device='cuda', dtype=torch_dtype)
+    buf14 = -torch.ones((s0, 6, 197, 197), device='cuda', dtype=torch_dtype)
+    kernel[(4728,)](buf11, buf14, 1182 * s0, 197, triton_dtype, 1, 256, num_warps=2)
+    assert buf14.to(torch.float32).mean() == -2.0

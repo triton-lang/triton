@@ -125,8 +125,6 @@ class JITFunction(KernelInterface[T]):
         elif isinstance(arg, int):
             if -2**31 <= arg and arg <= 2**31 - 1:
                 return "i32"
-            elif 2**31 <= arg and arg <= 2**32 - 1:
-                return "u32"
             elif 2**63 <= arg and arg <= 2**64 - 1:
                 return "u64"
             else:

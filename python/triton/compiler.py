@@ -665,17 +665,24 @@ class CodeGenerator(ast.NodeVisitor):
             step = triton.language.constexpr(-step.value)
             negative_step = True
             lb, ub = ub, lb
+        lb = triton.language.core._to_tensor(lb, self.builder)
+        ub = triton.language.core._to_tensor(ub, self.builder)
+        step = triton.language.core._to_tensor(step, self.builder)
+        # induction variable type
+        iv_type = triton.language.semantic.integer_promote_impl(lb.dtype, ub.dtype)
+        iv_type = triton.language.semantic.integer_promote_impl(iv_type, step.dtype)
+        iv_ir_type = iv_type.to_ir(self.builder)
         # lb/ub/step might be constexpr, we need to cast them to tensor
-        lb = triton.language.core._to_tensor(lb, self.builder).handle
-        ub = triton.language.core._to_tensor(ub, self.builder).handle
-        step = triton.language.core._to_tensor(step, self.builder).handle
+        lb = lb.handle
+        ub = ub.handle
+        step = step.handle
         # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
         lb = self.builder.create_to_index(lb)
         ub = self.builder.create_to_index(ub)
         step = self.builder.create_to_index(step)
         # Create placeholder for the loop induction variable
-        iv = self.builder.create_undef(self.builder.get_int32_ty())
-        self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+        iv = self.builder.create_undef(iv_ir_type)
+        self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -732,11 +739,13 @@ class CodeGenerator(ast.NodeVisitor):
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
             iv = self.builder.create_index_to_si(for_op.get_induction_var())
+            iv = self.builder.create_int_cast(iv, iv_ir_type, True)
             if negative_step:
                 ub_si = self.builder.create_index_to_si(ub)
+                ub_si = self.builder.create_int_cast(ub_si, iv_ir_type, True)
                 iv = self.builder.create_sub(ub_si, iv)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
-            self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+            self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
 
         # update lscope & local_defs (ForOp defines new values)
         for i, name in enumerate(names):

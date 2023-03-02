@@ -13,4 +13,10 @@ void populateElementwiseOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
                                          const Allocation *allocation,
                                          Value smem, PatternBenefit benefit);
 
+bool isLegalElementwiseOp(Operation *op);
+
+void populateElementwiseOpToPTXPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                        RewritePatternSet &patterns,
+                                        PatternBenefit benefit);
+
 #endif
