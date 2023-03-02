@@ -1409,6 +1409,28 @@ def test_vectorization(N):
         assert "ld.global.b32" in ptx
     # triton.testing.assert_almost_equal(dst, src[:N])
 
+
+@pytest.mark.parametrize("has_hints", [False, True])
+def test_vectorization_hints(has_hints):
+    src = torch.empty(1024, device='cuda')
+    dst = torch.empty(1024, device='cuda')
+    off = torch.zeros(1, device='cuda', dtype=torch.int32)
+
+    @triton.jit
+    def _kernel(dst, src, off, N, BLOCK_SIZE: tl.constexpr, HINT: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        offsets = offsets + tl.load(off)
+        if HINT:
+            tl.max_contiguous(tl.multiple_of(offsets, 1024), 1024)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+    pgm = _kernel[(1,)](dst, src, off, N=1024, BLOCK_SIZE=src.shape[0], HINT=has_hints)
+    ptx = pgm.asm["ptx"]
+    if has_hints:
+        assert "ld.global.v4.b32" in ptx
+    else:
+        assert "ld.global.v4.b32" not in ptx
+
 # ---------------
 # test store
 # ---------------
