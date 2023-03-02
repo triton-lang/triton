@@ -56,6 +56,16 @@ public:
   }
 };
 
+class TritonPTXConversionTarget : public ConversionTarget {
+public:
+  explicit TritonPTXConversionTarget(MLIRContext &ctx) : ConversionTarget(ctx) {
+    addDynamicallyLegalDialect<LLVM::LLVMDialect>(
+        [&](Operation *op) { return isLegalElementwiseOp(op); });
+    addLegalDialect<NVVM::NVVMDialect>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
+
 } // namespace mlir
 
 namespace {
@@ -201,6 +211,19 @@ public:
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+      return signalPassFailure();
+
+    // Use our custom converters to convert some operations to PTX to avoid
+    // using NVPTX for two reasons:
+    // 1. NVPTX backend is flaky on data types like float16 and bfloat16
+    // 2. In some cases, we may generate faster PTX code than NVPTX backend
+    TritonPTXConversionTarget ptxTarget(*context);
+    RewritePatternSet ptxPatterns(context);
+    // Add patterns to convert LLVM to PTX
+    populateElementwiseOpToPTXPatterns(typeConverter, ptxPatterns,
+                                       /*benefits=*/10);
+
+    if (failed(applyPartialConversion(mod, ptxTarget, std::move(ptxPatterns))))
       return signalPassFailure();
   }
 
