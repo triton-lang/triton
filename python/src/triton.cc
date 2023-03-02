@@ -46,6 +46,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <regex>
+#include <signal.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1512,7 +1513,6 @@ void init_triton_translation(py::module &m) {
           llvm::sys::fs::createTemporaryFile("compile-ptx-src", "", fsrc);
           llvm::sys::fs::createTemporaryFile("compile-ptx-log", "", flog);
           std::string fbin = std::string(fsrc) + ".o";
-          llvm::FileRemover srcRemover(fsrc);
           llvm::FileRemover logRemover(flog);
           llvm::FileRemover binRemover(fbin);
           const char *_fsrc = fsrc.c_str();
@@ -1529,16 +1529,30 @@ void init_triton_translation(py::module &m) {
 
           err = system(cmd.c_str());
           if (err != 0) {
+            err >>= 8;
             std::ifstream _log(_flog);
             std::string log(std::istreambuf_iterator<char>(_log), {});
-            throw std::runtime_error("Internal Triton PTX codegen error: \n" +
-                                     log);
+            if (err == 255) {
+              throw std::runtime_error("Internal Triton PTX codegen error: \n" +
+                                       log);
+            } else if (err == 128 + SIGSEGV) {
+              throw std::runtime_error("Please run `ptxas " + fsrc.str().str() +
+                                       "` to confirm that this is a "
+                                       "bug in `ptxas`\n" +
+                                       log);
+            } else {
+              throw std::runtime_error("`ptxas` failed with error code " +
+                                       std::to_string(err) + ": \n" + log);
+            }
+            return {};
+          } else {
+            llvm::FileRemover srcRemover(fsrc);
+            std::ifstream _cubin(_fbin, std::ios::binary);
+            std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
+            _cubin.close();
+            py::bytes bytes(cubin);
+            return std::move(bytes);
           }
-          std::ifstream _cubin(_fbin, std::ios::binary);
-          std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
-          _cubin.close();
-          py::bytes bytes(cubin);
-          return std::move(bytes);
         });
 
   m.def("add_external_libs",
