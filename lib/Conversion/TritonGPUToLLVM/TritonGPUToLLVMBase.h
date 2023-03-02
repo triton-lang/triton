@@ -208,13 +208,9 @@ public:
 
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
     auto llvmIndexTy = this->getTypeConverter()->getIndexType();
-    auto cast = rewriter.create<UnrealizedConversionCastOp>(
-        loc, TypeRange{llvmIndexTy},
-        ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
-            loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
-    Value threadId = cast.getResult(0);
-
-    return threadId;
+    auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
+        loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x);
+    return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
   }
 
   // -----------------------------------------------------------------------
@@ -223,13 +219,12 @@ public:
   template <typename T>
   Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
                             T value) const {
-
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
     auto bufferId = allocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = allocation->getOffset(bufferId);
-    Value offVal = idx_val(offset);
+    Value offVal = i32_val(offset);
     Value base = gep(ptrTy, smem, offVal);
     return base;
   }
@@ -244,8 +239,8 @@ public:
     // This utililty computes the pointers for accessing the provided swizzled
     // shared memory layout `resSharedLayout`. More specifically, it computes,
     // for all indices (row, col) of `srcEncoding` such that idx % inVec = 0,
-    // the pointer: ptr[(row, col)] = base + (rowOff * strides[ord[1]] + colOff)
-    // where :
+    // the pointer: ptr[(row, col)] = base + (rowOff * strides[ord[1]] +
+    // colOff) where :
     //   compute phase = (row // perPhase) % maxPhase
     //   rowOff = row
     //   colOff = colOffSwizzled + colOffOrdered
@@ -255,8 +250,8 @@ public:
     // Note 1:
     // -------
     // Because swizzling happens at a granularity of outVec, we need to
-    // decompose the offset into a swizzled factor and a non-swizzled (ordered)
-    // factor
+    // decompose the offset into a swizzled factor and a non-swizzled
+    // (ordered) factor
     //
     // Note 2:
     // -------
@@ -435,7 +430,7 @@ public:
     } else {
       Value remained = linear;
       for (auto &&en : llvm::enumerate(shape.drop_back())) {
-        Value dimSize = idx_val(en.value());
+        Value dimSize = i32_val(en.value());
         multiDim[en.index()] = urem(remained, dimSize);
         remained = udiv(remained, dimSize);
       }
@@ -454,12 +449,12 @@ public:
   Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                   ArrayRef<Value> multiDim, ArrayRef<unsigned> shape) const {
     auto rank = multiDim.size();
-    Value linear = idx_val(0);
+    Value linear = i32_val(0);
     if (rank > 0) {
       linear = multiDim.back();
       for (auto [dim, dimShape] :
            llvm::reverse(llvm::zip(multiDim.drop_back(), shape.drop_back()))) {
-        Value dimSize = idx_val(dimShape);
+        Value dimSize = i32_val(dimShape);
         linear = add(mul(linear, dimSize), dim);
       }
     }
@@ -469,7 +464,7 @@ public:
   Value dot(ConversionPatternRewriter &rewriter, Location loc,
             ArrayRef<Value> offsets, ArrayRef<Value> strides) const {
     assert(offsets.size() == strides.size());
-    Value ret = idx_val(0);
+    Value ret = i32_val(0);
     for (auto [offset, stride] : llvm::zip(offsets, strides)) {
       ret = add(ret, mul(offset, stride));
     }
@@ -597,7 +592,7 @@ private:
                                 const BlockedEncodingAttr &blocked_layout,
                                 ArrayRef<int64_t> shape) const {
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = idx_val(32);
+    Value warpSize = i32_val(32);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blocked_layout.getSizePerThread();
@@ -619,13 +614,13 @@ private:
       auto maxWarps =
           ceil<unsigned>(shape[k], sizePerThread[k] * threadsPerWarp[k]);
       auto maxThreads = ceil<unsigned>(shape[k], sizePerThread[k]);
-      multiDimWarpId[k] = urem(multiDimWarpId[k], idx_val(maxWarps));
-      multiDimThreadId[k] = urem(multiDimThreadId[k], idx_val(maxThreads));
+      multiDimWarpId[k] = urem(multiDimWarpId[k], i32_val(maxWarps));
+      multiDimThreadId[k] = urem(multiDimThreadId[k], i32_val(maxThreads));
       // multiDimBase[k] = (multiDimThreadId[k] +
       //                    multiDimWarpId[k] * threadsPerWarp[k]) *
       //                   sizePerThread[k];
-      Value threadsPerWarpK = idx_val(threadsPerWarp[k]);
-      Value sizePerThreadK = idx_val(sizePerThread[k]);
+      Value threadsPerWarpK = i32_val(threadsPerWarp[k]);
+      Value sizePerThreadK = i32_val(sizePerThread[k]);
       multiDimBase[k] =
           mul(sizePerThreadK, add(multiDimThreadId[k],
                                   mul(multiDimWarpId[k], threadsPerWarpK)));
@@ -799,21 +794,21 @@ private:
                               ArrayRef<int64_t> shape) const {
     auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
     assert(_warpsPerCTA.size() == 2);
-    SmallVector<Value> warpsPerCTA = {idx_val(_warpsPerCTA[0]),
-                                      idx_val(_warpsPerCTA[1])};
+    SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
+                                      i32_val(_warpsPerCTA[1])};
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = idx_val(32);
+    Value warpSize = i32_val(32);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
-    Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), idx_val(shape[0] / 16));
+    Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / 16));
     Value warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
-                         idx_val(shape[1] / 8));
-    Value offWarp0 = mul(warpId0, idx_val(16));
-    Value offWarp1 = mul(warpId1, idx_val(8));
+                         i32_val(shape[1] / 8));
+    Value offWarp0 = mul(warpId0, i32_val(16));
+    Value offWarp1 = mul(warpId1, i32_val(8));
 
     SmallVector<Value> multiDimBase(2);
-    multiDimBase[0] = add(udiv(laneId, idx_val(4)), offWarp0);
-    multiDimBase[1] = add(mul(idx_val(2), urem(laneId, idx_val(4))), offWarp1);
+    multiDimBase[0] = add(udiv(laneId, i32_val(4)), offWarp0);
+    multiDimBase[1] = add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarp1);
     return multiDimBase;
   }
 
@@ -850,7 +845,7 @@ private:
                                                 SmallVector<Value>(rank));
     for (unsigned n = 0; n < elemsPerThread; ++n)
       for (unsigned k = 0; k < rank; ++k)
-        multiDimIdx[n][k] = add(multiDimBase[k], idx_val(offset[n][k]));
+        multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
     return multiDimIdx;
   }
 
