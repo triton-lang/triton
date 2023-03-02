@@ -1242,6 +1242,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
 
 @pytest.mark.parametrize("dtype_str", int_dtypes + float_dtypes + ['bfloat16'])
 def test_full(dtype_str):
+    dtype = getattr(torch, dtype_str)
+    check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
+
     @triton.jit
     def kernel_static(out):
         a = GENERATE_TEST_HERE
@@ -1255,9 +1258,9 @@ def test_full(dtype_str):
         tl.store(out_ptr, a)
 
     kernel_static_patched = patch_kernel(kernel_static, {'GENERATE_TEST_HERE': f"tl.full((128,), 2, tl.{dtype_str})"})
-    out_static = torch.zeros((128), dtype=getattr(torch, dtype_str), device="cuda")
+    out_static = torch.zeros((128), dtype=dtype, device="cuda")
     kernel_static_patched[(1,)](out_static)
-    out_dynamic = torch.zeros((128), dtype=getattr(torch, dtype_str), device="cuda")
+    out_dynamic = torch.zeros((128), dtype=dtype, device="cuda")
     kernel_dynamic[(1,)](out_dynamic, 2, getattr(triton.language, dtype_str))
     assert torch.all(out_static == 2)
     assert torch.all(out_dynamic == 2)
