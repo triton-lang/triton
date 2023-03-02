@@ -1501,7 +1501,7 @@ def test_pointer_arguments(device):
 
 @pytest.mark.parametrize("value, value_type", [
     (-1, 'i32'), (0, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
-    (2**31, 'u32'), (2**32 - 1, 'u32'), (2**32, 'i64'), (2**63 - 1, 'i64'),
+    (2**31, 'i64'), (2**32 - 1, 'i64'), (2**32, 'i64'), (2**63 - 1, 'i64'),
     (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')
 ])
 def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
@@ -1759,6 +1759,23 @@ def test_libdevice_scalar(dtype_str, expr, lib_path):
 # -----------------------
 # test control flow
 # -----------------------
+
+
+def test_for_iv_int64():
+
+    @triton.jit
+    def kernel(Out, lo, hi):
+        acc = 0
+        acc = acc.to(tl.int64)
+        for i in range(lo, hi):
+            acc += i
+        tl.store(Out, acc)
+
+    lo = 2**35
+    hi = 2**35 + 20
+    out = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
+    kernel[(1,)](out, lo, hi)
+    assert out[0] == sum(range(lo, hi))
 
 
 def test_if_else():
