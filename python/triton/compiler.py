@@ -675,7 +675,7 @@ class CodeGenerator(ast.NodeVisitor):
         # lb/ub/step might be constexpr, we need to cast them to tensor
         lb = lb.handle
         ub = ub.handle
-        step =step.handle
+        step = step.handle
         # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
         lb = self.builder.create_to_index(lb)
         ub = self.builder.create_to_index(ub)
