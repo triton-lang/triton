@@ -25,7 +25,7 @@ You can install the latest stable release of Triton from pip:
 ```bash
 pip install triton
 ```
-Binary wheels are available for CPython 3.6-3.9 and PyPy 3.6-3.7.
+Binary wheels are available for CPython 3.6-3.11 and PyPy 3.7-3.9.
 
 And the latest nightly release:
 
@@ -44,12 +44,11 @@ pip install -e .
 
 # Changelog
 
-Version 1.1 is out! New features include:
+Version 2.0 is out! New features include:
 - Many, many bugfixes
-- More documentation
-- Automatic on-disk caching of compiled binary objects
-- Random Number Generation
-- Faster (up to 2x on A100), cleaner blocksparse ops
+- Performance improvements
+- Backend rewritten to use MLIR
+- Support for kernels taht contain back-to-back matmuls (e.g., flash attention)
 
 # Contributing
 
@@ -66,7 +65,3 @@ Supported Platforms:
 Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
   * Under development: AMD GPUs, CPUs
-
-# Disclaimer
-
-Triton is a fairly recent project, and it is under active development. We expect it to be pretty useful in a wide variety of cases, but don't be surprised if it's a bit rough around the edges :)
