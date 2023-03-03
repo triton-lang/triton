@@ -874,6 +874,7 @@ def dot(input, other, allow_tf32=True, allow_f16_acc=False, _builder=None):
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
+    allow_f16_acc = _constexpr_to_value(allow_f16_acc)
     return semantic.dot(input, other, allow_tf32, allow_f16_acc, _builder)
 
 

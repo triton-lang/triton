@@ -66,7 +66,8 @@ def _kernel(A, B, C, M, N, K,
             stride_cm, stride_cn,
             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
             GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
-            ACC_TYPE: tl.constexpr
+            ACC_TYPE: tl.constexpr,
+            allow_f16_acc: tl.constexpr
             ):
     # matrix multiplication
     pid = tl.program_id(0)
@@ -97,7 +98,7 @@ def _kernel(A, B, C, M, N, K,
             k_remaining = K - k * (BLOCK_K * SPLIT_K)
             a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.)
             b = tl.load(B, mask=rk[:, None] < k_remaining, other=0.)
-        acc += tl.dot(a, b)
+        acc += tl.dot(a, b, allow_f16_acc=allow_f16_acc)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk
     acc = acc.to(C.dtype.element_ty)
@@ -119,7 +120,7 @@ class _matmul(torch.autograd.Function):
     _locks = {}
 
     @staticmethod
-    def _call(a, b):
+    def _call(a, b, allow_acc_fp16):
         device = a.device
         # handle non-contiguous inputs if necessary
         if a.stride(0) > 1 and a.stride(1) > 1:
@@ -134,18 +135,20 @@ class _matmul(torch.autograd.Function):
         c = torch.empty((M, N), device=device, dtype=a.dtype)
         # accumulator types
         ACC_TYPE = tl.float32 if a.dtype in [torch.float16, torch.bfloat16, torch.float32] else tl.int32
+        ACC_TYPE = tl.float16 if allow_acc_fp16 else ACC_TYPE
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
         _kernel[grid](a, b, c, M, N, K,
                       a.stride(0), a.stride(1),
                       b.stride(0), b.stride(1),
                       c.stride(0), c.stride(1),
-                      GROUP_M=8, ACC_TYPE=ACC_TYPE)
+                      GROUP_M=8, ACC_TYPE=ACC_TYPE,
+                      allow_f16_acc=ACC_TYPE == tl.float16)
         return c
 
     @staticmethod
-    def forward(ctx, a, b):
-        return _matmul._call(a, b)
+    def forward(ctx, a, b, allow_acc_fp16=False):
+        return _matmul._call(a, b, allow_acc_fp16=allow_acc_fp16)
 
 
 matmul = _matmul.apply
