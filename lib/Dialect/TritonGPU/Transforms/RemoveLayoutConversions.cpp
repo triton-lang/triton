@@ -169,7 +169,7 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
   return success();
 }
 
-inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
+inline bool expensiveLoadOrStore(Operation *op) {
   // Case 1: A size 1 tensor is not expensive since all threads will load the
   // same
   if (isSingleValue(op->getOperand(0)))
@@ -200,11 +200,9 @@ inline bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
 inline bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
   if (!op)
     return true;
-  if (isa<triton::LoadOp, triton::StoreOp>(op))
-    return expensiveLoadOrStore(op, targetEncoding);
   if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
-          triton::AtomicCASOp, triton::DotOp>(op))
+          triton::AtomicCASOp, triton::DotOp, triton::LoadOp, triton::StoreOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
           op))
@@ -307,6 +305,7 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
   auto dstEncoding =
       cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
   IRMapping mapping;
+  
   auto op = cvtSlices.front();
   for (Value arg : op->getOperands()) {
     if (arg.getDefiningOp() == cvt)
@@ -329,11 +328,13 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
     return;
   }
   auto *newOp = cloneWithInferType(rewriter, op, mapping);
+  newOp->moveAfter(op);
   auto newType = newOp->getResult(0).getType().cast<RankedTensorType>();
   auto newCvtType = RankedTensorType::get(
       newType.getShape(), newType.getElementType(), dstEncoding);
   auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
       newOp->getLoc(), newCvtType, newOp->getResult(0));
+  newCvt->moveAfter(newOp);
   rewriter.replaceOp(op, newCvt->getResults());
 }
 
@@ -480,8 +481,7 @@ public:
       // don't rematerialize non-element-wise
       if (!isa<triton::ViewOp, triton::CatOp>(op) &&
           !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp>(op)) {
+          !op->hasTrait<mlir::OpTrait::Elementwise>()) {
         return failure();
       }
       // don't rematerialize if it adds an extra conversion that can't
@@ -500,6 +500,24 @@ public:
     }
 
     pushConversionForward(cvt, cvtSlices, rewriter);
+    return success();
+  }
+};
+
+class RematerializeLoadStore : public mlir::RewritePattern {
+public:
+  explicit RematerializeLoadStore(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (!isa<triton::LoadOp, triton::StoreOp>(op))
+      return failure();
+    if (expensiveLoadOrStore(op))
+      return failure();
+    Value ptr = op->getOperand(0);
     return success();
   }
 };
