@@ -35,6 +35,8 @@
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
 #define bitcast(val__, type__)                                                 \
   rewriter.create<LLVM::BitcastOp>(loc, type__, val__)
+#define addrspacecast(val__, type__)                                           \
+  rewriter.create<LLVM::AddrSpaceCastOp>(loc, type__, val__)
 #define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
 #define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
 #define insert_val(...) rewriter.create<LLVM::InsertValueOp>(loc, __VA_ARGS__)
