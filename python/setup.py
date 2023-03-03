@@ -215,7 +215,7 @@ setup(
     long_description="",
     packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/impl", "triton/ops", "triton/runtime", "triton/ops/blocksparse"],
     install_requires=[
-        "cmake",
+        "cmake>=3.20",
         "filelock",
         "torch",
         "lit",
