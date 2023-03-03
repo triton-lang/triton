@@ -48,7 +48,7 @@ Version 2.0 is out! New features include:
 - Many, many bugfixes
 - Performance improvements
 - Backend rewritten to use MLIR
-- Support for kernels taht contain back-to-back matmuls (e.g., flash attention)
+- Support for kernels that contain back-to-back matmuls (e.g., flash attention)
 
 # Contributing
 
