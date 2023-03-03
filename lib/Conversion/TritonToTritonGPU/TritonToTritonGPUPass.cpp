@@ -482,8 +482,6 @@ struct TritonPrintPattern : public OpConversionPattern<triton::PrintOp> {
   LogicalResult
   matchAndRewrite(triton::PrintOp op, typename triton::PrintOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<triton::PrintOp>(op, op.getPrefixAttr(),
-                                                 adaptor.getOperands());
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::PrintOp>(
                       op, op.getPrefixAttr(), adaptor.getOperands()),
                   adaptor.getAttributes());
@@ -498,9 +496,6 @@ struct TritonAssertPattern : public OpConversionPattern<triton::AssertOp> {
   matchAndRewrite(triton::AssertOp op,
                   typename triton::AssertOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<triton::AssertOp>(
-        op, adaptor.getCondition(), op.getMessageAttr(), op.getFileAttr(),
-        op.getFuncAttr(), op.getLineAttr());
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::AssertOp>(
                       op, adaptor.getCondition(), op.getMessageAttr(),
                       op.getFileAttr(), op.getFuncAttr(), op.getLineAttr()),
