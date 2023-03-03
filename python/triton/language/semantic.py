@@ -491,13 +491,22 @@ def arange(start: int, end: int, builder: ir.builder) -> tl.tensor:
 
 
 def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
-    if value == 0:
-        _value = builder.get_null_value(dtype.to_ir(builder))
+    if isinstance(value, tl.tensor):
+        assert value.numel.value == 1, "only accepts size-1 tensor"
+        value = cast(value, dtype, builder)
+        ret_ty = tl.block_type(value.dtype, shape)
+        return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
     else:
-        get_value_fn = getattr(builder, f"get_{dtype.name}")
-        _value = get_value_fn(value)
-    ret_ty = tl.block_type(dtype, shape)
-    return tl.tensor(builder.create_splat(_value, shape), ret_ty)
+        # scalar
+        if value == 0:
+            value = builder.get_null_value(dtype.to_ir(builder))
+        else:
+            get_value_fn = getattr(builder, f"get_{dtype.name}")
+            value = get_value_fn(value)
+        if dtype is None:
+            raise ValueError("dtype must be specified when value is not a tensor")
+        ret_ty = tl.block_type(dtype, shape)
+        return tl.tensor(builder.create_splat(value, shape), ret_ty)
 
 
 # ===----------------------------------------------------------------------===//

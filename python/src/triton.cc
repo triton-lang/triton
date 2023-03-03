@@ -13,6 +13,8 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
@@ -44,6 +46,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <regex>
+#include <signal.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -118,6 +121,7 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<>())
       .def("load_triton", [](mlir::MLIRContext &self) {
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
+        self.getOrLoadDialect<mlir::index::IndexDialect>();
         // we load LLVM because the frontend uses LLVM.undef for
         // some placeholders
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
@@ -392,8 +396,8 @@ void init_triton_ir(py::module &&m) {
         registry.insert<mlir::triton::TritonDialect,
                         mlir::triton::gpu::TritonGPUDialect,
                         mlir::math::MathDialect, mlir::arith::ArithDialect,
-                        mlir::func::FuncDialect, mlir::scf::SCFDialect,
-                        mlir::cf::ControlFlowDialect>();
+                        mlir::index::IndexDialect, mlir::func::FuncDialect,
+                        mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
 
@@ -511,6 +515,12 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  loc, v, self.getI8Type()));
            })
+      .def("get_int16",
+           [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 loc, v, self.getI16Type()));
+           })
       .def("get_int32",
            [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -523,16 +533,15 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  loc, v, self.getI64Type()));
            })
-      // bfloat16 cannot be initialized as it is treated as int16 for now
-      //.def("get_bf16",
-      //     [](mlir::OpBuilder &self, float v) -> mlir::Value {
-      //       auto loc = self.getUnknownLoc();
-      //       auto type = self.getBF16Type();
-      //       return self.create<mlir::arith::ConstantFloatOp>(
-      //           loc,
-      //           mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
-      //           type);
-      //     })
+      .def("get_bf16",
+           [](mlir::OpBuilder &self, float v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             auto type = self.getBF16Type();
+             return self.create<mlir::arith::ConstantFloatOp>(
+                 loc,
+                 mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
+                 type);
+           })
       .def("get_fp16",
            [](mlir::OpBuilder &self, float v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -544,6 +553,12 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::ConstantOp>(
                  loc, self.getF32FloatAttr(v));
+           })
+      .def("get_fp64",
+           [](mlir::OpBuilder &self, double v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::arith::ConstantOp>(
+                 loc, self.getF64FloatAttr(v));
            })
       .def("get_null_value",
            [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
@@ -806,7 +821,7 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &input) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::IndexCastOp>(
-                 loc, self.getI32Type(), input);
+                 loc, self.getI64Type(), input);
            })
       .def("create_fmul",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
@@ -1525,7 +1540,6 @@ void init_triton_translation(py::module &m) {
           llvm::sys::fs::createTemporaryFile("compile-ptx-src", "", fsrc);
           llvm::sys::fs::createTemporaryFile("compile-ptx-log", "", flog);
           std::string fbin = std::string(fsrc) + ".o";
-          llvm::FileRemover srcRemover(fsrc);
           llvm::FileRemover logRemover(flog);
           llvm::FileRemover binRemover(fbin);
           const char *_fsrc = fsrc.c_str();
@@ -1542,16 +1556,30 @@ void init_triton_translation(py::module &m) {
 
           err = system(cmd.c_str());
           if (err != 0) {
+            err >>= 8;
             std::ifstream _log(_flog);
             std::string log(std::istreambuf_iterator<char>(_log), {});
-            throw std::runtime_error("Internal Triton PTX codegen error: \n" +
-                                     log);
+            if (err == 255) {
+              throw std::runtime_error("Internal Triton PTX codegen error: \n" +
+                                       log);
+            } else if (err == 128 + SIGSEGV) {
+              throw std::runtime_error("Please run `ptxas " + fsrc.str().str() +
+                                       "` to confirm that this is a "
+                                       "bug in `ptxas`\n" +
+                                       log);
+            } else {
+              throw std::runtime_error("`ptxas` failed with error code " +
+                                       std::to_string(err) + ": \n" + log);
+            }
+            return {};
+          } else {
+            llvm::FileRemover srcRemover(fsrc);
+            std::ifstream _cubin(_fbin, std::ios::binary);
+            std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
+            _cubin.close();
+            py::bytes bytes(cubin);
+            return std::move(bytes);
           }
-          std::ifstream _cubin(_fbin, std::ios::binary);
-          std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
-          _cubin.close();
-          py::bytes bytes(cubin);
-          return std::move(bytes);
         });
 
   m.def("add_external_libs",

@@ -1,0 +1,39 @@
+name: Torchinductor
+
+on:
+  workflow_dispatch:
+
+jobs:
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          echo '::set-output name=matrix::[["self-hosted", "A100"]]'
+
+  Integration-Tests:
+    needs: Runner-Preparation
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      #- name: Packages
+      #  run: |
+      #    ./.github/workflows/torchinductor/scripts/install_torchinductor.sh
+      - name: Environment
+        run: |
+          source /opt/torchinductor_venv/bin/activate
+          ./.github/workflows/torchinductor/scripts/install_triton.sh
+      - name: Performance
+        run: |
+          ./.github/workflows/torchinductor/scripts/run_torchinductor_perf.sh
+      # Runs too long time
+      #- name: Accuracy
+      #  run: |
+      #    ./.github/workflows/torchinductor/scripts/run_torchinductor_acc.sh

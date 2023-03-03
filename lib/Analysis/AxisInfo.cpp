@@ -846,10 +846,14 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
 void AxisInfoAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
+  // TODO: For sure not the right way to do this
+  // but why is scf.if not initialized otherwise?
+  for (auto op : operands)
+    if (op->getValue().getRank() == 0)
+      setToEntryState((dataflow::Lattice<AxisInfo> *)op);
   AxisInfo curr = visitors.apply(op, operands);
-  if (curr.getRank() == 0) {
+  if (curr.getRank() == 0)
     return setAllToEntryStates(results);
-  }
   // override with hint
   auto newContiguity = curr.getContiguity();
   auto newDivisibility = curr.getDivisibility();

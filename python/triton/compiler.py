@@ -668,17 +668,24 @@ class CodeGenerator(ast.NodeVisitor):
             step = triton.language.constexpr(-step.value)
             negative_step = True
             lb, ub = ub, lb
+        lb = triton.language.core._to_tensor(lb, self.builder)
+        ub = triton.language.core._to_tensor(ub, self.builder)
+        step = triton.language.core._to_tensor(step, self.builder)
+        # induction variable type
+        iv_type = triton.language.semantic.integer_promote_impl(lb.dtype, ub.dtype)
+        iv_type = triton.language.semantic.integer_promote_impl(iv_type, step.dtype)
+        iv_ir_type = iv_type.to_ir(self.builder)
         # lb/ub/step might be constexpr, we need to cast them to tensor
-        lb = triton.language.core._to_tensor(lb, self.builder).handle
-        ub = triton.language.core._to_tensor(ub, self.builder).handle
-        step = triton.language.core._to_tensor(step, self.builder).handle
+        lb = lb.handle
+        ub = ub.handle
+        step = step.handle
         # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
         lb = self.builder.create_to_index(lb)
         ub = self.builder.create_to_index(ub)
         step = self.builder.create_to_index(step)
         # Create placeholder for the loop induction variable
-        iv = self.builder.create_undef(self.builder.get_int32_ty())
-        self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+        iv = self.builder.create_undef(iv_ir_type)
+        self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -735,11 +742,13 @@ class CodeGenerator(ast.NodeVisitor):
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
             iv = self.builder.create_index_to_si(for_op.get_induction_var())
+            iv = self.builder.create_int_cast(iv, iv_ir_type, True)
             if negative_step:
                 ub_si = self.builder.create_index_to_si(ub)
+                ub_si = self.builder.create_int_cast(ub_si, iv_ir_type, True)
                 iv = self.builder.create_sub(ub_si, iv)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
-            self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+            self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
 
         # update lscope & local_defs (ForOp defines new values)
         for i, name in enumerate(names):
@@ -1203,7 +1212,7 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
     CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
@@ -1264,16 +1273,13 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *compiled_kernel = NULL;
-  PyObject *hook_ret = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
 
   if (launch_enter_hook != Py_None) {{
-    PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
-    hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
-    Py_DECREF(new_args);
+    PyObject_CallObject(launch_enter_hook, args);
   }}
 
 
@@ -1282,19 +1288,9 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
   if (launch_exit_hook != Py_None) {{
-    PyObject *new_args = NULL;
-    if (hook_ret) {{
-        new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
-    }} else {{
-        new_args = PyTuple_Pack(1, compiled_kernel);
-    }}
-    hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
-    Py_DECREF(new_args);
+    PyObject_CallObject(launch_exit_hook, args);
   }}
 
-  if (hook_ret) {{
-      Py_DECREF(hook_ret);
-  }}
   if(PyErr_Occurred()) {{
     return NULL;
   }}
@@ -1561,7 +1557,22 @@ arg_type_pattern = {
 }
 
 
+def _get_jsonable_constants(constants):
+    def _is_jsonable(x):
+        try:
+            json.dumps(x)
+            return True
+        except (TypeError, OverflowError):
+            return False
+    serialized_constants = {}
+    for constant in constants:
+        if _is_jsonable(constants[constant]):
+            serialized_constants[constant] = constants[constant]
+    return serialized_constants
+
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+
+
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
@@ -1634,7 +1645,7 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+        metadata = {"num_warps": num_warps, "num_stages": num_stages, "constants": _get_jsonable_constants(constants), "ctime": dict()}
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
@@ -1665,7 +1676,7 @@ def compile(fn, **kwargs):
     # write-back metadata
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, metadata, asm)
+    return CompiledKernel(fn, so_path, metadata, asm)
 
 
 class CompiledKernel:
@@ -1674,17 +1685,19 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, so_path, metadata, asm):
+    def __init__(self, fn, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
+        self.fn = fn
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
         # initialize metadata
         self.shared = metadata["shared"]
         self.num_warps = metadata["num_warps"]
         self.num_stages = metadata["num_stages"]
+        self.constants = metadata["constants"]
         # initialize asm dict
         self.asm = asm
         # binaries are lazily initialized

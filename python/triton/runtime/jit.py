@@ -125,8 +125,6 @@ class JITFunction(KernelInterface[T]):
         elif isinstance(arg, int):
             if -2**31 <= arg and arg <= 2**31 - 1:
                 return "i32"
-            elif 2**31 <= arg and arg <= 2**32 - 1:
-                return "u32"
             elif 2**63 <= arg and arg <= 2**64 - 1:
                 return "u64"
             else:
@@ -244,7 +242,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
-    key = (version_key, sig_key, constexpr_key, spec_key)
+    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_stages)
     if not extern_libs is None:
       key = (key, tuple(extern_libs.items()))
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
