@@ -1363,9 +1363,6 @@ def device_print(prefix, *args, _builder=None):
 
 @builtin
 def device_assert(cond, msg="", _builder=None):
-    import os
-    if os.getenv("TRITON_DEBUG", "0") == "0":
-        return
     msg = _constexpr_to_value(msg)
     import inspect
     frame = inspect.currentframe()

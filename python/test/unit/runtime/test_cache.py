@@ -160,10 +160,10 @@ def test_jit_debug() -> None:
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
     assert len(kernel_add.cache[device]) == 1
-    os.environ["TRITON_DEBUG"] = "0"
+    kernel_add.debug = False
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
     assert len(kernel_add.cache[device]) == 1
-    os.environ["TRITON_DEBUG"] = "1"
+    kernel_add.debug = True
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
     assert len(kernel_add.cache[device]) == 2
 
