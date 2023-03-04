@@ -261,12 +261,6 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-
-      SmallVector<Type> resultTypes(resultElems,
-                                    withIndex ? llvmIndexTy : llvmElemTy);
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
-      // TODO
       Value ret = packLLElements(loc, resultVals, rewriter, resultTy);
       rewriter.replaceOp(op, ret);
     } else {
@@ -465,12 +459,6 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-
-      SmallVector<Type> resultTypes(resultElems,
-                                    withIndex ? llvmIndexTy : llvmElemTy);
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
-      // TODO
       Value ret = packLLElements(loc, resultVals, rewriter, structTy);
       rewriter.replaceOp(op, ret);
     } else {
