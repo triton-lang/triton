@@ -156,12 +156,6 @@ def test_jit_debug() -> None:
         tl.store(o + idx,
                  tl.load(a + idx) + tl.load(b + idx))
 
-    args = [
-        torch.randn(32, dtype=torch.float32, device="cuda"),
-        torch.randn(32, dtype=torch.float32, device="cuda"),
-        torch.randn(32, dtype=torch.float32, device="cuda"),
-        32,
-    ]
     device = torch.cuda.current_device()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
