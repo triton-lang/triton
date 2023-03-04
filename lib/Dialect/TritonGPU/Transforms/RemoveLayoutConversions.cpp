@@ -200,9 +200,11 @@ inline bool expensiveLoadOrStore(Operation *op) {
 inline bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
   if (!op)
     return true;
+  if (isa<triton::LoadOp, triton::StoreOp>(op))
+    return expensiveLoadOrStore(op);
   if (isa<triton::gpu::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
-          triton::AtomicCASOp, triton::DotOp, triton::LoadOp, triton::StoreOp>(op))
+          triton::AtomicCASOp, triton::DotOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
           op))
@@ -305,36 +307,36 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
   auto dstEncoding =
       cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
   IRMapping mapping;
-  
-  for (auto *op : cvtSlices) {
-    for (Value arg : op->getOperands()) {
-      if (arg.getDefiningOp() == cvt) {
-        mapping.map(arg, cvt.getOperand());
-      } else if (!mapping.contains(arg)) {
-        auto oldType = arg.getType().cast<RankedTensorType>();
-        auto newType = RankedTensorType::get(
-            oldType.getShape(), oldType.getElementType(), srcEncoding);
-        auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(arg.getLoc(),
-                                                                  newType, arg);
-        if (Operation *argOp = arg.getDefiningOp())
-          cvtI->moveAfter(argOp);
-        mapping.map(arg, cvtI);
-      }
+  auto op = cvtSlices.front();
+  for (Value arg : op->getOperands()) {
+    if (arg.getDefiningOp() == cvt)
+      mapping.map(arg, cvt.getOperand());
+    else {
+      auto oldType = arg.getType().cast<RankedTensorType>();
+      auto newType = RankedTensorType::get(
+          oldType.getShape(), oldType.getElementType(), srcEncoding);
+      auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(arg.getLoc(),
+                                                                newType, arg);
+      if (Operation *argOp = arg.getDefiningOp())
+        cvtI->moveAfter(argOp);
+      mapping.map(arg, cvtI);
     }
-    auto *newOp = cloneWithInferType(rewriter, op, mapping);
-    newOp->moveAfter(op);
-    if (op->getNumResults() > 0 &&
-        !cvtSlices.contains(op->getResult(0).getDefiningOp())) {
-      auto newType = newOp->getResult(0).getType().cast<RankedTensorType>();
-      auto newCvtType = RankedTensorType::get(
-          newType.getShape(), newType.getElementType(), dstEncoding);
-      auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          newOp->getLoc(), newCvtType, newOp->getResult(0));
-      newCvt->moveAfter(newOp);
-      mapping.map(op->getResult(0), newCvt);
-    }
-    rewriter.eraseOp(op);
   }
+  rewriter.setInsertionPoint(op);
+  if (op->getNumResults() == 0) {
+    Operation *newOp = rewriter.clone(*op, mapping);
+    rewriter.eraseOp(op);
+    return;
+  }
+  auto *newOp = cloneWithInferType(rewriter, op, mapping);
+  newOp->moveAfter(op);
+  auto newType = newOp->getResult(0).getType().cast<RankedTensorType>();
+  auto newCvtType = RankedTensorType::get(
+      newType.getShape(), newType.getElementType(), dstEncoding);
+  auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+      newOp->getLoc(), newCvtType, newOp->getResult(0));
+  newCvt->moveAfter(newOp);
+  rewriter.replaceOp(op, newCvt->getResults());
 }
 
 //
@@ -460,19 +462,27 @@ public:
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     SetVector<Operation *> cvtSlices;
-    auto filter = [&](Operation *op) {
-      return op->getBlock() == cvt->getBlock() &&
-             !(isa<triton::ReduceOp>(op) &&
-               !op->getResult(0).getType().isa<RankedTensorType>()) &&
-             !isa<triton::gpu::ConvertLayoutOp>(op) && !isa<scf::YieldOp>(op);
+    auto stop = [&](Operation *op) {
+      return op->getBlock() != cvt->getBlock() ||
+             isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp,
+                 triton::ExpandDimsOp, scf::YieldOp>(op) ||
+             op->getNumResults() == 0 ||
+             !op->getResult(0).getType().isa<RankedTensorType>();
     };
+    auto filter = [&](Operation *op) { return !stop(op); };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty()) {
       return failure();
     }
 
     llvm::MapVector<Value, Attribute> toConvert;
+    llvm::SetVector<Operation *> toErase;
     for (Operation *op : cvtSlices) {
+      if (stop(op)) {
+        toErase.insert(op);
+        continue;
+      }
+
       // don't rematerialize anything expensive
       if (expensiveToRemat(op, dstEncoding)) {
         return failure();
@@ -497,6 +507,9 @@ public:
         }
       }
     }
+
+    for (Operation *op : toErase)
+      cvtSlices.remove(op);
 
     pushConversionForward(cvt, cvtSlices, rewriter);
     return success();
