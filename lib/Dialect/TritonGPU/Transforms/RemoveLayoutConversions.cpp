@@ -105,12 +105,12 @@ public:
             .getEncoding()
             .isa<triton::gpu::MmaEncodingAttr>())
       return mlir::failure();
-    auto newReduce = rewriter.create<triton::ReduceOp>(
-        op->getLoc(), reduce.getRedOp(), reduceArg.getOperand(),
-        reduce.getAxis());
     if (isa<triton::gpu::ConvertLayoutOp>(
             *reduceArg.getOperand().getDefiningOp()))
       return mlir::failure();
+    auto newReduce = rewriter.create<triton::ReduceOp>(
+        op->getLoc(), reduce.getRedOp(), reduceArg.getOperand(),
+        reduce.getAxis());
     Value newRet = newReduce.getResult();
     // it's still beneficial to move the conversion
     // to after the reduce if necessary since it will be
@@ -512,24 +512,6 @@ public:
       cvtSlices.remove(op);
 
     pushConversionForward(cvt, cvtSlices, rewriter);
-    return success();
-  }
-};
-
-class RematerializeLoadStore : public mlir::RewritePattern {
-public:
-  explicit RematerializeLoadStore(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             1, context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (!isa<triton::LoadOp, triton::StoreOp>(op))
-      return failure();
-    if (expensiveLoadOrStore(op))
-      return failure();
-    Value ptr = op->getOperand(0);
     return success();
   }
 };
