@@ -106,7 +106,7 @@ class enter_sub_region:
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, module=None, is_kernel=False, function_types=dict()):
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, module=None, is_kernel=False, function_types=dict(), debug=False):
         self.builder = _triton.ir.builder(context)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = function_types
@@ -118,15 +118,19 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.last_node = None
+        self.debug = debug
         self.builtins = {
             'range': range,
             'min': triton.language.minimum,
             'float': float,
             'int': int,
-            'print': print,
+            'print': triton.language.core.device_print,
             'isinstance': isinstance,
             'getattr': getattr,
         }
+        self.static_functions = [
+            'static_print', 'static_assert'
+        ]
         self.scf_stack = []
         # SSA-construction
         # name => triton.language.tensor
@@ -767,6 +771,14 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_keyword(self, node):
         return {node.arg: self.visit(node.value)}
 
+    def visit_Assert(self, node) -> Any:
+        if not self.debug:
+            return
+        test = self.visit(node.test)
+        msg = self.visit(node.msg)
+        # Convert assert to triton's device_assert which happens on the device
+        return triton.language.core.device_assert(test, msg, _builder=self.builder)
+
     def visit_Call(self, node):
         fn = self.visit(node.func)
         if isinstance(fn, triton.language.constexpr):
@@ -775,6 +787,18 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
+        if fn.__name__ == "print":
+            fn = self.builtins["print"]
+        elif fn.__name__ == "device_assert":
+            if not self.debug:
+                return
+        elif fn.__name__ in self.static_functions:
+            if fn.__name__ == "static_print":
+                print(*args, **kws)
+                return
+            elif fn.__name__ == "static_assert":
+                assert args[0], args[1]
+                return
         if isinstance(fn, triton.runtime.JITFunction):
             from inspect import getcallargs
             args = getcallargs(fn.fn, *args, **kws)
@@ -794,7 +818,7 @@ class CodeGenerator(ast.NodeVisitor):
             if not self.module.has_function(fn_name):
                 prototype = triton.language.function_type([], arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types)
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=self.debug)
                 generator.visit(fn.parse())
                 callee_ret_type = generator.last_ret_type
                 self.function_ret_types[fn_name] = callee_ret_type
@@ -932,7 +956,7 @@ def parse_mlir_module(path, context):
     return module
 
 
-def build_triton_ir(fn, signature, specialization, constants):
+def build_triton_ir(fn, signature, specialization, constants, debug=False):
     # canonicalize signature
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -952,7 +976,7 @@ def build_triton_ir(fn, signature, specialization, constants):
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
 
     prototype = triton.language.function_type([], arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True, debug=debug)
     try:
         generator.visit(fn.parse())
     except Exception as e:
@@ -979,8 +1003,8 @@ def optimize_triton_ir(mod):
     return mod
 
 
-def ast_to_ttir(fn, signature, specialization, constants):
-    mod, _ = build_triton_ir(fn, signature, specialization, constants)
+def ast_to_ttir(fn, signature, specialization, constants, debug=False):
+    mod, _ = build_triton_ir(fn, signature, specialization, constants, debug)
     return optimize_triton_ir(mod)
 
 
@@ -1570,11 +1594,12 @@ def compile(fn, **kwargs):
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if capability >= 75 else 2)
     extern_libs = kwargs.get("extern_libs", dict())
+    debug = kwargs.get("debug", False)
     # build compilation stages
     stages = {
         "ast": (lambda path: fn, None),
         "ttir": (lambda path: parse_mlir_module(path, context),
-                 lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+                 lambda src: ast_to_ttir(src, signature, configs[0], constants, debug)),
         "ttgir": (lambda path: parse_mlir_module(path, context),
                   lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
         "llir": (lambda path: Path(path).read_text(),
@@ -1627,7 +1652,8 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        metadata = {"num_warps": num_warps, "num_stages": num_stages, "constants": _get_jsonable_constants(constants), "ctime": dict()}
+        metadata = {"num_warps": num_warps, "num_stages": num_stages,
+                    "constants": _get_jsonable_constants(constants), "ctime": dict(), "debug": debug}
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
