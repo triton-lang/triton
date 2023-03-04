@@ -129,8 +129,10 @@ private:
     unsigned numN = helper.getNumN(BShape[1], isBRow, isBVec4_);
     unsigned NK = AShape[1];
 
-    auto has = helper.extractLoadedOperand(adaptor.getA(), NK, rewriter);
-    auto hbs = helper.extractLoadedOperand(adaptor.getB(), NK, rewriter);
+    auto has =
+        helper.extractLoadedOperand(adaptor.getA(), NK, rewriter, ATensorTy);
+    auto hbs =
+        helper.extractLoadedOperand(adaptor.getB(), NK, rewriter, BTensorTy);
 
     // Initialize accumulators with external values, the acc holds the
     // accumulator value that is shared between the MMA instructions inside a
@@ -234,7 +236,7 @@ private:
     BlockedEncodingAttr dLayout =
         dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
     auto order = dLayout.getOrder();
-    auto cc = unpackLLElements(loc, adaptor.getC(), rewriter, DTensorTy);
+    auto cc = unpackLLElements(loc, adaptor.getC(), rewriter, dTensorTy);
 
     DotOpFMAConversionHelper helper(dLayout);
     Value llA = adaptor.getA();
@@ -256,10 +258,10 @@ private:
     int nSizePerThread =
         order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
-    auto has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
-                                              mSizePerThread, rewriter, loc);
-    auto hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
-                                              nSizePerThread, rewriter, loc);
+    auto has = helper.getValueTableFromStruct(
+        llA, K, M, mShapePerCTA, mSizePerThread, rewriter, loc, aTensorTy);
+    auto hbs = helper.getValueTableFromStruct(
+        llB, K, N, nShapePerCTA, nSizePerThread, rewriter, loc, bTensorTy);
 
     SmallVector<Value> ret = cc;
     bool isCRow = order[0] == 1;
@@ -279,7 +281,7 @@ private:
             }
     }
 
-    auto res = packLLElements(loc, ret, rewriter, DTensorTy);
+    auto res = packLLElements(loc, ret, rewriter, dTensorTy);
     rewriter.replaceOp(op, res);
 
     return success();

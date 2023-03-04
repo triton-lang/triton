@@ -167,7 +167,8 @@ Value packLLElements(Location loc, ValueRange resultVals,
                      ConversionPatternRewriter &rewriter, Type type);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
-                                    ConversionPatternRewriter &rewriter);
+                                    ConversionPatternRewriter &rewriter,
+                                    Type type);
 
 /// Create a 32-bit integer constant.
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v);

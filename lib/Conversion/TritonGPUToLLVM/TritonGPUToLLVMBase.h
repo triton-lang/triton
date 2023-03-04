@@ -203,7 +203,13 @@ public:
     auto types = smemObj.getTypes();
     auto structTy =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    return packLLElements(loc, elems, rewriter, structTy);
+    // pack into struct
+    Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+    for (const auto &v : llvm::enumerate(elems)) {
+      assert(v.value() && "can not insert null values");
+      llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
+    }
+    return llvmStruct;
   }
 
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
@@ -371,7 +377,7 @@ public:
     unsigned maxPhase = dstSharedLayout.getMaxPhase();
     unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
-    auto inVals = LLVM::unpackLLElements(loc, llSrc, rewriter);
+    auto inVals = LLVM::unpackLLElements(loc, llSrc, rewriter, srcTy);
     auto wordTy = vec_ty(elemTy, minVec);
     auto elemPtrTy = ptr_ty(elemTy);
     Value outVecVal = i32_val(outVec);

@@ -31,6 +31,8 @@ struct SplatOpConversion
     auto tensorTy = resType.cast<RankedTensorType>();
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(constVal, srcType);
+    size_t elemsPerThread = getElemsPerThread(tensorTy);
+    llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
     return packLLElements(loc, elems, rewriter, resType);
   }
 

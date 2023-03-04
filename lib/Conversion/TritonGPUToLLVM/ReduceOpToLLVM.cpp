@@ -459,7 +459,7 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-      Value ret = packLLElements(loc, resultVals, rewriter, structTy);
+      Value ret = packLLElements(loc, resultVals, rewriter, resultTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar

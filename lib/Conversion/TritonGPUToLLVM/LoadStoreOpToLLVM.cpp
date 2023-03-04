@@ -378,9 +378,12 @@ struct AtomicCASOpConversion
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        unpackLLElements(loc, llPtr, rewriter, op.getPtr().getType());
+    auto cmpElements =
+        unpackLLElements(loc, llCmp, rewriter, op.getCmp().getType());
+    auto valElements =
+        unpackLLElements(loc, llVal, rewriter, op.getVal().getType());
 
     auto valueTy = op.getResult().getType().dyn_cast<RankedTensorType>();
     Type valueElemTy =
@@ -449,16 +452,19 @@ struct AtomicRMWOpConversion
     MLIRContext *ctx = rewriter.getContext();
 
     auto atomicRmwAttr = op.getAtomicRmwOp();
-    Value ptr = op.getPtr();
+
     Value val = op.getVal();
+    Value ptr = op.getPtr();
+    Value _mask = op.getMask();
 
     Value llPtr = adaptor.getPtr();
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto maskElements = unpackLLElements(loc, llMask, rewriter);
+    auto valElements = unpackLLElements(loc, llVal, rewriter, val.getType());
+    auto ptrElements = unpackLLElements(loc, llPtr, rewriter, ptr.getType());
+    auto maskElements =
+        unpackLLElements(loc, llMask, rewriter, _mask.getType());
 
     auto valueTy = op.getResult().getType().dyn_cast<RankedTensorType>();
     Type valueElemTy =

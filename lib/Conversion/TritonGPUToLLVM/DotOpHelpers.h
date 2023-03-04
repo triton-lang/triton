@@ -146,7 +146,7 @@ struct DotOpMmaV1ConversionHelper {
   // Extract values belong to $a or $b from a LLVMStruct, the shape is n0xn1.
   DotOpMmaV1ConversionHelper::ValueTable
   extractLoadedOperand(Value llStruct, int NK,
-                       ConversionPatternRewriter &rewriter) const;
+                       ConversionPatternRewriter &rewriter, Type type) const;
 
   // Get the number of elements of this thread in M axis. The N axis could be
   // further deduced with the accSize / elemsM. \param wpt: the wpt in M axis
@@ -560,8 +560,8 @@ private:
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals, int n0,
                                               int n1) const;
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0,
-                                                 int n1) const;
+  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1,
+                                                 Type type) const;
 };
 
 // Helper for conversion of FMA DotOp.
@@ -588,7 +588,7 @@ struct DotOpFMAConversionHelper {
   ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
                                      int sizePerThread,
                                      ConversionPatternRewriter &rewriter,
-                                     Location loc) const;
+                                     Location loc, Type type) const;
 
   Value getStructFromValueTable(ArrayRef<Value> vals,
                                 ConversionPatternRewriter &rewriter,

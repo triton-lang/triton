@@ -347,10 +347,11 @@ DotOpMmaV1ConversionHelper::computeOffsets(Value threadId, bool isARow,
 
 DotOpMmaV1ConversionHelper::ValueTable
 DotOpMmaV1ConversionHelper::extractLoadedOperand(
-    Value llStruct, int NK, ConversionPatternRewriter &rewriter) const {
+    Value llStruct, int NK, ConversionPatternRewriter &rewriter,
+    Type type) const {
   ValueTable rcds;
   SmallVector<Value> elems =
-      unpackLLElements(llStruct.getLoc(), llStruct, rewriter);
+      unpackLLElements(llStruct.getLoc(), llStruct, rewriter, type);
 
   int offset = 0;
   for (int i = 0; offset < elems.size(); ++i) {
@@ -1070,6 +1071,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   helper.deduceMmaType(op);
 
   auto aTensorTy = a.getType().cast<RankedTensorType>();
+  auto bTensorTy = b.getType().cast<RankedTensorType>();
   auto dTensorTy = d.getType().cast<RankedTensorType>();
 
   SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
@@ -1083,10 +1085,10 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   int numRepK = getNumRepK(aTensorTy, aShape[1]);
 
   ValueTable ha =
-      getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK);
+      getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK, aTensorTy);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
-      loadedB, std::max(numRepN / 2, 1), numRepK);
-  auto fc = unpackLLElements(loc, loadedC, rewriter);
+      loadedB, std::max(numRepN / 2, 1), numRepK, bTensorTy);
+  auto fc = unpackLLElements(loc, loadedC, rewriter, dTensorTy);
 
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = numRepN * 2;
@@ -1216,9 +1218,9 @@ Value MMA16816ConversionHelper::composeValuesToDotOperandLayoutStruct(
 }
 MMA16816ConversionHelper::ValueTable
 MMA16816ConversionHelper::getValuesFromDotOperandLayoutStruct(Value value,
-                                                              int n0,
-                                                              int n1) const {
-  auto elems = unpackLLElements(loc, value, rewriter);
+                                                              int n0, int n1,
+                                                              Type type) const {
+  auto elems = unpackLLElements(loc, value, rewriter, type);
 
   int offset{};
   ValueTable vals;
@@ -1377,9 +1379,9 @@ Value DotOpFMAConversionHelper::loadB(
 DotOpFMAConversionHelper::ValueTable
 DotOpFMAConversionHelper::getValueTableFromStruct(
     Value val, int K, int n0, int shapePerCTA, int sizePerThread,
-    ConversionPatternRewriter &rewriter, Location loc) const {
+    ConversionPatternRewriter &rewriter, Location loc, Type type) const {
   ValueTable res;
-  auto elems = unpackLLElements(loc, val, rewriter);
+  auto elems = unpackLLElements(loc, val, rewriter, type);
   int index = 0;
   for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTA)

@@ -84,8 +84,7 @@ struct BroadcastOpConversion
       resultVals.push_back(srcValues.lookup(offset));
     }
 
-    Value resultStruct =
-        packLLElements(loc, resultVals, rewriter, getTypeConverter(), resultTy);
+    Value resultStruct = packLLElements(loc, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -305,8 +304,7 @@ struct MakeRangeOpConversion
       assert(multiDim.value().size() == 1);
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
-    Value result =
-        packLLElements(loc, retVals, rewriter, getTypeConverter(), rankedTy);
+    Value result = packLLElements(loc, retVals, rewriter, rankedTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -368,7 +366,7 @@ struct AddPtrOpConversion
     Location loc = op->getLoc();
     auto resultTy = op.getType();
     auto offsetTy = op.getOffset().getType();
-    auto ptrTy = op.getPointer().getType();
+    auto ptrTy = op.getPtr().getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     if (resultTensorTy) {
       unsigned elems = getElemsPerThread(resultTy);
