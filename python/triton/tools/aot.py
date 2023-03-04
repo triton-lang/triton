@@ -21,6 +21,7 @@ if __name__ == '__main__':
     parser.add_argument('--gfx', type=str, help="AMDGPU target to compile for")
     parser.add_argument('--triple', type=str, help="target triple, for example: amdgcn-amd-amdhsa")
     parser.add_argument('--features', type=str, help="target features, for example: +sramecc,-xnack")
+    parser.add_argument('--num_warps', type=int, help="number of warps to compile ttgir for")
 
     # parse the args
     args = parser.parse_args()
@@ -41,6 +42,9 @@ if __name__ == '__main__':
     if args.target == 'triton-ir':
         print(module.str())
         sys.exit(0)
+
+    if not args.num_warps:
+        args.num_warps = 4
 
     # llvm-ir -> amdgcn
     if args.target == 'amdgcn':
@@ -68,7 +72,7 @@ if __name__ == '__main__':
 
         # triton-ir -> triton-gpu-ir
         # use compute_capability == 80
-        module = triton.compiler.ttir_to_ttgir(module, num_warps=4) # num_stages=3, compute_capability=80)
+        module = triton.compiler.ttir_to_ttgir(module, num_warps=args.num_warps) # num_stages=3, compute_capability=80)
         module = triton.compiler.optimize_ttgir(module, num_stages=3, compute_capability=80)
         # triton-gpu-ir -> llvm-ir
         # use compute_capability == 80
@@ -84,7 +88,7 @@ if __name__ == '__main__':
         raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
 
     # triton-ir -> triton-gpu-ir
-    module = triton.compiler.ttir_to_ttgir(module, num_warps=4)
+    module = triton.compiler.ttir_to_ttgir(module, num_warps=args.num_warps)
     module = triton.compiler.optimize_ttgir(module, num_stages=3, compute_capability=args.sm)
     if args.target == 'triton-gpu-ir':
         print(module.str())
