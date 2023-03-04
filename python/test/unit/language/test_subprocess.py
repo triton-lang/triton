@@ -38,7 +38,7 @@ def test_print(func_type: str, data_type: str):
 
 @pytest.mark.parametrize("func_type", func_types)
 def test_assert(func_type: str):
-    os.environ["TRITON_ENABLE_DEVICE_ASSERT"] = "1"
+    os.environ["TRITON_DEBUG"] = "1"
     proc = subprocess.Popen([sys.executable, assert_path, func_type], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
     _, errs = proc.communicate()
     errs = errs.splitlines()
@@ -46,7 +46,7 @@ def test_assert(func_type: str):
     for err in errs:
         if "x != 0" in err.decode("utf-8"):
             num_errs += 1
-    os.environ["TRITON_ENABLE_DEVICE_ASSERT"] = "0"
+    os.environ["TRITON_DEBUG"] = "0"
     if func_type != "static_assert":
         assert num_errs == 127
     else:

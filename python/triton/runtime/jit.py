@@ -155,8 +155,8 @@ class JITFunction(KernelInterface[T]):
             return False
         divisible_by_16 = {i for i, arg in enumerate(args) if is_divisible_by_16(arg) and i not in self.do_not_specialize}
         equal_to_1 = {i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize}
-        assert_enabled = os.environ.get("TRITON_ENABLE_DEVICE_ASSERT", "0") == "1"
-        return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1", "asssert_enabled"])(tuple(divisible_by_16), tuple(equal_to_1), assert_enabled)
+        debug = os.environ.get("TRITON_DEBUG", "0") == "1"
+        return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1", "debug"])(tuple(divisible_by_16), tuple(equal_to_1), debug)
         # return _triton.code_gen.instance_descriptor(divisible_by_16, equal_to_1)
 
     @staticmethod
@@ -242,7 +242,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
-    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_stages)
+    debug = environ.get("TRITON_DEBUG", "0") == "1"
+    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_stages, debug)
     if not extern_libs is None:
       key = (key, tuple(extern_libs.items()))
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
@@ -286,7 +287,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 """
         scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,
                  "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of,
-                 "cache": self.cache, "triton": triton, "torch": torch}
+                 "cache": self.cache, "triton": triton, "torch": torch, "environ": os.environ}
         exec(src, scope)
         return scope[self.fn.__name__]
 
