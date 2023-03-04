@@ -127,9 +127,6 @@ public:
   }
 };
 
-using FPTruncLowering =
-    VectorConvertToLLVMPattern<LLVM::FPTruncOp, arith::TruncFOp>;
-
 class ConvertTritonGPUToLLVM
     : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
 
@@ -205,6 +202,8 @@ public:
     populatePatterns2(populateViewOpToLLVMPatterns);
     // Native lowering patterns
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          patterns);
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
 
