@@ -5,9 +5,9 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStructFromElements;
+using ::mlir::LLVM::packLLElements;
+using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
@@ -68,7 +68,7 @@ struct BroadcastOpConversion
     auto order = triton::gpu::getOrder(srcLayout);
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
-    SmallVector<Value> srcVals = getElementsFromStruct(loc, src, rewriter);
+    SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter, srcTy);
 
     DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
@@ -84,10 +84,8 @@ struct BroadcastOpConversion
       resultVals.push_back(srcValues.lookup(offset));
     }
 
-    auto llvmStructTy = getTypeConverter()->convertType(resultTy);
-
     Value resultStruct =
-        getStructFromElements(loc, resultVals, rewriter, llvmStructTy);
+        packLLElements(loc, resultVals, rewriter, getTypeConverter(), resultTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -103,8 +101,9 @@ struct PrintfOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     SmallVector<Value, 16> operands;
-    for (auto operand : adaptor.getOperands()) {
-      auto sub_operands = getElementsFromStruct(loc, operand, rewriter);
+    for (size_t i = 0; i < op.getNumOperands(); i++) {
+      auto sub_operands = unpackLLElements(
+          loc, adaptor.getOperands()[i], rewriter, op.getOperand(i).getType());
       for (auto elem : sub_operands) {
         operands.push_back(elem);
       }
@@ -306,9 +305,8 @@ struct MakeRangeOpConversion
       assert(multiDim.value().size() == 1);
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
-    SmallVector<Type> types(elems, elemTy);
-    Type structTy = LLVM::LLVMStructType::getLiteral(getContext(), types);
-    Value result = getStructFromElements(loc, retVals, rewriter, structTy);
+    Value result =
+        packLLElements(loc, retVals, rewriter, getTypeConverter(), rankedTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -369,20 +367,21 @@ struct AddPtrOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = op.getType();
+    auto offsetTy = op.getOffset().getType();
+    auto ptrTy = op.getPointer().getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     if (resultTensorTy) {
       unsigned elems = getElemsPerThread(resultTy);
       Type elemTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
-      SmallVector<Type> types(elems, elemTy);
-      Type structTy = LLVM::LLVMStructType::getLiteral(getContext(), types);
-      auto ptrs = getElementsFromStruct(loc, adaptor.getPtr(), rewriter);
-      auto offsets = getElementsFromStruct(loc, adaptor.getOffset(), rewriter);
+      auto ptrs = unpackLLElements(loc, adaptor.getPtr(), rewriter, ptrTy);
+      auto offsets =
+          unpackLLElements(loc, adaptor.getOffset(), rewriter, offsetTy);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
       }
-      Value view = getStructFromElements(loc, resultVals, rewriter, structTy);
+      Value view = packLLElements(loc, resultVals, rewriter, resultTy);
       rewriter.replaceOp(op, view);
     } else {
       assert(resultTy.isa<triton::PointerType>());

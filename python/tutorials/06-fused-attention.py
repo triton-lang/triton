@@ -223,7 +223,6 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=2,
         )
-        # print(h.asm["ttgir"])
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.grid = grid
@@ -268,7 +267,7 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 128)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
@@ -310,7 +309,7 @@ try:
 except BaseException:
     HAS_FLASH = False
 
-BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 128
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
@@ -322,7 +321,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
-) for mode in ['fwd', 'bwd']]
+) for mode in ['fwd']]
 
 
 @triton.testing.perf_report(configs)

@@ -4,11 +4,11 @@
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::MMA16816ConversionHelper;
+using ::mlir::LLVM::packLLElements;
+using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getElemsPerThread;
@@ -393,7 +393,7 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     // unsigned elems = getElemsPerThread(srcTy);
-    auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter, srcTy);
     unsigned inVec = 0;
     unsigned outVec = 0;
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
@@ -444,7 +444,7 @@ private:
     SmallVector<Type> types(outElems, llvmElemTy);
     auto *ctx = llvmElemTy.getContext();
     Type structTy = struct_ty(types);
-    Value result = getStructFromElements(loc, outVals, rewriter, structTy);
+    Value result = packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -547,7 +547,7 @@ private:
     auto dstDotLayout = dstLayout.cast<DotOperandEncodingAttr>();
     if (isMmaToDotShortcut(srcMmaLayout, dstDotLayout)) {
       // get source values
-      auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter, srcTy);
       unsigned elems = getElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -578,12 +578,7 @@ private:
         reorderedVals.push_back(vecVals[i + 3]);
       }
 
-      // return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-      Value view =
-          getStructFromElements(loc, reorderedVals, rewriter, structTy);
+      Value view = packLLElements(loc, reorderedVals, rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }

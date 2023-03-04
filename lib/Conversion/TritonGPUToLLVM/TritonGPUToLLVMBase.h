@@ -203,7 +203,7 @@ public:
     auto types = smemObj.getTypes();
     auto structTy =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    return getStructFromElements(loc, elems, rewriter, structTy);
+    return packLLElements(loc, elems, rewriter, structTy);
   }
 
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
@@ -371,7 +371,7 @@ public:
     unsigned maxPhase = dstSharedLayout.getMaxPhase();
     unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
-    auto inVals = LLVM::getElementsFromStruct(loc, llSrc, rewriter);
+    auto inVals = LLVM::unpackLLElements(loc, llSrc, rewriter);
     auto wordTy = vec_ty(elemTy, minVec);
     auto elemPtrTy = ptr_ty(elemTy);
     Value outVecVal = i32_val(outVec);

@@ -7,9 +7,9 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::getElementsFromStruct;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::MMA16816ConversionHelper;
+using ::mlir::LLVM::packLLElements;
+using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 
@@ -137,7 +137,7 @@ private:
     // DotOp, we can call the order of the values the accumulator-internal
     // order.
     SmallVector<Value> acc =
-        getElementsFromStruct(loc, adaptor.getC(), rewriter);
+        unpackLLElements(loc, adaptor.getC(), rewriter, DTensorTy);
     size_t resSize = acc.size();
 
     // The resVals holds the final result of the DotOp.
@@ -209,9 +209,7 @@ private:
       resVals[i] = acc[i];
     }
 
-    Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));
-    Value res = getStructFromElements(loc, resVals, rewriter, structTy);
+    Value res = packLLElements(loc, resVals, rewriter, DTensorTy);
     rewriter.replaceOp(op, res);
     return success();
   }
@@ -236,7 +234,7 @@ private:
     BlockedEncodingAttr dLayout =
         dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
     auto order = dLayout.getOrder();
-    auto cc = getElementsFromStruct(loc, adaptor.getC(), rewriter);
+    auto cc = unpackLLElements(loc, adaptor.getC(), rewriter, DTensorTy);
 
     DotOpFMAConversionHelper helper(dLayout);
     Value llA = adaptor.getA();
@@ -281,9 +279,7 @@ private:
             }
     }
 
-    auto res = getStructFromElements(
-        loc, ret, rewriter,
-        struct_ty(SmallVector<Type>(ret.size(), ret[0].getType())));
+    auto res = packLLElements(loc, ret, rewriter, DTensorTy);
     rewriter.replaceOp(op, res);
 
     return success();

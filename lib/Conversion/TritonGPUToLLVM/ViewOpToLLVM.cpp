@@ -7,10 +7,10 @@ using namespace mlir::triton;
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::DotOpMmaV2ConversionHelper;
-using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::MMA16816ConversionHelper;
+using ::mlir::LLVM::packLLElements;
+using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 
 struct SplatOpConversion
@@ -31,13 +31,7 @@ struct SplatOpConversion
     auto tensorTy = resType.cast<RankedTensorType>();
     auto srcType = typeConverter->convertType(elemType);
     auto llSrc = bitcast(constVal, srcType);
-    size_t elemsPerThread = getElemsPerThread(tensorTy);
-    llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
-    llvm::SmallVector<Type> elemTypes(elems.size(), srcType);
-    auto structTy =
-        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
-
-    return getStructFromElements(loc, elems, rewriter, structTy);
+    return packLLElements(loc, elems, rewriter, resType);
   }
 
   LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
@@ -109,8 +103,10 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     // unpack input values
-    auto lhsVals = getElementsFromStruct(loc, adaptor.getLhs(), rewriter);
-    auto rhsVals = getElementsFromStruct(loc, adaptor.getRhs(), rewriter);
+    auto lhsVals = unpackLLElements(loc, adaptor.getLhs(), rewriter,
+                                    op.getOperand(0).getType());
+    auto rhsVals = unpackLLElements(loc, adaptor.getRhs(), rewriter,
+                                    op.getOperand(1).getType());
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
     for (Value v : lhsVals)
@@ -118,8 +114,7 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
     for (Value v : rhsVals)
       retVals.push_back(v);
     // pack and replace
-    Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-    Value ret = getStructFromElements(loc, retVals, rewriter, structTy);
+    Value ret = packLLElements(loc, retVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -135,17 +130,11 @@ struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // We cannot directly run `rewriter.replaceOp(op, adaptor.getSrc())`
-    // due to MLIR's restrictions
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
-    unsigned elems = getElemsPerThread(resultTy);
-    Type elemTy =
-        this->getTypeConverter()->convertType(resultTy.getElementType());
-    SmallVector<Type> types(elems, elemTy);
-    Type structTy = LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-    auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
-    Value view = getStructFromElements(loc, vals, rewriter, structTy);
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter,
+                                 op.getOperand().getType());
+    Value view = packLLElements(loc, vals, rewriter, resultTy);
     rewriter.replaceOp(op, view);
     return success();
   }

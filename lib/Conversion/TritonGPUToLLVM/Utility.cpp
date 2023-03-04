@@ -5,9 +5,8 @@ namespace mlir {
 namespace LLVM {
 using namespace mlir::triton;
 
-Value getStructFromElements(Location loc, ValueRange resultVals,
-                            ConversionPatternRewriter &rewriter,
-                            Type structType) {
+Value packLLElements(Location loc, ValueRange resultVals,
+                     ConversionPatternRewriter &rewriter, Type structType) {
   if (!structType.isa<LLVM::LLVMStructType>()) {
     return *resultVals.begin();
   }
@@ -20,8 +19,8 @@ Value getStructFromElements(Location loc, ValueRange resultVals,
   return llvmStruct;
 }
 
-SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
-                                         ConversionPatternRewriter &rewriter) {
+SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
+                                    ConversionPatternRewriter &rewriter) {
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
       llvmStruct.getType().isa<triton::PointerType>() ||
       llvmStruct.getType().isa<LLVM::LLVMPointerType>())
@@ -73,7 +72,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter) {
-  auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
+  auto elems = unpackLLElements(loc, llvmStruct, rewriter);
   auto rank = (elems.size() - 1) / 2;
   return {/*base=*/elems[0],
           /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},

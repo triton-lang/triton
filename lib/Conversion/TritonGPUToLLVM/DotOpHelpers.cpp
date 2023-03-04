@@ -166,7 +166,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
   }
 
   Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
-  Value res = getStructFromElements(loc, elems, rewriter, resTy);
+  Value res = packLLElements(loc, elems, rewriter, resTy);
   return res;
 }
 
@@ -280,7 +280,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   }
 
   Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
-  Value res = getStructFromElements(loc, elems, rewriter, resTy);
+  Value res = packLLElements(loc, elems, rewriter, resTy);
   return res;
 }
 
@@ -350,7 +350,7 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
     Value llStruct, int NK, ConversionPatternRewriter &rewriter) const {
   ValueTable rcds;
   SmallVector<Value> elems =
-      getElementsFromStruct(llStruct.getLoc(), llStruct, rewriter);
+      unpackLLElements(llStruct.getLoc(), llStruct, rewriter);
 
   int offset = 0;
   for (int i = 0; offset < elems.size(); ++i) {
@@ -1086,7 +1086,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
       getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
       loadedB, std::max(numRepN / 2, 1), numRepK);
-  auto fc = getElementsFromStruct(loc, loadedC, rewriter);
+  auto fc = unpackLLElements(loc, loadedC, rewriter);
 
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = numRepN * 2;
@@ -1132,7 +1132,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(fc.size(), resElemTy));
-  Value res = getStructFromElements(loc, fc, rewriter, structTy);
+  Value res = packLLElements(loc, fc, rewriter, structTy);
   rewriter.replaceOp(op, res);
 
   return success();
@@ -1211,14 +1211,14 @@ Value MMA16816ConversionHelper::composeValuesToDotOperandLayoutStruct(
   Type elemTy = elems[0].getType();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(elems.size(), elemTy));
-  auto result = getStructFromElements(loc, elems, rewriter, structTy);
+  auto result = packLLElements(loc, elems, rewriter, structTy);
   return result;
 }
 MMA16816ConversionHelper::ValueTable
 MMA16816ConversionHelper::getValuesFromDotOperandLayoutStruct(Value value,
                                                               int n0,
                                                               int n1) const {
-  auto elems = getElementsFromStruct(loc, value, rewriter);
+  auto elems = unpackLLElements(loc, value, rewriter);
 
   int offset{};
   ValueTable vals;
@@ -1379,7 +1379,7 @@ DotOpFMAConversionHelper::getValueTableFromStruct(
     Value val, int K, int n0, int shapePerCTA, int sizePerThread,
     ConversionPatternRewriter &rewriter, Location loc) const {
   ValueTable res;
-  auto elems = getElementsFromStruct(loc, val, rewriter);
+  auto elems = unpackLLElements(loc, val, rewriter);
   int index = 0;
   for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTA)
@@ -1400,7 +1400,7 @@ Value DotOpFMAConversionHelper::getStructFromValueTable(
   }
 
   Type structTy = struct_ty(elemTypes);
-  return getStructFromElements(loc, elems, rewriter, structTy);
+  return packLLElements(loc, elems, rewriter, structTy);
 }
 int DotOpFMAConversionHelper::getNumElemsPerThread(
     ArrayRef<int64_t> shape, DotOperandEncodingAttr dotOpLayout) {

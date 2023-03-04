@@ -3,10 +3,10 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::getElementsFromStruct;
-using ::mlir::LLVM::getStructFromElements;
+using ::mlir::LLVM::packLLElements;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
+using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
 
@@ -161,7 +161,8 @@ private:
 
     unsigned srcElems = getElemsPerThread(srcTy);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
+    auto srcValues =
+        unpackLLElements(loc, adaptor.getOperand(), rewriter, srcTy);
 
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcShape);
@@ -265,7 +266,8 @@ private:
                                     withIndex ? llvmIndexTy : llvmElemTy);
       Type structTy =
           LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
-      Value ret = getStructFromElements(loc, resultVals, rewriter, structTy);
+      // TODO
+      Value ret = packLLElements(loc, resultVals, rewriter, resultTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar
@@ -311,7 +313,8 @@ private:
 
     unsigned srcElems = getElemsPerThread(srcTy);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
+    auto srcValues =
+        unpackLLElements(loc, adaptor.getOperand(), rewriter, srcTy);
 
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcShape);
@@ -467,7 +470,8 @@ private:
                                     withIndex ? llvmIndexTy : llvmElemTy);
       Type structTy =
           LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
-      Value ret = getStructFromElements(loc, resultVals, rewriter, structTy);
+      // TODO
+      Value ret = packLLElements(loc, resultVals, rewriter, structTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar

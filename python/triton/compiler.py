@@ -971,9 +971,9 @@ def optimize_triton_ir(mod):
     pm.enable_debug()
     pm.add_inliner_pass()
     pm.add_triton_combine_pass()
-    pm.add_canonicalizer_pass()
-    pm.add_cse_pass()
-    pm.add_licm_pass()
+    # pm.add_canonicalizer_pass()
+    # pm.add_cse_pass()
+    # pm.add_licm_pass()
     pm.add_symbol_dce_pass()
     pm.run(mod)
     return mod
