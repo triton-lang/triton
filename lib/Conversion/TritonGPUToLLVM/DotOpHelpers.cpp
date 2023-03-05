@@ -61,7 +61,7 @@ int DotOpMmaV1ConversionHelper::numElemsPerThreadB(ArrayRef<int64_t> shape,
 Value DotOpMmaV1ConversionHelper::loadA(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
     TritonGPUToLLVMTypeConverter *typeConverter,
-    ConversionPatternRewriter &rewriter) const {
+    ConversionPatternRewriter &rewriter, Type resultTy) const {
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -167,16 +167,14 @@ Value DotOpMmaV1ConversionHelper::loadA(
     elems.push_back(item.second.second);
   }
 
-  llvm::outs() << elemX2Ty << "\n";
-  Value res = typeConverter->packLLElements(loc, elems, rewriter, tensorTy);
-  llvm::outs() << "packed " << res << "\n";
+  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
   return res;
 }
 
 Value DotOpMmaV1ConversionHelper::loadB(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
     TritonGPUToLLVMTypeConverter *typeConverter,
-    ConversionPatternRewriter &rewriter) const {
+    ConversionPatternRewriter &rewriter, Type resultTy) const {
   // smem
   auto strides = smemObj.strides;
 
@@ -283,7 +281,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     elems.push_back(item.second.second);
   }
 
-  Value res = typeConverter->packLLElements(loc, elems, rewriter, tensorTy);
+  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
   return res;
 }
 

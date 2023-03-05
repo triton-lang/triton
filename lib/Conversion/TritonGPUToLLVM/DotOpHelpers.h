@@ -126,12 +126,12 @@ struct DotOpMmaV1ConversionHelper {
   // Loading $a from smem to registers, returns a LLVM::Struct.
   Value loadA(Value tensor, const SharedMemoryObject &smemObj, Value thread,
               Location loc, TritonGPUToLLVMTypeConverter *converter,
-              ConversionPatternRewriter &rewriter) const;
+              ConversionPatternRewriter &rewriter, Type resultTy) const;
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
   Value loadB(Value tensor, const SharedMemoryObject &smemObj, Value thread,
               Location loc, TritonGPUToLLVMTypeConverter *converter,
-              ConversionPatternRewriter &rewriter) const;
+              ConversionPatternRewriter &rewriter, Type resultTy) const;
 
   static ArrayRef<unsigned> getOrder() { return mmaOrder; }
 

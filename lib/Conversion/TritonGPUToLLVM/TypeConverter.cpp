@@ -53,6 +53,7 @@ Value TritonGPUToLLVMTypeConverter::packLLElements(
   }
 
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
+  // llvm::outs() << structType << "\n";
   for (const auto &v : llvm::enumerate(resultVals)) {
     assert(v.value() && "can not insert null values");
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());

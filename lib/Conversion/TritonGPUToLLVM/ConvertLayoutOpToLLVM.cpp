@@ -633,12 +633,12 @@ private:
         // TODO[Superjomn]: transA is not available here.
         bool transA = false;
         res = helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc,
-                           getTypeConverter(), rewriter);
+                           getTypeConverter(), rewriter, dst.getType());
       } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
         // TODO[Superjomn]: transB is not available here.
         bool transB = false;
         res = helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc,
-                           getTypeConverter(), rewriter);
+                           getTypeConverter(), rewriter, dst.getType());
       }
     } else {
       assert(false && "Unsupported mma layout found");
