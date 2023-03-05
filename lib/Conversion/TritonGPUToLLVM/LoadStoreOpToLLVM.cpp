@@ -101,8 +101,10 @@ struct LoadOpConversion
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
-    auto otherElems = getTypeConverter()->unpackLLElements(
-        loc, llOther, rewriter, other.getType());
+    SmallVector<Value> otherElems;
+    if (other)
+      auto otherElems = getTypeConverter()->unpackLLElements(
+          loc, llOther, rewriter, other.getType());
 
     // vectorized iteration through all the pointer/mask/other elements
     const int valueElemNbits =

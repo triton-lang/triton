@@ -309,7 +309,7 @@ try:
 except BaseException:
     HAS_FLASH = False
 
-BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 128
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
