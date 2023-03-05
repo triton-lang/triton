@@ -163,14 +163,6 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 namespace LLVM {
 using namespace mlir::triton;
 
-Value packLLElements(Location loc, ValueRange resultVals,
-                     ConversionPatternRewriter &rewriter, Type type);
-
-SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
-                                    ConversionPatternRewriter &rewriter,
-                                    Type type);
-
-/// Create a 32-bit integer constant.
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v);
 
 /// Create a 32-bit float constant.

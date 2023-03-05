@@ -7,8 +7,6 @@ using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::MMA16816ConversionHelper;
-using ::mlir::LLVM::packLLElements;
-using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getElemsPerThread;
@@ -393,7 +391,8 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     // unsigned elems = getElemsPerThread(srcTy);
-    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter, srcTy);
+    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                     rewriter, srcTy);
     unsigned inVec = 0;
     unsigned outVec = 0;
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
@@ -444,7 +443,8 @@ private:
     SmallVector<Type> types(outElems, llvmElemTy);
     auto *ctx = llvmElemTy.getContext();
     Type structTy = struct_ty(types);
-    Value result = packLLElements(loc, outVals, rewriter, dstTy);
+    Value result =
+        getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -547,7 +547,8 @@ private:
     auto dstDotLayout = dstLayout.cast<DotOperandEncodingAttr>();
     if (isMmaToDotShortcut(srcMmaLayout, dstDotLayout)) {
       // get source values
-      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter, srcTy);
+      auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                       rewriter, srcTy);
       unsigned elems = getElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -578,7 +579,8 @@ private:
         reorderedVals.push_back(vecVals[i + 3]);
       }
 
-      Value view = packLLElements(loc, reorderedVals, rewriter, dstTy);
+      Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
+                                                      rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -646,7 +648,7 @@ private:
 };
 
 void populateConvertLayoutOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,

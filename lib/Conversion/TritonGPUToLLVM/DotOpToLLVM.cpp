@@ -8,8 +8,6 @@ using namespace mlir::triton;
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::MMA16816ConversionHelper;
-using ::mlir::LLVM::packLLElements;
-using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 
@@ -138,8 +136,8 @@ private:
     // accumulator value that is shared between the MMA instructions inside a
     // DotOp, we can call the order of the values the accumulator-internal
     // order.
-    SmallVector<Value> acc =
-        unpackLLElements(loc, adaptor.getC(), rewriter, DTensorTy);
+    SmallVector<Value> acc = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getC(), rewriter, DTensorTy);
     size_t resSize = acc.size();
 
     // The resVals holds the final result of the DotOp.
@@ -211,7 +209,8 @@ private:
       resVals[i] = acc[i];
     }
 
-    Value res = packLLElements(loc, resVals, rewriter, DTensorTy);
+    Value res =
+        getTypeConverter()->packLLElements(loc, resVals, rewriter, DTensorTy);
     rewriter.replaceOp(op, res);
     return success();
   }
@@ -236,7 +235,8 @@ private:
     BlockedEncodingAttr dLayout =
         dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
     auto order = dLayout.getOrder();
-    auto cc = unpackLLElements(loc, adaptor.getC(), rewriter, dTensorTy);
+    auto cc = getTypeConverter()->unpackLLElements(loc, adaptor.getC(),
+                                                   rewriter, dTensorTy);
 
     DotOpFMAConversionHelper helper(dLayout);
     Value llA = adaptor.getA();
@@ -281,14 +281,15 @@ private:
             }
     }
 
-    auto res = packLLElements(loc, ret, rewriter, dTensorTy);
+    auto res =
+        getTypeConverter()->packLLElements(loc, ret, rewriter, dTensorTy);
     rewriter.replaceOp(op, res);
 
     return success();
   }
 };
 
-void populateDotOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
                                  AxisInfoAnalysis &axisInfoAnalysis,
                                  const Allocation *allocation, Value smem,

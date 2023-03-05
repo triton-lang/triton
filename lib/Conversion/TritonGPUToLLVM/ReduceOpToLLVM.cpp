@@ -3,10 +3,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::packLLElements;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
-using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
 
@@ -161,8 +159,8 @@ private:
 
     unsigned srcElems = getElemsPerThread(srcTy);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    auto srcValues =
-        unpackLLElements(loc, adaptor.getOperand(), rewriter, srcTy);
+    auto srcValues = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getOperand(), rewriter, srcTy);
 
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcShape);
@@ -261,7 +259,8 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-      Value ret = packLLElements(loc, resultVals, rewriter, resultTy);
+      Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
+                                                     resultTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar
@@ -307,8 +306,8 @@ private:
 
     unsigned srcElems = getElemsPerThread(srcTy);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    auto srcValues =
-        unpackLLElements(loc, adaptor.getOperand(), rewriter, srcTy);
+    auto srcValues = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getOperand(), rewriter, srcTy);
 
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcShape);
@@ -459,7 +458,8 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-      Value ret = packLLElements(loc, resultVals, rewriter, resultTy);
+      Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
+                                                     resultTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar
@@ -472,7 +472,7 @@ private:
 };
 
 void populateReduceOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,

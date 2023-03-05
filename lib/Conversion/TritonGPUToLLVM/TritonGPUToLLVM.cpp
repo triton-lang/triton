@@ -6,8 +6,6 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::packLLElements;
-using ::mlir::LLVM::unpackLLElements;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
@@ -68,7 +66,8 @@ struct BroadcastOpConversion
     auto order = triton::gpu::getOrder(srcLayout);
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
-    SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter, srcTy);
+    SmallVector<Value> srcVals =
+        getTypeConverter()->unpackLLElements(loc, src, rewriter, srcTy);
 
     DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
@@ -84,7 +83,8 @@ struct BroadcastOpConversion
       resultVals.push_back(srcValues.lookup(offset));
     }
 
-    Value resultStruct = packLLElements(loc, resultVals, rewriter, resultTy);
+    Value resultStruct =
+        getTypeConverter()->packLLElements(loc, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -101,7 +101,7 @@ struct PrintfOpConversion
     auto loc = op->getLoc();
     SmallVector<Value, 16> operands;
     for (size_t i = 0; i < op.getNumOperands(); i++) {
-      auto sub_operands = unpackLLElements(
+      auto sub_operands = getTypeConverter()->unpackLLElements(
           loc, adaptor.getOperands()[i], rewriter, op.getOperand(i).getType());
       for (auto elem : sub_operands) {
         operands.push_back(elem);
@@ -276,7 +276,7 @@ struct MakeRangeOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp> {
 
   MakeRangeOpConversion(
-      LLVMTypeConverter &converter,
+      TritonGPUToLLVMTypeConverter &converter,
       ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(
@@ -304,7 +304,8 @@ struct MakeRangeOpConversion
       assert(multiDim.value().size() == 1);
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
-    Value result = packLLElements(loc, retVals, rewriter, rankedTy);
+    Value result =
+        getTypeConverter()->packLLElements(loc, retVals, rewriter, rankedTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -372,14 +373,16 @@ struct AddPtrOpConversion
       unsigned elems = getElemsPerThread(resultTy);
       Type elemTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
-      auto ptrs = unpackLLElements(loc, adaptor.getPtr(), rewriter, ptrTy);
-      auto offsets =
-          unpackLLElements(loc, adaptor.getOffset(), rewriter, offsetTy);
+      auto ptrs = getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(),
+                                                       rewriter, ptrTy);
+      auto offsets = getTypeConverter()->unpackLLElements(
+          loc, adaptor.getOffset(), rewriter, offsetTy);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = gep(elemTy, ptrs[i], offsets[i]);
       }
-      Value view = packLLElements(loc, resultVals, rewriter, resultTy);
+      Value view = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
+                                                      resultTy);
       rewriter.replaceOp(op, view);
     } else {
       assert(resultTy.isa<triton::PointerType>());
@@ -544,7 +547,7 @@ void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
 } // namespace mlir
 
 void populateTritonGPUToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
