@@ -197,7 +197,7 @@ class CMakeBuild(build_ext):
         else:
             import multiprocessing
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            # build_args += ['-j' + str(2 * multiprocessing.cpu_count())]
+            build_args += ['-j' + str(2 * multiprocessing.cpu_count())]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)

@@ -521,10 +521,10 @@ private:
       auto thread = getThreadId(rewriter, loc);
       if (dotOpLayout.getOpIdx() == 0) { // $a
         res = helper.loadA(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       } else { // $b
         res = helper.loadB(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       }
     } else {
       assert(false && "Unsupported dot operand layout found");
@@ -633,12 +633,12 @@ private:
         // TODO[Superjomn]: transA is not available here.
         bool transA = false;
         res = helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
         // TODO[Superjomn]: transB is not available here.
         bool transB = false;
         res = helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       }
     } else {
       assert(false && "Unsupported mma layout found");

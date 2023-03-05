@@ -127,10 +127,10 @@ private:
     unsigned numN = helper.getNumN(BShape[1], isBRow, isBVec4_);
     unsigned NK = AShape[1];
 
-    auto has =
-        helper.extractLoadedOperand(adaptor.getA(), NK, rewriter, ATensorTy);
-    auto hbs =
-        helper.extractLoadedOperand(adaptor.getB(), NK, rewriter, BTensorTy);
+    auto has = helper.extractLoadedOperand(adaptor.getA(), NK, rewriter,
+                                           getTypeConverter(), ATensorTy);
+    auto hbs = helper.extractLoadedOperand(adaptor.getB(), NK, rewriter,
+                                           getTypeConverter(), BTensorTy);
 
     // Initialize accumulators with external values, the acc holds the
     // accumulator value that is shared between the MMA instructions inside a
@@ -258,10 +258,12 @@ private:
     int nSizePerThread =
         order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
-    auto has = helper.getValueTableFromStruct(
-        llA, K, M, mShapePerCTA, mSizePerThread, rewriter, loc, aTensorTy);
-    auto hbs = helper.getValueTableFromStruct(
-        llB, K, N, nShapePerCTA, nSizePerThread, rewriter, loc, bTensorTy);
+    auto has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
+                                              mSizePerThread, rewriter, loc,
+                                              getTypeConverter(), aTensorTy);
+    auto hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
+                                              nSizePerThread, rewriter, loc,
+                                              getTypeConverter(), bTensorTy);
 
     SmallVector<Value> ret = cc;
     bool isCRow = order[0] == 1;
