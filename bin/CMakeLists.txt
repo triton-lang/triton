@@ -1,4 +1,4 @@
-add_custom_target(FileCheck
+add_custom_target(copy-FileCheck
     COMMAND ${CMAKE_COMMAND} -E copy
         "${LLVM_LIBRARY_DIR}/../bin/FileCheck"
         "${CMAKE_CURRENT_BINARY_DIR}/FileCheck"
