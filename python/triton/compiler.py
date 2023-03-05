@@ -16,7 +16,6 @@ import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-from sysconfig import get_paths
 from typing import Any, Callable, Dict, Tuple, Union
 
 import setuptools
@@ -97,16 +96,17 @@ class enter_sub_region:
         self.prev_defs = self.generator.local_defs.copy()
         self.generator.local_defs = {}
         self.insert_block = self.generator.builder.get_insertion_block()
+        self.insert_point = self.generator.builder.get_insertion_point()
         return self.liveins, self.insert_block
 
     def __exit__(self, *args, **kwargs):
-        self.generator.builder.set_insertion_point_to_end(self.insert_block)
+        self.generator.builder.restore_insertion_point(self.insert_point)
         self.generator.lscope = self.liveins
         self.generator.local_defs = self.prev_defs
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, module=None, is_kernel=False, function_types=dict()):
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, module=None, is_kernel=False, function_types=dict(), debug=False):
         self.builder = _triton.ir.builder(context)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = function_types
@@ -118,15 +118,20 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.last_node = None
+        self.debug = debug
         self.builtins = {
             'range': range,
             'min': triton.language.minimum,
             'float': float,
             'int': int,
-            'print': print,
+            'print': triton.language.core.device_print,
             'isinstance': isinstance,
             'getattr': getattr,
         }
+        self.static_functions = [
+            'static_print', 'static_assert'
+        ]
+        self.scf_stack = []
         # SSA-construction
         # name => triton.language.tensor
         self.local_defs: Dict[str, triton.language.tensor] = {}
@@ -177,6 +182,18 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
+    def contains_return_op(self, node):
+        if isinstance(node, ast.Return):
+            return True
+        elif isinstance(node, ast.If):
+            pred = lambda s: self.contains_return_op(s)
+            ret = any(pred(s) for s in node.body)
+            if node.orelse:
+                ret = ret or any(pred(s) for s in node.orelse)
+            return ret
+        else:
+            return False
+
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
 
@@ -189,18 +206,25 @@ class CodeGenerator(ast.NodeVisitor):
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
+        # ret_block = self.builder.create_block()
+        # post_ret_block = self.builder.create_block()
+        # self.builder.create_branch(ret_block)
+        # self.builder.set_insertion_point_to_end(ret_block)
         if ret_value is None:
             self.builder.ret([])
-            return None
-        if isinstance(ret_value, tuple):
+            ret_ty = None
+        elif isinstance(ret_value, tuple):
             ret_values = [triton.language.core._to_tensor(v, self.builder) for v in ret_value]
             ret_types = [v.type for v in ret_values]
             self.builder.ret([v.handle for v in ret_values])
-            return tuple(ret_types)
+            ret_ty = tuple(ret_types)
         else:
             ret = triton.language.core._to_tensor(ret_value, self.builder)
             self.builder.ret([ret.handle])
-            return ret.type
+            ret_ty = ret.type
+        # self.builder.create_branch(post_ret_block)
+        # self.builder.set_insertion_point_to_end(post_ret_block)
+        return ret_ty
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -350,81 +374,126 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             return getattr(lhs, fn)(rhs)
 
+    def visit_then_else_blocks(self, node, liveins, then_block, else_block):
+        # then block
+        self.builder.set_insertion_point_to_start(then_block)
+        self.visit_compound_statement(node.body)
+        then_block = self.builder.get_insertion_block()
+        then_defs = self.local_defs.copy()
+        # else block
+        else_defs = {}
+        if node.orelse:
+            self.builder.set_insertion_point_to_start(else_block)
+            self.lscope = liveins.copy()
+            self.local_defs = {}
+            self.visit_compound_statement(node.orelse)
+            else_defs = self.local_defs.copy()
+            else_block = self.builder.get_insertion_block()
+
+        # update block arguments
+        names = []
+        ret_types = []
+        ir_ret_types = []
+        # variables in livein whose value is updated in `if`
+        for name in liveins:
+            # check type
+            for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
+                if name in defs:
+                    assert defs[name].type == liveins[name].type,\
+                        f'initial value for `{name}` is of type {liveins[name].type}, '\
+                        f'but the {block_name} block redefines it as {defs[name].type}'
+            if name in then_defs or name in else_defs:
+                names.append(name)
+                ret_types.append(then_defs[name].type if name in then_defs else else_defs[name].type)
+                ir_ret_types.append(then_defs[name].handle.get_type() if name in then_defs else else_defs[name].handle.get_type())
+            # variable defined in then but not in else
+            if name in then_defs and name not in else_defs:
+                else_defs[name] = liveins[name]
+            # variable defined in else but not in then
+            if name in else_defs and name not in then_defs:
+                then_defs[name] = liveins[name]
+        # variables that are both in then and else but not in liveins
+        # TODO: could probably be cleaned up
+        for name in then_defs.keys() & else_defs.keys():
+            if name in names:
+                continue
+            then_ty = then_defs[name].type
+            else_ty = else_defs[name].type
+            assert then_ty == else_ty,\
+                f'mismatched type for {name} between then block ({then_ty}) '\
+                f'and else block ({else_ty})'
+            names.append(name)
+            ret_types.append(then_ty)
+            ir_ret_types.append(then_defs[name].handle.get_type())
+
+        return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
+
+    def visit_if_top_level(self, cond, node):
+        with enter_sub_region(self) as sr:
+            liveins, ip_block = sr
+            then_block = self.builder.create_block()
+            else_block = self.builder.create_block()
+            # create basic-block after conditional
+            endif_block = self.builder.create_block()
+            # create branch
+            self.builder.set_insertion_point_to_end(ip_block)
+            self.builder.create_cond_branch(cond.handle, then_block, else_block)
+            # visit then and else blocks
+            then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types = \
+                self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            # then terminator
+            self.builder.set_insertion_point_to_end(then_block)
+            if not then_block.has_terminator():
+                self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
+            # else terminator
+            self.builder.set_insertion_point_to_end(else_block)
+            if not else_block.has_terminator():
+                self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+            for ty in ir_ret_types:
+                endif_block.add_argument(ty)
+        # change block
+        self.builder.set_insertion_point_to_start(endif_block)
+        # update value
+        for i, name in enumerate(names):
+            new_tensor = triton.language.core.tensor(endif_block.arg(i), ret_types[i])
+            self.set_value(name, new_tensor)
+
+    # TODO: refactor
+    def visit_if_scf(self, cond, node):
+        with enter_sub_region(self) as sr:
+            liveins, _ = sr
+            ip = self.builder.get_insertion_point()
+            then_block = self.builder.create_block()
+            else_block = self.builder.create_block() if node.orelse else None
+            then_defs, else_defs, then_block, else_block, names, ret_types, _ = \
+                self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            # create if op
+            self.builder.restore_insertion_point(ip)
+            if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
+            then_block.merge_block_before(if_op.get_then_block())
+            self.builder.set_insertion_point_to_end(if_op.get_then_block())
+            if len(names) > 0:
+                self.builder.create_yield_op([then_defs[n].handle for n in names])
+            if not node.orelse:
+                else_block = if_op.get_else_block()
+            else:
+                else_block.merge_block_before(if_op.get_else_block())
+            self.builder.set_insertion_point_to_end(if_op.get_else_block())
+            if len(names) > 0:
+                self.builder.create_yield_op([else_defs[n].handle for n in names])
+        # update values
+        for i, name in enumerate(names):
+            new_tensor = triton.language.core.tensor(if_op.get_result(i), ret_types[i])
+            self.set_value(name, new_tensor)
+
     def visit_If(self, node):
         cond = self.visit(node.test)
         if isinstance(cond, triton.language.tensor):
             cond = cond.to(triton.language.int1, _builder=self.builder)
-            with enter_sub_region(self) as sr:
-                liveins, ip_block = sr
-                liveins_copy = liveins.copy()
-                then_block = self.builder.create_block()
-                self.builder.set_insertion_point_to_start(then_block)
-                self.visit_compound_statement(node.body)
-                then_defs = self.local_defs.copy()
-
-                # when need an else block when:
-                # 1. we have an orelse node
-                #   or
-                # 2. the then block defines new variable
-                else_defs = {}
-                if then_defs or node.orelse:
-                    if node.orelse:
-                        self.lscope = liveins
-                        self.local_defs = {}
-                        else_block = self.builder.create_block()
-                        self.builder.set_insertion_point_to_end(else_block)
-                        self.visit_compound_statement(node.orelse)
-                        else_defs = self.local_defs.copy()
-                    else:
-                        # collect else_defs
-                        for name in then_defs:
-                            if name in liveins:
-                                assert self.is_triton_tensor(then_defs[name])
-                                assert self.is_triton_tensor(liveins[name])
-                                else_defs[name] = liveins[name]
-                # collect yields
-                names = []
-                ret_types = []
-                for then_name in then_defs:
-                    for else_name in else_defs:
-                        if then_name == else_name:
-                            if then_defs[then_name].type == else_defs[else_name].type:
-                                names.append(then_name)
-                                ret_types.append(then_defs[then_name].type)
-
-                # defined in else block but not in then block
-                # to find in parent scope and yield them
-                for else_name in else_defs:
-                    if else_name in liveins and else_name not in then_defs:
-                        if else_defs[else_name].type == liveins[else_name].type:
-                            names.append(else_name)
-                            ret_types.append(else_defs[else_name].type)
-                            then_defs[else_name] = liveins_copy[else_name]
-                self.builder.set_insertion_point_to_end(ip_block)
-
-                if then_defs or node.orelse:  # with else block
-                    if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
-                    then_block.merge_block_before(if_op.get_then_block())
-                    self.builder.set_insertion_point_to_end(if_op.get_then_block())
-                    if len(names) > 0:
-                        self.builder.create_yield_op([then_defs[n].handle for n in names])
-                    if not node.orelse:
-                        else_block = if_op.get_else_block()
-                    else:
-                        else_block.merge_block_before(if_op.get_else_block())
-                    self.builder.set_insertion_point_to_end(if_op.get_else_block())
-                    if len(names) > 0:
-                        self.builder.create_yield_op([else_defs[n].handle for n in names])
-                else:  # no else block
-                    if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, False)
-                    then_block.merge_block_before(if_op.get_then_block())
-
-            # update values yielded by IfOp
-            for i, name in enumerate(names):
-                new_tensor = triton.language.core.tensor(if_op.get_result(i), ret_types[i])
-                self.lscope[name] = new_tensor
-                self.local_defs[name] = new_tensor
-
+            if self.scf_stack or not self.contains_return_op(node):
+                self.visit_if_scf(cond, node)
+            else:
+                self.visit_if_top_level(cond, node)
         else:
             if isinstance(cond, triton.language.constexpr):
                 cond = cond.value
@@ -474,12 +543,10 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
-        if type(node.op) == ast.Not:
-            assert isinstance(op, triton.language.constexpr), "`not` only supported for constexpr at the moment"
-            return triton.language.constexpr(not op)
         fn = {
             ast.USub: '__neg__',
             ast.UAdd: '__pos__',
+            ast.Not: '__not__',
             ast.Invert: '__invert__',
         }[type(node.op)]
         if self.is_triton_tensor(op):
@@ -490,33 +557,29 @@ class CodeGenerator(ast.NodeVisitor):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
 
-            # condition (the before region)
-            cond_block = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(cond_block)
-            cond = self.visit(node.test)
-
             # loop body (the after region)
-            loop_block = self.builder.create_block()
-            self.builder.set_insertion_point_to_start(loop_block)
+            # loop_block = self.builder.create_block()
+            dummy = self.builder.create_block()
+            self.builder.set_insertion_point_to_start(dummy)
+            self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
+            self.scf_stack.pop()
             loop_defs = self.local_defs
 
             # collect loop-carried values
             names = []
             ret_types = []
             init_args = []
-            yields = []
             for name in loop_defs:
                 if name in liveins:
                     # We should not def new constexpr
                     assert self.is_triton_tensor(loop_defs[name])
                     assert self.is_triton_tensor(liveins[name])
-                    if loop_defs[name].type == liveins[name].type:
-                        # these are loop-carried values
-                        names.append(name)
-                        ret_types.append(loop_defs[name].type)
-                        init_args.append(liveins[name])
-                        yields.append(loop_defs[name])
+                    assert loop_defs[name].type == liveins[name].type
+                    # these are loop-carried values
+                    names.append(name)
+                    ret_types.append(loop_defs[name].type)
+                    init_args.append(liveins[name])
 
             self.builder.set_insertion_point_to_end(insert_block)
             while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
@@ -524,20 +587,35 @@ class CodeGenerator(ast.NodeVisitor):
             # merge the condition region
             before_block = self.builder.create_block_with_parent(while_op.get_before(),
                                                                  [ty.to_ir(self.builder) for ty in ret_types])
-            cond_block.merge_block_before(before_block)
+            self.builder.set_insertion_point_to_start(before_block)
+            for i, name in enumerate(names):
+                self.lscope[name] = triton.language.core.tensor(before_block.arg(i), ret_types[i])
+                self.local_defs[name] = self.lscope[name]
+            cond = self.visit(node.test)
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
             self.builder.create_condition_op(cond.handle, [before_block.arg(i) for i in range(len(init_args))])
             # merge the loop body
             after_block = self.builder.create_block_with_parent(while_op.get_after(),
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
-            loop_block.merge_block_before(after_block)
-            self.builder.set_insertion_point_to_end(after_block)
+
+            # generate loop body
+            self.builder.set_insertion_point_to_start(after_block)
+            for i, name in enumerate(names):
+                self.lscope[name] = triton.language.core.tensor(after_block.arg(i), ret_types[i])
+                self.local_defs[name] = self.lscope[name]
+            self.scf_stack.append(node)
+            self.visit_compound_statement(node.body)
+            self.scf_stack.pop()
+            loop_defs = self.local_defs
+            yields = []
+            for name in loop_defs:
+                if name in liveins:
+                    yields.append(loop_defs[name])
             self.builder.create_yield_op([y.handle for y in yields])
 
         # update global uses in while_op
         for i, name in enumerate(names):
-            before_block.replace_use_in_block_with(init_args[i].handle, before_block.arg(i))
             after_block.replace_use_in_block_with(init_args[i].handle, after_block.arg(i))
 
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
@@ -562,56 +640,66 @@ class CodeGenerator(ast.NodeVisitor):
         return [self.visit(dim) for dim in node.dims]
 
     def visit_For(self, node):
-        iterator = self.visit(node.iter.func)
-        if iterator != self.builtins['range']:
-            raise RuntimeError('Only `range` iterator currently supported')
+        IteratorClass = self.visit(node.iter.func)
+        iter_args = [self.visit(arg) for arg in node.iter.args]
+        if IteratorClass == triton.language.static_range:
+            iterator = IteratorClass(*iter_args)
+            static_range = range(iterator.start.value,
+                                 iterator.end.value,
+                                 iterator.step.value)
+            for i in static_range:
+                self.lscope[node.target.id] = triton.language.constexpr(i)
+                self.visit_compound_statement(node.body)
+                for stmt in node.orelse:
+                    ast.NodeVisitor.generic_visit(self, stmt)
+            return
+
+        if IteratorClass != self.builtins['range']:
+            raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
+
         # visit iterator arguments
         # note: only `range` iterator is supported now
-        iter_args = [self.visit(arg) for arg in node.iter.args]
         # collect lower bound (lb), upper bound (ub), and step
         lb = iter_args[0] if len(iter_args) > 1 else self.visit(ast.Num(0))
         ub = iter_args[1] if len(iter_args) > 1 else self.visit(node.iter.args[0])
         step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Num(1))
-        # static for loops: all iterator arguments are constexpr
-        if isinstance(lb, triton.language.constexpr) and \
-           isinstance(ub, triton.language.constexpr) and \
-           isinstance(step, triton.language.constexpr):
-            sta_range = iterator(lb.value, ub.value, step.value)
-            static_unrolling = os.environ.get('TRITON_STATIC_LOOP_UNROLLING', False)
-            if static_unrolling and len(sta_range) <= 10:
-                for i in sta_range:
-                    self.lscope[node.target.id] = triton.language.constexpr(i)
-                    self.visit_compound_statement(node.body)
-                    for stmt in node.orelse:
-                        ast.NodeVisitor.generic_visit(self, stmt)
-                return
         # handle negative constant step (not supported by scf.for in MLIR)
         negative_step = False
         if isinstance(step, triton.language.constexpr) and step.value < 0:
             step = triton.language.constexpr(-step.value)
             negative_step = True
             lb, ub = ub, lb
+        lb = triton.language.core._to_tensor(lb, self.builder)
+        ub = triton.language.core._to_tensor(ub, self.builder)
+        step = triton.language.core._to_tensor(step, self.builder)
+        # induction variable type
+        iv_type = triton.language.semantic.integer_promote_impl(lb.dtype, ub.dtype)
+        iv_type = triton.language.semantic.integer_promote_impl(iv_type, step.dtype)
+        iv_ir_type = iv_type.to_ir(self.builder)
         # lb/ub/step might be constexpr, we need to cast them to tensor
-        lb = triton.language.core._to_tensor(lb, self.builder).handle
-        ub = triton.language.core._to_tensor(ub, self.builder).handle
-        step = triton.language.core._to_tensor(step, self.builder).handle
+        lb = lb.handle
+        ub = ub.handle
+        step = step.handle
         # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
         lb = self.builder.create_to_index(lb)
         ub = self.builder.create_to_index(ub)
         step = self.builder.create_to_index(step)
         # Create placeholder for the loop induction variable
-        iv = self.builder.create_undef(self.builder.get_int32_ty())
-        self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+        iv = self.builder.create_undef(iv_ir_type)
+        self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
+            ip = self.builder.get_insertion_point()
 
             # create loop body block
             block = self.builder.create_block()
             self.builder.set_insertion_point_to_start(block)
-
-            # visit loop body
+            # dry visit loop body
+            self.scf_stack.append(node)
             self.visit_compound_statement(node.body)
+            self.scf_stack.pop()
+            block.erase()
 
             # If a variable (name) is defined in both its parent & itself, then it's
             # a loop-carried variable. (They must be of the same type)
@@ -622,37 +710,46 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert self.is_triton_tensor(liveins[name])
-                    if self.local_defs[name].type != liveins[name].type:
-                        local_value = self.local_defs[name]
-                        self.local_defs[name] = local_value.to(liveins[name].dtype, _builder=self.builder)
+                    assert self.local_defs[name].type == liveins[name].type,\
+                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
+                        f'but is re-assigned to {self.local_defs[name].type} in loop! '\
+                        f'Please make sure that the type stays consistent.'
+
                     names.append(name)
                     init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
                     yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
-            self.builder.set_insertion_point_to_end(insert_block)
+            self.builder.restore_insertion_point(ip)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
-            block.merge_block_before(for_op.get_body(0))
 
-            # update induction variable with actual value, and replace all uses
+            self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
-            iv = self.builder.create_index_to_si(for_op.get_induction_var())
-            if negative_step:
-                ub_si = self.builder.create_index_to_si(ub)
-                iv = self.builder.create_sub(ub_si, iv)
-            self.lscope[node.target.id].handle.replace_all_uses_with(iv)
-            self.set_value(node.target.id, triton.language.core.tensor(iv, triton.language.core.int32))
+            for i, name in enumerate(names):
+                self.set_value(name, triton.language.core.tensor(for_op.get_body(0).arg(i + 1), yields[i].type))
+            self.visit_compound_statement(node.body)
+            self.scf_stack.pop()
+            yields = []
+            for name in self.local_defs:
+                if name in liveins:
+                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
 
             # create YieldOp
-            self.builder.set_insertion_point_to_end(for_op.get_body(0))
             if len(yields) > 0:
                 self.builder.create_yield_op([y.handle for y in yields])
             for_op_region = for_op.get_body(0).get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
-            # replace global uses with block arguments
-            for i, name in enumerate(names):
-                # arg0 is the induction variable
-                for_op.get_body(0).replace_use_in_block_with(init_args[i].handle, for_op.get_body(0).arg(i + 1))
+
+            # update induction variable with actual value, and replace all uses
+            self.builder.set_insertion_point_to_start(for_op.get_body(0))
+            iv = self.builder.create_index_to_si(for_op.get_induction_var())
+            iv = self.builder.create_int_cast(iv, iv_ir_type, True)
+            if negative_step:
+                ub_si = self.builder.create_index_to_si(ub)
+                ub_si = self.builder.create_int_cast(ub_si, iv_ir_type, True)
+                iv = self.builder.create_sub(ub_si, iv)
+            self.lscope[node.target.id].handle.replace_all_uses_with(iv)
+            self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
 
         # update lscope & local_defs (ForOp defines new values)
         for i, name in enumerate(names):
@@ -674,6 +771,14 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_keyword(self, node):
         return {node.arg: self.visit(node.value)}
 
+    def visit_Assert(self, node) -> Any:
+        if not self.debug:
+            return
+        test = self.visit(node.test)
+        msg = self.visit(node.msg)
+        # Convert assert to triton's device_assert which happens on the device
+        return triton.language.core.device_assert(test, msg, _builder=self.builder)
+
     def visit_Call(self, node):
         fn = self.visit(node.func)
         if isinstance(fn, triton.language.constexpr):
@@ -682,6 +787,18 @@ class CodeGenerator(ast.NodeVisitor):
         for keyword in node.keywords:
             kws.update(self.visit(keyword))
         args = [self.visit(arg) for arg in node.args]
+        if fn.__name__ == "print":
+            fn = self.builtins["print"]
+        elif fn.__name__ == "device_assert":
+            if not self.debug:
+                return
+        elif fn.__name__ in self.static_functions:
+            if fn.__name__ == "static_print":
+                print(*args, **kws)
+                return
+            elif fn.__name__ == "static_assert":
+                assert args[0], args[1]
+                return
         if isinstance(fn, triton.runtime.JITFunction):
             from inspect import getcallargs
             args = getcallargs(fn.fn, *args, **kws)
@@ -701,7 +818,7 @@ class CodeGenerator(ast.NodeVisitor):
             if not self.module.has_function(fn_name):
                 prototype = triton.language.function_type([], arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types)
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=self.debug)
                 generator.visit(fn.parse())
                 callee_ret_type = generator.last_ret_type
                 self.function_ret_types[fn_name] = callee_ret_type
@@ -832,7 +949,14 @@ def kernel_suffix(signature, specialization):
 # ------------------------------------------------------------------------------
 
 
-def build_triton_ir(fn, signature, specialization, constants):
+def parse_mlir_module(path, context):
+    module = _triton.ir.parse_mlir_module(path, context)
+    # module takes ownership of the context
+    module.context = context
+    return module
+
+
+def build_triton_ir(fn, signature, specialization, constants, debug=False):
     # canonicalize signature
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -852,7 +976,7 @@ def build_triton_ir(fn, signature, specialization, constants):
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
 
     prototype = triton.language.function_type([], arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True, debug=debug)
     try:
         generator.visit(fn.parse())
     except Exception as e:
@@ -874,40 +998,42 @@ def optimize_triton_ir(mod):
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
     pm.add_licm_pass()
+    pm.add_symbol_dce_pass()
     pm.run(mod)
     return mod
 
 
-def ast_to_ttir(fn, signature, specialization, constants):
-    mod, _ = build_triton_ir(fn, signature, specialization, constants)
+def ast_to_ttir(fn, signature, specialization, constants, debug=False):
+    mod, _ = build_triton_ir(fn, signature, specialization, constants, debug)
     return optimize_triton_ir(mod)
 
 
-def ttir_to_ttgir(mod, num_warps, num_stages, compute_capability):
+def ttir_to_ttgir(mod, num_warps):
     pm = _triton.ir.pass_manager(mod.context)
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
+    pm.run(mod)
+    return mod
+
+
+def optimize_ttgir(mod, num_stages, compute_capability):
+    pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_coalesce_pass()
-    # The combine pass converts blocked layout to mma layout
-    # for dot ops so that pipeline can get shared memory swizzled correctly.
-    pm.add_tritongpu_combine_pass(compute_capability)
+    pm.add_tritongpu_coalesce_pass()
+    pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
+    pm.add_tritongpu_remove_layout_conversions_pass()
+    pm.add_tritongpu_fuse_transpositions_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
-    # Prefetch must be done after pipeline pass because pipeline pass
-    # extracts slices from the original tensor.
     pm.add_tritongpu_prefetch_pass()
-    pm.add_canonicalizer_pass()
-    pm.add_cse_pass()
-    pm.add_tritongpu_combine_pass(compute_capability)
-    pm.add_licm_pass()
-    pm.add_tritongpu_combine_pass(compute_capability)
+    pm.add_tritongpu_fuse_transpositions_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
+    pm.add_tritongpu_decompose_conversions_pass()
     if compute_capability // 10 == 7:
         # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
+        # NOTE this pass should be placed after all the passes those modifies mma layout
         pm.add_tritongpu_update_mma_for_volta_pass()
-    pm.add_cse_pass()
-    pm.add_tritongpu_decompose_conversions_pass()
+    pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
-    pm.add_tritongpu_reorder_instructions_pass()
     pm.run(mod)
     return mod
 
@@ -980,15 +1106,14 @@ def ptx_get_version(cuda_version) -> int:
 
 
 def path_to_ptxas():
-    prefixes = [
+    base_dir = os.path.dirname(__file__)
+    paths = [
         os.environ.get("TRITON_PTXAS_PATH", ""),
-        "",
-        "/usr",
-        os.environ.get('CUDA_PATH', default_cuda_dir())
+        os.path.join(base_dir, "third_party", "cuda", "bin", "ptxas")
     ]
-    for prefix in prefixes:
-        ptxas = os.path.join(prefix, "bin", "ptxas")
-        if os.path.exists(ptxas):
+
+    for ptxas in paths:
+        if os.path.exists(ptxas) and os.path.isfile(ptxas):
             result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
@@ -1093,7 +1218,7 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
     CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
@@ -1129,15 +1254,16 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
       return ptr_info;
     }}
     ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
-    unsigned attr;
-    CUresult status =
-        cuPointerGetAttribute(&attr, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr_info.dev_ptr);
-    if (!(attr == CU_MEMORYTYPE_DEVICE || attr == CU_MEMORYTYPE_UNIFIED) ||
-        !(status == CUDA_SUCCESS)) {{
+    if(!ptr_info.dev_ptr)
+      return ptr_info;
+    uint64_t dev_ptr;
+    int status = cuPointerGetAttribute(&dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
+    if (status == CUDA_ERROR_INVALID_VALUE) {{
         PyErr_Format(PyExc_ValueError,
                      "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
         ptr_info.valid = false;
     }}
+    ptr_info.dev_ptr = dev_ptr;
     return ptr_info;
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
@@ -1153,16 +1279,13 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *compiled_kernel = NULL;
-  PyObject *hook_ret = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
 
   if (launch_enter_hook != Py_None) {{
-    PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
-    hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
-    Py_DECREF(new_args);
+    PyObject_CallObject(launch_enter_hook, args);
   }}
 
 
@@ -1171,19 +1294,9 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
   if (launch_exit_hook != Py_None) {{
-    PyObject *new_args = NULL;
-    if (hook_ret) {{
-        new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
-    }} else {{
-        new_args = PyTuple_Pack(1, compiled_kernel);
-    }}
-    hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
-    Py_DECREF(new_args);
+    PyObject_CallObject(launch_exit_hook, args);
   }}
 
-  if (hook_ret) {{
-      Py_DECREF(hook_ret);
-  }}
   if(PyErr_Occurred()) {{
     return NULL;
   }}
@@ -1199,13 +1312,13 @@ static PyMethodDef ModuleMethods[] = {{
 
 static struct PyModuleDef ModuleDef = {{
   PyModuleDef_HEAD_INIT,
-  \"launcher\",
+  \"__triton_launcher\",
   NULL, //documentation
   -1, //size
   ModuleMethods
 }};
 
-PyMODINIT_FUNC PyInit_launcher(void) {{
+PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
     return NULL;
@@ -1220,11 +1333,6 @@ PyMODINIT_FUNC PyInit_launcher(void) {{
 
 def default_cache_dir():
     return os.path.join(os.environ["HOME"], ".triton", "cache")
-
-
-def default_cuda_dir():
-    default_dir = "/usr/local/cuda"
-    return os.getenv("CUDA_HOME", default=default_dir)
 
 
 class CacheManager:
@@ -1284,8 +1392,15 @@ def quiet():
 
 def _build(name, src, srcdir):
     cuda_lib_dirs = libcuda_dirs()
-    cuda_path = os.environ.get('CUDA_PATH', default_cuda_dir())
+    base_dir = os.path.dirname(__file__)
+    cuda_path = os.path.join(base_dir, "third_party", "cuda")
+
     cu_include_dir = os.path.join(cuda_path, "include")
+    triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
+    cuda_header = os.path.join(cu_include_dir, "cuda.h")
+    triton_cuda_header = os.path.join(triton_include_dir, "cuda.h")
+    if not os.path.exists(cuda_header) and os.path.exists(triton_cuda_header):
+        cu_include_dir = triton_include_dir
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -1295,7 +1410,18 @@ def _build(name, src, srcdir):
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
-    py_include_dir = get_paths()["include"]
+        if cc is None:
+            raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
+    # This function was renamed and made public in Python 3.10
+    if hasattr(sysconfig, 'get_default_scheme'):
+        scheme = sysconfig.get_default_scheme()
+    else:
+        scheme = sysconfig._get_default_scheme()
+    # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
+    # path changes to include 'local'. This change is required to use triton with system-wide python.
+    if scheme == 'posix_local':
+        scheme = 'posix_prefix'
+    py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
     cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
     cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
@@ -1413,14 +1539,14 @@ def make_hash(fn, **kwargs):
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
-# - ^\s*func\s+ : match the start of the string, any leading whitespace, the keyword func,
+# - ^\s*func\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
 # - (public\s+)? : optionally match the keyword public and any following whitespace
 # - (@\w+) : match an @ symbol followed by one or more word characters
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-mlir_prototype_pattern = r'^\s*func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+mlir_prototype_pattern = r'^\s*func\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
     "ttir": mlir_prototype_pattern,
@@ -1437,7 +1563,22 @@ arg_type_pattern = {
 }
 
 
+def _get_jsonable_constants(constants):
+    def _is_jsonable(x):
+        try:
+            json.dumps(x)
+            return True
+        except (TypeError, OverflowError):
+            return False
+    serialized_constants = {}
+    for constant in constants:
+        if _is_jsonable(constants[constant]):
+            serialized_constants[constant] = constants[constant]
+    return serialized_constants
+
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
+
+
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
@@ -1453,14 +1594,15 @@ def compile(fn, **kwargs):
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if capability >= 75 else 2)
     extern_libs = kwargs.get("extern_libs", dict())
+    debug = kwargs.get("debug", False)
     # build compilation stages
     stages = {
         "ast": (lambda path: fn, None),
-        "ttir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                 lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-        "ttgir": (lambda path: _triton.ir.parse_mlir_module(path, context),
-                  lambda src: ttir_to_ttgir(src, num_warps, num_stages, capability)),
-        "llir": (lambda path: Path(path).read_bytes(),
+        "ttir": (lambda path: parse_mlir_module(path, context),
+                 lambda src: ast_to_ttir(src, signature, configs[0], constants, debug)),
+        "ttgir": (lambda path: parse_mlir_module(path, context),
+                  lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
+        "llir": (lambda path: Path(path).read_text(),
                  lambda src: ttgir_to_llir(src, extern_libs, capability)),
         "ptx": (lambda path: Path(path).read_text(),
                 lambda src: llir_to_ptx(src, capability)),
@@ -1510,7 +1652,8 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        metadata = {"num_warps": num_warps, "num_stages": num_stages, "ctime": dict()}
+        metadata = {"num_warps": num_warps, "num_stages": num_stages,
+                    "constants": _get_jsonable_constants(constants), "ctime": dict(), "debug": debug}
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
@@ -1541,7 +1684,7 @@ def compile(fn, **kwargs):
     # write-back metadata
     fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, metadata, asm)
+    return CompiledKernel(fn, so_path, metadata, asm)
 
 
 class CompiledKernel:
@@ -1550,17 +1693,19 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, so_path, metadata, asm):
+    def __init__(self, fn, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
-        spec = importlib.util.spec_from_file_location("launcher", so_path)
+        spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
+        self.fn = fn
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
         # initialize metadata
         self.shared = metadata["shared"]
         self.num_warps = metadata["num_warps"]
         self.num_stages = metadata["num_stages"]
+        self.constants = metadata["constants"]
         # initialize asm dict
         self.asm = asm
         # binaries are lazily initialized
