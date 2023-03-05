@@ -249,7 +249,8 @@ struct AssertOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto ctx = rewriter.getContext();
-    auto elems = getElementsFromStruct(loc, adaptor.getCondition(), rewriter);
+    auto elems = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getCondition(), rewriter, op.getCondition().getType());
     auto elemTy = elems[0].getType();
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
