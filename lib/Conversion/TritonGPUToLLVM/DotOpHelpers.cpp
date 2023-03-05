@@ -167,7 +167,9 @@ Value DotOpMmaV1ConversionHelper::loadA(
     elems.push_back(item.second.second);
   }
 
+  llvm::outs() << elemX2Ty << "\n";
   Value res = typeConverter->packLLElements(loc, elems, rewriter, tensorTy);
+  llvm::outs() << "packed " << res << "\n";
   return res;
 }
 
