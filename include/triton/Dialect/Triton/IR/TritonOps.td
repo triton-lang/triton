@@ -405,19 +405,31 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 }
 
 //
-// Make PrintfOp
+// Make PrintOp
 //
-def TT_PrintfOp : TT_Op<"printf", [MemoryEffects<[MemWrite]>]>,
-  Arguments<(ins StrAttr:$prefix,
-                Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
-  let summary = "Device-side printf, as in CUDA for debugging";
+def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
+  Arguments<(ins StrAttr:$prefix, Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
+  let summary = "Device-side print, as in CUDA for debugging";
   let description = [{
-    `tt.printf` takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
+    `tt.print` takes a literal string prefix and an arbitrary number of scalar or tensor arguments that should be printed.
     format are generated automatically from the arguments.
   }];
   let assemblyFormat = [{
-    $prefix attr-dict ($args^ `:` type($args))?
+    $prefix attr-dict `:` ($args^ `:` type($args))?
   }];
+}
+
+//
+// Make AssertOp
+//
+def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Device-side assert, as in CUDA for correctness checking";
+  let description = [{
+    `tt.assert` takes a condition tensor, a message string, a file string, a function string, and a line number.
+    If the condition is false, the message is printed, and the program is aborted.
+  }];
+  let arguments = (ins TT_Tensor:$condition, StrAttr:$message, StrAttr:$file, StrAttr:$func, I32Attr:$line);
+  let assemblyFormat = "$condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)";
 }
 
 #endif // Triton_OPS

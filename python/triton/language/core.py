@@ -1329,24 +1329,56 @@ def zeros(shape, dtype):
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
 
+# -----------------------
+# Debugging functions
+# -----------------------
+
 
 @builtin
-def printf(prefix, *args, _builder=None):
+def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
+    pass
+
+
+@builtin
+def static_assert(cond, msg="", _builder=None):
+    pass
+
+
+@builtin
+def device_print(prefix, *args, _builder=None):
     import string
-    new_prefix = prefix
-    if isinstance(prefix, constexpr):
-        new_prefix = prefix.value
-    assert isinstance(new_prefix, str), f"{new_prefix} is not string"
+    prefix = _constexpr_to_value(prefix)
+    assert isinstance(prefix, str), f"{prefix} is not string"
     b_ascii = True
-    for ch in new_prefix:
+    for ch in prefix:
         if ch not in string.printable:
             b_ascii = False
             break
-    assert b_ascii, f"{new_prefix} is not an ascii string"
+    assert b_ascii, f"{prefix} is not an ascii string"
     new_args = []
     for arg in args:
         new_args.append(_to_tensor(arg, _builder))
-    return semantic.printf(new_prefix, new_args, _builder)
+    return semantic.device_print(prefix, new_args, _builder)
+
+
+@builtin
+def device_assert(cond, msg="", _builder=None):
+    msg = _constexpr_to_value(msg)
+    import inspect
+    frame = inspect.currentframe()
+    module = inspect.getmodule(frame)
+    # The triton function module doesn't have the name attribute.
+    # We use this trick to find the caller.
+    while hasattr(module, "__name__"):
+        frame = frame.f_back
+        module = inspect.getmodule(frame)
+    func_name = frame.f_code.co_name
+    file_name = frame.f_back.f_code.co_filename
+    # TODO: The line number currently indicates the line
+    # where the triton function is called but not where the
+    # device_assert is called. Need to enhance this.
+    lineno = frame.f_back.f_lineno
+    return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
 
 # -----------------------
 # Iterators
