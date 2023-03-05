@@ -260,14 +260,13 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
             num_stages=1,
         )
-        # print(h.asm["ttgir"])
         return dq, dk, dv, None
 
 
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 128)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
@@ -321,7 +320,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
-) for mode in ['fwd']]
+) for mode in ['fwd', 'bwd']]
 
 
 @triton.testing.perf_report(configs)

@@ -76,7 +76,7 @@ matmul_data = {
 @pytest.mark.parametrize('M, N, K, dtype_str',
                          [(M, N, K, dtype_str)
                           for M, N, K in matmul_data[DEVICE_NAME].keys()
-                          for dtype_str in ['int8']])
+                          for dtype_str in ['float16']])
 def test_matmul(M, N, K, dtype_str):
     if dtype_str in ['float32', 'int8'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test float32 & int8 on a100')
@@ -95,7 +95,6 @@ def test_matmul(M, N, K, dtype_str):
     fn = lambda: triton.ops.matmul(a, b)
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=300)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
-    print(cur_gpu_perf)
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     assert triton.testing.allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
 
