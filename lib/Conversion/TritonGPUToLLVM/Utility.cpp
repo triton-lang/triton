@@ -42,8 +42,7 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
-                                ConversionPatternRewriter &rewriter,
-                                TritonGPUToLLVMTypeConverter *converter) {
+                                ConversionPatternRewriter &rewriter) {
   ArrayRef<Type> types =
       llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
   SmallVector<Value> elems(types.size());

@@ -417,9 +417,9 @@ protected:
   getOperands(ConversionPatternRewriter &rewriter, OpAdaptor adaptor,
               Type operandTy, const unsigned elems, Location loc) const {
     SmallVector<SmallVector<Value>> operands(elems);
-    for (size_t i = 0; i < elems; i++) {
+    for (auto operand : adaptor.getOperands()) {
       auto sub_operands = this->getTypeConverter()->unpackLLElements(
-          loc, adaptor.getOperands()[i], rewriter, operandTy);
+          loc, operand, rewriter, operandTy);
       for (size_t i = 0; i < elems; ++i) {
         operands[i].push_back(sub_operands[i]);
       }
