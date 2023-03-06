@@ -84,9 +84,9 @@ public:
   }
 };
 
-class SimplifyReduceCvt : public mlir::RewritePattern {
+class SimplifyCvtReduce : public mlir::RewritePattern {
 public:
-  explicit SimplifyReduceCvt(mlir::MLIRContext *context)
+  explicit SimplifyCvtReduce(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::ReduceOp::getOperationName(), 2, context) {
   }
 
@@ -150,9 +150,9 @@ public:
 LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
                              Attribute &ret) {
   ret = targetEncoding;
-  if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
+  if (auto expandDims = dyn_cast<triton::ExpandDimsOp>(op)) {
     ret = triton::gpu::SliceEncodingAttr::get(
-        op->getContext(), expand_dims.getAxis(), targetEncoding);
+        op->getContext(), expandDims.getAxis(), targetEncoding);
   }
   if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
     auto sliceEncoding =
@@ -475,12 +475,10 @@ public:
       return failure();
     }
 
-    llvm::MapVector<Value, Attribute> toConvert;
-    llvm::SetVector<Operation *> toErase;
+    llvm::SetVector<Operation *> candidates;
     for (Operation *op : cvtSlices) {
       if (stop(op)) {
-        toErase.insert(op);
-        continue;
+        break;
       }
 
       // don't rematerialize anything expensive
@@ -506,12 +504,11 @@ public:
           return failure();
         }
       }
+      candidates.insert(op);
     }
-
-    for (Operation *op : toErase)
-      cvtSlices.remove(op);
-
-    pushConversionForward(cvt, cvtSlices, rewriter);
+    if (candidates.empty())
+      return failure();
+    pushConversionForward(cvt, candidates, rewriter);
     return success();
   }
 };
@@ -787,7 +784,7 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
-    patterns.add<SimplifyReduceCvt>(context);
+    patterns.add<SimplifyCvtReduce>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
