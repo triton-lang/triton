@@ -294,13 +294,7 @@ struct StoreOpConversion
 
     // numElements = 1 for scalar
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
-    auto numElems = 1;
-    // tensor
-    if (tensorTy) {
-      // mask
-      auto shape = tensorTy.getShape();
-      numElems = product(shape);
-    }
+    auto numElems = tensorTy ? tensorTy.getNumElements() : 1;
     Value mask = int_val(1, 1);
     auto tid = tid_val();
     mask = and_(mask,
@@ -504,8 +498,7 @@ struct AtomicRMWOpConversion
       auto valTy = val.getType().cast<RankedTensorType>();
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
       // mask
-      auto shape = tensorTy.getShape();
-      numElems = product(shape);
+      numElems = tensorTy.getNumElements();
     }
     Value mask = int_val(1, 1);
     auto tid = tid_val();
