@@ -370,11 +370,10 @@ void LoopPipeliner::emitPrologue() {
         setValueMapping(originalResult, newOp->getResult(dstIdx), stage);
         // update mapping for loop-carried values (args)
         for (OpOperand &operand : yieldOp->getOpOperands()) {
-          if (operand.get() == op->getResult(dstIdx)) {
+          if (operand.get() == op->getResult(dstIdx))
             setValueMapping(
                 forOp.getRegionIterArgs()[operand.getOperandNumber()],
                 newOp->getResult(dstIdx), stage + 1);
-          }
         }
       }
     } // for (Operation *op : orderedDeps)
@@ -484,22 +483,24 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   // 3. replace loads with block args (from prologue)
   for (size_t idx = 0; idx < loads.size(); ++idx) {
     OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(newForOp.getBody());
-
     Value load = loads[idx];
     assert(load.hasOneUse() &&
            "we assume that this load has one use (ConvertLayout)");
     Value loadUse = load.getUsers().begin()->getResult(0);
+    // set insertion point
+    Value newLoad = mapping.lookup(load);
+    Value newLoadUse = mapping.lookup(loadUse);
+    builder.setInsertionPoint(newLoadUse.getDefiningOp());
     // create conversion
     auto cvt = builder.create<ttg::ConvertLayoutOp>(
         loadUse.getLoc(), loadUse.getType(),
         newForOp.getRegionIterArgs()[loadIdx + idx]);
 
     // replace uses
-    mapping.lookup(loadUse).replaceAllUsesWith(cvt.getResult());
+    newLoadUse.replaceAllUsesWith(cvt.getResult());
     // delete old load and layout conversion
-    mapping.lookup(loadUse).getDefiningOp()->erase();
-    mapping.lookup(load).getDefiningOp()->erase();
+    newLoadUse.getDefiningOp()->erase();
+    newLoad.getDefiningOp()->erase();
   }
 
   // 4. prefetch the next iteration
