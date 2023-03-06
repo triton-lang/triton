@@ -13,7 +13,7 @@ configure_lit_site_cfg(
 
 set(TRITON_TEST_DEPENDS
   triton-opt
-  FileCheck
+  copy-FileCheck
 )
 
 add_lit_testsuite(check-triton-lit-tests "Running the triton regression tests"
