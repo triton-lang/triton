@@ -133,9 +133,10 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
   std::string hsaco_path = kernel_name + std::string(".hsaco");
 
   std::string error_message;
+  std::string lld_path = ::triton::tools::getenv("ROCM_PATH") + "/llvm/bin/ld.lld";
   int lld_result =
-      llvm::sys::ExecuteAndWait("/opt/rocm/llvm/bin/ld.lld",
-                                {"/opt/rocm/llvm/bin/ld.lld", "-flavor", "gnu",
+      llvm::sys::ExecuteAndWait(lld_path,
+                                {lld_path, "-flavor", "gnu",
                                  "-shared", "-o", hsaco_path, isabin_path},
                                 std::nullopt, {}, 0, 0, &error_message);
   if (lld_result) {

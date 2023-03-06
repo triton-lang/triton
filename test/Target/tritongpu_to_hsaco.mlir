@@ -1,3 +1,4 @@
+// RUN: export ROCM_PATH=/opt/rocm
 // RUN: HSACO_PATH=$(%PYTHON -m triton.tools.aot %s --target=amdgcn --gfx=gfx906 --triple=amdgcn-amd-amdhsa --features="+sramecc,-xnack" | head -n 1)
 // RUN: llvm-readobj -a "${HSACO_PATH}" | FileCheck %s
 

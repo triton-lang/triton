@@ -1486,22 +1486,13 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 @functools.lru_cache()
-def libhip_dir():
-    return "/opt/rocm/lib"
-
-@functools.lru_cache()
-def hip_home_dirs():
-    default_dir = "/opt/rocm"
-    return os.getenv("ROCM_HOME", default=default_dir)
-
-@functools.lru_cache()
 def rocm_path_dir():
     return os.getenv("ROCM_PATH", default="/opt/rocm")
 
 def _build(name, src, srcdir):
     if torch.version.hip is not None:
-        hip_lib_dir = libhip_dir()
-        hip_include_dir = os.path.join(hip_home_dirs(), "include")
+        hip_lib_dir = os.path.join(rocm_path_dir(), "lib")
+        hip_include_dir = os.path.join(rocm_path_dir(), "include")
     else:
         cuda_lib_dirs = libcuda_dirs()
         base_dir = os.path.dirname(__file__)
