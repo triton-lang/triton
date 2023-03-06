@@ -1,40 +1,10 @@
 #include "Utility.h"
+#include "TypeConverter.h"
 
 namespace mlir {
 
 namespace LLVM {
 using namespace mlir::triton;
-
-Value getStructFromElements(Location loc, ValueRange resultVals,
-                            ConversionPatternRewriter &rewriter,
-                            Type structType) {
-  if (!structType.isa<LLVM::LLVMStructType>()) {
-    return *resultVals.begin();
-  }
-
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  for (const auto &v : llvm::enumerate(resultVals)) {
-    assert(v.value() && "can not insert null values");
-    llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
-  }
-  return llvmStruct;
-}
-
-SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
-                                         ConversionPatternRewriter &rewriter) {
-  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
-      llvmStruct.getType().isa<triton::PointerType>() ||
-      llvmStruct.getType().isa<LLVM::LLVMPointerType>())
-    return {llvmStruct};
-  ArrayRef<Type> types =
-      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
-  SmallVector<Value> results(types.size());
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    results[i] = extract_val(type, llvmStruct, i);
-  }
-  return results;
-}
 
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
@@ -73,7 +43,14 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter) {
-  auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
+  ArrayRef<Type> types =
+      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
+  SmallVector<Value> elems(types.size());
+  for (unsigned i = 0; i < types.size(); ++i) {
+    Type type = types[i];
+    elems[i] = extract_val(type, llvmStruct, i);
+  }
+
   auto rank = (elems.size() - 1) / 2;
   return {/*base=*/elems[0],
           /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
