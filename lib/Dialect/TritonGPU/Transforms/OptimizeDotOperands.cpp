@@ -131,10 +131,13 @@ public:
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto srcTy = cvt.getOperand().getType().cast<RankedTensorType>();
     auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
     if (!retTy)
       return failure();
     if (!isa<triton::gpu::DotOperandEncodingAttr>(retTy.getEncoding()))
+      return failure();
+    if (isa<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding()))
       return failure();
     //
     Operation *argOp = cvt.getOperand().getDefiningOp();
