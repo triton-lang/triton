@@ -425,10 +425,13 @@ struct MMA16816ConversionHelper {
         helper(mmaLayout), rewriter(rewriter), typeConverter(typeConverter),
         loc(loc), ctx(mmaLayout.getContext()) {
     helper.deduceMmaType(dotOperand);
-
-    Value _32 = i32_val(32);
-    lane = urem(thread, _32);
-    warp = udiv(thread, _32);
+#ifdef USE_ROCM
+  Value warpSize = i32_val(64);
+#else
+  Value warpSize = i32_val(32);
+#endif
+    lane = urem(thread, warpSize);
+    warp = udiv(thread, warpSize);
   }
 
   // Get a warpId for M axis.

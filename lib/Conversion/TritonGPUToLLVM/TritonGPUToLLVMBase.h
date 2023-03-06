@@ -597,7 +597,11 @@ private:
                                 const BlockedEncodingAttr &blocked_layout,
                                 ArrayRef<int64_t> shape) const {
     Value threadId = getThreadId(rewriter, loc);
+#ifdef USE_ROCM
+    Value warpSize = idx_val(64);
+#else
     Value warpSize = idx_val(32);
+#endif
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blocked_layout.getSizePerThread();
@@ -706,6 +710,7 @@ private:
     Value _4 = i32_val(4);
     Value _16 = i32_val(16);
     Value _32 = i32_val(32);
+    Value _64 = i32_val(64);
     Value _fpw0 = i32_val(fpw[0]);
     Value _fpw1 = i32_val(fpw[1]);
 
@@ -716,8 +721,8 @@ private:
     SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
     SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
 
-    Value lane = urem(thread, _32);
-    Value warp = udiv(thread, _32);
+    Value lane = urem(thread, _64);
+    Value warp = udiv(thread, _64);
 
     Value warp0 = urem(warp, i32_val(wpt[0]));
     Value warp12 = udiv(warp, i32_val(wpt[0]));
@@ -802,7 +807,7 @@ private:
     SmallVector<Value> warpsPerCTA = {idx_val(_warpsPerCTA[0]),
                                       idx_val(_warpsPerCTA[1])};
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = idx_val(32);
+    Value warpSize = idx_val(64);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), idx_val(shape[0] / 16));
