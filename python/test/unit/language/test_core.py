@@ -801,14 +801,15 @@ def test_store_constant(dtype_str):
 def test_load_store_same_ptr():
     @triton.jit()
     def kernel(in_out_ptr):
-        x = tl.load(in_out_ptr)
+        pid = tl.program_id(axis=0)
+        x = tl.load(in_out_ptr + pid)
         out = x * 2
-        tl.store(in_out_ptr, out)
+        tl.store(in_out_ptr + pid, out)
 
     for _ in range(1000):
-        x = torch.ones((1,), device="cuda", dtype=torch.float32)
-        kernel[(1,)](x, num_warps=32)
-        assert x[0] == 2.0
+        x = torch.ones((65536,), device="cuda", dtype=torch.float32)
+        kernel[(65536,)](x, num_warps=32)
+        assert torch.all(x == 2)
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
