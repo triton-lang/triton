@@ -798,6 +798,19 @@ def test_store_constant(dtype_str):
     assert torch.all(output == ref)
 
 
+def test_load_store_same_ptr():
+    @triton.jit()
+    def kernel(in_out_ptr):
+        x = tl.load(in_out_ptr)
+        out = x * 2
+        tl.store(in_out_ptr, out)
+
+    for _ in range(1000):
+        x = torch.ones((1,), device="cuda", dtype=torch.float32)
+        kernel[(1,)](x, num_warps=32)
+        assert x[0] == 2.0
+
+
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_f8_xf16_roundtrip(dtype):
     """Tests that converting an f8 to f16 and back to f8 doesn't change its value"""
