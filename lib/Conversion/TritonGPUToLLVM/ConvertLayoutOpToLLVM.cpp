@@ -4,10 +4,8 @@
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
@@ -393,7 +391,8 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     // unsigned elems = getElemsPerThread(srcTy);
-    auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                     rewriter, srcTy);
     unsigned inVec = 0;
     unsigned outVec = 0;
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
@@ -444,7 +443,8 @@ private:
     SmallVector<Type> types(outElems, llvmElemTy);
     auto *ctx = llvmElemTy.getContext();
     Type structTy = struct_ty(types);
-    Value result = getStructFromElements(loc, outVals, rewriter, structTy);
+    Value result =
+        getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -521,10 +521,10 @@ private:
       auto thread = getThreadId(rewriter, loc);
       if (dotOpLayout.getOpIdx() == 0) { // $a
         res = helper.loadA(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       } else { // $b
         res = helper.loadB(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       }
     } else {
       assert(false && "Unsupported dot operand layout found");
@@ -547,7 +547,8 @@ private:
     auto dstDotLayout = dstLayout.cast<DotOperandEncodingAttr>();
     if (isMmaToDotShortcut(srcMmaLayout, dstDotLayout)) {
       // get source values
-      auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
+      auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                       rewriter, srcTy);
       unsigned elems = getElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -578,12 +579,8 @@ private:
         reorderedVals.push_back(vecVals[i + 3]);
       }
 
-      // return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-      Value view =
-          getStructFromElements(loc, reorderedVals, rewriter, structTy);
+      Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
+                                                      rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -636,12 +633,12 @@ private:
         // TODO[Superjomn]: transA is not available here.
         bool transA = false;
         res = helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+                           getTypeConverter(), rewriter, dst.getType());
       } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
         // TODO[Superjomn]: transB is not available here.
         bool transB = false;
         res = helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+                           getTypeConverter(), rewriter, dst.getType());
       }
     } else {
       assert(false && "Unsupported mma layout found");
@@ -651,7 +648,7 @@ private:
 };
 
 void populateConvertLayoutOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,

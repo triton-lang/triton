@@ -1,4 +1,5 @@
 #include "DotOpHelpers.h"
+#include "TypeConverter.h"
 
 namespace mlir {
 namespace LLVM {
@@ -59,7 +60,8 @@ int DotOpMmaV1ConversionHelper::numElemsPerThreadB(ArrayRef<int64_t> shape,
 
 Value DotOpMmaV1ConversionHelper::loadA(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
+    TritonGPUToLLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, Type resultTy) const {
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -165,14 +167,14 @@ Value DotOpMmaV1ConversionHelper::loadA(
     elems.push_back(item.second.second);
   }
 
-  Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
-  Value res = getStructFromElements(loc, elems, rewriter, resTy);
+  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
   return res;
 }
 
 Value DotOpMmaV1ConversionHelper::loadB(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
+    TritonGPUToLLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, Type resultTy) const {
   // smem
   auto strides = smemObj.strides;
 
@@ -279,8 +281,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     elems.push_back(item.second.second);
   }
 
-  Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
-  Value res = getStructFromElements(loc, elems, rewriter, resTy);
+  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
   return res;
 }
 
@@ -347,10 +348,11 @@ DotOpMmaV1ConversionHelper::computeOffsets(Value threadId, bool isARow,
 
 DotOpMmaV1ConversionHelper::ValueTable
 DotOpMmaV1ConversionHelper::extractLoadedOperand(
-    Value llStruct, int NK, ConversionPatternRewriter &rewriter) const {
+    Value llStruct, int NK, ConversionPatternRewriter &rewriter,
+    TritonGPUToLLVMTypeConverter *typeConverter, Type type) const {
   ValueTable rcds;
-  SmallVector<Value> elems =
-      getElementsFromStruct(llStruct.getLoc(), llStruct, rewriter);
+  SmallVector<Value> elems = typeConverter->unpackLLElements(
+      llStruct.getLoc(), llStruct, rewriter, type);
 
   int offset = 0;
   for (int i = 0; offset < elems.size(); ++i) {
@@ -1070,6 +1072,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   helper.deduceMmaType(op);
 
   auto aTensorTy = a.getType().cast<RankedTensorType>();
+  auto bTensorTy = b.getType().cast<RankedTensorType>();
   auto dTensorTy = d.getType().cast<RankedTensorType>();
 
   SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
@@ -1083,10 +1086,10 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   int numRepK = getNumRepK(aTensorTy, aShape[1]);
 
   ValueTable ha =
-      getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK);
+      getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK, aTensorTy);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
-      loadedB, std::max(numRepN / 2, 1), numRepK);
-  auto fc = getElementsFromStruct(loc, loadedC, rewriter);
+      loadedB, std::max(numRepN / 2, 1), numRepK, bTensorTy);
+  auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter, dTensorTy);
 
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = numRepN * 2;
@@ -1132,7 +1135,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(fc.size(), resElemTy));
-  Value res = getStructFromElements(loc, fc, rewriter, structTy);
+  Value res = typeConverter->packLLElements(loc, fc, rewriter, structTy);
   rewriter.replaceOp(op, res);
 
   return success();
@@ -1211,14 +1214,14 @@ Value MMA16816ConversionHelper::composeValuesToDotOperandLayoutStruct(
   Type elemTy = elems[0].getType();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(elems.size(), elemTy));
-  auto result = getStructFromElements(loc, elems, rewriter, structTy);
+  auto result = typeConverter->packLLElements(loc, elems, rewriter, structTy);
   return result;
 }
 MMA16816ConversionHelper::ValueTable
 MMA16816ConversionHelper::getValuesFromDotOperandLayoutStruct(Value value,
-                                                              int n0,
-                                                              int n1) const {
-  auto elems = getElementsFromStruct(loc, value, rewriter);
+                                                              int n0, int n1,
+                                                              Type type) const {
+  auto elems = typeConverter->unpackLLElements(loc, value, rewriter, type);
 
   int offset{};
   ValueTable vals;
@@ -1250,6 +1253,7 @@ SmallVector<Value> DotOpFMAConversionHelper::getThreadIds(
 }
 Value DotOpFMAConversionHelper::loadA(
     Value A, Value llA, BlockedEncodingAttr dLayout, Value thread, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter,
     ConversionPatternRewriter &rewriter) const {
   auto aTensorTy = A.getType().cast<RankedTensorType>();
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -1309,10 +1313,11 @@ Value DotOpFMAConversionHelper::loadA(
         vas.emplace_back(va);
       }
 
-  return getStructFromValueTable(vas, rewriter, loc, elemTy);
+  return getStructFromValueTable(vas, rewriter, loc, typeConverter, elemTy);
 }
 Value DotOpFMAConversionHelper::loadB(
     Value B, Value llB, BlockedEncodingAttr dLayout, Value thread, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter,
     ConversionPatternRewriter &rewriter) const {
   auto bTensorTy = B.getType().cast<RankedTensorType>();
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -1372,14 +1377,15 @@ Value DotOpFMAConversionHelper::loadB(
         vbs.emplace_back(vb);
       }
 
-  return getStructFromValueTable(vbs, rewriter, loc, elemTy);
+  return getStructFromValueTable(vbs, rewriter, loc, typeConverter, elemTy);
 }
 DotOpFMAConversionHelper::ValueTable
 DotOpFMAConversionHelper::getValueTableFromStruct(
     Value val, int K, int n0, int shapePerCTA, int sizePerThread,
-    ConversionPatternRewriter &rewriter, Location loc) const {
+    ConversionPatternRewriter &rewriter, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter, Type type) const {
   ValueTable res;
-  auto elems = getElementsFromStruct(loc, val, rewriter);
+  auto elems = typeConverter->unpackLLElements(loc, val, rewriter, type);
   int index = 0;
   for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTA)
@@ -1391,7 +1397,7 @@ DotOpFMAConversionHelper::getValueTableFromStruct(
 }
 Value DotOpFMAConversionHelper::getStructFromValueTable(
     ArrayRef<Value> vals, ConversionPatternRewriter &rewriter, Location loc,
-    Type elemTy) const {
+    TritonGPUToLLVMTypeConverter *typeConverter, Type elemTy) const {
   SmallVector<Type> elemTypes(vals.size(), elemTy);
   SmallVector<Value> elems;
   elems.reserve(vals.size());
@@ -1400,7 +1406,7 @@ Value DotOpFMAConversionHelper::getStructFromValueTable(
   }
 
   Type structTy = struct_ty(elemTypes);
-  return getStructFromElements(loc, elems, rewriter, structTy);
+  return typeConverter->packLLElements(loc, elems, rewriter, structTy);
 }
 int DotOpFMAConversionHelper::getNumElemsPerThread(
     ArrayRef<int64_t> shape, DotOperandEncodingAttr dotOpLayout) {

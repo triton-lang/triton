@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "triton/Analysis/Allocation.h"
 
+#include "TypeConverter.h"
 //
 #include "DotOpHelpers.h"
 #include "Utility.h"
@@ -178,22 +179,22 @@ public:
     OpBuilder::InsertPoint *indexInsertPoint;
   };
 
-  explicit ConvertTritonGPUOpToLLVMPatternBase(LLVMTypeConverter &typeConverter)
+  explicit ConvertTritonGPUOpToLLVMPatternBase(
+      TritonGPUToLLVMTypeConverter &typeConverter)
       : converter(&typeConverter) {}
 
-  explicit ConvertTritonGPUOpToLLVMPatternBase(LLVMTypeConverter &typeConverter,
-                                               const Allocation *allocation,
-                                               Value smem)
+  explicit ConvertTritonGPUOpToLLVMPatternBase(
+      TritonGPUToLLVMTypeConverter &typeConverter, const Allocation *allocation,
+      Value smem)
       : converter(&typeConverter), allocation(allocation), smem(smem) {}
 
-  explicit ConvertTritonGPUOpToLLVMPatternBase(LLVMTypeConverter &typeConverter,
-                                               const Allocation *allocation,
-                                               Value smem,
-                                               IndexCacheInfo indexCacheInfo)
+  explicit ConvertTritonGPUOpToLLVMPatternBase(
+      TritonGPUToLLVMTypeConverter &typeConverter, const Allocation *allocation,
+      Value smem, IndexCacheInfo indexCacheInfo)
       : converter(&typeConverter), allocation(allocation), smem(smem),
         indexCacheInfo(indexCacheInfo) {}
 
-  LLVMTypeConverter *getTypeConverter() const { return converter; }
+  TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
 
   static Value
   getStructFromSharedMemoryObject(Location loc,
@@ -203,7 +204,13 @@ public:
     auto types = smemObj.getTypes();
     auto structTy =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    return getStructFromElements(loc, elems, rewriter, structTy);
+    // pack into struct
+    Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+    for (const auto &v : llvm::enumerate(elems)) {
+      assert(v.value() && "can not insert null values");
+      llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
+    }
+    return llvmStruct;
   }
 
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
@@ -371,7 +378,8 @@ public:
     unsigned maxPhase = dstSharedLayout.getMaxPhase();
     unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
-    auto inVals = LLVM::getElementsFromStruct(loc, llSrc, rewriter);
+    auto inVals =
+        getTypeConverter()->unpackLLElements(loc, llSrc, rewriter, srcTy);
     auto wordTy = vec_ty(elemTy, minVec);
     auto elemPtrTy = ptr_ty(elemTy);
     Value outVecVal = i32_val(outVec);
@@ -868,7 +876,7 @@ private:
   }
 
 protected:
-  LLVMTypeConverter *converter;
+  TritonGPUToLLVMTypeConverter *converter;
   const Allocation *allocation;
   Value smem;
   IndexCacheInfo indexCacheInfo;
@@ -881,30 +889,29 @@ class ConvertTritonGPUOpToLLVMPattern
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                           PatternBenefit benefit = 1)
+  explicit ConvertTritonGPUOpToLLVMPattern(
+      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
-  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                           const Allocation *allocation,
-                                           Value smem,
-                                           PatternBenefit benefit = 1)
+  explicit ConvertTritonGPUOpToLLVMPattern(
+      TritonGPUToLLVMTypeConverter &typeConverter, const Allocation *allocation,
+      Value smem, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, smem) {}
 
-  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                           const Allocation *allocation,
-                                           Value smem,
-                                           IndexCacheInfo indexCacheInfo,
-                                           PatternBenefit benefit = 1)
+  explicit ConvertTritonGPUOpToLLVMPattern(
+      TritonGPUToLLVMTypeConverter &typeConverter, const Allocation *allocation,
+      Value smem, IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, smem,
                                             indexCacheInfo) {}
 
 protected:
-  LLVMTypeConverter *getTypeConverter() const {
-    return ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
+  TritonGPUToLLVMTypeConverter *getTypeConverter() const {
+    LLVMTypeConverter *ret =
+        ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
+    return (TritonGPUToLLVMTypeConverter *)ret;
   }
 };
 
