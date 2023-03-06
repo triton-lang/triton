@@ -108,7 +108,7 @@ public:
     auto newReduce = rewriter.create<triton::ReduceOp>(
         op->getLoc(), reduce.getRedOp(), reduceArg.getOperand(),
         reduce.getAxis());
-    if (isa<triton::gpu::ConvertLayoutOp>(
+    if (isa_and_nonnull<triton::gpu::ConvertLayoutOp>(
             *reduceArg.getOperand().getDefiningOp()))
       return mlir::failure();
     Value newRet = newReduce.getResult();
@@ -368,11 +368,11 @@ public:
 
     IRMapping mapping;
     for (size_t i = 0; i < numOps; i++) {
-      auto thenCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(
+      auto thenCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
           thenYield.getOperand(i).getDefiningOp());
       if (hasElse) {
         auto elseYield = ifOp.elseYield();
-        auto elseCvt = dyn_cast<triton::gpu::ConvertLayoutOp>(
+        auto elseCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
             elseYield.getOperand(i).getDefiningOp());
         if (thenCvt && elseCvt &&
             std::distance(elseCvt->user_begin(), elseCvt->user_end()) == 1 &&
