@@ -31,8 +31,7 @@ struct SplatOpConversion
     auto llSrc = bitcast(constVal, srcType);
     size_t elemsPerThread = getElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
-    return typeConverter->packLLElements(loc, elems, rewriter, resType
-                                         /*,true*/);
+    return typeConverter->packLLElements(loc, elems, rewriter, resType);
   }
 
   LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
@@ -78,7 +77,6 @@ struct ArithConstantSplatOpConversion
       return failure();
     }
 
-    llvm::outs() << op << "\n";
     auto constOp = rewriter.create<LLVM::ConstantOp>(loc, elemType, val);
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
         elemType, op.getType(), constOp, getTypeConverter(), rewriter, loc);

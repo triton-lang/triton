@@ -1,5 +1,4 @@
 #include "ElementwiseOpToLLVM.h"
-#include "mlir/IR/TypeUtilities.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -305,7 +304,6 @@ struct FpToFpOpConversion
   LogicalResult
   matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    llvm::outs() << op << "\n";
     auto srcTensorType = op.getFrom().getType().cast<mlir::RankedTensorType>();
     auto dstTensorType =
         op.getResult().getType().cast<mlir::RankedTensorType>();
@@ -316,29 +314,27 @@ struct FpToFpOpConversion
     SmallVector<Value> resultVals;
 
     // Select convertor
-    bool isSrcFloat8E4M3 = srcEltType.isFloat8E4M3FN();
-    bool isDstFloat8E4M3 = dstEltType.isFloat8E4M3FN();
-
-    if (isSrcFloat8E4M3 || isDstFloat8E4M3) {
+    if (srcEltType.isa<triton::Float8Type>() ||
+        dstEltType.isa<triton::Float8Type>()) {
       std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                        const Value &, const Value &,
                                        const Value &, const Value &)>
           convertor;
-      if (isSrcFloat8E4M3 && dstEltType.isF16()) {
+      if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF16()) {
         convertor = convertFp8x4ToFp16x4;
-      } else if (srcEltType.isF16() && isDstFloat8E4M3) {
+      } else if (srcEltType.isF16() && dstEltType.isa<triton::Float8Type>()) {
         convertor = convertFp16x4ToFp8x4;
-      } else if (isSrcFloat8E4M3 && dstEltType.isBF16()) {
+      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isBF16()) {
         convertor = convertFp8x4ToBf16x4;
-      } else if (srcEltType.isBF16() && isDstFloat8E4M3) {
+      } else if (srcEltType.isBF16() && dstEltType.isa<triton::Float8Type>()) {
         convertor = convertBf16x4ToFp8x4;
-      } else if (isSrcFloat8E4M3 && dstEltType.isF32()) {
+      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF32()) {
         convertor = convertFp8x4ToFp32x4;
-      } else if (srcEltType.isF32() && isDstFloat8E4M3) {
+      } else if (srcEltType.isF32() && dstEltType.isa<triton::Float8Type>()) {
         convertor = convertFp32x4ToFp8x4;
-      } else if (isSrcFloat8E4M3 && dstEltType.isF64()) {
+      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF64()) {
         convertor = convertFp8x4ToFp64x4;
-      } else if (srcEltType.isF64() && isDstFloat8E4M3) {
+      } else if (srcEltType.isF64() && dstEltType.isa<triton::Float8Type>()) {
         convertor = convertFp64x4ToFp8x4;
       } else {
         assert(false && "unsupported fp8 casting");
@@ -348,13 +344,12 @@ struct FpToFpOpConversion
       assert(elems % 4 == 0 &&
              "FP8 casting only support tensors with 4-aligned sizes");
       auto elements = getTypeConverter()->unpackLLElements(
-          loc, adaptor.getFrom(), rewriter, srcTensorType /*, true*/);
+          loc, adaptor.getFrom(), rewriter, srcTensorType);
       for (size_t i = 0; i < elems; i += 4) {
         auto converted = convertor(loc, rewriter, elements[i], elements[i + 1],
                                    elements[i + 2], elements[i + 3]);
         resultVals.append(converted);
       }
-
     } else if (srcEltType.isBF16() && dstEltType.isF32()) {
       resultVals.emplace_back(
           convertBf16ToFp32(loc, rewriter, adaptor.getFrom()));
@@ -373,7 +368,7 @@ struct FpToFpOpConversion
 
     assert(resultVals.size() == elems);
     auto result = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
-                                                     dstTensorType /*, true*/);
+                                                     dstTensorType);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -410,23 +405,10 @@ public:
       if (!bool(resultVals[i]))
         return failure();
     }
-    if (isa<arith::ExtFOp>(op)) {
-      SmallVector<Value> reorderedVals;
-      for (unsigned i = 0; i < resultVals.size(); i += 8) {
-        reorderedVals.push_back(resultVals[i]);
-        reorderedVals.push_back(resultVals[i + 1]);
-        reorderedVals.push_back(resultVals[i + 4]);
-        reorderedVals.push_back(resultVals[i + 5]);
-        reorderedVals.push_back(resultVals[i + 2]);
-        reorderedVals.push_back(resultVals[i + 3]);
-        reorderedVals.push_back(resultVals[i + 6]);
-        reorderedVals.push_back(resultVals[i + 7]);
-      }
-      resultVals = reorderedVals;
-    }
-    Value view = this->getTypeConverter()->packLLElements(
-        loc, resultVals, rewriter, resultTy /*, true*/);
+    Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
+                                                          rewriter, resultTy);
     rewriter.replaceOp(op, view);
+
     return success();
   }
 
@@ -437,9 +419,7 @@ protected:
     SmallVector<SmallVector<Value>> operands(elems);
     for (auto operand : adaptor.getOperands()) {
       auto sub_operands = this->getTypeConverter()->unpackLLElements(
-          loc, operand, rewriter, operandTy /*, true*/);
-      assert(sub_operands.size() == elems &&
-             "number of operands should be equal to number of elements");
+          loc, operand, rewriter, operandTy);
       for (size_t i = 0; i < elems; ++i) {
         operands[i].push_back(sub_operands[i]);
       }

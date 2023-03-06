@@ -149,12 +149,11 @@ struct CacheKeyDenseMapInfo {
     auto *pointer = llvm::DenseMapInfo<void *>::getEmptyKey();
     return std::make_pair(
         mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
-        RankedTensorType());
+        RankedTensorType{});
   }
   static IndexCacheKeyT getTombstoneKey() {
     auto *pointer = llvm::DenseMapInfo<void *>::getTombstoneKey();
     auto tombstone = llvm::DenseMapInfo<RankedTensorType>::getTombstoneKey();
-
     return std::make_pair(
         mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
         tombstone);
@@ -699,6 +698,7 @@ private:
                               const MmaEncodingAttr &mmaLayout,
                               RankedTensorType type) const {
     auto shape = type.getShape();
+
     auto wpt = mmaLayout.getWarpsPerCTA();
     auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
     auto [isARow, isBRow, isAVec4, isBVec4, id] =
@@ -852,7 +852,6 @@ private:
     auto offset = emitOffsetForLayout(layout, type);
     // step 3, add offset to base, and reorder the sequence of indices to
     // guarantee that elems in the same sizePerThread are adjacent in order
-    auto shape = type.getShape();
     unsigned rank = shape.size();
     unsigned elemsPerThread = offset.size();
     SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,

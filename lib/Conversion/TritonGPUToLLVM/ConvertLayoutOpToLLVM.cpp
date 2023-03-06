@@ -57,7 +57,6 @@ private:
                                        unsigned elemId, RankedTensorType type,
                                        ArrayRef<unsigned> multiDimCTAInRepId,
                                        ArrayRef<unsigned> shapePerCTA) const {
-    auto shape = type.getShape();
     unsigned rank = shape.size();
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
       auto multiDimOffsetFirstElem =
@@ -78,7 +77,6 @@ private:
       auto parentShape = sliceLayout.paddedShape(shape);
       auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
                                             parentEncoding);
-
       auto multiDimOffsetParent =
           getMultiDimOffset(parentEncoding, loc, rewriter, elemId, parentTy,
                             sliceLayout.paddedShape(multiDimCTAInRepId),
