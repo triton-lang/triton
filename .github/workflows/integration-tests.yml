@@ -42,7 +42,7 @@ jobs:
 
       - name: Clear cache
         run: |
-          rm -rf ~/.triton/cache/
+          rm -rf ~/.triton/
 
       - name: Update path
         run: |
@@ -92,7 +92,6 @@ jobs:
         run: |
           cd python/test/unit/
           pytest
-
 
       - name: Run CXX unittests
         run: |

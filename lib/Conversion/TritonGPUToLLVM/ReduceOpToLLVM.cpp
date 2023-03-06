@@ -3,8 +3,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::getElementsFromStruct;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getElemsPerThread;
@@ -161,7 +159,8 @@ private:
 
     unsigned srcElems = getElemsPerThread(srcTy);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
-    auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
+    auto srcValues = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getOperand(), rewriter, srcTy);
 
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcTy);
@@ -259,12 +258,8 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-
-      SmallVector<Type> resultTypes(resultElems,
-                                    withIndex ? llvmIndexTy : llvmElemTy);
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
-      Value ret = getStructFromElements(loc, resultVals, rewriter, structTy);
+      Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
+                                                     resultTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar
@@ -310,7 +305,8 @@ private:
 
     unsigned srcElems = getElemsPerThread(srcTy);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
-    auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
+    auto srcValues = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getOperand(), rewriter, srcTy);
 
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcTy);
@@ -460,12 +456,8 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-
-      SmallVector<Type> resultTypes(resultElems,
-                                    withIndex ? llvmIndexTy : llvmElemTy);
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
-      Value ret = getStructFromElements(loc, resultVals, rewriter, structTy);
+      Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
+                                                     resultTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar
@@ -478,7 +470,7 @@ private:
 };
 
 void populateReduceOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,

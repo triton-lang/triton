@@ -25,6 +25,8 @@
 
 #include "Utility.h"
 
+class TritonGPUToLLVMTypeConverter;
+
 namespace mlir {
 namespace LLVM {
 using namespace mlir::triton;
@@ -123,11 +125,13 @@ struct DotOpMmaV1ConversionHelper {
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
   Value loadA(Value tensor, const SharedMemoryObject &smemObj, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+              Location loc, TritonGPUToLLVMTypeConverter *converter,
+              ConversionPatternRewriter &rewriter, Type resultTy) const;
 
   // Loading $b from smem to registers, returns a LLVM::Struct.
   Value loadB(Value tensor, const SharedMemoryObject &smemObj, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+              Location loc, TritonGPUToLLVMTypeConverter *converter,
+              ConversionPatternRewriter &rewriter, Type resultTy) const;
 
   static ArrayRef<unsigned> getOrder() { return mmaOrder; }
 
@@ -144,9 +148,9 @@ struct DotOpMmaV1ConversionHelper {
                  ConversionPatternRewriter &rewriter, Location loc) const;
 
   // Extract values belong to $a or $b from a LLVMStruct, the shape is n0xn1.
-  DotOpMmaV1ConversionHelper::ValueTable
-  extractLoadedOperand(Value llStruct, int NK,
-                       ConversionPatternRewriter &rewriter) const;
+  DotOpMmaV1ConversionHelper::ValueTable extractLoadedOperand(
+      Value llStruct, int NK, ConversionPatternRewriter &rewriter,
+      TritonGPUToLLVMTypeConverter *typeConverter, Type type) const;
 
   // Get the number of elements of this thread in M axis. The N axis could be
   // further deduced with the accSize / elemsM. \param wpt: the wpt in M axis
@@ -410,7 +414,7 @@ struct MMA16816ConversionHelper {
 
   DotOpMmaV2ConversionHelper helper;
   ConversionPatternRewriter &rewriter;
-  TypeConverter *typeConverter;
+  TritonGPUToLLVMTypeConverter *typeConverter;
   Location loc;
   MLIRContext *ctx{};
 
@@ -419,7 +423,8 @@ struct MMA16816ConversionHelper {
   // dotOperand: type of either one operand of dotOp.
   MMA16816ConversionHelper(Type dotOperand, MmaEncodingAttr mmaLayout,
                            Value thread, ConversionPatternRewriter &rewriter,
-                           TypeConverter *typeConverter, Location loc)
+                           TritonGPUToLLVMTypeConverter *typeConverter,
+                           Location loc)
       : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()), thread(thread),
         helper(mmaLayout), rewriter(rewriter), typeConverter(typeConverter),
         loc(loc), ctx(mmaLayout.getContext()) {
@@ -560,8 +565,8 @@ private:
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals, int n0,
                                               int n1) const;
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0,
-                                                 int n1) const;
+  ValueTable getValuesFromDotOperandLayoutStruct(Value value, int n0, int n1,
+                                                 Type type) const;
 };
 
 // Helper for conversion of FMA DotOp.
@@ -580,19 +585,23 @@ struct DotOpFMAConversionHelper {
                ConversionPatternRewriter &rewriter, Location loc) const;
 
   Value loadA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+              Location loc, TritonGPUToLLVMTypeConverter *typeConverter,
+              ConversionPatternRewriter &rewriter) const;
 
   Value loadB(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
-              Location loc, ConversionPatternRewriter &rewriter) const;
+              Location loc, TritonGPUToLLVMTypeConverter *typeConverter,
+              ConversionPatternRewriter &rewriter) const;
 
-  ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
-                                     int sizePerThread,
-                                     ConversionPatternRewriter &rewriter,
-                                     Location loc) const;
+  ValueTable getValueTableFromStruct(
+      Value val, int K, int n0, int shapePerCTA, int sizePerThread,
+      ConversionPatternRewriter &rewriter, Location loc,
+      TritonGPUToLLVMTypeConverter *typeConverter, Type type) const;
 
   Value getStructFromValueTable(ArrayRef<Value> vals,
                                 ConversionPatternRewriter &rewriter,
-                                Location loc, Type elemTy) const;
+                                Location loc,
+                                TritonGPUToLLVMTypeConverter *typeConverter,
+                                Type elemTy) const;
 
   // get number of elements per thread for $a or $b.
   static int getNumElemsPerThread(ArrayRef<int64_t> shape,

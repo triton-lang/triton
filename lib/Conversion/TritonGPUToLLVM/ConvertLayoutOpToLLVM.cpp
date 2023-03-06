@@ -4,10 +4,8 @@
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
@@ -69,7 +67,7 @@ private:
           elemId, getSizePerThread(layout), getOrder(layout));
       for (unsigned d = 0; d < rank; ++d) {
         multiDimOffset[d] = add(multiDimOffsetFirstElem[d],
-                                idx_val(multiDimCTAInRepId[d] * shapePerCTA[d] +
+                                i32_val(multiDimCTAInRepId[d] * shapePerCTA[d] +
                                         multiDimElemId[d]));
       }
       return multiDimOffset;
@@ -98,21 +96,21 @@ private:
       SmallVector<Value> mmaColIdx(4);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
-      Value warpSize = idx_val(32);
+      Value warpSize = i32_val(32);
       Value laneId = urem(threadId, warpSize);
       Value warpId = udiv(threadId, warpSize);
       // TODO: fix the bug in MMAEncodingAttr document
       SmallVector<Value> multiDimWarpId(2);
-      multiDimWarpId[0] = urem(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
-      multiDimWarpId[1] = udiv(warpId, idx_val(mmaLayout.getWarpsPerCTA()[0]));
-      Value _1 = idx_val(1);
-      Value _2 = idx_val(2);
-      Value _4 = idx_val(4);
-      Value _8 = idx_val(8);
-      Value _16 = idx_val(16);
+      multiDimWarpId[0] = urem(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
+      multiDimWarpId[1] = udiv(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
+      Value _1 = i32_val(1);
+      Value _2 = i32_val(2);
+      Value _4 = i32_val(4);
+      Value _8 = i32_val(8);
+      Value _16 = i32_val(16);
       if (mmaLayout.isAmpere()) {
-        multiDimWarpId[0] = urem(multiDimWarpId[0], idx_val(shape[0] / 16));
-        multiDimWarpId[1] = urem(multiDimWarpId[1], idx_val(shape[1] / 8));
+        multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
+        multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
         Value mmaGrpId = udiv(laneId, _4);
         Value mmaGrpIdP8 = add(mmaGrpId, _8);
         Value mmaThreadIdInGrp = urem(laneId, _4);
@@ -136,9 +134,9 @@ private:
         multiDimOffset[0] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
         multiDimOffset[1] = elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
         multiDimOffset[0] = add(
-            multiDimOffset[0], idx_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+            multiDimOffset[0], i32_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
         multiDimOffset[1] = add(
-            multiDimOffset[1], idx_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+            multiDimOffset[1], i32_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
       } else if (mmaLayout.isVolta()) {
         auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
             mmaLayout.decodeVoltaLayoutStates();
@@ -217,13 +215,13 @@ private:
               currVal = zext(llvmElemTy, currVal);
             else if (isPtr)
               currVal = ptrtoint(llvmElemTy, currVal);
-            valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
+            valVec = insert_element(vecTy, valVec, currVal, i32_val(v));
           }
           store(valVec, ptr);
         } else {
           Value valVec = load(ptr);
           for (unsigned v = 0; v < vec; ++v) {
-            Value currVal = extract_element(llvmElemTy, valVec, idx_val(v));
+            Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
             if (isInt1)
               currVal = icmp_ne(currVal,
                                 rewriter.create<LLVM::ConstantOp>(
@@ -327,13 +325,13 @@ private:
         Value valVec = undef(vecTy);
         for (unsigned v = 0; v < vec; ++v) {
           auto currVal = coord2valT[elemId + v].second;
-          valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
+          valVec = insert_element(vecTy, valVec, currVal, i32_val(v));
         }
         store(valVec, ptr);
       } else {
         Value valVec = load(ptr);
         for (unsigned v = 0; v < vec; ++v) {
-          Value currVal = extract_element(elemTy, valVec, idx_val(v));
+          Value currVal = extract_element(elemTy, valVec, i32_val(v));
           vals[elemId + v] = currVal;
         }
       }
@@ -398,7 +396,8 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     // unsigned elems = getElemsPerThread(srcTy);
-    auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                     rewriter, srcTy);
     unsigned inVec = 0;
     unsigned outVec = 0;
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
@@ -449,7 +448,8 @@ private:
     SmallVector<Type> types(outElems, llvmElemTy);
     auto *ctx = llvmElemTy.getContext();
     Type structTy = struct_ty(types);
-    Value result = getStructFromElements(loc, outVals, rewriter, structTy);
+    Value result =
+        getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -526,10 +526,10 @@ private:
       auto thread = getThreadId(rewriter, loc);
       if (dotOpLayout.getOpIdx() == 0) { // $a
         res = helper.loadA(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       } else { // $b
         res = helper.loadB(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       }
     } else {
       assert(false && "Unsupported dot operand layout found");
@@ -552,7 +552,8 @@ private:
     auto dstDotLayout = dstLayout.cast<DotOperandEncodingAttr>();
     if (isMmaToDotShortcut(srcMmaLayout, dstDotLayout)) {
       // get source values
-      auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
+      auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                       rewriter, srcTy);
       unsigned elems = getElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -583,12 +584,8 @@ private:
         reorderedVals.push_back(vecVals[i + 3]);
       }
 
-      // return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-      Value view =
-          getStructFromElements(loc, reorderedVals, rewriter, structTy);
+      Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
+                                                      rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -641,12 +638,12 @@ private:
         // TODO[Superjomn]: transA is not available here.
         bool transA = false;
         res = helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+                           getTypeConverter(), rewriter, dst.getType());
       } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
         // TODO[Superjomn]: transB is not available here.
         bool transB = false;
         res = helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+                           getTypeConverter(), rewriter, dst.getType());
       }
     } else {
       assert(false && "Unsupported mma layout found");
@@ -656,7 +653,7 @@ private:
 };
 
 void populateConvertLayoutOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,

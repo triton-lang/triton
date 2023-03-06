@@ -1,81 +1,10 @@
 #include "Utility.h"
+#include "TypeConverter.h"
 
 namespace mlir {
 
 namespace LLVM {
 using namespace mlir::triton;
-
-SmallVector<Value> unpackVectorData(ConversionPatternRewriter &rewriter,
-                                    Location loc,
-                                    SmallVector<Value> const &vals) {
-  auto vecTy = dyn_cast<VectorType>(vals[0].getType());
-  if (!vecTy)
-    return vals;
-  SmallVector<Value> ret;
-  for (Value val : vals)
-    for (int k = 0; k < vecTy.getNumElements(); k++)
-      ret.push_back(extract_element(val, i32_val(k)));
-  return ret;
-}
-
-SmallVector<Value> packVectorData(ConversionPatternRewriter &rewriter,
-                                  Location loc, SmallVector<Value> const &vals,
-                                  Type destType) {
-  auto structTy = destType.dyn_cast<LLVM::LLVMStructType>();
-  if (!structTy)
-    return vals;
-  auto vecTy = structTy.getBody()[0].dyn_cast<VectorType>();
-  if (!vecTy)
-    return vals;
-  size_t vecWidth = vecTy.getNumElements();
-  SmallVector<Value> ret;
-  for (int i = 0; i < vals.size(); i += vecWidth) {
-    Value vec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
-    for (int k = 0; k < vecWidth; k++)
-      vec = insert_element(vec, vals[i + k], i32_val(k));
-    ret.push_back(vec);
-  }
-  return ret;
-}
-
-Value getStructFromElements(Location loc, ValueRange resultVals,
-                            ConversionPatternRewriter &rewriter,
-                            Type structType, bool packVectors) {
-
-  if (!structType.isa<LLVM::LLVMStructType>()) {
-    return *resultVals.begin();
-  }
-  SmallVector<Value> _resultVals;
-  if (packVectors) {
-    _resultVals = packVectorData(rewriter, loc, resultVals, structType);
-    resultVals = _resultVals;
-  }
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  for (const auto &v : llvm::enumerate(resultVals)) {
-    assert(v.value() && "can not insert null values");
-    llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
-  }
-  return llvmStruct;
-}
-
-SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
-                                         ConversionPatternRewriter &rewriter,
-                                         bool unpackVectors) {
-  if (llvmStruct.getType().isIntOrIndexOrFloat() ||
-      llvmStruct.getType().isa<triton::PointerType>() ||
-      llvmStruct.getType().isa<LLVM::LLVMPointerType>())
-    return {llvmStruct};
-  ArrayRef<Type> types =
-      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
-  SmallVector<Value> results(types.size());
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    results[i] = extract_val(type, llvmStruct, i);
-  }
-  if (unpackVectors)
-    results = unpackVectorData(rewriter, loc, results);
-  return results;
-}
 
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
@@ -114,7 +43,14 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter) {
-  auto elems = getElementsFromStruct(loc, llvmStruct, rewriter);
+  ArrayRef<Type> types =
+      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
+  SmallVector<Value> elems(types.size());
+  for (unsigned i = 0; i < types.size(); ++i) {
+    Type type = types[i];
+    elems[i] = extract_val(type, llvmStruct, i);
+  }
+
   auto rank = (elems.size() - 1) / 2;
   return {/*base=*/elems[0],
           /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
@@ -174,6 +110,40 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   auto *maskOpr = builder.newConstantOperand("0xffffffff");
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
   return builder.launch(rewriter, loc, val.getType(), false);
+}
+
+Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
+                        StringRef key, StringRef content) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto ctx = moduleOp.getContext();
+  unsigned stringNumber = 0;
+  SmallString<16> stringConstName;
+  do {
+    stringConstName.clear();
+    (key + Twine(stringNumber++)).toStringRef(stringConstName);
+  } while (moduleOp.lookupSymbol(stringConstName));
+
+  llvm::SmallString<64> contentStr(content);
+  size_t contentSize = contentStr.size_in_bytes();
+  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
+
+  LLVM::GlobalOp global;
+  {
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    global = rewriter.create<LLVM::GlobalOp>(
+        UnknownLoc::get(ctx), globalType,
+        /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
+        rewriter.getStringAttr(contentStr));
+  }
+
+  Value zero = i32_val(0);
+  Value globalPtr =
+      rewriter.create<LLVM::AddressOfOp>(UnknownLoc::get(ctx), global);
+  Value stringStart =
+      rewriter.create<LLVM::GEPOp>(UnknownLoc::get(ctx), ptr_ty(i8_ty),
+                                   globalPtr, SmallVector<Value>({zero, zero}));
+  return stringStart;
 }
 
 } // namespace LLVM

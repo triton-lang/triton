@@ -27,7 +27,7 @@ void SharedMemoryAliasAnalysis::visitOperation(
     // These ops may allocate a new shared memory buffer.
     auto result = op->getResult(0);
     // XXX(Keren): the following ops are always aliasing for now
-    if (isa<tensor::ExtractSliceOp, triton::TransOp>(op)) {
+    if (isa<triton::gpu::ExtractSliceOp, triton::TransOp>(op)) {
       // extract_slice %src
       // trans %src
       aliasInfo = AliasInfo(operands[0]->getValue());

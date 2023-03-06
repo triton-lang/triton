@@ -55,49 +55,6 @@ func.func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   // CHECK: return %6 : tensor<1024xi32, [[$target_layout]]>
 }
 
-// CHECK-LABEL: remat_load_store
-func.func @remat_load_store(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-  %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout0>
-  %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout0>
-  %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout0>, tensor<64xi32, #layout0>
-  %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xi32, #layout0>
-  // CHECK-NOT: triton_gpu.convert_layout
-  %4 = triton_gpu.convert_layout %3 : (tensor<64xi32, #layout0>) -> tensor<64xi32, #layout1>
-  %5 = triton_gpu.convert_layout %2 : (tensor<64x!tt.ptr<i32>, #layout0>) -> tensor<64x!tt.ptr<i32>, #layout1>
-  tt.store %5, %4 : tensor<64xi32, #layout1>
-  return
-}
-
-// Don't rematerialize vectorized loads
-// CHECK-LABEL: remat_expensive
-func.func @remat_expensive(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-  %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout1>
-  %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout1>
-  %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout1>, tensor<64xi32, #layout1>
-  %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xi32, #layout1>
-  // CHECK: triton_gpu.convert_layout
-  // CHECK-NOT: triton_gpu.convert_layout
-  %4 = triton_gpu.convert_layout %3 : (tensor<64xi32, #layout1>) -> tensor<64xi32, #layout0>
-  %5 = triton_gpu.convert_layout %2 : (tensor<64x!tt.ptr<i32>, #layout1>) -> tensor<64x!tt.ptr<i32>, #layout0>
-  tt.store %5, %4 : tensor<64xi32, #layout0>
-  return
-}
-
-// Don't rematerialize loads when original and target layouts are different
-// CHECK-LABEL: remat_multi_layout
-func.func @remat_multi_layout(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-  %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout0>
-  %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout0>
-  %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout0>, tensor<64xi32, #layout0>
-  %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xi32, #layout0>
-  // CHECK: triton_gpu.convert_layout
-  // CHECK-NOT: triton_gpu.convert_layout
-  %4 = triton_gpu.convert_layout %3 : (tensor<64xi32, #layout0>) -> tensor<64xi32, #layout2>
-  %5 = triton_gpu.convert_layout %2 : (tensor<64x!tt.ptr<i32>, #layout0>) -> tensor<64x!tt.ptr<i32>, #layout2>
-  tt.store %5, %4 : tensor<64xi32, #layout2>
-  return
-}
-
 // Always rematerialize single value loads
 // CHECK-LABEL: remat_single_value
 func.func @remat_single_value(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
