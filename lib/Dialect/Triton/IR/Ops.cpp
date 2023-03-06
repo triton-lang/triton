@@ -138,8 +138,11 @@ bool FpToFpOp::areCastCompatible(::mlir::TypeRange inputs,
   }
   // Check whether fp8 <=> fp16, bf16, f32, f64
   // Make `srcEltType` always the fp8 side
-  return dstEltType.isFloat8E5M2() || dstEltType.isFloat8E4M3FN() ||
-         dstEltType.isF16() || dstEltType.isBF16() || dstEltType.isF32() ||
+  if (dstEltType.dyn_cast<mlir::triton::Float8Type>())
+    std::swap(srcEltType, dstEltType);
+  if (!srcEltType.dyn_cast<mlir::triton::Float8Type>())
+    return false;
+  return dstEltType.isF16() || dstEltType.isBF16() || dstEltType.isF32() ||
          dstEltType.isF64();
 }
 

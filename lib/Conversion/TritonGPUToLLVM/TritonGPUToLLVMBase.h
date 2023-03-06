@@ -852,6 +852,7 @@ private:
     auto offset = emitOffsetForLayout(layout, type);
     // step 3, add offset to base, and reorder the sequence of indices to
     // guarantee that elems in the same sizePerThread are adjacent in order
+    auto shape = type.getShape();
     unsigned rank = shape.size();
     unsigned elemsPerThread = offset.size();
     SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
