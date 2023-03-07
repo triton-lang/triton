@@ -253,9 +253,12 @@ for
         prevWarps *= warpsPerCTA[i];
       }
       // Expand the last dimension to fill the remaining lanes and warps
+#ifdef USE_ROCM
       threadsPerWarp[order[rank-1]] = 64 / prevLanes;
+#else
+      threadsPerWarp[order[rank-1]] = 32 / prevLanes;
+#endif
       warpsPerCTA[order[rank-1]] = numWarps / prevWarps;
-
       return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order);
 
     }]>

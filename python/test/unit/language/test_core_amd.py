@@ -1856,18 +1856,18 @@ if torch.version.hip is not None:
     ]
 else:
     layouts = [
-    # MmaLayout(version=1, warps_per_cta=[1, 4]),
-    MmaLayout(version=(2, 0), warps_per_cta=[1, 4]),
-    # MmaLayout(version=1, warps_per_cta=[4, 1]),
-    MmaLayout(version=(2, 0), warps_per_cta=[4, 1]),
-    BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
-    BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),
-    BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0]),
-#    BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1]),
-    BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1]),
-    BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1]),
-    BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0])
-]
+        # MmaLayout(version=1, warps_per_cta=[1, 4]),
+        MmaLayout(version=(2, 0), warps_per_cta=[1, 4]),
+        # MmaLayout(version=1, warps_per_cta=[4, 1]),
+        MmaLayout(version=(2, 0), warps_per_cta=[4, 1]),
+        BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
+        BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),
+        BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0]),
+    #    BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1]),
+        BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1]),
+        BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1]),
+        BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0])
+    ]
 
 @pytest.mark.parametrize("shape", [(128, 128)])
 @pytest.mark.parametrize("dtype", ['float16'])

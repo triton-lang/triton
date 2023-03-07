@@ -426,9 +426,9 @@ struct MMA16816ConversionHelper {
         loc(loc), ctx(mmaLayout.getContext()) {
     helper.deduceMmaType(dotOperand);
 #ifdef USE_ROCM
-  Value warpSize = i32_val(64);
+    Value warpSize = i32_val(64);
 #else
-  Value warpSize = i32_val(32);
+    Value warpSize = i32_val(32);
 #endif
     lane = urem(thread, warpSize);
     warp = udiv(thread, warpSize);
