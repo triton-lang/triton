@@ -171,8 +171,10 @@ LogicalResult LoopPipeliner::initialize() {
 
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> allLoads;
+  SmallVector<triton::LoadOp, 2> validLoads;
   for (Operation &op : *loop)
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
+      allLoads.push_back(loadOp);
       auto ptr = loadOp.getPtr();
       unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
       if (auto mask = loadOp.getMask())
@@ -184,17 +186,18 @@ LogicalResult LoopPipeliner::initialize() {
                     .cast<triton::PointerType>()
                     .getPointeeType();
       unsigned width = vec * ty.getIntOrFloatBitWidth();
+      // cp.async's cp-size can only be 4, 8 and 16.
       if (width >= 32)
-        allLoads.push_back(loadOp);
+        validLoads.push_back(loadOp);
     }
 
   // Early stop: no need to continue if there is no load in the loop.
-  if (allLoads.empty())
+  if (validLoads.empty())
     return failure();
 
   // load => values that it depends on
   DenseMap<Value, SetVector<Value>> loadDeps;
-  for (triton::LoadOp loadOp : allLoads) {
+  for (triton::LoadOp loadOp : validLoads) {
     SetVector<Value> deps;
     for (Value op : loadOp->getOperands())
       collectDeps(op, numStages - 1, deps);
@@ -205,7 +208,7 @@ LogicalResult LoopPipeliner::initialize() {
   // (Because if a load depends on another load, this load needs to wait on the
   //  other load in the prologue, which is against the point of the pipeline
   //  pass)
-  for (triton::LoadOp loadOp : allLoads) {
+  for (triton::LoadOp loadOp : validLoads) {
     bool isCandidate = true;
     for (triton::LoadOp other : allLoads) {
       if (loadDeps[loadOp].contains(other)) {
