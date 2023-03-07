@@ -80,7 +80,7 @@ class LoopPipeliner {
 
   Value lookupOrDefault(Value origin, int stage);
 
-  Value getLoadMask(triton::LoadOp loadOp, Value loopCond, unsigned stage,
+  Value getLoadMask(triton::LoadOp loadOp, Value mappedMask, Value loopCond,
                     OpBuilder &builder);
 
   /// Returns a empty buffer of size <numStages, ...>
@@ -283,18 +283,17 @@ LogicalResult LoopPipeliner::initialize() {
   return failure();
 }
 
-Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value loopCond,
-                                 unsigned stage, OpBuilder &builder) {
-  Value mask = lookupOrDefault(loadOp.getMask(), stage);
+Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value mappedMask,
+                                 Value loopCond, OpBuilder &builder) {
   Type maskType = getI1SameShape(loadOp);
+  Value mask = loadOp.getMask();
   Value newMask;
   if (mask) {
-    Value cond;
+    Value cond = loopCond;
     if (isa<RankedTensorType>(maskType)) {
-      cond = builder.create<triton::SplatOp>(mask.getLoc(), mask.getType(),
-                                             loopCond);
+      cond = builder.create<triton::SplatOp>(mask.getLoc(), maskType, loopCond);
     }
-    newMask = builder.create<arith::AndIOp>(mask.getLoc(), mask, cond);
+    newMask = builder.create<arith::AndIOp>(mask.getLoc(), mappedMask, cond);
   } else {
     if (isa<RankedTensorType>(maskType)) {
       newMask = builder.create<triton::SplatOp>(loopCond.getLoc(), maskType,
@@ -350,7 +349,9 @@ void LoopPipeliner::emitPrologue() {
         }
         // load => copy async
         if (auto loadOp = llvm::dyn_cast<triton::LoadOp>(op)) {
-          Value newMask = getLoadMask(loadOp, loopCond, stage, builder);
+          Value newMask =
+              getLoadMask(loadOp, lookupOrDefault(loadOp.getMask(), stage),
+                          loopCond, builder);
           // TODO: check if the hardware supports async copy
           newOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
               op->getLoc(), loadsBuffer[loadOp].getType(),
@@ -364,7 +365,9 @@ void LoopPipeliner::emitPrologue() {
           llvm_unreachable("This should be LoadOp");
       } else {
         if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
-          Value newMask = getLoadMask(loadOp, loopCond, stage, builder);
+          Value newMask =
+              getLoadMask(loadOp, lookupOrDefault(loadOp.getMask(), stage),
+                          loopCond, builder);
           newOp = builder.create<triton::LoadOp>(
               loadOp.getLoc(), loadOp.getResult().getType(),
               lookupOrDefault(loadOp.getPtr(), stage), newMask,
@@ -372,15 +375,15 @@ void LoopPipeliner::emitPrologue() {
               loadOp.getEvict(), loadOp.getIsVolatile());
         } else {
           newOp = builder.clone(*op);
-          // Update loop-carried uses
-          for (unsigned opIdx = 0; opIdx < op->getNumOperands(); ++opIdx) {
-            auto it = valueMapping.find(op->getOperand(opIdx));
-            if (it != valueMapping.end()) {
-              Value v = it->second[stage];
-              assert(v);
-              newOp->setOperand(opIdx, v);
-            } // else, op at opIdx is a loop-invariant value
-          }
+        }
+        // Update loop-carried uses
+        for (unsigned opIdx = 0; opIdx < op->getNumOperands(); ++opIdx) {
+          auto it = valueMapping.find(op->getOperand(opIdx));
+          if (it != valueMapping.end()) {
+            Value v = it->second[stage];
+            assert(v);
+            newOp->setOperand(opIdx, v);
+          } // else, op at opIdx is a loop-invariant value
         }
       }
 
@@ -534,10 +537,28 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   // 4. prefetch the next iteration
   SmallVector<Operation *> orderedDeps;
+  SmallVector<Operation *> depLoads;
   for (Operation &op : forOp.getLoopBody().front()) {
-    if (depOps.contains(&op))
-      orderedDeps.push_back(&op);
-    else if (loads.contains(op.getResult(0)))
+    if (depOps.contains(&op)) {
+      Operation *newOp = &op;
+      if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
+        Value iv = newForOp.getInductionVar();
+        Value loopCond = builder.create<arith::CmpIOp>(
+            iv.getLoc(), arith::CmpIPredicate::slt, iv,
+            newForOp.getUpperBound());
+        auto newMask =
+            getLoadMask(loadOp, mapping.lookupOrDefault(loadOp.getMask()),
+                        loopCond, builder);
+        newOp = builder.create<triton::LoadOp>(
+            loadOp.getLoc(), loadOp.getResult().getType(),
+            mapping.lookupOrDefault(loadOp.getPtr()), newMask,
+            mapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
+            loadOp.getEvict(), loadOp.getIsVolatile());
+        loadOp.replaceAllUsesWith(newOp->getResult(0));
+        depLoads.push_back(loadOp);
+      }
+      orderedDeps.push_back(newOp);
+    } else if (loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
@@ -550,6 +571,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
     nextMapping.map(arg, nextArg);
     ++argIdx;
+  }
+
+  for (auto *depLoad : depLoads) {
+    depLoad->erase();
   }
 
   // Special handling for iv & loop condition
@@ -598,21 +623,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     // Update loading mask
     if (loads.contains(op->getResult(0))) {
       auto loadOp = llvm::cast<triton::LoadOp>(op);
-      Value mask = loadOp.getMask();
-      Value newMask;
-      if (mask) {
-        Value splatCond = builder.create<triton::SplatOp>(
-            mask.getLoc(), mask.getType(), nextLoopCond);
-        newMask = builder.create<arith::AndIOp>(
-            mask.getLoc(), splatCond, nextMapping.lookupOrDefault(mask));
-        // If mask is defined outside the loop, don't update the map more than
-        // once
-        if (!(forOp.isDefinedOutsideOfLoop(mask) && nextMapping.contains(mask)))
-          nextMapping.map(mask, newMask);
-        newMask = nextMapping.lookupOrDefault(loadOp.getMask());
-      } else
-        newMask = builder.create<triton::SplatOp>(
-            loadOp.getLoc(), getI1SameShape(loadOp), nextLoopCond);
+      auto newMask =
+          getLoadMask(loadOp, nextMapping.lookupOrDefault(loadOp.getMask()),
+                      nextLoopCond, builder);
       Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
           op->getLoc(), loadsBuffer[loadOp].getType(),
           nextMapping.lookupOrDefault(loadOp.getPtr()),
@@ -727,8 +740,10 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
 
       pipeliner.emitPrologue();
 
+      llvm::errs() << "----------------------\n";
       scf::ForOp newForOp = pipeliner.createNewForOp();
       pipeliner.emitEpilogue();
+      llvm::errs() << newForOp << "\n";
 
       // replace the original loop
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)
