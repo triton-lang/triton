@@ -65,8 +65,8 @@ struct BroadcastOpConversion
 
     assert(rank == resultTy.getRank());
     auto order = triton::gpu::getOrder(srcLayout);
-    auto srcOffsets = emitOffsetForLayout(srcLayout, srcShape);
-    auto resultOffsets = emitOffsetForLayout(resultLayout, resultShape);
+    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
+    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
     SmallVector<Value> srcVals =
         getTypeConverter()->unpackLLElements(loc, src, rewriter, srcTy);
 
@@ -353,14 +353,14 @@ struct MakeRangeOpConversion
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto rankedTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    auto rankedTy = op.getResult().getType().cast<RankedTensorType>();
     auto shape = rankedTy.getShape();
     auto layout = rankedTy.getEncoding();
 
     auto elemTy = rankedTy.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, shape);
+    auto idxs = emitIndices(loc, rewriter, layout, rankedTy);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
