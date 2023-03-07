@@ -604,7 +604,7 @@ void init_triton_ir(py::module &&m) {
           [](mlir::OpBuilder &self) -> mlir::Type { return self.getI64Type(); })
       .def("get_fp8_ty",
            [](mlir::OpBuilder &self) -> mlir::Type {
-             return self.getType<mlir::Float8E4M3FNType>();
+             return self.getType<mlir::triton::Float8Type>();
            })
       .def(
           "get_half_ty",
