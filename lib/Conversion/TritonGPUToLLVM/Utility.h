@@ -288,9 +288,17 @@ struct RewriteEnvGuard {
   static Location *kLoc;
 };
 
-#define OPERATOR_FOR_EACH(__fn)                                                \
-  __fn(+, add) __fn(-, sub) __fn(*, mul) __fn(/, udiv) __fn(^, xor_)           \
-      __fn(%, urem)
+
+// clang-format off
+#define OPERATOR_FOR_EACH(__fn)  \
+  __fn(+, add)   \
+  __fn(-, sub)   \
+  __fn(*, mul)   \
+  __fn(/, udiv)  \
+  __fn(^, xor_)  \
+  __fn(%, urem)
+
+// clang-format on
 
 #define OPERATOR_WITH_VALUE_DECL(opr__, macro__)                               \
   Value operator opr__(const Value &a, const Value &b);
