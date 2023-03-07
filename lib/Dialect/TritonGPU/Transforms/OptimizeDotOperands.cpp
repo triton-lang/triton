@@ -120,15 +120,56 @@ public:
   }
 };
 
+class MoveOpAfterLayoutConversion : public mlir::RewritePattern {
+
+public:
+  MoveOpAfterLayoutConversion(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto srcTy = cvt.getOperand().getType().cast<RankedTensorType>();
+    auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
+    if (!retTy)
+      return failure();
+    if (!isa<triton::gpu::DotOperandEncodingAttr>(retTy.getEncoding()))
+      return failure();
+    if (isa<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding()))
+      return failure();
+    //
+    Operation *argOp = cvt.getOperand().getDefiningOp();
+    //
+    if (!argOp)
+      return failure();
+    // we only handle loads since the goal of this pass is to
+    SetVector<Operation *> processed;
+    SetVector<Attribute> layout;
+    llvm::MapVector<Value, Attribute> toConvert;
+    int numCvts = simulateBackwardRematerialization(
+        cvt, processed, layout, toConvert, retTy.getEncoding());
+    if (numCvts > 1 || toConvert.size() == 1)
+      return failure();
+
+    IRMapping mapping;
+    rematerializeConversionChain(toConvert, rewriter, processed, mapping);
+    rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
+    return mlir::success();
+  }
+};
+
 } // namespace
 
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-class TritonGPUFuseTranspositionsPass
-    : public TritonGPUFuseTranspositionsBase<TritonGPUFuseTranspositionsPass> {
+class TritonGPUOptimizeDotOperandsPass
+    : public TritonGPUOptimizeDotOperandsBase<
+          TritonGPUOptimizeDotOperandsPass> {
 public:
-  TritonGPUFuseTranspositionsPass() = default;
+  TritonGPUOptimizeDotOperandsPass() = default;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -141,6 +182,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<ConvertTransConvert>(context);
+    // patterns.add<MoveOpAfterLayoutConversion>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
     if (fixupLoops(m).failed())
@@ -148,6 +190,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUFuseTranspositionsPass() {
-  return std::make_unique<TritonGPUFuseTranspositionsPass>();
+std::unique_ptr<Pass> mlir::createTritonGPUOptimizeDotOperandsPass() {
+  return std::make_unique<TritonGPUOptimizeDotOperandsPass>();
 }

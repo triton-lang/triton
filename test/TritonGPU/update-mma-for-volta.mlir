@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-fuse-transposition -tritongpu-update-mma-for-volta 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-optimize-dot-operands -tritongpu-update-mma-for-volta 2>&1 | FileCheck %s
 
 // -----
 

@@ -224,7 +224,7 @@ public:
 private:
   Value smem;
 
-  using IndexCacheKeyT = std::pair<Attribute, SmallVector<int64_t>>;
+  using IndexCacheKeyT = std::pair<Attribute, RankedTensorType>;
   DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
       baseIndexCache;
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
