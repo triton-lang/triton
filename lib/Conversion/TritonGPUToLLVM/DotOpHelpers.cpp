@@ -1,5 +1,6 @@
 #include "DotOpHelpers.h"
 #include "TypeConverter.h"
+#include "Utility.h"
 
 namespace mlir {
 namespace LLVM {
@@ -68,6 +69,8 @@ Value DotOpMmaV1ConversionHelper::loadA(
   auto shape = tensorTy.getShape();
   auto order = sharedLayout.getOrder();
 
+  RewriteEnvGuard guard(rewriter, loc);
+
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
@@ -100,15 +103,14 @@ Value DotOpMmaV1ConversionHelper::loadA(
   // pre-compute pointer lanes
   Value offA0 = isARow ? offsetAK : offsetAM;
   Value offA1 = isARow ? offsetAM : offsetAK;
-  Value phaseA = urem(udiv(offA1, i32_val(perPhaseA)), i32_val(maxPhaseA));
-  offA0 = add(offA0, cSwizzleOffset);
+  Value phaseA = offA1 / perPhaseA % maxPhaseA;
+
+  offA0 = offA0 + cSwizzleOffset;
   SmallVector<Value> offA(numPtrA);
   for (int i = 0; i < numPtrA; i++) {
-    Value offA0I = add(offA0, i32_val(i * (isARow ? 4 : strideRepM)));
-    offA0I = udiv(offA0I, i32_val(vecA));
-    offA0I = xor_(offA0I, phaseA);
-    offA0I = mul(offA0I, i32_val(vecA));
-    offA[i] = add(mul(offA0I, strideA0), mul(offA1, strideA1));
+    Value offA0I = offA0 + i * (isARow ? 4 : strideRepM);
+    offA0I = ((offA0I / vecA) ^ phaseA) * vecA;
+    offA[i] = offA0I * strideA0 + offA1 * strideA1;
   }
 
   Type elemX2Ty = vec_ty(f16_ty, 2);
@@ -175,6 +177,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
     TritonGPUToLLVMTypeConverter *typeConverter,
     ConversionPatternRewriter &rewriter, Type resultTy) const {
+  RewriteEnvGuard guard(rewriter, loc);
   // smem
   auto strides = smemObj.strides;
 
@@ -213,17 +216,15 @@ Value DotOpMmaV1ConversionHelper::loadB(
 
   Value offB0 = isBRow ? offsetBN : offsetBK;
   Value offB1 = isBRow ? offsetBK : offsetBN;
-  Value phaseB = urem(udiv(offB1, i32_val(perPhaseB)), i32_val(maxPhaseB));
+  Value phaseB = (offB1 / perPhaseB) % maxPhaseB;
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
 
-  offB0 = add(offB0, cSwizzleOffset);
+  offB0 = offB0 + cSwizzleOffset;
   SmallVector<Value> offB(numPtrB);
   for (int i = 0; i < numPtrB; ++i) {
-    Value offB0I = add(offB0, i32_val(i * (isBRow ? strideRepN : 4)));
-    offB0I = udiv(offB0I, i32_val(vecB));
-    offB0I = xor_(offB0I, phaseB);
-    offB0I = mul(offB0I, i32_val(vecB));
-    offB[i] = add(mul(offB0I, strideB0), mul(offB1, strideB1));
+    Value offB0I = offB0 + i * (isBRow ? strideRepN : 4);
+    offB0I = (offB0I / vecB ^ phaseB) * vecB;
+    offB[i] = offB0I * strideB0 + offB1 * strideB1;
   }
 
   Type elemPtrTy = ptr_ty(f16_ty, 3);

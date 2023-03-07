@@ -146,5 +146,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   return stringStart;
 }
 
+OPERATOR_FOR_EACH(OPERATOR_WITH_VALUE_DEF)
+
 } // namespace LLVM
 } // namespace mlir

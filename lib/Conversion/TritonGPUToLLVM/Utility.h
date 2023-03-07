@@ -265,6 +265,63 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
+// Operator overriding begin
+// @{
+struct RewriteEnvGuard {
+  PatternRewriter *oldPatternRewriter{};
+  Location *oldLoc{};
+
+  RewriteEnvGuard(PatternRewriter &rewriter, Location &loc) {
+    oldPatternRewriter = kPatternRewriter;
+    oldLoc = kLoc;
+
+    kPatternRewriter = &rewriter;
+    kLoc = &loc;
+  }
+
+  ~RewriteEnvGuard() {
+    kPatternRewriter = oldPatternRewriter;
+    kLoc = oldLoc;
+  }
+
+  static PatternRewriter *kPatternRewriter;
+  static Location *kLoc;
+};
+
+#define OPERATOR_FOR_EACH(__fn)                                                \
+  __fn(+, add) __fn(-, sub) __fn(*, mul) __fn(/, udiv) __fn(^, xor_)           \
+      __fn(%, urem)
+
+#define OPERATOR_WITH_VALUE_DECL(opr__, macro__)                               \
+  Value operator opr__(const Value &a, const Value &b);
+
+#define OPERATOR_WITH_VALUE_DEF(opr__, macro__)                                \
+  Value operator opr__(const Value &a, const Value &b) {                       \
+    auto &loc = *RewriteEnvGuard::kLoc;                                        \
+    auto &rewriter = *RewriteEnvGuard::kPatternRewriter;                       \
+    return macro__(a, b);                                                      \
+  }
+
+#define OPERATOR_WITH_INT_DEF(opr__, macro__)                                  \
+  template <typename T, std::enable_if_t<std::is_integral_v<T>, bool> = true>  \
+  Value operator opr__(const Value &a, T b) {                                  \
+    constexpr int bits = sizeof(b) * 8;                                        \
+    assert(a.getType().isInteger(bits) ||                                      \
+           a.getType().template isa<LLVM::PointerType>());                     \
+    auto &loc = *RewriteEnvGuard::kLoc;                                        \
+    auto &rewriter = *RewriteEnvGuard::kPatternRewriter;                       \
+    Type intTy = rewriter.getIntegerType(bits);                                \
+    auto bV = rewriter.create<LLVM::ConstantOp>(loc, intTy,                    \
+                                                IntegerAttr::get(intTy, b));   \
+    return macro__(a, bV);                                                     \
+  }
+
+OPERATOR_FOR_EACH(OPERATOR_WITH_VALUE_DECL)
+OPERATOR_FOR_EACH(OPERATOR_WITH_INT_DEF)
+
+// @}
+// Operator overriding end
+
 } // namespace LLVM
 } // namespace mlir
 
