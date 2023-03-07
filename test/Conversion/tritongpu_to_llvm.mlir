@@ -20,8 +20,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // PTX: llvm.inline_asm
 
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast %6 : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     %1 = tt.load %a_ptr_init, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     return
   }
@@ -34,9 +38,13 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: vectorized_load
   func.func @vectorized_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32)>
     // PTX: llvm.inline_asm
@@ -55,7 +63,30 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: vectorized_load_f16
   func.func @vectorized_load_f16(%a_ptr_init: tensor<256x!tt.ptr<f16>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf16, #blocked0>) {
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f16, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
+    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
+    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
+    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
+    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
+    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
+    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
+    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f16, 1> to !llvm.ptr<i16>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i16>
+    // GCN: llvm.bitcast {{.*}} : i16 to vector<1xf16>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
@@ -118,7 +149,19 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
     // Load 4 elements from vector0
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
@@ -130,7 +173,18 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
     // Load 4 elements from vector1
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
@@ -180,7 +234,18 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
     // Load 4 elements from A with single one vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
@@ -189,7 +254,18 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
     // Load 4 elements from B with single one vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32)>
@@ -236,7 +312,9 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     %10 = "triton_gpu.cmpi"(%4, %9) {predicate = 2 : i64} : (tensor<64xi32, #blocked>, tensor<64xi32, #blocked>) -> tensor<64xi1, #blocked>
     // load op has a vector width = 1 due to the %mask's alignment
     // GCN-NOT: llvm.inline_asm
-    // GCN: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // PTX: ld.global.b32
     %11 = tt.load %6, %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32, #blocked>
     %12 = tt.load %8, %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xf32, #blocked>
@@ -267,7 +345,30 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
     // Load 8 elements from A with four vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
@@ -283,7 +384,30 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
     // Load 8 elements from B with four vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
@@ -342,7 +466,30 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
     // Load 8 elements from A with two vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
@@ -356,7 +503,30 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
     // Load 8 elements from B with two vectorized load instruction
     // GCN-NOT: llvm.inline_asm
-    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
@@ -631,7 +801,30 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // PTX: llvm.inline_asm has_side_effects asm_dialect = att
     // PTX-SAME: cp.async.commit_group
 
-    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN: llvm.store {{.*}} : !llvm.ptr<vector<8xf32>, 3>
     // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x64x!tt.ptr<f32>, #AL> -> tensor<2x16x64xf32, #A>
@@ -686,7 +879,18 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // PTX: llvm.inline_asm
     // PTX-SAME: cp.async.commit_group
 
-    // GCN-COUNT-4: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN-COUNT-4: llvm.store {{.*}} : !llvm.ptr<vector<1xf32>, 3>
     // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x32x!tt.ptr<f32>, #AL> -> tensor<2x16x32xf32, #A>
@@ -752,7 +956,30 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // PTX: llvm.inline_asm
     // PTX-SAME: cp.async.commit_group
 
-    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<f32, 1>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
     // GCN-COUNT-8: llvm.store {{.*}} : !llvm.ptr<vector<1xf32>, 3>
     // GCN: llvm.inline_asm {{.*}}cp.async.commit_group
     %a = triton_gpu.insert_slice_async %a_ptr, %tensor, %index {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f32>, #AL> -> tensor<2x32x32xf32, #A>
