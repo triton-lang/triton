@@ -314,27 +314,28 @@ struct FpToFpOpConversion
     SmallVector<Value> resultVals;
 
     // Select convertor
-    if (srcEltType.isa<triton::Float8Type>() ||
-        dstEltType.isa<triton::Float8Type>()) {
+    bool isSrcF8 = srcEltType.isa<mlir::Float8E4M3FNType>();
+    bool isDstF8 = dstEltType.isa<mlir::Float8E4M3FNType>();
+    if (isSrcF8 || isDstF8) {
       std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                        const Value &, const Value &,
                                        const Value &, const Value &)>
           convertor;
-      if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF16()) {
+      if (isSrcF8 && dstEltType.isF16()) {
         convertor = convertFp8x4ToFp16x4;
-      } else if (srcEltType.isF16() && dstEltType.isa<triton::Float8Type>()) {
+      } else if (srcEltType.isF16() && isDstF8) {
         convertor = convertFp16x4ToFp8x4;
-      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isBF16()) {
+      } else if (isSrcF8 && dstEltType.isBF16()) {
         convertor = convertFp8x4ToBf16x4;
-      } else if (srcEltType.isBF16() && dstEltType.isa<triton::Float8Type>()) {
+      } else if (srcEltType.isBF16() && isDstF8) {
         convertor = convertBf16x4ToFp8x4;
-      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF32()) {
+      } else if (isSrcF8 && dstEltType.isF32()) {
         convertor = convertFp8x4ToFp32x4;
-      } else if (srcEltType.isF32() && dstEltType.isa<triton::Float8Type>()) {
+      } else if (srcEltType.isF32() && isDstF8) {
         convertor = convertFp32x4ToFp8x4;
-      } else if (srcEltType.isa<triton::Float8Type>() && dstEltType.isF64()) {
+      } else if (isSrcF8 && dstEltType.isF64()) {
         convertor = convertFp8x4ToFp64x4;
-      } else if (srcEltType.isF64() && dstEltType.isa<triton::Float8Type>()) {
+      } else if (srcEltType.isF64() && isDstF8) {
         convertor = convertFp64x4ToFp8x4;
       } else {
         assert(false && "unsupported fp8 casting");

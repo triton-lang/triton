@@ -72,7 +72,7 @@ def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape,
 def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
-                                     DeclareOpInterfaceMethods<CastOpInterface>]> {
+                                     /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
     let summary = "Floating point casting for custom types";
 
     let description = [{
