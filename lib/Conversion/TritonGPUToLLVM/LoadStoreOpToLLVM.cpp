@@ -660,7 +660,7 @@ struct InsertSliceOpConversion
     auto smemBase = gep(elemPtrTy, smemObj.base, offset);
 
     auto llSrc = adaptor.getSource();
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
     storeDistributedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
                              elemTy, loc, rewriter);
     // Barrier is not necessary.
@@ -785,7 +785,7 @@ struct InsertSliceAsyncOpConversion
     // single vector read into multiple ones
     auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
 
-    auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcShape);
+    auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcTy);
 
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       // 16 * 8 = 128bits
