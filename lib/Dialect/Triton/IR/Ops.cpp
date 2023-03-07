@@ -238,21 +238,10 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
 }
 
 //-- ReduceOp --
-mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
-  // infer shape
-  Value arg = operands[0];
-  auto argTy = arg.getType().cast<RankedTensorType>();
-  auto argEltTy = argTy.getElementType();
-  auto i32Ty = IntegerType::get(argEltTy.getContext(), 32);
-  auto redOp =
-      attributes.get("redOp").cast<mlir::triton::RedOpAttr>().getValue();
-  bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
-  auto retEltTy = withIndex ? i32Ty : argEltTy;
+static mlir::LogicalResult inferReduceReturnShape(
+    const RankedTensorType &argTy, const Type &retEltTy,
+    int axis, SmallVectorImpl<Type> &inferredReturnTypes) {
   auto retShape = argTy.getShape().vec();
-  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
   retShape.erase(retShape.begin() + axis);
   if (retShape.empty()) {
     // 0d-tensor -> scalar
@@ -280,6 +269,22 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
   return mlir::success();
 }
 
+mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  Value arg = operands[0];
+  auto argTy = arg.getType().cast<RankedTensorType>();
+  auto argEltTy = argTy.getElementType();
+  auto i32Ty = IntegerType::get(argEltTy.getContext(), 32);
+  auto redOp =
+      attributes.get("redOp").cast<mlir::triton::RedOpAttr>().getValue();
+  bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
+  auto retEltTy = withIndex ? i32Ty : argEltTy;
+  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  return inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
+}
+
 bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
   return redOp == mlir::triton::RedOp::ARGMIN ||
          redOp == mlir::triton::RedOp::ARGMAX ||
@@ -287,6 +292,45 @@ bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
          redOp == mlir::triton::RedOp::ARGUMAX ||
          redOp == mlir::triton::RedOp::ARGFMIN ||
          redOp == mlir::triton::RedOp::ARGFMAX;
+}
+
+//-- GenericReduceOp --
+mlir::LogicalResult mlir::triton::GenericReduceOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  Value arg = operands[0];
+  auto argTy = arg.getType().cast<RankedTensorType>();
+  auto retEltTy = argTy.getElementType();
+  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  return inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
+}
+
+mlir::LogicalResult mlir::triton::GenericReduceOp::verifyRegions() {
+  auto argTy = getOperand().getType().cast<RankedTensorType>();
+  auto argElemTy = argTy.getElementType();
+
+  constexpr unsigned num_args = 2;
+  auto &block = this->getBody();
+  if (block.getNumArguments() != num_args) {
+    return emitOpError() << "nested block must take " << num_args
+                         << " arguments, but given block with "
+                         << block.getNumArguments() << " arguments";
+  }
+  unsigned i = 0;
+  for (const auto & blockArgTy: block.getArgumentTypes()) {
+    if (blockArgTy != argElemTy) {
+      return this->emitOpError() << "types mismatch on reduction block. Expected argument " << i
+                                 << " to have type " << argElemTy << " but got " << blockArgTy;
+    }
+    ++i;
+  }
+
+  if (!mlir::isa<mlir::triton::GenericReduceReturnOp>(block.getTerminator())) {
+    return this->emitOpError("the GenericReduceOp region must be terminated "
+                             "with a GenericReduceReturnOp but got") << block.getTerminator();
+  }
+  return mlir::success();
 }
 
 //-- SplatOp --

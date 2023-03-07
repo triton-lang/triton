@@ -1,5 +1,6 @@
 from __future__ import annotations  # remove after python 3.11
 
+from contextlib import contextmanager
 from typing import List, Optional, Tuple
 
 from . import core as tl
@@ -1185,6 +1186,41 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
         raise ValueError("xor_sum only supported for integers")
     return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.XOR, ir.REDUCE_OP.XOR)
 
+def reduction(input: tl.tensor, axis: int, region_builder_fn, builder: ir.builder) -> tl.tensor:
+    scalar_ty = input.type.scalar
+
+    # get result type
+    shape = input.type.shape
+    ret_shape = [s for i, s in enumerate(shape) if i != axis]
+    if ret_shape:
+        res_ty = tl.block_type(scalar_ty, ret_shape)
+    else:
+        # 0d-tensor -> scalar
+        res_ty = out_scalar_ty
+
+    reduce_op = builder.create_generic_reduce(input.handle, axis)
+    region_builder_fn(reduce_op)
+    reduce_op.verify()
+
+    return tl.tensor(reduce_op.get_result(0), res_ty)
+
+@contextmanager
+def insertion_guard(builder):
+    ip = builder.get_insertion_point()
+    yield
+    builder.restore_insertion_point(ip)
+
+def prod(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+
+    def make_mul(reduce_op):
+        ir_scalar_ty = input.type.scalar.to_ir(builder)
+        region = reduce_op.get_region(0)
+        with insertion_guard(builder):
+            block = builder.create_block_with_parent(region, [ir_scalar_ty] * 2)
+            fmul = builder.create_fmul(block.arg(0), block.arg(1))
+            builder.create_reduce_ret(fmul)
+
+    return reduction(input, axis, make_mul, builder)
 
 # ===----------------------------------------------------------------------===
 #                               Math

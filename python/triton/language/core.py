@@ -1168,6 +1168,13 @@ def xor_sum(input, axis, _builder=None):
     return semantic.xor_sum(input, axis, _builder)
 
 
+@builtin
+@_add_reduction_docstr("prod")
+def prod(input, axis, _builder):
+    axis = _constexpr_to_value(axis)
+    return semantic.prod(input, axis, _builder)
+
+
 # -----------------------
 # Internal for debugging
 # -----------------------

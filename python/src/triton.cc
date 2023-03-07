@@ -440,6 +440,8 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("type", &mlir::func::FuncOp::getFunctionType)
       .def("reset_type", &mlir::func::FuncOp::setType);
 
+  py::class_<mlir::triton::GenericReduceOp, mlir::OpState>(m, "GenericReduceOp");
+
   py::class_<mlir::OpBuilder::InsertPoint>(m, "InsertPoint");
 
   py::class_<mlir::OpBuilder>(m, "builder", py::dynamic_attr())
@@ -1325,6 +1327,26 @@ void init_triton_ir(py::module &&m) {
              }
              return self.create<mlir::triton::ReduceOp>(loc, resType, redOp,
                                                         operand, axis);
+           })
+      .def("create_generic_reduce",
+           [](mlir::OpBuilder &self, mlir::Value &operand, int axis) -> mlir::triton::GenericReduceOp {
+             auto loc = self.getUnknownLoc();
+             auto inputTensorType =
+                 operand.getType().dyn_cast<mlir::RankedTensorType>();
+             std::vector<int64_t> shape = inputTensorType.getShape();
+             shape.erase(shape.begin() + axis);
+             mlir::Type resType = inputTensorType.getElementType();
+             if (!shape.empty()) {
+               resType = mlir::RankedTensorType::get(shape, resType);
+             }
+             return self.create<mlir::triton::GenericReduceOp>(
+                 loc, resType, operand, axis);
+           })
+      .def("create_reduce_ret",
+           [](mlir::OpBuilder &self, mlir::Value &return_value) -> mlir::OpState {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::GenericReduceReturnOp>(
+                 loc, return_value);
            })
       .def("create_ptr_to_int",
            [](mlir::OpBuilder &self, mlir::Value &val,
