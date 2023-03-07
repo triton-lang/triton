@@ -128,28 +128,12 @@ TritonGPUToLLVMTypeConverter::convertTritonTensorType(RankedTensorType type) {
         Type targetTy;
         if (targetTyMap.count(elemTy.getIntOrFloatBitWidth())) {
           targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
-          // <2xi16>/<4xi8> => i32
-          // We are doing this because NVPTX inserts extra integer instrs to
-          // pack & unpack vectors of sub-word integers
-          // Note: this needs to be synced with
-          //       DotOpMmaV2ConversionHelper::loadX4
-          if (elemTy.isa<IntegerType>() &&
-              (elemTy.getIntOrFloatBitWidth() == 8 ||
-               elemTy.getIntOrFloatBitWidth() == 16))
-            targetTy = IntegerType::get(ctx, 32);
         } else {
           assert(false && "Unsupported element type");
         }
-        if (dotOpLayout.getOpIdx() == 0) { // $a
-          auto elems =
-              MMA16816ConversionHelper::getANumElemsPerThread(type, wpt[0]);
-          return struct_ty(SmallVector<Type>(elems, targetTy));
-        }
-        if (dotOpLayout.getOpIdx() == 1) { // $b
-          auto elems =
-              MMA16816ConversionHelper::getBNumElemsPerThread(type, wpt[1]);
-          return struct_ty(SmallVector<Type>(elems, targetTy));
-        }
+        auto elems =
+            getElemsPerThread(type) / (32 / elemTy.getIntOrFloatBitWidth());
+        return struct_ty(SmallVector<Type>(elems, targetTy));
       }
 
       if (mmaLayout.isVolta()) {
@@ -172,7 +156,6 @@ TritonGPUToLLVMTypeConverter::convertTritonTensorType(RankedTensorType type) {
         }
       }
     }
-
     llvm::errs() << "Unexpected dot operand layout detected in "
                     "TritonToLLVMTypeConverter";
     return std::nullopt;

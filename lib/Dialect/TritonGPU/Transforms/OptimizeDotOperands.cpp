@@ -182,7 +182,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<OptimizeConvertToDotOperand>(context);
     patterns.add<ConvertTransConvert>(context);
-    // patterns.add<MoveOpAfterLayoutConversion>(context);
+    patterns.add<MoveOpAfterLayoutConversion>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
     if (fixupLoops(m).failed())

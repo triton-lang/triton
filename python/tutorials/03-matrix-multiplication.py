@@ -156,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -221,6 +221,7 @@ def matmul_kernel(
         # error or (worse!) incorrect results.
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
+        b = b.to(tl.float8, bitcast=True).to(tl.float16)
         # We accumulate along the K dimension
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block
@@ -255,8 +256,6 @@ def leaky_relu(x):
 def matmul(a, b, activation=None):
     # checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
-    assert a.is_contiguous(), "matrix A must be contiguous"
-    assert b.is_contiguous(), "matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
     assert (
@@ -268,14 +267,16 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    matmul_kernel[grid](
+    h = matmul_kernel[grid](
         a, b, c,
+        # a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
         ACTIVATION=activation,
     )
+    print(h.asm["ttgir"])
     return c
 
 
@@ -287,7 +288,10 @@ def matmul(a, b, activation=None):
 
 torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+b = torch.randint(-128, 127, (512, 512), dtype=torch.int8, device='cuda')
+# b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+
+b = b.t()
 triton_output = matmul(a, b, activation=None)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
@@ -335,4 +339,4 @@ def benchmark(M, N, K, provider):
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+# benchmark.run(show_plots=True, print_data=True)
