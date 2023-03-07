@@ -9,8 +9,8 @@ import tarfile
 import tempfile
 import urllib.request
 from distutils.version import LooseVersion
-from typing import NamedTuple
 from pathlib import Path
+from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
@@ -52,7 +52,6 @@ def get_pybind11_package_info():
     return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 # llvm
-
 
 
 def get_llvm_package_info():
