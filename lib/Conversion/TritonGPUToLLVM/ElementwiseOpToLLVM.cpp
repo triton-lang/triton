@@ -980,12 +980,17 @@ struct ExpOpConversionApprox
     const double log2e = 1.4426950408889634;
     Value prod = fmul(f32_ty, operands[0], f32_val(log2e));
 
+#ifdef USE_ROCM
+    return rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
+                                         adaptor.getAttributes().getValue());
+#else
     PTXBuilder ptxBuilder;
     auto &exp2 = ptxBuilder.create<PTXInstr>("ex2")->o("approx").o("f32");
     auto output = ptxBuilder.newOperand("=f");
     auto input = ptxBuilder.newOperand(prod, "f");
     exp2(output, input);
     return ptxBuilder.launch(rewriter, loc, f32_ty, false);
+#endif
   }
 };
 
@@ -1055,7 +1060,5 @@ void populateElementwiseOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   // For FP64 input type, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
-#ifndef USE_ROCM
   patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
-#endif
 }
