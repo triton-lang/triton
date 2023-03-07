@@ -95,7 +95,7 @@ def get_thirdparty_packages(triton_cache_path):
             file = tarfile.open(fileobj=ftpstream, mode="r|*")
             file.extractall(path=package_root_dir)
             # write version url to package_root_dir
-            with open(os.path.join(package_root_dir, "version.txt"), "w") as f:
+            with open(os.path.join(package_dir, "version.txt"), "w") as f:
                 f.write(p.url)
         if p.include_flag:
             thirdparty_cmake_args.append(f"-D{p.include_flag}={package_dir}/include")
