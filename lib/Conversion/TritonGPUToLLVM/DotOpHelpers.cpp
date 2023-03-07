@@ -295,11 +295,14 @@ DotOpMmaV1ConversionHelper::computeOffsets(Value threadId, bool isARow,
   Value _3 = i32_val(3);
   Value _4 = i32_val(4);
   Value _16 = i32_val(16);
-  Value _32 = i32_val(32);
+#ifdef USE_ROCM
+  Value warpSize = i32_val(64);
+#else
+  Value warpSize = i32_val(32);
+#endif
 
-  Value lane = urem(threadId, _32);
-  Value warp = udiv(threadId, _32);
-
+  Value lane = urem(threadId, warpSize);
+  Value warp = udiv(threadId, warpSize);
   // warp offset
   Value warp0 = urem(warp, i32_val(wpt[0]));
   Value warp12 = udiv(warp, i32_val(wpt[0]));
@@ -377,7 +380,11 @@ DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
   Value _2 = i32_val(2);
   Value _4 = i32_val(4);
   Value _16 = i32_val(16);
-  Value _32 = i32_val(32);
+#ifdef USE_ROCM
+  Value warpSize = i32_val(64);
+#else
+  Value warpSize = i32_val(32);
+#endif
   Value _fpw0 = i32_val(fpw[0]);
   Value _fpw1 = i32_val(fpw[1]);
 
@@ -388,8 +395,8 @@ DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
   SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
   SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
 
-  Value lane = urem(thread, _32);
-  Value warp = udiv(thread, _32);
+  Value lane = urem(thread, warpSize);
+  Value warp = udiv(thread, warpSize);
 
   Value warp0 = urem(warp, i32_val(wpt[0]));
   Value warp12 = udiv(warp, i32_val(wpt[0]));

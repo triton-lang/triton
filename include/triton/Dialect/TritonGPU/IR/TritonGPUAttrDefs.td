@@ -229,8 +229,13 @@ for
                      "ArrayRef<unsigned>":$order,
                      "unsigned":$numWarps), [{
       int rank = sizePerThread.size();
+#ifdef USE_ROCM
+      unsigned remainingLanes = 64;
+      unsigned remainingThreads = numWarps*64;
+#else
       unsigned remainingLanes = 32;
       unsigned remainingThreads = numWarps*32;
+#endif
       unsigned remainingWarps = numWarps;
       unsigned prevLanes = 1;
       unsigned prevWarps = 1;
@@ -248,9 +253,12 @@ for
         prevWarps *= warpsPerCTA[i];
       }
       // Expand the last dimension to fill the remaining lanes and warps
+#ifdef USE_ROCM
+      threadsPerWarp[order[rank-1]] = 64 / prevLanes;
+#else
       threadsPerWarp[order[rank-1]] = 32 / prevLanes;
+#endif
       warpsPerCTA[order[rank-1]] = numWarps / prevWarps;
-
       return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order);
 
     }]>

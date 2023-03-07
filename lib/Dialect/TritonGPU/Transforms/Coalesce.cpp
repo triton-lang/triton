@@ -49,7 +49,11 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
         }
       }
     int numElems = product(origType.getShape());
+#ifdef USE_ROCM
+    int numThreads = numWarps * 64;
+#else
     int numThreads = numWarps * 32;
+#endif
     int numElemsPerThread = std::max(numElems / numThreads, 1);
     // Thread tile size depends on memory alignment
     SmallVector<unsigned, 4> sizePerThread(rank, 1);

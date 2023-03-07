@@ -130,14 +130,36 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   }
 
 #ifdef USE_ROCM
-  // This map facilates the butterfly shuffle pattern for a stride less than 16. The pattern stride is the key of the map.
-  DenseMap<short, unsigned int> masks{{16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
-  GCNBuilder builder; 
-  auto shfl = builder.create("ds_swizzle_b32");
-  auto dOpr = builder.newOperand("=v");
-  auto aOpr = builder.newOperand(val, "v");
-  auto maskOpr = builder.newConstantOperand("offset:" + std::to_string(masks[i]));
-  (*shfl)(dOpr, aOpr, maskOpr);
+  GCNBuilder builder;
+  if (i > 16) {
+    Value threadId =
+        rewriter
+            .create<UnrealizedConversionCastOp>(
+                loc, TypeRange{i32_ty},
+                ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
+                    loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
+            .getResult(0);
+    Value stride = i32_val(32);
+    Value byteOffset = i32_val(2);
+    Value lineId = add(threadId, stride);
+    Value permuteAddr = shl(lineId, byteOffset);
+    auto shfl = builder.create("ds_permute_b32");
+    auto dOpr = builder.newOperand("=v");
+    auto addrOpr = builder.newOperand(permuteAddr, "v");
+    auto aOpr = builder.newOperand(val, "v");
+    (*shfl)(dOpr, addrOpr, aOpr);
+  } else {
+    // This map facilates the butterfly shuffle pattern for a stride less
+    // than 16. The pattern stride is the key of the map.
+    DenseMap<short, unsigned int> masks{
+        {16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
+    auto shfl = builder.create("ds_swizzle_b32");
+    auto dOpr = builder.newOperand("=v");
+    auto aOpr = builder.newOperand(val, "v");
+    auto maskOpr =
+        builder.newConstantOperand("offset:" + std::to_string(masks[i]));
+    (*shfl)(dOpr, aOpr, maskOpr);
+  }
   auto swait = builder.create("s_waitcnt lgkmcnt(0)");
   (*swait)();
 #else
