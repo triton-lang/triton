@@ -4,9 +4,9 @@
 
 // == LLVM IR check begin ==
 // CHECK-LABEL: {{^}}test_float16_load:
-// CHECK: global_load_dwordx2
-// CHECK: global_load_dwordx2
-// CHECK: global_store_dwordx2
+// CHECK: global_load_dword
+// CHECK: global_load_dword
+// CHECK: global_store_dword
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
