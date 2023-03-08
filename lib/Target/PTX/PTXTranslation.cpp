@@ -81,17 +81,18 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   else
     module.setDataLayout(layout);
   // emit machine code
-  std::string result;
-  llvm::raw_string_ostream stream(result);
-  llvm::buffer_ostream pstream(stream);
   for (llvm::Function &f : module.functions())
     f.addFnAttr(llvm::Attribute::AlwaysInline);
-  llvm::legacy::PassManager pass;
-  // emit
-  machine->addPassesToEmitFile(pass, pstream, nullptr,
-                               llvm::CodeGenFileType::CGFT_AssemblyFile);
-  pass.run(module);
-  stream.flush();
+  std::string result;
+  {
+    llvm::raw_string_ostream stream(result);
+    llvm::buffer_ostream pstream(stream);
+    llvm::legacy::PassManager pass;
+    // emit
+    machine->addPassesToEmitFile(pass, pstream, nullptr,
+                                 llvm::CodeGenFileType::CGFT_AssemblyFile);
+    pass.run(module);
+  }
 
   // post-process
   findAndReplace(result, ".version", "\n",
