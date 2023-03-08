@@ -25,6 +25,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
+#include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
@@ -1433,10 +1434,12 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createCombineOpsPass());
            })
       .def("add_convert_triton_to_tritongpu_pass",
-           [](mlir::PassManager &self, int numWarps) {
+           [](mlir::PassManager &self, int numWarps, int threadsPerWarp) {
              self.addPass(
-                 mlir::triton::createConvertTritonToTritonGPUPass(numWarps));
-           })
+                 mlir::triton::createConvertTritonToTritonGPUPass(numWarps, threadsPerWarp));
+           },
+           py::arg("numWarps") = 4,
+           py::arg("threadsPerWarp") = 32)
       .def("add_tritongpu_pipeline_pass",
            [](mlir::PassManager &self, int numStages) {
              self.addPass(mlir::createTritonGPUPipelinePass(numStages));
@@ -1504,6 +1507,29 @@ void init_triton_translation(py::module &m) {
         return str;
       },
       ret::take_ownership);
+
+  m.def(
+          "translate_triton_gpu_to_spirv",
+          [](mlir::ModuleOp op, int computeCapability) {
+            auto spirvModule = ::mlir::triton::translateTritonGPUToSPIRVIR(op, computeCapability);
+            if (spirvModule.empty())
+              llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
+
+            return spirvModule;
+          },
+          ret::take_ownership);
+
+  m.def("compile_spirv_to_spvbin",
+        [](const std::string &spirvCode, int capability) -> py::object {
+          std::string spvbin;
+          llvm::raw_string_ostream os(spvbin);
+
+          if (failed(::mlir::triton::assembleSPIRV(spirvCode, os)))
+            llvm::report_fatal_error("Failed to assemble SPIRV.");
+
+          py::bytes bytes(spvbin);
+          return std::move(bytes);
+        });
 
   m.def(
       "translate_llvmir_to_ptx",
