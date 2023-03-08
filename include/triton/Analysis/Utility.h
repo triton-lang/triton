@@ -11,9 +11,24 @@
 namespace mlir {
 
 class ReduceOpHelper {
+  ReduceOpHelper(Operation *op, int axis, bool withIndex)
+    : op(op), axis(axis), withIndex(withIndex) {
+    srcTy = op->getOperands().front().getType().cast<RankedTensorType>();
+  }
+
 public:
-  explicit ReduceOpHelper(triton::ReduceOp op) : op(op) {
-    srcTy = op.getOperand().getType().cast<RankedTensorType>();
+  explicit ReduceOpHelper(triton::ReduceOp op):
+    ReduceOpHelper(
+        op.getOperation(),
+        op.getAxis(),
+        triton::ReduceOp::withIndex(op.getRedOp())) {
+  }
+
+  explicit ReduceOpHelper(triton::GenericReduceOp op):
+    ReduceOpHelper(
+        op.getOperation(),
+        op.getAxis(),
+        /*withIndex*/false) {
   }
 
   ArrayRef<int64_t> getSrcShape() { return srcTy.getShape(); }
@@ -35,8 +50,10 @@ public:
   unsigned getScratchSizeInBytes();
 
 private:
-  triton::ReduceOp op;
+  Operation *op;
   RankedTensorType srcTy{};
+  int axis;
+  bool withIndex;
 };
 
 bool isSharedEncoding(Value value);

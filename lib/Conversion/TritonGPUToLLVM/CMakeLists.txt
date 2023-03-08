@@ -7,6 +7,7 @@ add_mlir_conversion_library(TritonGPUToLLVM
     TritonGPUToLLVMPass.cpp
     PTXAsmFormat.cpp
     ReduceOpToLLVM.cpp
+    GenericReduceOpToLLVM.cpp
     Utility.cpp
     TypeConverter.cpp
     ViewOpToLLVM.cpp

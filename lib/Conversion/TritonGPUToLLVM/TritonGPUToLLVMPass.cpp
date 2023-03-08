@@ -23,6 +23,7 @@
 #include "ElementwiseOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
 #include "ReduceOpToLLVM.h"
+#include "./GenericReduceOpToLLVM.h"
 #include "TritonGPUToLLVM.h"
 #include "TypeConverter.h"
 #include "ViewOpToLLVM.h"
@@ -199,6 +200,7 @@ public:
     populatePatterns2(populateElementwiseOpToLLVMPatterns);
     populatePatterns1(populateLoadStoreOpToLLVMPatterns);
     populatePatterns1(populateReduceOpToLLVMPatterns);
+    populatePatterns1(populateGenericReduceOpToLLVMPatterns);
     populatePatterns2(populateViewOpToLLVMPatterns);
     // Native lowering patterns
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);

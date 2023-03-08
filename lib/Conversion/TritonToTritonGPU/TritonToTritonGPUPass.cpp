@@ -477,6 +477,38 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   }
 };
 
+struct TritonGenericReducePattern : public OpConversionPattern<triton::GenericReduceOp> {
+  using OpConversionPattern<triton::GenericReduceOp>::OpConversionPattern;
+
+  LogicalResult
+      matchAndRewrite(triton::GenericReduceOp op, OpAdaptor adaptor,
+                      ConversionPatternRewriter &rewriter) const override {
+    auto newReduce = rewriter.create<triton::GenericReduceOp>(
+        op.getLoc(), adaptor.getOperand(), adaptor.getAxis());
+    addNamedAttrs(newReduce, adaptor.getAttributes());
+
+    auto &newRegion = newReduce.getRegion();
+    rewriter.inlineRegionBefore(op.getRegion(), newRegion, newRegion.end());
+    rewriter.replaceOp(op, newReduce.getResult());
+    return success();
+  }
+};
+
+struct TritonGenericReduceReturnPattern :
+    public OpConversionPattern<triton::GenericReduceReturnOp> {
+  using OpConversionPattern<triton::GenericReduceReturnOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::GenericReduceReturnOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    addNamedAttrs(
+        rewriter.replaceOpWithNewOp<triton::GenericReduceReturnOp>(
+            op, adaptor.getResult()),
+        adaptor.getAttributes());
+    return success();
+  }
+};
+
 struct TritonPrintPattern : public OpConversionPattern<triton::PrintOp> {
   using OpConversionPattern<triton::PrintOp>::OpConversionPattern;
 
@@ -518,6 +550,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
           TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
           TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
           TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
+          TritonGenericReducePattern, TritonGenericReduceReturnPattern,
           TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
           TritonStorePattern, TritonExtElemwisePattern, TritonPrintPattern,
           TritonAssertPattern, TritonAtomicRMWPattern>(typeConverter, context);

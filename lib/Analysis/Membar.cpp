@@ -72,6 +72,9 @@ void MembarAnalysis::visitTerminator(Operation *op,
     }
     return;
   }
+  if (isa<triton::GenericReduceReturnOp>(op)) {
+    return;
+  }
   // Otherwise, it could be a return op
   assert(isa<func::ReturnOp>(op) && "Unknown terminator");
 }
