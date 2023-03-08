@@ -537,28 +537,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   // 4. prefetch the next iteration
   SmallVector<Operation *> orderedDeps;
-  SmallVector<Operation *> depLoads;
   for (Operation &op : forOp.getLoopBody().front()) {
-    if (depOps.contains(&op)) {
-      Operation *newOp = &op;
-      if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
-        Value iv = newForOp.getInductionVar();
-        Value loopCond = builder.create<arith::CmpIOp>(
-            iv.getLoc(), arith::CmpIPredicate::slt, iv,
-            newForOp.getUpperBound());
-        auto newMask =
-            getLoadMask(loadOp, mapping.lookupOrDefault(loadOp.getMask()),
-                        loopCond, builder);
-        newOp = builder.create<triton::LoadOp>(
-            loadOp.getLoc(), loadOp.getResult().getType(),
-            mapping.lookupOrDefault(loadOp.getPtr()), newMask,
-            mapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
-            loadOp.getEvict(), loadOp.getIsVolatile());
-        loadOp.replaceAllUsesWith(newOp->getResult(0));
-        depLoads.push_back(loadOp);
-      }
-      orderedDeps.push_back(newOp);
-    } else if (loads.contains(op.getResult(0)))
+    if (depOps.contains(&op))
+      orderedDeps.push_back(&op);
+    else if (loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
@@ -571,10 +553,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
     nextMapping.map(arg, nextArg);
     ++argIdx;
-  }
-
-  for (auto *depLoad : depLoads) {
-    depLoad->erase();
   }
 
   // Special handling for iv & loop condition
@@ -599,9 +577,24 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
 
+  SmallVector<Operation *> depLoads;
   for (Operation *op : orderedDeps)
     if (!loads.contains(op->getResult(0))) {
-      Operation *nextOp = builder.clone(*op, nextMapping);
+      Operation *nextOp;
+      if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
+        auto newMask =
+            getLoadMask(loadOp, nextMapping.lookupOrDefault(loadOp.getMask()),
+                        nextLoopCond, builder);
+        nextOp = builder.create<triton::LoadOp>(
+            loadOp.getLoc(), loadOp.getResult().getType(),
+            nextMapping.lookupOrDefault(loadOp.getPtr()), newMask,
+            nextMapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
+            loadOp.getEvict(), loadOp.getIsVolatile());
+        loadOp.replaceAllUsesWith(nextOp->getResult(0));
+        depLoads.push_back(op);
+      } else {
+        nextOp = builder.clone(*op, nextMapping);
+      }
 
       auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
@@ -617,6 +610,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         }
       }
     }
+
+  // Take out the old dep loads
+  for (auto *depLoad : depLoads)
+    depLoad->erase();
 
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
@@ -740,10 +737,8 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
 
       pipeliner.emitPrologue();
 
-      llvm::errs() << "----------------------\n";
       scf::ForOp newForOp = pipeliner.createNewForOp();
       pipeliner.emitEpilogue();
-      llvm::errs() << newForOp << "\n";
 
       // replace the original loop
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)
