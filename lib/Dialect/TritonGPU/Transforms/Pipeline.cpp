@@ -31,6 +31,13 @@ static Type getI1SameShape(Value v) {
   return i1Type;
 }
 
+// pass named attrs (e.g., tt.contiguity) from Triton to Triton
+static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
+  for (const NamedAttribute attr : dictAttrs.getValue())
+    if (!op->hasAttr(attr.getName()))
+      op->setAttr(attr.getName(), attr.getValue());
+}
+
 #define int_attr(num) builder.getI64IntegerAttr(num)
 
 namespace {
@@ -69,6 +76,8 @@ class LoopPipeliner {
 
   /// Block arguments that loads depend on
   SetVector<BlockArgument> depArgs;
+
+  SetVector<BlockArgument> nonImmedidateDepArgs;
 
   /// Operations (inside the loop body) that loads depend on
   SetVector<Operation *> depOps;
@@ -204,6 +213,12 @@ LogicalResult LoopPipeliner::initialize() {
     for (Value op : loadOp->getOperands())
       collectDeps(op, numStages - 1, deps);
     loadDeps[loadOp] = deps;
+    if (deps.size() > 0 && !isa<BlockArgument>(deps.front())) {
+      for (auto dep : deps) {
+        if (auto arg = dyn_cast<BlockArgument>(dep))
+          nonImmedidateDepArgs.insert(arg);
+      }
+    }
   }
 
   // Don't pipeline valid loads that depend on other valid loads
@@ -373,6 +388,7 @@ void LoopPipeliner::emitPrologue() {
               lookupOrDefault(loadOp.getPtr(), stage), newMask,
               lookupOrDefault(loadOp.getOther(), stage), loadOp.getCache(),
               loadOp.getEvict(), loadOp.getIsVolatile());
+          addNamedAttrs(newOp, op->getAttrDictionary());
         } else {
           newOp = builder.clone(*op);
         }
@@ -459,9 +475,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   //   (original args)
   //   (insertSliceAsync buffer at stage numStages - 1) for each load
   //   (extracted tensor) for each load
-  //   (depArgs at stage numStages - 1)
+  //   (depArgs at stage numStages - 1):
   //   for each dep arg that is not an immediate block argument
-  //   (depArgs at stage numStages - 2)
+  //   (depArgs at stage numStages - 2):
   //   for each dep arg that is an immediate block argument
   //   (iv at stage numStages - 2)
   //   (pipeline iteration index)
@@ -483,19 +499,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   size_t depArgsBeginIdx = newLoopArgs.size();
   for (BlockArgument depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    auto users = depArg.getUsers();
-    bool immediate = false;
-    for (auto user : users) {
-      if (loads.contains(user->getResult(0))) {
-        // Immediate dep arg
-        immediate = true;
-        break;
-      }
-    }
-    if (immediate)
-      newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
-    else
+    if (nonImmedidateDepArgs.contains(depArg)) {
       newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
+    } else
+      newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
   }
 
   size_t nextIVIdx = newLoopArgs.size();
@@ -604,6 +611,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
             nextMapping.lookupOrDefault(loadOp.getPtr()), newMask,
             nextMapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
             loadOp.getEvict(), loadOp.getIsVolatile());
+        addNamedAttrs(nextOp, op->getAttrDictionary());
         nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
       } else {
         nextOp = builder.clone(*op, nextMapping);
