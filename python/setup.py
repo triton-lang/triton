@@ -94,7 +94,7 @@ def get_thirdparty_packages(triton_cache_path):
             ftpstream = urllib.request.urlopen(p.url)
             file = tarfile.open(fileobj=ftpstream, mode="r|*")
             file.extractall(path=package_root_dir)
-            # write version url to package_root_dir
+            # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
                 f.write(p.url)
         if p.include_flag:
