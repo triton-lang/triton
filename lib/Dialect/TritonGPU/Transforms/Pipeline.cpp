@@ -592,7 +592,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
 
-  SmallVector<Operation *> depLoads;
   for (Operation *op : orderedDeps)
     if (!loads.contains(op->getResult(0))) {
       Operation *nextOp;
@@ -605,8 +604,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
             nextMapping.lookupOrDefault(loadOp.getPtr()), newMask,
             nextMapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
             loadOp.getEvict(), loadOp.getIsVolatile());
-        loadOp.replaceAllUsesWith(nextOp->getResult(0));
-        depLoads.push_back(op);
+        nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
       } else {
         nextOp = builder.clone(*op, nextMapping);
       }
@@ -625,10 +623,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         }
       }
     }
-
-  // Take out the old dep loads
-  for (auto *depLoad : depLoads)
-    depLoad->erase();
 
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
