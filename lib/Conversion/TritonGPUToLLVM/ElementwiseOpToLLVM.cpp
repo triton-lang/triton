@@ -348,9 +348,14 @@ struct FpToFpOpConversion
              "FP8 casting only support tensors with 4-aligned sizes");
       auto elements = getTypeConverter()->unpackLLElements(
           loc, adaptor.getFrom(), rewriter, srcTensorType);
-      for (size_t i = 0; i < elems; i += 4) {
-        auto converted = convertor(loc, rewriter, elements[i], elements[i + 1],
-                                   elements[i + 2], elements[i + 3]);
+      for(auto element: elements){
+        auto type = element.getType().cast<VectorType>();
+        assert(type.getNumElements() == 4);
+        Value elt0 = extract_element(element, i32_val(0));
+        Value elt1 = extract_element(element, i32_val(1));
+        Value elt2 = extract_element(element, i32_val(2));
+        Value elt3 = extract_element(element, i32_val(3));
+        auto converted = convertor(loc, rewriter, elt0, elt1, elt2, elt3);
         resultVals.append(converted);
       }
     } else if (srcEltType.isBF16() && dstEltType.isF32()) {
@@ -372,6 +377,7 @@ struct FpToFpOpConversion
     assert(resultVals.size() == elems);
     auto result = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
                                                      dstTensorType);
+    llvm::outs() << result << "\n";
     rewriter.replaceOp(op, result);
     return success();
   }
