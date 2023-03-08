@@ -1021,10 +1021,10 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm.add_tritongpu_coalesce_pass()
     pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
     pm.add_tritongpu_remove_layout_conversions_pass()
-    pm.add_tritongpu_fuse_transpositions_pass()
+    pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_tritongpu_prefetch_pass()
-    pm.add_tritongpu_fuse_transpositions_pass()
+    pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
     if compute_capability // 10 == 7:
@@ -1725,7 +1725,8 @@ class CompiledKernel:
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
         mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
-        # print(self.shared, n_regs, n_spills)
+        self.n_spills = n_spills
+        self.n_regs = n_regs
         self.cu_module = mod
         self.cu_function = func
 
