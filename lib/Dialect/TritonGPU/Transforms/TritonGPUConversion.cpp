@@ -12,8 +12,9 @@ using namespace mlir::triton::gpu;
 // TypeConverter
 //
 TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
-                                               int numWarps)
-    : context(context), numWarps(numWarps) {
+                                               int numWarps,
+                                               int threadsPerWarp)
+    : context(context), numWarps(numWarps), threadsPerWarp(threadsPerWarp) {
   // TODO: how does MLIR pick the right conversion?
   addConversion([](Type type) { return type; });
   addConversion([this](RankedTensorType tensorType) -> RankedTensorType {
@@ -30,7 +31,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     std::iota(order.begin(), order.end(), 0);
     llvm::SmallVector<unsigned> sizePerThread(rank, 1);
     Attribute encoding = triton::gpu::BlockedEncodingAttr::get(
-        this->context, shape, sizePerThread, order, this->numWarps);
+        this->context, shape, sizePerThread, order, this->numWarps, this->threadsPerWarp);
     return RankedTensorType::get(shape, tensorType.getElementType(), encoding);
   });
 

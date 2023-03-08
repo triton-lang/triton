@@ -252,15 +252,16 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     auto origShape = origType.getShape();
     auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
     int numWarps = typeConverter->getNumWarps();
+    int threadsPerWarp = typeConverter->getThreadsPerWarp();
 
     SmallVector<unsigned> retSizePerThread = {1, 1};
-    if (origShape[0] * origShape[1] / (numWarps * 32) >= 4)
+    if (origShape[0] * origShape[1] / (numWarps * threadsPerWarp) >= 4)
       retSizePerThread = {2, 2};
-    if (origShape[0] * origShape[1] / (numWarps * 32) >= 16)
+    if (origShape[0] * origShape[1] / (numWarps * threadsPerWarp) >= 16)
       retSizePerThread = {4, 4};
     SmallVector<unsigned> retOrder = {1, 0};
     Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
-        getContext(), origShape, retSizePerThread, retOrder, numWarps);
+        getContext(), origShape, retSizePerThread, retOrder, numWarps, threadsPerWarp);
     RankedTensorType retType =
         RankedTensorType::get(origShape, origType.getElementType(), dEncoding);
     // a & b must be of smem layout
@@ -728,13 +729,16 @@ class ConvertTritonToTritonGPU
 public:
   ConvertTritonToTritonGPU() = default;
   // constructor with some parameters set explicitly.
-  ConvertTritonToTritonGPU(int numWarps) { this->numWarps = numWarps; }
+  ConvertTritonToTritonGPU(int numWarps, int threadsPerWarp) {
+    this->numWarps = numWarps;
+    this->threadsPerWarp = threadsPerWarp;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     // type converter
-    TritonGPUTypeConverter typeConverter(context, numWarps);
+    TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp);
     TritonGPUConversionTarget target(*context, typeConverter);
     // rewrite patterns
     RewritePatternSet patterns(context);
@@ -757,6 +761,9 @@ public:
     mod->setAttr(
         AttrNumWarpsName,
         IntegerAttr::get(i32_ty, llvm::APInt(32, numWarps.getValue())));
+    mod->setAttr(
+            AttrNumThreadsPerWarp,
+            IntegerAttr::get(i32_ty, llvm::APInt(32, threadsPerWarp.getValue())));
 
     // update layouts
     //  broadcast src => multicast, dst => broadcasted
@@ -768,8 +775,8 @@ public:
 } // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUPass(int numWarps) {
-  return std::make_unique<::ConvertTritonToTritonGPU>(numWarps);
+mlir::triton::createConvertTritonToTritonGPUPass(int numWarps, int threadsPerWarp) {
+  return std::make_unique<::ConvertTritonToTritonGPU>(numWarps, threadsPerWarp);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

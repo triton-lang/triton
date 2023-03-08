@@ -142,9 +142,10 @@ public:
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMConversionTarget target(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     /* preprocess */
-    decomposeMmaToDotOperand(mod, numWarps);
+    decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
     decomposeBlockedToDotOperand(mod);
     if (failed(decomposeInsertSliceAsyncOp(mod)))
       return signalPassFailure();
@@ -258,7 +259,7 @@ private:
     smem = b.create<LLVM::BitcastOp>(loc, ptrTy, smem);
   }
 
-  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps) const {
+  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps, int threadsPerWarp) const {
     // Replace `mma -> dot_op` with `mma -> blocked -> dot_op`
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -274,7 +275,7 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
-                getOrder(srcMma), numWarps));
+                getOrder(srcMma), numWarps, threadsPerWarp));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
