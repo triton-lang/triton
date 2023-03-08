@@ -63,8 +63,8 @@ class Prefetcher {
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                          Attribute dotEncoding, OpBuilder &builder,
-                         llvm::Optional<int64_t> offsetK = std::nullopt,
-                         llvm::Optional<int64_t> shapeK = std::nullopt);
+                         std::optional<int64_t> offsetK = std::nullopt,
+                         std::optional<int64_t> shapeK = std::nullopt);
 
 public:
   Prefetcher() = delete;
@@ -82,8 +82,8 @@ public:
 
 Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    Attribute dotEncoding, OpBuilder &builder,
-                                   llvm::Optional<int64_t> offsetK,
-                                   llvm::Optional<int64_t> shapeK) {
+                                   std::optional<int64_t> offsetK,
+                                   std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
   auto type = v.getType().cast<RankedTensorType>();
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
