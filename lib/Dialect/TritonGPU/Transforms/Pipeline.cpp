@@ -70,11 +70,14 @@ class LoopPipeliner {
   /// Block arguments that loads depend on
   SetVector<BlockArgument> depArgs;
 
+  /// Block arguments that are immediately used by loads
+  SetVector<BlockArgument> immedidateDepArgs;
+
   /// Operations (inside the loop body) that loads depend on
   SetVector<Operation *> depOps;
 
   /// collect values that v depends on and are defined inside the loop
-  void collectDeps(Value v, int stages, SetVector<Value> &deps);
+  void collectDeps(Value v, int stages, SetVector<std::pair<Value, int>> &deps);
 
   void setValueMapping(Value origin, Value newValue, int stage);
 
@@ -121,7 +124,8 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
   return valueMapping[origin][stage];
 }
 
-void LoopPipeliner::collectDeps(Value v, int stages, SetVector<Value> &deps) {
+void LoopPipeliner::collectDeps(Value v, int stages,
+                                SetVector<std::pair<Value, int>> &deps) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return;
@@ -135,14 +139,14 @@ void LoopPipeliner::collectDeps(Value v, int stages, SetVector<Value> &deps) {
     if (arg.getArgNumber() > 0) {
       // Skip the first arg (loop induction variable)
       // Otherwise the op idx is arg.getArgNumber()-1
-      deps.insert(v);
+      deps.insert({v, stages});
       collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stages - 1,
                   deps);
     }
   } else { // value
     // v might be in deps, but we still need to visit v.
     // This is because v might depend on value in previous iterations
-    deps.insert(v);
+    deps.insert({v, stages});
     for (Value op : v.getDefiningOp()->getOperands())
       collectDeps(op, stages, deps);
   }
@@ -198,12 +202,15 @@ LogicalResult LoopPipeliner::initialize() {
     return failure();
 
   // load => values that it depends on
-  DenseMap<Value, SetVector<Value>> loadDeps;
+  DenseMap<Value, SetVector<std::pair<Value, int>>> loadDeps;
+  DenseMap<Value, SetVector<Value>> denseLoadDeps;
   for (triton::LoadOp loadOp : validLoads) {
-    SetVector<Value> deps;
+    SetVector<std::pair<Value, int>> deps;
     for (Value op : loadOp->getOperands())
       collectDeps(op, numStages - 1, deps);
     loadDeps[loadOp] = deps;
+    for (auto dep : deps)
+      denseLoadDeps[loadOp].insert(dep.first);
   }
 
   // Don't pipeline valid loads that depend on other valid loads
@@ -213,7 +220,7 @@ LogicalResult LoopPipeliner::initialize() {
   for (triton::LoadOp loadOp : validLoads) {
     bool isCandidate = true;
     for (triton::LoadOp other : validLoads) {
-      if (loadDeps[loadOp].contains(other)) {
+      if (denseLoadDeps[loadOp].contains(other)) {
         isCandidate = false;
         break;
       }
@@ -269,11 +276,15 @@ LogicalResult LoopPipeliner::initialize() {
   if (!loads.empty()) {
     // Update depArgs & depOps
     for (Value loadOp : loads) {
-      for (Value dep : loadDeps[loadOp]) {
+      for (auto &entry : loadDeps[loadOp]) {
+        auto dep = entry.first;
+        auto stage = entry.second;
         // TODO: we should record the stage that the value is depended on
-        if (auto arg = dep.dyn_cast<BlockArgument>())
+        if (auto arg = dep.dyn_cast<BlockArgument>()) {
           depArgs.insert(arg);
-        else
+          if (stage == 0)
+            immedidateDepArgs.insert(arg);
+        } else
           depOps.insert(dep.getDefiningOp());
       }
     }
@@ -459,7 +470,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   //   (original args)
   //   (insertSliceAsync buffer at stage numStages - 1) for each load
   //   (extracted tensor) for each load
+  //   (depArgs at stage numStages - 1)
+  //   for each dep arg that is not an immediate block argument
   //   (depArgs at stage numStages - 2)
+  //   for each dep arg that is an immediate block argument
   //   (iv at stage numStages - 2)
   //   (pipeline iteration index)
   //   (loop iteration index)
@@ -480,7 +494,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   size_t depArgsBeginIdx = newLoopArgs.size();
   for (BlockArgument depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
+    if (immedidateDepArgs.contains(depArg))
+      newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
+    else
+      newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
   }
 
   size_t nextIVIdx = newLoopArgs.size();
