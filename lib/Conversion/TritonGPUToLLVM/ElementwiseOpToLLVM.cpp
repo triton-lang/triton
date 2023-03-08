@@ -316,6 +316,8 @@ struct FpToFpOpConversion
     // Select convertor
     bool isSrcF8 = srcEltType.isa<mlir::Float8E4M3FNType>();
     bool isDstF8 = dstEltType.isa<mlir::Float8E4M3FNType>();
+    llvm::outs() << op << "\n";
+    llvm::outs() << isSrcF8 << " " << isDstF8 << "\n";
     if (isSrcF8 || isDstF8) {
       std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                        const Value &, const Value &,
@@ -390,21 +392,25 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto resultTy = op.getType();
     Location loc = op->getLoc();
-
-    unsigned elems = getElemsPerThread(resultTy);
+    // element type
     auto resultElementTy = getElementTypeOrSelf(resultTy);
     Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
-    SmallVector<Type> types(elems, elemTy);
-    Type structTy = this->getTypeConverter()->convertType(resultTy);
-
-    auto *concreteThis = static_cast<const ConcreteT *>(this);
-    auto operands = getOperands(rewriter, adaptor, resultTy, elems, loc);
-    SmallVector<Value> resultVals(elems);
-    for (unsigned i = 0; i < elems; ++i) {
-      resultVals[i] = concreteThis->createDestOp(op, adaptor, rewriter, elemTy,
-                                                 operands[i], loc);
-      if (!bool(resultVals[i]))
+    SmallVector<Value> resultVals;
+    //
+    SmallVector<SmallVector<Value>> allOperands;
+    for (auto operand : adaptor.getOperands()) {
+      auto sub_operands = this->getTypeConverter()->unpackLLElements(
+          loc, operand, rewriter, resultTy);
+      allOperands.resize(sub_operands.size());
+      for(auto v: llvm::enumerate(sub_operands))
+        allOperands[v.index()].push_back(v.value());
+    }
+    for(const SmallVector<Value>& operands: allOperands){
+      Value curr = ((ConcreteT*)(this))->createDestOp(op, adaptor, rewriter, elemTy,
+                                                 operands, loc);
+      if (!bool(curr))
         return failure();
+      resultVals.push_back(curr);
     }
     Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
                                                           rewriter, resultTy);
@@ -413,20 +419,6 @@ public:
     return success();
   }
 
-protected:
-  SmallVector<SmallVector<Value>>
-  getOperands(ConversionPatternRewriter &rewriter, OpAdaptor adaptor,
-              Type operandTy, const unsigned elems, Location loc) const {
-    SmallVector<SmallVector<Value>> operands(elems);
-    for (auto operand : adaptor.getOperands()) {
-      auto sub_operands = this->getTypeConverter()->unpackLLElements(
-          loc, operand, rewriter, operandTy);
-      for (size_t i = 0; i < elems; ++i) {
-        operands[i].push_back(sub_operands[i]);
-      }
-    }
-    return operands;
-  }
 };
 
 template <typename SourceOp, typename DestOp>
