@@ -348,7 +348,7 @@ struct FpToFpOpConversion
              "FP8 casting only support tensors with 4-aligned sizes");
       auto elements = getTypeConverter()->unpackLLElements(
           loc, adaptor.getFrom(), rewriter, srcTensorType);
-      for(auto element: elements){
+      for (auto element : elements) {
         auto type = element.getType().cast<VectorType>();
         assert(type.getNumElements() == 4);
         Value elt0 = extract_element(element, i32_val(0));
@@ -377,7 +377,6 @@ struct FpToFpOpConversion
     assert(resultVals.size() == elems);
     auto result = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
                                                      dstTensorType);
-    llvm::outs() << result << "\n";
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -408,12 +407,13 @@ public:
       auto sub_operands = this->getTypeConverter()->unpackLLElements(
           loc, operand, rewriter, resultTy);
       allOperands.resize(sub_operands.size());
-      for(auto v: llvm::enumerate(sub_operands))
+      for (auto v : llvm::enumerate(sub_operands))
         allOperands[v.index()].push_back(v.value());
     }
-    for(const SmallVector<Value>& operands: allOperands){
-      Value curr = ((ConcreteT*)(this))->createDestOp(op, adaptor, rewriter, elemTy,
-                                                 operands, loc);
+    for (const SmallVector<Value> &operands : allOperands) {
+      Value curr =
+          ((ConcreteT *)(this))
+              ->createDestOp(op, adaptor, rewriter, elemTy, operands, loc);
       if (!bool(curr))
         return failure();
       resultVals.push_back(curr);
@@ -424,7 +424,6 @@ public:
 
     return success();
   }
-
 };
 
 template <typename SourceOp, typename DestOp>

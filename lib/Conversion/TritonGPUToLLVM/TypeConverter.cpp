@@ -27,6 +27,9 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
     return convertTritonTensorType(type);
   });
+  addConversion([&](Float8E4M3FNType type) -> llvm::Optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
   // Internally store bfloat16 as int16
   addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
     return IntegerType::get(type.getContext(), 16);
@@ -65,24 +68,12 @@ SmallVector<Value> TritonGPUToLLVMTypeConverter::unpackLLElements(
       llvmStruct.getType().isa<triton::PointerType>() ||
       llvmStruct.getType().isa<LLVM::LLVMPointerType>())
     return {llvmStruct};
-  // check whether `llvmStruct` represent vectors of sub-word values
-  RankedTensorType tensorTy = type.cast<RankedTensorType>();
-  Type elementTy = tensorTy.getElementType();
-  size_t elementTyBitwidth = elementTy.getIntOrFloatBitWidth();
-  Attribute encoding = tensorTy.getEncoding();
-  Type subwordVecTy;
-  if(isa<triton::gpu::DotOperandEncodingAttr>(encoding) && 
-     elementTyBitwidth < 32)
-    subwordVecTy = vec_ty(elementTy, 32/elementTyBitwidth);
-  // unpack
   ArrayRef<Type> types =
       llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
   SmallVector<Value> results(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];
     results[i] = extract_val(type, llvmStruct, i);
-    if(subwordVecTy)
-      results[i] = bitcast(results[i], subwordVecTy);
   }
   return results;
 }
