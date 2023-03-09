@@ -1,8 +1,10 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.18)
 
+if(POLICY CMP0116)
 # Introduced in cmake 3.20
 # https://cmake.org/cmake/help/latest/policy/CMP0116.html
-cmake_policy(SET CMP0116 OLD)
+  cmake_policy(SET CMP0116 OLD)
+endif()
 
 include(ExternalProject)
 
