@@ -3,8 +3,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::getElementsFromStruct;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getElemsPerThread;
@@ -160,11 +158,12 @@ private:
     indexSmemBase = bitcast(indexSmemBase, indexPtrTy);
 
     unsigned srcElems = getElemsPerThread(srcTy);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
+    auto srcValues = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getOperand(), rewriter, srcTy);
 
     SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForLayout(srcLayout, srcShape);
+        emitOffsetForLayout(srcLayout, srcTy);
 
     std::map<SmallVector<unsigned>, Value> accs;
     std::map<SmallVector<unsigned>, Value> accIndices;
@@ -247,8 +246,7 @@ private:
       auto resultShape = resultTy.getShape();
 
       unsigned resultElems = getElemsPerThread(resultTy);
-      auto resultIndices =
-          emitIndices(loc, rewriter, resultLayout, resultShape);
+      auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
       assert(resultIndices.size() == resultElems);
 
       SmallVector<Value> resultVals(resultElems);
@@ -260,12 +258,8 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-
-      SmallVector<Type> resultTypes(resultElems,
-                                    withIndex ? llvmIndexTy : llvmElemTy);
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
-      Value ret = getStructFromElements(loc, resultVals, rewriter, structTy);
+      Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
+                                                     resultTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar
@@ -310,11 +304,12 @@ private:
     unsigned sizeInterWarps = helper.getInterWarpSize();
 
     unsigned srcElems = getElemsPerThread(srcTy);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
-    auto srcValues = getElementsFromStruct(loc, adaptor.getOperand(), rewriter);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
+    auto srcValues = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getOperand(), rewriter, srcTy);
 
     SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForLayout(srcLayout, srcShape);
+        emitOffsetForLayout(srcLayout, srcTy);
 
     std::map<SmallVector<unsigned>, Value> accs;
     std::map<SmallVector<unsigned>, Value> accIndices;
@@ -448,8 +443,7 @@ private:
       auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
       auto resultShape = resultTy.getShape();
       unsigned resultElems = getElemsPerThread(resultTy);
-      auto resultIndices =
-          emitIndices(loc, rewriter, resultLayout, resultShape);
+      auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
       assert(resultIndices.size() == resultElems);
 
       SmallVector<Value> resultVals(resultElems);
@@ -462,12 +456,8 @@ private:
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
       }
-
-      SmallVector<Type> resultTypes(resultElems,
-                                    withIndex ? llvmIndexTy : llvmElemTy);
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), resultTypes);
-      Value ret = getStructFromElements(loc, resultVals, rewriter, structTy);
+      Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
+                                                     resultTy);
       rewriter.replaceOp(op, ret);
     } else {
       // 0d-tensor -> scalar
@@ -480,7 +470,7 @@ private:
 };
 
 void populateReduceOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,

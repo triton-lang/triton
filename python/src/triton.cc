@@ -13,6 +13,8 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
@@ -119,6 +121,7 @@ void init_triton_ir(py::module &&m) {
       .def(py::init<>())
       .def("load_triton", [](mlir::MLIRContext &self) {
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
+        self.getOrLoadDialect<mlir::index::IndexDialect>();
         // we load LLVM because the frontend uses LLVM.undef for
         // some placeholders
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
@@ -393,8 +396,8 @@ void init_triton_ir(py::module &&m) {
         registry.insert<mlir::triton::TritonDialect,
                         mlir::triton::gpu::TritonGPUDialect,
                         mlir::math::MathDialect, mlir::arith::ArithDialect,
-                        mlir::func::FuncDialect, mlir::scf::SCFDialect,
-                        mlir::cf::ControlFlowDialect>();
+                        mlir::index::IndexDialect, mlir::func::FuncDialect,
+                        mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
 
@@ -512,6 +515,12 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  loc, v, self.getI8Type()));
            })
+      .def("get_int16",
+           [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 loc, v, self.getI16Type()));
+           })
       .def("get_int32",
            [](mlir::OpBuilder &self, int64_t v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -524,16 +533,15 @@ void init_triton_ir(py::module &&m) {
              return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
                  loc, v, self.getI64Type()));
            })
-      // bfloat16 cannot be initialized as it is treated as int16 for now
-      //.def("get_bf16",
-      //     [](mlir::OpBuilder &self, float v) -> mlir::Value {
-      //       auto loc = self.getUnknownLoc();
-      //       auto type = self.getBF16Type();
-      //       return self.create<mlir::arith::ConstantFloatOp>(
-      //           loc,
-      //           mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
-      //           type);
-      //     })
+      .def("get_bf16",
+           [](mlir::OpBuilder &self, float v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             auto type = self.getBF16Type();
+             return self.create<mlir::arith::ConstantFloatOp>(
+                 loc,
+                 mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
+                 type);
+           })
       .def("get_fp16",
            [](mlir::OpBuilder &self, float v) -> mlir::Value {
              auto loc = self.getUnknownLoc();
@@ -545,6 +553,12 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::ConstantOp>(
                  loc, self.getF32FloatAttr(v));
+           })
+      .def("get_fp64",
+           [](mlir::OpBuilder &self, double v) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::arith::ConstantOp>(
+                 loc, self.getF64FloatAttr(v));
            })
       .def("get_null_value",
            [](mlir::OpBuilder &self, mlir::Type type) -> mlir::Value {
@@ -807,7 +821,7 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &input) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::IndexCastOp>(
-                 loc, self.getI32Type(), input);
+                 loc, self.getI64Type(), input);
            })
       .def("create_fmul",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
@@ -1327,15 +1341,31 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::arith::SelectOp>(loc, condition,
                                                        trueValue, falseValue);
            })
-      .def("create_printf",
+      .def("create_print",
            [](mlir::OpBuilder &self, const std::string &prefix,
               const std::vector<mlir::Value> &values) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::PrintfOp>(
+             self.create<mlir::triton::PrintOp>(
                  loc,
                  mlir::StringAttr::get(self.getContext(),
                                        llvm::StringRef(prefix)),
                  values);
+           })
+      .def("create_assert",
+           [](mlir::OpBuilder &self, mlir::Value &condition,
+              const std::string &message, const std::string &fileName,
+              const std::string &funcName, unsigned lineNo) -> void {
+             auto loc = self.getUnknownLoc();
+             auto messageAttr = mlir::StringAttr::get(self.getContext(),
+                                                      llvm::StringRef(message));
+             auto fileNameAttr = mlir::StringAttr::get(
+                 self.getContext(), llvm::StringRef(fileName));
+             auto funcNameAttr = mlir::StringAttr::get(
+                 self.getContext(), llvm::StringRef(funcName));
+             auto lineNoAttr = self.getI32IntegerAttr(lineNo);
+             self.create<mlir::triton::AssertOp>(loc, condition, messageAttr,
+                                                 fileNameAttr, funcNameAttr,
+                                                 lineNoAttr);
            })
       // Undef
       .def("create_undef",
@@ -1420,9 +1450,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(
                  mlir::createTritonGPUAccelerateMatmulPass(computeCapability));
            })
-      .def("add_tritongpu_fuse_transpositions_pass",
+      .def("add_tritongpu_optimize_dot_operands_pass",
            [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUFuseTranspositionsPass());
+             self.addPass(mlir::createTritonGPUOptimizeDotOperandsPass());
            })
       .def("add_tritongpu_remove_layout_conversions_pass",
            [](mlir::PassManager &self) {

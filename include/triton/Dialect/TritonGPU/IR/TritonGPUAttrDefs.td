@@ -35,7 +35,7 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
   }];
 
   code extraBaseClassDeclaration = [{
-    unsigned getElemsPerThread(ArrayRef<int64_t> shape) const;
+    unsigned getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     ::mlir::LogicalResult verifyLayoutForArg(::mlir::Operation* op, unsigned argNo) const;
   }];
 }

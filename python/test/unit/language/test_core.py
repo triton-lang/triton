@@ -798,6 +798,20 @@ def test_store_constant(dtype_str):
     assert torch.all(output == ref)
 
 
+def test_load_store_same_ptr():
+    @triton.jit()
+    def kernel(in_out_ptr):
+        pid = tl.program_id(axis=0)
+        x = tl.load(in_out_ptr + pid)
+        out = x * 2
+        tl.store(in_out_ptr + pid, out)
+
+    for _ in range(1000):
+        x = torch.ones((65536,), device="cuda", dtype=torch.float32)
+        kernel[(65536,)](x, num_warps=32)
+        assert torch.all(x == 2)
+
+
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_f8_xf16_roundtrip(dtype):
     """Tests that converting an f8 to f16 and back to f8 doesn't change its value"""
@@ -1240,6 +1254,32 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
         assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
+@pytest.mark.parametrize("dtype_str", int_dtypes + float_dtypes + ['bfloat16'])
+def test_full(dtype_str):
+    dtype = getattr(torch, dtype_str)
+    check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
+
+    @triton.jit
+    def kernel_static(out):
+        a = GENERATE_TEST_HERE
+        out_ptr = out + tl.arange(0, 128)[:]
+        tl.store(out_ptr, a)
+
+    @triton.jit
+    def kernel_dynamic(out, val, dtype: tl.constexpr):
+        a = tl.full((128,), val, dtype)
+        out_ptr = out + tl.arange(0, 128)[:]
+        tl.store(out_ptr, a)
+
+    kernel_static_patched = patch_kernel(kernel_static, {'GENERATE_TEST_HERE': f"tl.full((128,), 2, tl.{dtype_str})"})
+    out_static = torch.zeros((128), dtype=dtype, device="cuda")
+    kernel_static_patched[(1,)](out_static)
+    out_dynamic = torch.zeros((128), dtype=dtype, device="cuda")
+    kernel_dynamic[(1,)](out_dynamic, 2, getattr(triton.language, dtype_str))
+    assert torch.all(out_static == 2)
+    assert torch.all(out_dynamic == 2)
+
+
 # TODO: uncomment once DotOperandEncoding::getElemsPerThread is implemented
 # @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 # def test_dot_without_load(dtype_str):
@@ -1501,7 +1541,7 @@ def test_pointer_arguments(device):
 
 @pytest.mark.parametrize("value, value_type", [
     (-1, 'i32'), (0, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
-    (2**31, 'u32'), (2**32 - 1, 'u32'), (2**32, 'i64'), (2**63 - 1, 'i64'),
+    (2**31, 'i64'), (2**32 - 1, 'i64'), (2**32, 'i64'), (2**63 - 1, 'i64'),
     (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')
 ])
 def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
@@ -1759,6 +1799,23 @@ def test_libdevice_scalar(dtype_str, expr, lib_path):
 # -----------------------
 # test control flow
 # -----------------------
+
+
+def test_for_iv_int64():
+
+    @triton.jit
+    def kernel(Out, lo, hi):
+        acc = 0
+        acc = acc.to(tl.int64)
+        for i in range(lo, hi):
+            acc += i
+        tl.store(Out, acc)
+
+    lo = 2**35
+    hi = 2**35 + 20
+    out = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
+    kernel[(1,)](out, lo, hi)
+    assert out[0] == sum(range(lo, hi))
 
 
 def test_if_else():

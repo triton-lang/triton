@@ -1,6 +1,9 @@
-add_subdirectory(FileCheck)
-# add_llvm_executable(FileCheck FileCheck/FileCheck.cpp)
-# target_link_libraries(FileCheck PRIVATE LLVMFileCheck LLVMSupport)
+add_custom_target(copy-FileCheck ALL
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${LLVM_LIBRARY_DIR}/../bin/FileCheck"
+        "${CMAKE_CURRENT_BINARY_DIR}/FileCheck"
+    COMMENT "Copying FileCheck to the current directory"
+)
 
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)

@@ -69,7 +69,7 @@ def get_llvm_package_info():
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
     name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
-    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-17.0.0-37b7a60cd74b/{name}.tar.xz"
+    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/llvm-17.0.0-8e5a41e8271f/{name}.tar.xz"
     return Package("llvm", name, url, "lib", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -208,14 +208,14 @@ download_and_copy_ptxas()
 
 setup(
     name="triton",
-    version="2.0.0",
+    version="2.1.0",
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/impl", "triton/ops", "triton/runtime", "triton/ops/blocksparse"],
     install_requires=[
-        "cmake",
+        "cmake>=3.20",
         "filelock",
         "torch",
         "lit",
