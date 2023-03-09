@@ -18,11 +18,12 @@ public:
   Type convertTritonPointerType(triton::PointerType type);
 
   Value packLLElements(Location loc, ValueRange resultVals,
-                       ConversionPatternRewriter &rewriter, Type type);
+                       ConversionPatternRewriter &rewriter, Type type,
+                       bool packVector = false);
 
   SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                       ConversionPatternRewriter &rewriter,
-                                      Type type);
+                                      Type type, bool unpackVector = false);
 
   llvm::Optional<Type> convertTritonTensorType(RankedTensorType type);
 };

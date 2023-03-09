@@ -405,7 +405,7 @@ public:
     SmallVector<SmallVector<Value>> allOperands;
     for (auto operand : adaptor.getOperands()) {
       auto sub_operands = this->getTypeConverter()->unpackLLElements(
-          loc, operand, rewriter, resultTy);
+          loc, operand, rewriter, resultTy, true);
       allOperands.resize(sub_operands.size());
       for (auto v : llvm::enumerate(sub_operands))
         allOperands[v.index()].push_back(v.value());
@@ -418,8 +418,8 @@ public:
         return failure();
       resultVals.push_back(curr);
     }
-    Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
-                                                          rewriter, resultTy);
+    Value view = this->getTypeConverter()->packLLElements(
+        loc, resultVals, rewriter, resultTy, true);
     rewriter.replaceOp(op, view);
 
     return success();

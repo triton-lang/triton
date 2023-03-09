@@ -43,16 +43,54 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
                                     type.getAddressSpace());
 }
 
+SmallVector<Value> unpackVectorData(ConversionPatternRewriter &rewriter,
+                                    Location loc,
+                                    SmallVector<Value> const &vals) {
+  auto vecTy = dyn_cast<VectorType>(vals[0].getType());
+  if (!vecTy)
+    return vals;
+  SmallVector<Value> ret;
+  for (Value val : vals)
+    for (int k = 0; k < vecTy.getNumElements(); k++)
+      ret.push_back(extract_element(val, i32_val(k)));
+  return ret;
+}
+
+SmallVector<Value> packVectorData(ConversionPatternRewriter &rewriter,
+                                  Location loc, SmallVector<Value> const &vals,
+                                  Type destType) {
+  auto structTy = destType.dyn_cast<LLVM::LLVMStructType>();
+  if (!structTy)
+    return vals;
+  auto vecTy = structTy.getBody()[0].dyn_cast<VectorType>();
+  if (!vecTy)
+    return vals;
+  size_t vecWidth = vecTy.getNumElements();
+  SmallVector<Value> ret;
+  for (int i = 0; i < vals.size(); i += vecWidth) {
+    Value vec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+    for (int k = 0; k < vecWidth; k++)
+      vec = insert_element(vec, vals[i + k], i32_val(k));
+    ret.push_back(vec);
+  }
+  return ret;
+}
+
 Value TritonGPUToLLVMTypeConverter::packLLElements(
     Location loc, ValueRange resultVals, ConversionPatternRewriter &rewriter,
-    Type type) {
+    Type type, bool packVector) {
   auto structType = this->convertType(type);
   if (!structType.isa<LLVM::LLVMStructType>()) {
     return *resultVals.begin();
   }
-
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  // llvm::outs() << structType << "\n";
+
+  SmallVector<Value> _resultVals;
+  if (packVector) {
+    _resultVals = packVectorData(rewriter, loc, resultVals, structType);
+    resultVals = _resultVals;
+  }
+
   for (const auto &v : llvm::enumerate(resultVals)) {
     assert(v.value() && "can not insert null values");
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
@@ -62,7 +100,7 @@ Value TritonGPUToLLVMTypeConverter::packLLElements(
 
 SmallVector<Value> TritonGPUToLLVMTypeConverter::unpackLLElements(
     Location loc, Value llvmStruct, ConversionPatternRewriter &rewriter,
-    Type type) {
+    Type type, bool unpackVector) {
   assert(bool(llvmStruct) && "can not unpack null values");
   if (llvmStruct.getType().isIntOrIndexOrFloat() ||
       llvmStruct.getType().isa<triton::PointerType>() ||
@@ -75,6 +113,8 @@ SmallVector<Value> TritonGPUToLLVMTypeConverter::unpackLLElements(
     Type type = types[i];
     results[i] = extract_val(type, llvmStruct, i);
   }
+  if (unpackVector)
+    results = unpackVectorData(rewriter, loc, results);
   return results;
 }
 

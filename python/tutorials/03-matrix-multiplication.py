@@ -222,7 +222,8 @@ def matmul_kernel(
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         # b = b.to(tl.float8, bitcast=True).to(tl.float16)
-        b = b.to(tl.float32).to(tl.float16)
+        # b = b.to(tl.float32).to(tl.float16)
+        b = b * 2
         # We accumulate along the K dimension
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block
