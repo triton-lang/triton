@@ -277,17 +277,6 @@ struct FpToFpOpConversion
     return builder.launch(rewriter, loc, f32_ty, false);
   }
 
-  static Value convertFp16ToFp32(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
-    PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.f32.f16");
-    auto res = builder.newOperand("=r");
-    auto operand = builder.newOperand(v, "h");
-    cvt(res, operand);
-    return builder.launch(rewriter, loc, f32_ty, false);
-  }
-
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
