@@ -39,9 +39,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype):
     tri_dq, q.grad = q.grad.clone(), None
     # compare
     triton.testing.assert_almost_equal(ref_out, tri_out)
+    decimal = 1 if dtype == torch.bfloat16 else 2
+    triton.testing.assert_almost_equal(ref_dv, tri_dv, decimal=decimal)
     triton.testing.assert_almost_equal(ref_dk, tri_dk)
     triton.testing.assert_almost_equal(ref_dq, tri_dq)
-    if dtype == torch.bfloat16:
-        triton.testing.assert_almost_equal(ref_dv, tri_dv, decimal=1)
-    else:
-        triton.testing.assert_almost_equal(ref_dv, tri_dv)
