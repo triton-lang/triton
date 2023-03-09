@@ -84,9 +84,10 @@ public:
   }
 };
 
-class SimplifyCvtReduce : public mlir::RewritePattern {
+// reduce(cvt(x, type2)) -> cvt(reduce(x), type2)
+class SimplifyReduceCvt : public mlir::RewritePattern {
 public:
-  explicit SimplifyCvtReduce(mlir::MLIRContext *context)
+  explicit SimplifyReduceCvt(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::ReduceOp::getOperationName(), 2, context) {
   }
 
@@ -601,7 +602,7 @@ public:
     mlir::RewritePatternSet patterns(context);
 
     patterns.add<SimplifyConversion>(context);
-    patterns.add<SimplifyCvtReduce>(context);
+    patterns.add<SimplifyReduceCvt>(context);
     patterns.add<RematerializeBackward>(context);
     patterns.add<RematerializeForward>(context);
     patterns.add<MoveConvertOutOfLoop>(context);
