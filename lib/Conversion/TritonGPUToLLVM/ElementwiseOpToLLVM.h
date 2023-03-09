@@ -17,10 +17,4 @@ void populateElementwiseOpToPTXPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit);
 
-bool isLegalElementwiseOp(Operation *op);
-
-void populateElementwiseOpToPTXPatterns(mlir::LLVMTypeConverter &typeConverter,
-                                        RewritePatternSet &patterns,
-                                        PatternBenefit benefit);
-
 #endif
