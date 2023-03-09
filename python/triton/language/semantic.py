@@ -641,7 +641,7 @@ def bitcast(input: tl.tensor,
             builder: ir.builder) -> tl.tensor:
     src_ty = input.type
     if src_ty.is_block():
-        dst_ty = tl.block_type(dst_ty, input.type.get_block_shapes())
+        dst_ty = tl.block_type(dst_ty.scalar, input.type.get_block_shapes())
     if src_ty == dst_ty:
         return input
     src_sca_ty = src_ty.scalar
@@ -665,7 +665,7 @@ def cast(input: tl.tensor,
     if isinstance(dst_ty, tl.constexpr):
         dst_ty = dst_ty.value
     if src_ty.is_block():
-        dst_ty = tl.block_type(dst_ty, input.type.get_block_shapes())
+        dst_ty = tl.block_type(dst_ty.scalar, input.type.get_block_shapes())
     if src_ty == dst_ty:
         return input
 
@@ -1133,6 +1133,10 @@ def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
 
     # get result type
     shape = input.type.shape
+
+    rank = len(shape)
+    assert 0 <= axis < rank, f"axis (v={axis}) is out of range, should be within [0, {rank})"
+
     ret_shape = []
     for i, s in enumerate(shape):
         if i != axis:
