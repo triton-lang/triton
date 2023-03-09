@@ -79,21 +79,31 @@ SmallVector<Value> packVectorData(ConversionPatternRewriter &rewriter,
 Value TritonGPUToLLVMTypeConverter::packLLElements(
     Location loc, ValueRange resultVals, ConversionPatternRewriter &rewriter,
     Type type, bool packVector) {
-  auto structType = this->convertType(type);
-  if (!structType.isa<LLVM::LLVMStructType>()) {
+  auto structType = this->convertType(type).dyn_cast<LLVM::LLVMStructType>();
+  if (!structType) {
     return *resultVals.begin();
   }
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
 
   SmallVector<Value> _resultVals;
   if (packVector) {
-    _resultVals = packVectorData(rewriter, loc, resultVals, structType);
+    Type tensorEltTy = getElementTypeOrSelf(type);
+    Type llvmEltTy = convertType(tensorEltTy);
+    int bitwidth = llvmEltTy.getIntOrFloatBitWidth();
+    Type packedStructType = structType;
+    if (bitwidth == 8) {
+      auto ctx = structType.getContext();
+      packedStructType = struct_ty(SmallVector<Type>(
+          structType.getBody().size(), vec_ty(llvmEltTy, 32 / bitwidth)));
+    }
+    _resultVals = packVectorData(rewriter, loc, resultVals, packedStructType);
     resultVals = _resultVals;
   }
 
   for (const auto &v : llvm::enumerate(resultVals)) {
     assert(v.value() && "can not insert null values");
-    llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
+    Value currVal = bitcast(v.value(), structType.getBody()[v.index()]);
+    llvmStruct = insert_val(structType, llvmStruct, currVal, v.index());
   }
   return llvmStruct;
 }
@@ -113,8 +123,15 @@ SmallVector<Value> TritonGPUToLLVMTypeConverter::unpackLLElements(
     Type type = types[i];
     results[i] = extract_val(type, llvmStruct, i);
   }
-  if (unpackVector)
+  if (unpackVector) {
+    Type tensorEltTy = getElementTypeOrSelf(type);
+    Type llvmEltTy = convertType(tensorEltTy);
+    int bitwidth = llvmEltTy.getIntOrFloatBitWidth();
+    if (bitwidth == 8)
+      for (auto &v : results)
+        v = bitcast(v, vec_ty(llvmEltTy, 32 / bitwidth));
     results = unpackVectorData(rewriter, loc, results);
+  }
   return results;
 }
 
@@ -167,6 +184,15 @@ TritonGPUToLLVMTypeConverter::convertTritonTensorType(RankedTensorType type) {
         Type targetTy;
         if (targetTyMap.count(elemTy.getIntOrFloatBitWidth())) {
           targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
+          // <2xi16>/<4xi8> => i32
+          // We are doing this because NVPTX inserts extra integer instrs to
+          // pack & unpack vectors of sub-word integers
+          // Note: this needs to be synced with
+          //       DotOpMmaV2ConversionHelper::loadX4
+          if (elemTy.isa<IntegerType>() &&
+              (elemTy.getIntOrFloatBitWidth() == 8 ||
+               elemTy.getIntOrFloatBitWidth() == 16))
+            targetTy = IntegerType::get(ctx, 32);
         } else {
           assert(false && "Unsupported element type");
         }

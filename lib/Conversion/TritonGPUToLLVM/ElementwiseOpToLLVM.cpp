@@ -349,6 +349,7 @@ struct FpToFpOpConversion
       auto elements = getTypeConverter()->unpackLLElements(
           loc, adaptor.getFrom(), rewriter, srcTensorType);
       for (auto element : elements) {
+        element = bitcast(element, vec_ty(i8_ty, 4));
         auto type = element.getType().cast<VectorType>();
         assert(type.getNumElements() == 4);
         Value elt0 = extract_element(element, i32_val(0));
@@ -375,8 +376,9 @@ struct FpToFpOpConversion
     }
 
     assert(resultVals.size() == elems);
+    llvm::outs() << resultVals[0] << "\n";
     auto result = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
-                                                     dstTensorType);
+                                                     dstTensorType, true);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -392,9 +394,45 @@ public:
       TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
 
+  SmallVector<Value> reorderValues(const SmallVector<Value> &values,
+                                   Type inType, Type ouType) const {
+    auto inTensorTy = inType.dyn_cast<RankedTensorType>();
+    auto ouTensorTy = ouType.dyn_cast<RankedTensorType>();
+    if (!inTensorTy || !ouTensorTy)
+      return values;
+    auto inEncoding =
+        dyn_cast<triton::gpu::DotOperandEncodingAttr>(inTensorTy.getEncoding());
+    auto ouEncoding =
+        dyn_cast<triton::gpu::DotOperandEncodingAttr>(ouTensorTy.getEncoding());
+    assert(inEncoding == ouEncoding);
+    if (!inEncoding)
+      return values;
+    size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
+    size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
+    auto ouEltTy = ouTensorTy.getElementType();
+    if (inBitWidth == ouBitWidth)
+      return values;
+    if (inBitWidth == 16 && ouBitWidth == 32) {
+      SmallVector<Value> ret;
+      for (unsigned i = 0; i < values.size(); i += 8) {
+        ret.push_back(values[i]);
+        ret.push_back(values[i + 1]);
+        ret.push_back(values[i + 4]);
+        ret.push_back(values[i + 5]);
+        ret.push_back(values[i + 2]);
+        ret.push_back(values[i + 3]);
+        ret.push_back(values[i + 6]);
+        ret.push_back(values[i + 7]);
+      }
+      return ret;
+    }
+    llvm_unreachable("unimplemented code path");
+  }
+
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto argTy = op->getOperand(0).getType();
     auto resultTy = op.getType();
     Location loc = op->getLoc();
     // element type
@@ -418,6 +456,7 @@ public:
         return failure();
       resultVals.push_back(curr);
     }
+    resultVals = reorderValues(resultVals, argTy, resultTy);
     Value view = this->getTypeConverter()->packLLElements(
         loc, resultVals, rewriter, resultTy, true);
     rewriter.replaceOp(op, view);
