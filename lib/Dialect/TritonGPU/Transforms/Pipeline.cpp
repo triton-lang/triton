@@ -77,6 +77,8 @@ class LoopPipeliner {
   /// Block arguments that loads depend on
   SetVector<BlockArgument> depArgs;
 
+  SetVector<BlockArgument> immedidateDepArgs;
+
   SetVector<BlockArgument> nonImmedidateDepArgs;
 
   /// Operations (inside the loop body) that loads depend on
@@ -213,12 +215,6 @@ LogicalResult LoopPipeliner::initialize() {
     for (Value op : loadOp->getOperands())
       collectDeps(op, numStages - 1, deps);
     loadDeps[loadOp] = deps;
-    if (deps.size() > 0 && !isa<BlockArgument>(deps.front())) {
-      for (auto dep : deps) {
-        if (auto arg = dyn_cast<BlockArgument>(dep))
-          nonImmedidateDepArgs.insert(arg);
-      }
-    }
   }
 
   // Don't pipeline valid loads that depend on other valid loads
@@ -284,16 +280,27 @@ LogicalResult LoopPipeliner::initialize() {
   if (!loads.empty()) {
     // Update depArgs & depOps
     for (Value loadOp : loads) {
-      for (Value dep : loadDeps[loadOp]) {
+      auto &deps = loadDeps[loadOp];
+      for (Value dep : deps) {
         // TODO: we should record the stage that the value is depended on
-        if (auto arg = dep.dyn_cast<BlockArgument>())
+        if (auto arg = dep.dyn_cast<BlockArgument>()) {
           depArgs.insert(arg);
-        else
+          if (deps.front().isa<BlockArgument>())
+            immedidateDepArgs.insert(arg);
+          else
+            nonImmedidateDepArgs.insert(arg);
+        } else
           depOps.insert(dep.getDefiningOp());
       }
     }
     return success();
   }
+
+  // Check if immedidateDepArgs and nonImmedidateDepArgs are disjoint
+  // If yes, we can pipeline the loop for now
+  for (BlockArgument arg : immedidateDepArgs)
+    if (nonImmedidateDepArgs.contains(arg))
+      return failure();
 
   return failure();
 }
