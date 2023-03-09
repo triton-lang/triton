@@ -144,7 +144,9 @@ public:
     //
     if (!argOp)
       return failure();
-    // we only handle loads since the goal of this pass is to
+    // // we only handle loads since the goal of this pass is to
+    // if (!isa<triton::LoadOp>(argOp))
+    //   return failure();
     SetVector<Operation *> processed;
     SetVector<Attribute> layout;
     llvm::MapVector<Value, Attribute> toConvert;
@@ -152,7 +154,17 @@ public:
         cvt, processed, layout, toConvert, retTy.getEncoding());
     if (numCvts > 1 || toConvert.size() == 1)
       return failure();
-
+    for (Operation *op : processed) {
+      if (op->getNumOperands() != 1)
+        continue;
+      auto srcTy = op->getOperand(0).getType().cast<RankedTensorType>();
+      auto dstTy = op->getResult(0).getType().cast<RankedTensorType>();
+      // we don't want to push conversions backward if there is a downcast
+      // since it would result in more shared memory traffic
+      if (srcTy.getElementType().getIntOrFloatBitWidth() >
+          dstTy.getElementType().getIntOrFloatBitWidth())
+        return failure();
+    }
     IRMapping mapping;
     rematerializeConversionChain(toConvert, rewriter, processed, mapping);
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));

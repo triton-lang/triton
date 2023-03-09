@@ -434,7 +434,7 @@ public:
     SmallVector<SmallVector<Value>> allOperands;
     for (auto operand : adaptor.getOperands()) {
       auto sub_operands = this->getTypeConverter()->unpackLLElements(
-          loc, operand, rewriter, resultTy, true);
+          loc, operand, rewriter, argTy, true);
       allOperands.resize(sub_operands.size());
       for (auto v : llvm::enumerate(sub_operands))
         allOperands[v.index()].push_back(v.value());
