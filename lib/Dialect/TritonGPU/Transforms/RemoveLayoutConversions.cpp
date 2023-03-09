@@ -310,6 +310,8 @@ public:
     // XXX: why is this needed?
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
+    // Step 1: Find all the operations that are forward slices of the
+    // conversion.
     SetVector<Operation *> cvtSlices;
     auto stop = [&](Operation *op) {
       return op->getBlock() != cvt->getBlock() ||
@@ -323,11 +325,10 @@ public:
     if (cvtSlices.empty()) {
       return failure();
     }
-
-    llvm::SetVector<Operation *> candidates;
+    // Step 2: Check if the conversion can be pushed forward.
     for (Operation *op : cvtSlices) {
       if (stop(op)) {
-        break;
+        continue;
       }
       // don't rematerialize anything expensive
       if (expensiveToRemat(op, dstEncoding)) {
@@ -352,10 +353,15 @@ public:
           return failure();
         }
       }
-      candidates.insert(op);
     }
-    if (candidates.empty())
-      return failure();
+    // Step 3: Take out the operations at which we stop slicing.
+    // These must be the last operations on the slice path.
+    llvm::SetVector<Operation *> candidates;
+    for (Operation *op : cvtSlices) {
+      if (!stop(op))
+        candidates.insert(op);
+    }
+    // Step 4: Push the conversion forward.
     pushConversionForward(cvt, candidates, rewriter);
     return success();
   }
