@@ -1,6 +1,8 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -173,6 +175,8 @@ LogicalResult LoopPipeliner::initialize() {
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.getPtr();
       unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
+      if (auto mask = loadOp.getMask())
+        vec = std::min<unsigned>(vec, axisInfoAnalysis->getMaskAlignment(mask));
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
       if (!tensorTy)
         continue;
@@ -480,15 +484,25 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   // 3. replace loads with block args (from prologue)
   for (size_t idx = 0; idx < loads.size(); ++idx) {
+    OpBuilder::InsertionGuard guard(builder);
     Value load = loads[idx];
     assert(load.hasOneUse() &&
            "we assume that this load has one use (ConvertLayout)");
     Value loadUse = load.getUsers().begin()->getResult(0);
-    mapping.lookup(loadUse).replaceAllUsesWith(
+    // set insertion point
+    Value newLoad = mapping.lookup(load);
+    Value newLoadUse = mapping.lookup(loadUse);
+    builder.setInsertionPoint(newLoadUse.getDefiningOp());
+    // create conversion
+    auto cvt = builder.create<ttg::ConvertLayoutOp>(
+        loadUse.getLoc(), loadUse.getType(),
         newForOp.getRegionIterArgs()[loadIdx + idx]);
+
+    // replace uses
+    newLoadUse.replaceAllUsesWith(cvt.getResult());
     // delete old load and layout conversion
-    mapping.lookup(loadUse).getDefiningOp()->erase();
-    mapping.lookup(load).getDefiningOp()->erase();
+    newLoadUse.getDefiningOp()->erase();
+    newLoad.getDefiningOp()->erase();
   }
 
   // 4. prefetch the next iteration
@@ -616,35 +630,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     }
   }
 
-  {
-    OpBuilder::InsertionGuard guard(builder);
-    for (Operation &op : *newForOp.getBody()) {
-      if (auto dotOp = llvm::dyn_cast<triton::DotOp>(&op)) {
-        builder.setInsertionPoint(&op);
-        auto dotType = dotOp.getType().cast<RankedTensorType>();
-        Value a = dotOp.getA();
-        Value b = dotOp.getB();
-        auto layoutCast = [&](Value dotOperand, int opIdx) -> Value {
-          auto tensorType = dotOperand.getType().cast<RankedTensorType>();
-          if (!tensorType.getEncoding().isa<ttg::DotOperandEncodingAttr>()) {
-            auto newEncoding = ttg::DotOperandEncodingAttr::get(
-                tensorType.getContext(), opIdx, dotType.getEncoding());
-            auto newType =
-                RankedTensorType::get(tensorType.getShape(),
-                                      tensorType.getElementType(), newEncoding);
-            return builder.create<ttg::ConvertLayoutOp>(dotOperand.getLoc(),
-                                                        newType, dotOperand);
-          }
-          return dotOperand;
-        };
-        a = layoutCast(a, 0);
-        b = layoutCast(b, 1);
-        dotOp->setOperand(0, a);
-        dotOp->setOperand(1, b);
-      }
-    }
-  }
-
   // async.wait & extract_slice
   Operation *asyncWait = builder.create<ttg::AsyncWaitOp>(
       loads[0].getLoc(), loads.size() * (numStages - 2));
@@ -696,6 +681,17 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     if (numStages <= 1)
       return;
 
+    // Pre-processing
+    // we make sure element-wise ops are done *after* the conversion
+    // to dot operands
+    // we can achieve this with simple recursive pattern matching
+    // MLIRContext *context = &getContext();
+    // mlir::RewritePatternSet patterns(context);
+    // patterns.add<MoveOpAfterLayoutConversion>(context);
+    // auto didPreprocess =
+    //     applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+
+    // Do the pipelining
     getOperation()->walk([&](scf::ForOp forOp) -> void {
       LoopPipeliner pipeliner(forOp, numStages);
 
@@ -705,7 +701,6 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
       pipeliner.emitPrologue();
 
       scf::ForOp newForOp = pipeliner.createNewForOp();
-
       pipeliner.emitEpilogue();
 
       // replace the original loop

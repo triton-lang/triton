@@ -1341,15 +1341,31 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::arith::SelectOp>(loc, condition,
                                                        trueValue, falseValue);
            })
-      .def("create_printf",
+      .def("create_print",
            [](mlir::OpBuilder &self, const std::string &prefix,
               const std::vector<mlir::Value> &values) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::PrintfOp>(
+             self.create<mlir::triton::PrintOp>(
                  loc,
                  mlir::StringAttr::get(self.getContext(),
                                        llvm::StringRef(prefix)),
                  values);
+           })
+      .def("create_assert",
+           [](mlir::OpBuilder &self, mlir::Value &condition,
+              const std::string &message, const std::string &fileName,
+              const std::string &funcName, unsigned lineNo) -> void {
+             auto loc = self.getUnknownLoc();
+             auto messageAttr = mlir::StringAttr::get(self.getContext(),
+                                                      llvm::StringRef(message));
+             auto fileNameAttr = mlir::StringAttr::get(
+                 self.getContext(), llvm::StringRef(fileName));
+             auto funcNameAttr = mlir::StringAttr::get(
+                 self.getContext(), llvm::StringRef(funcName));
+             auto lineNoAttr = self.getI32IntegerAttr(lineNo);
+             self.create<mlir::triton::AssertOp>(loc, condition, messageAttr,
+                                                 fileNameAttr, funcNameAttr,
+                                                 lineNoAttr);
            })
       // Undef
       .def("create_undef",
@@ -1434,9 +1450,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(
                  mlir::createTritonGPUAccelerateMatmulPass(computeCapability));
            })
-      .def("add_tritongpu_fuse_transpositions_pass",
+      .def("add_tritongpu_optimize_dot_operands_pass",
            [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUFuseTranspositionsPass());
+             self.addPass(mlir::createTritonGPUOptimizeDotOperandsPass());
            })
       .def("add_tritongpu_remove_layout_conversions_pass",
            [](mlir::PassManager &self) {

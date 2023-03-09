@@ -4,10 +4,8 @@
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::getElementsFromStruct;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
@@ -56,13 +54,14 @@ public:
 private:
   SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
                                        ConversionPatternRewriter &rewriter,
-                                       unsigned elemId, ArrayRef<int64_t> shape,
+                                       unsigned elemId, RankedTensorType type,
                                        ArrayRef<unsigned> multiDimCTAInRepId,
                                        ArrayRef<unsigned> shapePerCTA) const {
+    auto shape = type.getShape();
     unsigned rank = shape.size();
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
       auto multiDimOffsetFirstElem =
-          emitBaseIndexForLayout(loc, rewriter, blockedLayout, shape);
+          emitBaseIndexForLayout(loc, rewriter, blockedLayout, type);
       SmallVector<Value> multiDimOffset(rank);
       SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
           elemId, getSizePerThread(layout), getOrder(layout));
@@ -75,9 +74,12 @@ private:
     }
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
       unsigned dim = sliceLayout.getDim();
+      auto parentEncoding = sliceLayout.getParent();
+      auto parentShape = sliceLayout.paddedShape(shape);
+      auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
+                                            parentEncoding);
       auto multiDimOffsetParent =
-          getMultiDimOffset(sliceLayout.getParent(), loc, rewriter, elemId,
-                            sliceLayout.paddedShape(shape),
+          getMultiDimOffset(parentEncoding, loc, rewriter, elemId, parentTy,
                             sliceLayout.paddedShape(multiDimCTAInRepId),
                             sliceLayout.paddedShape(shapePerCTA));
       SmallVector<Value> multiDimOffset(rank);
@@ -195,7 +197,7 @@ private:
       //       of performance issue observed.
       for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
+            getMultiDimOffset(layout, loc, rewriter, elemId, type,
                               multiDimCTAInRepId, shapePerCTA);
         Value offset =
             linearize(rewriter, loc, multiDimOffset, paddedRepShape, outOrd);
@@ -285,7 +287,7 @@ private:
         // TODO[Superjomn]: Move the coordinate computation out of loop, it is
         // duplicate in Volta.
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type.getShape(),
+            getMultiDimOffset(layout, loc, rewriter, elemId, type,
                               multiDimCTAInRepId, shapePerCTA);
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
       }
@@ -393,7 +395,8 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     // unsigned elems = getElemsPerThread(srcTy);
-    auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
+    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                     rewriter, srcTy);
     unsigned inVec = 0;
     unsigned outVec = 0;
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
@@ -444,7 +447,8 @@ private:
     SmallVector<Type> types(outElems, llvmElemTy);
     auto *ctx = llvmElemTy.getContext();
     Type structTy = struct_ty(types);
-    Value result = getStructFromElements(loc, outVals, rewriter, structTy);
+    Value result =
+        getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -476,7 +480,7 @@ private:
 
     auto dstStrides =
         getStridesFromShapeAndOrder(dstShape, outOrd, loc, rewriter);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcShape);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
     storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices, dst,
                              smemBase, elemTy, loc, rewriter);
     auto smemObj =
@@ -521,10 +525,10 @@ private:
       auto thread = getThreadId(rewriter, loc);
       if (dotOpLayout.getOpIdx() == 0) { // $a
         res = helper.loadA(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       } else { // $b
         res = helper.loadB(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           rewriter);
+                           getTypeConverter(), rewriter);
       }
     } else {
       assert(false && "Unsupported dot operand layout found");
@@ -547,7 +551,8 @@ private:
     auto dstDotLayout = dstLayout.cast<DotOperandEncodingAttr>();
     if (isMmaToDotShortcut(srcMmaLayout, dstDotLayout)) {
       // get source values
-      auto vals = getElementsFromStruct(loc, adaptor.getSrc(), rewriter);
+      auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                       rewriter, srcTy);
       unsigned elems = getElemsPerThread(srcTy);
       Type elemTy =
           this->getTypeConverter()->convertType(srcTy.getElementType());
@@ -578,12 +583,8 @@ private:
         reorderedVals.push_back(vecVals[i + 3]);
       }
 
-      // return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
-
-      Type structTy =
-          LLVM::LLVMStructType::getLiteral(this->getContext(), types);
-      Value view =
-          getStructFromElements(loc, reorderedVals, rewriter, structTy);
+      Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
+                                                      rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -636,12 +637,12 @@ private:
         // TODO[Superjomn]: transA is not available here.
         bool transA = false;
         res = helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+                           getTypeConverter(), rewriter, dst.getType());
       } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
         // TODO[Superjomn]: transB is not available here.
         bool transB = false;
         res = helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc,
-                           rewriter);
+                           getTypeConverter(), rewriter, dst.getType());
       }
     } else {
       assert(false && "Unsupported mma layout found");
@@ -651,7 +652,7 @@ private:
 };
 
 void populateConvertLayoutOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
