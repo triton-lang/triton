@@ -310,14 +310,12 @@ struct FpToFpOpConversion
     auto srcEltType = srcTensorType.getElementType();
     auto dstEltType = dstTensorType.getElementType();
     auto loc = op->getLoc();
-    auto elems = getElemsPerThread(dstTensorType);
     SmallVector<Value> resultVals;
+    auto elems = getElemsPerThread(dstTensorType);
 
     // Select convertor
     bool isSrcF8 = srcEltType.isa<mlir::Float8E4M3FNType>();
     bool isDstF8 = dstEltType.isa<mlir::Float8E4M3FNType>();
-    llvm::outs() << op << "\n";
-    llvm::outs() << isSrcF8 << " " << isDstF8 << "\n";
     if (isSrcF8 || isDstF8) {
       std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                        const Value &, const Value &,
@@ -347,16 +345,10 @@ struct FpToFpOpConversion
       assert(elems % 4 == 0 &&
              "FP8 casting only support tensors with 4-aligned sizes");
       auto elements = getTypeConverter()->unpackLLElements(
-          loc, adaptor.getFrom(), rewriter, srcTensorType);
-      for (auto element : elements) {
-        element = bitcast(element, vec_ty(i8_ty, 4));
-        auto type = element.getType().cast<VectorType>();
-        assert(type.getNumElements() == 4);
-        Value elt0 = extract_element(element, i32_val(0));
-        Value elt1 = extract_element(element, i32_val(1));
-        Value elt2 = extract_element(element, i32_val(2));
-        Value elt3 = extract_element(element, i32_val(3));
-        auto converted = convertor(loc, rewriter, elt0, elt1, elt2, elt3);
+          loc, adaptor.getFrom(), rewriter, srcTensorType, true);
+      for (size_t i = 0; i < elements.size(); i += 4) {
+        auto converted = convertor(loc, rewriter, elements[i], elements[i + 1],
+                                   elements[i + 2], elements[i + 3]);
         resultVals.append(converted);
       }
     } else if (srcEltType.isBF16() && dstEltType.isF32()) {
@@ -376,7 +368,6 @@ struct FpToFpOpConversion
     }
 
     assert(resultVals.size() == elems);
-    llvm::outs() << resultVals[0] << "\n";
     auto result = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
                                                      dstTensorType, true);
     rewriter.replaceOp(op, result);

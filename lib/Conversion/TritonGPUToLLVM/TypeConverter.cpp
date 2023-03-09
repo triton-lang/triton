@@ -91,7 +91,7 @@ Value TritonGPUToLLVMTypeConverter::packLLElements(
     Type llvmEltTy = convertType(tensorEltTy);
     int bitwidth = llvmEltTy.getIntOrFloatBitWidth();
     Type packedStructType = structType;
-    if (bitwidth == 8) {
+    if (bitwidth == 8 && structType.getBody()[0].isInteger(32)) {
       auto ctx = structType.getContext();
       packedStructType = struct_ty(SmallVector<Type>(
           structType.getBody().size(), vec_ty(llvmEltTy, 32 / bitwidth)));
@@ -127,8 +127,8 @@ SmallVector<Value> TritonGPUToLLVMTypeConverter::unpackLLElements(
     Type tensorEltTy = getElementTypeOrSelf(type);
     Type llvmEltTy = convertType(tensorEltTy);
     int bitwidth = llvmEltTy.getIntOrFloatBitWidth();
-    if (bitwidth == 8)
-      for (auto &v : results)
+    for (auto &v : results)
+      if (bitwidth == 8 && v.getType().isInteger(32))
         v = bitcast(v, vec_ty(llvmEltTy, 32 / bitwidth));
     results = unpackVectorData(rewriter, loc, results);
   }

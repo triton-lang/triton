@@ -306,7 +306,6 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   pm.addPass(mlir::createSymbolDCEPass());
 
   if (failed(pm.run(module))) {
-    llvm::outs() << module << "\n";
     llvm::errs() << "Pass execution failed";
     return nullptr;
   }
