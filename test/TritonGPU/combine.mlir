@@ -3,6 +3,7 @@
 #layout0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #layout1 = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #layout2 = #triton_gpu.mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1]}>
+#layout3 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 
 // CHECK: [[$target_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK: [[$row_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -33,6 +34,21 @@ func.func @splat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   // CHECK-NOT: triton_gpu.convert_layout
   // CHECK: return %0 : tensor<1024xi32, [[$target_layout]]>
   return %1: tensor<1024xi32, #layout1>
+}
+
+// %1 will be pushed forward before reduce
+// CHECK-LABEL: reduce
+func.func @reduce(%arg0: i32) -> tensor<64xi32, #layout1> {
+  // CHECK: tt.splat
+  // CHECK-NOT: triton_gpu.convert_layout
+  // CHECK: tt.reduce
+  // CHECK: triton_gpu.convert_layout
+  %0 = tt.splat %arg0 : (i32) -> tensor<64x64xi32, #layout0>
+  %1 = triton_gpu.convert_layout %0 : (tensor<64x64xi32, #layout0>) -> tensor<64x64xi32, #layout3>
+  %2 = arith.addi %1, %1 : tensor<64x64xi32, #layout3>
+  %3 = tt.reduce %2 {axis = 1 : i32, redOp = 2 : i32} : tensor<64x64xi32, #layout3> -> tensor<64xi32, #triton_gpu.slice<{dim = 1, parent = #layout3}>>
+  %4 = triton_gpu.convert_layout %3 : (tensor<64xi32, #triton_gpu.slice<{dim = 1, parent = #layout3}>>) -> tensor<64xi32, #layout1>
+  return %4: tensor<64xi32, #layout1>
 }
 
 // CHECK-LABEL: remat

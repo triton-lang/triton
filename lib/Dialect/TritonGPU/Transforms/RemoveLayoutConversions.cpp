@@ -316,8 +316,8 @@ public:
     SetVector<Operation *> cvtSlices;
     auto stop = [&](Operation *op) {
       return op->getBlock() != cvt->getBlock() ||
-             isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp,
-                 triton::ExpandDimsOp, scf::YieldOp>(op) ||
+             isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp, scf::YieldOp>(
+                 op) ||
              op->getNumResults() == 0 ||
              !op->getResult(0).getType().isa<RankedTensorType>();
     };
@@ -336,7 +336,7 @@ public:
         return failure();
       }
       // don't rematerialize non-element-wise
-      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
+      if (!isa<triton::StoreOp, triton::ViewOp, triton::CatOp>(op) &&
           !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>()) {
         return failure();
@@ -362,8 +362,13 @@ public:
       if (!stop(op))
         candidates.insert(op);
     }
+    llvm::errs() << "before push\n";
+    llvm::errs() << *cvt->getParentOp() << "\n";
     // Step 4: Push the conversion forward.
     pushConversionForward(cvt, candidates, rewriter);
+    llvm::errs() << "after push\n";
+    llvm::errs() << *cvt->getParentOp() << "\n";
+    llvm::errs() << "---------------\n";
     return success();
   }
 };
