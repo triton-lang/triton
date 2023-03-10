@@ -198,7 +198,7 @@ class _attention(torch.autograd.Function):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
-            raise RuntimeError("Flash attention currently only supported for compute capability < 80")
+            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
         BLOCK = 128
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
