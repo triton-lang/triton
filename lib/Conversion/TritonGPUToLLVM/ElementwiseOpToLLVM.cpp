@@ -4,6 +4,84 @@ using namespace mlir;
 using namespace mlir::triton;
 using ::mlir::triton::gpu::getElemsPerThread;
 
+static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
+                                        Type inType, Type ouType) {
+  auto inTensorTy = inType.dyn_cast<RankedTensorType>();
+  auto ouTensorTy = ouType.dyn_cast<RankedTensorType>();
+  if (!inTensorTy || !ouTensorTy)
+    return values;
+  auto inEncoding =
+      dyn_cast<triton::gpu::DotOperandEncodingAttr>(inTensorTy.getEncoding());
+  auto ouEncoding =
+      dyn_cast<triton::gpu::DotOperandEncodingAttr>(ouTensorTy.getEncoding());
+  assert(inEncoding == ouEncoding);
+  if (!inEncoding)
+    return values;
+  size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
+  size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
+  auto ouEltTy = ouTensorTy.getElementType();
+  if (inBitWidth == ouBitWidth)
+    return values;
+  if (inBitWidth == 16 && ouBitWidth == 32) {
+    SmallVector<Value> ret;
+    for (unsigned i = 0; i < values.size(); i += 8) {
+      ret.push_back(values[i]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+    }
+    return ret;
+  }
+  if (inBitWidth == 8 && ouBitWidth == 16) {
+    llvm::outs() << values.size() << "\n";
+    SmallVector<Value> ret;
+    for (unsigned i = 0; i < values.size(); i += 16) {
+      ret.push_back(values[i + 0]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 8]);
+      ret.push_back(values[i + 9]);
+      ret.push_back(values[i + 10]);
+      ret.push_back(values[i + 11]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+      ret.push_back(values[i + 12]);
+      ret.push_back(values[i + 13]);
+      ret.push_back(values[i + 14]);
+      ret.push_back(values[i + 15]);
+    }
+    return ret;
+    // for (unsigned i = 0; i < values.size(); i += 16) {
+    //   ret.push_back(values[i]);
+    //   ret.push_back(values[i + 1]);
+    //   ret.push_back(values[i + 4]);
+    //   ret.push_back(values[i + 5]);
+    //   ret.push_back(values[i + 8]);
+    //   ret.push_back(values[i + 9]);
+    //   ret.push_back(values[i + 12]);
+    //   ret.push_back(values[i + 13]);
+
+    //   ret.push_back(values[i + 2]);
+    //   ret.push_back(values[i + 3]);
+    //   ret.push_back(values[i + 6]);
+    //   ret.push_back(values[i + 7]);
+    //   ret.push_back(values[i + 10]);
+    //   ret.push_back(values[i + 11]);
+    //   ret.push_back(values[i + 14]);
+    //   ret.push_back(values[i + 15]);
+    // }
+    return values;
+  }
+  llvm_unreachable("unimplemented code path");
+}
+
 struct FpToFpOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::FpToFpOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -367,6 +445,7 @@ struct FpToFpOpConversion
       assert(false && "unsupported type casting");
     }
 
+    resultVals = reorderValues(resultVals, srcTensorType, dstTensorType);
     assert(resultVals.size() == elems);
     auto result = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
                                                      dstTensorType, true);
@@ -384,41 +463,6 @@ public:
   explicit ElementwiseOpConversionBase(
       TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
-
-  SmallVector<Value> reorderValues(const SmallVector<Value> &values,
-                                   Type inType, Type ouType) const {
-    auto inTensorTy = inType.dyn_cast<RankedTensorType>();
-    auto ouTensorTy = ouType.dyn_cast<RankedTensorType>();
-    if (!inTensorTy || !ouTensorTy)
-      return values;
-    auto inEncoding =
-        dyn_cast<triton::gpu::DotOperandEncodingAttr>(inTensorTy.getEncoding());
-    auto ouEncoding =
-        dyn_cast<triton::gpu::DotOperandEncodingAttr>(ouTensorTy.getEncoding());
-    assert(inEncoding == ouEncoding);
-    if (!inEncoding)
-      return values;
-    size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
-    size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
-    auto ouEltTy = ouTensorTy.getElementType();
-    if (inBitWidth == ouBitWidth)
-      return values;
-    if (inBitWidth == 16 && ouBitWidth == 32) {
-      SmallVector<Value> ret;
-      for (unsigned i = 0; i < values.size(); i += 8) {
-        ret.push_back(values[i]);
-        ret.push_back(values[i + 1]);
-        ret.push_back(values[i + 4]);
-        ret.push_back(values[i + 5]);
-        ret.push_back(values[i + 2]);
-        ret.push_back(values[i + 3]);
-        ret.push_back(values[i + 6]);
-        ret.push_back(values[i + 7]);
-      }
-      return ret;
-    }
-    llvm_unreachable("unimplemented code path");
-  }
 
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,

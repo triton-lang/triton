@@ -914,7 +914,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
       }
     }
 
-    llvm::errs() << i8v4Elems[0] << "\n";
     return {bitcast(i8v4Elems[0], i32_ty), bitcast(i8v4Elems[1], i32_ty),
             bitcast(i8v4Elems[2], i32_ty), bitcast(i8v4Elems[3], i32_ty)};
   }
