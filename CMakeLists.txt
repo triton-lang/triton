@@ -216,6 +216,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonGPUTransforms
     TritonLLVMIR
     TritonPTX
+    TritonHSACO
     ${dialect_libs}
     ${conversion_libs}
 
@@ -228,6 +229,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRExecutionEngine
     MLIRMathToLLVM
     MLIRNVVMToLLVMIRTranslation
+    MLIRROCDLToLLVMIRTranslation
     MLIRIR
   )
 

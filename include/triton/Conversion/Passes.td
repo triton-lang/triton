@@ -40,6 +40,7 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                              "mlir::tensor::TensorDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::ROCDL::ROCDLDialect",
                              "mlir::NVVM::NVVMDialect"];
 
     let options = [

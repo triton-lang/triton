@@ -4,6 +4,7 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM//ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
@@ -11,12 +12,14 @@
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"
@@ -43,7 +46,11 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<NVVM::NVVMDialect>();
+    if (isROCM()) {
+      addLegalDialect<ROCDL::ROCDLDialect>();
+    } else {
+      addLegalDialect<NVVM::NVVMDialect>();
+    }
     addIllegalOp<mlir::func::FuncOp>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
@@ -54,7 +61,19 @@ public:
   explicit TritonPTXConversionTarget(MLIRContext &ctx) : ConversionTarget(ctx) {
     addDynamicallyLegalDialect<LLVM::LLVMDialect>(
         [&](Operation *op) { return isLegalElementwiseOp(op); });
+
     addLegalDialect<NVVM::NVVMDialect>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
+
+class TritonGCNConversionTarget : public ConversionTarget {
+public:
+  explicit TritonGCNConversionTarget(MLIRContext &ctx) : ConversionTarget(ctx) {
+    addDynamicallyLegalDialect<LLVM::LLVMDialect>(
+        [&](Operation *op) { return isLegalElementwiseOp(op); });
+
+    addLegalDialect<ROCDL::ROCDLDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -101,10 +120,12 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // Set an attribute to indicate this function is a kernel entry.
     newFuncOp->setAttr("nvvm.kernel",
                        rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-
-    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-    // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
+    if(!isROCM()){
+      // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+      // for `nvvm.annotation` metadata.
+      newFuncOp->setAttr("nvvm.maxntid",
+                        rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
+    }
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -119,7 +140,12 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<NVVM::NVVMDialect>();
+    if (isROCM()) {
+      addLegalDialect<ROCDL::ROCDLDialect>();
+      addLegalDialect<mlir::scf::SCFDialect>();
+    } else {
+      addLegalDialect<NVVM::NVVMDialect>();
+    }
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
@@ -200,25 +226,40 @@ public:
     populatePatterns1(populateLoadStoreOpToLLVMPatterns);
     populatePatterns1(populateReduceOpToLLVMPatterns);
     populatePatterns2(populateViewOpToLLVMPatterns);
-    // Native lowering patterns
-    mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+   
+     // Native lowering patterns
+    if (isROCM()) {
+      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns, mlir::gpu::amd::HIP);
+    }else{
+      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+    }
+
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
 
-    // Use our custom converters to convert some operations to PTX to avoid
-    // using NVPTX for two reasons:
-    // 1. NVPTX backend is flaky on data types like float16 and bfloat16
-    // 2. In some cases, we may generate faster PTX code than NVPTX backend
-    TritonPTXConversionTarget ptxTarget(*context);
-    RewritePatternSet ptxPatterns(context);
-    // Add patterns to convert LLVM to PTX
-    populateElementwiseOpToPTXPatterns(typeConverter, ptxPatterns,
-                                       /*benefits=*/10);
+    if (isROCM()) {
+      TritonGCNConversionTarget gcnTarget(*context);
+      RewritePatternSet gcnPatterns(context);
+      populateElementwiseOpToPTXPatterns(typeConverter, gcnPatterns,
+                                         /*benefits=*/10);
+      if (failed(applyPartialConversion(mod, gcnTarget, std::move(gcnPatterns))))
+        return signalPassFailure();
+    } else {
+      // Use our custom converters to convert some operations to PTX to avoid
+      // using NVPTX for two reasons:
+      // 1. NVPTX backend is flaky on data types like float16 and bfloat16
+      // 2. In some cases, we may generate faster PTX code than NVPTX backend
+      TritonPTXConversionTarget ptxTarget(*context);
+      RewritePatternSet ptxPatterns(context);
+      // Add patterns to convert LLVM to PTX
+      populateElementwiseOpToPTXPatterns(typeConverter, ptxPatterns,
+                                         /*benefits=*/10);
+      if (failed(applyPartialConversion(mod, ptxTarget, std::move(ptxPatterns))))
+        return signalPassFailure();
+    }
 
-    if (failed(applyPartialConversion(mod, ptxTarget, std::move(ptxPatterns))))
-      return signalPassFailure();
   }
 
 private:

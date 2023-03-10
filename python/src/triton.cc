@@ -25,7 +25,9 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
+#include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -64,7 +66,7 @@ void init_triton_runtime(py::module &&m) {
   py::enum_<backend_t>(m, "backend")
       .value("HOST", HOST)
       .value("CUDA", CUDA)
-      // .value("ROCM", ROCM)
+      .value("ROCM", ROCM)
       .export_values();
 }
 
@@ -900,22 +902,22 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return mlir::Value(
-                 self.create<mlir::arith::ShLIOp>(loc, lhs, rhs));
+               return mlir::Value(
+                   self.create<mlir::arith::ShLIOp>(loc, lhs, rhs));
            })
       .def("create_lshr",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return mlir::Value(
-                 self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs));
+               return mlir::Value(
+                   self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs));
            })
       .def("create_ashr",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return mlir::Value(
-                 self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs));
+               return mlir::Value(
+                   self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs));
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",
@@ -1587,6 +1589,23 @@ void init_triton_translation(py::module &m) {
            const std::vector<std::string> &paths) {
           ::mlir::triton::addExternalLibs(op, names, paths);
         });
+
+  m.def(
+      "translate_llvmir_to_hsaco",
+      [](const std::string llvmIR, std::string gfx_arch, std::string gfx_triple, 
+          std::string gfx_features) -> std::tuple<std::string, std::string> {
+        // create LLVM module from C++
+        llvm::LLVMContext context;
+        std::unique_ptr<llvm::MemoryBuffer> buffer =
+            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+        llvm::SMDiagnostic error;
+        std::unique_ptr<llvm::Module> module =
+            llvm::parseIR(buffer->getMemBufferRef(), error, context);
+        // translate module to HSACO
+        auto hsacoCode = triton::translateLLVMIRToHSACO(*module, gfx_arch, gfx_triple, gfx_features);
+        return hsacoCode;
+      },
+      ret::take_ownership);
 }
 
 void init_triton(py::module &m) {

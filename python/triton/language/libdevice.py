@@ -1,11 +1,14 @@
 import os
+import torch
 
 from .. import impl
 from . import core, extern
 
-LOCAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "third_party", "cuda", "lib", "libdevice.10.bc")
+if torch.version.hip is not None:
+    LOCAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cuda2gcn.bc")
+else:
+    LOCAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "third_party", "cuda", "lib", "libdevice.10.bc")
 LIBDEVICE_PATH = os.getenv("TRITON_LIBDEVICE_PATH", LOCAL_PATH)
-
 
 @impl.extern
 def clz(arg0, _builder=None):
