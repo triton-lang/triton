@@ -62,7 +62,7 @@ class dtype:
             if name == 'fp8e4':
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
-            if name == 'fp8e5':
+            elif name == 'fp8e5':
                 self.fp_mantissa_width = 2
                 self.primitive_bitwidth = 8
             elif name == 'fp16':
