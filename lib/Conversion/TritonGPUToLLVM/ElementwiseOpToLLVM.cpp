@@ -259,7 +259,7 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.rn.f32.bf16");
+    auto &cvt = *builder.create("cvt.f32.bf16");
     auto res = builder.newOperand("=r");
     auto operand = builder.newOperand(v, "h");
     cvt(res, operand);
