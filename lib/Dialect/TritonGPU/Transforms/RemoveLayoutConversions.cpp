@@ -362,13 +362,8 @@ public:
       if (!stop(op))
         candidates.insert(op);
     }
-    llvm::errs() << "before push\n";
-    llvm::errs() << *cvt->getParentOp() << "\n";
     // Step 4: Push the conversion forward.
     pushConversionForward(cvt, candidates, rewriter);
-    llvm::errs() << "after push\n";
-    llvm::errs() << *cvt->getParentOp() << "\n";
-    llvm::errs() << "---------------\n";
     return success();
   }
 };
