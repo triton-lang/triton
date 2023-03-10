@@ -20,27 +20,26 @@
  */
 
 #ifndef TDL_TOOLS_SYS_GETPLATFORM_HPP
-#define TDL_TOOLS_SYS__GETPLATFORM_HPP
+#define TDL_TOOLS_SYS_GETPLATFORM_HPP
 
 #include <algorithm>
 #include <cstdlib>
-#include <string>
 #include <iostream>
 #include <map>
 #include <memory>
-
-
+#include <string>
 
 inline std::map<std::string, bool> cache{};
 inline bool isROCM() {
   // only need to run function once after that return cached value
   if (cache.find("isROCM") != cache.end()) {
-      return cache["isROCM"];
+    return cache["isROCM"];
   }
 
   // run command
   std::string cmd = "apt-cache show rocm-libs | grep 'Package:'";
-  std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+  std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"),
+                                                pclose);
   if (!pipe) {
     std::cout << ("cmd failed!") << std::endl;
   }
@@ -54,7 +53,7 @@ inline bool isROCM() {
 
   // check ROCM that is found
   cache["isROCM"] = result.find("rocm") != std::string::npos;
-  return cache["isROCM"] ;
+  return cache["isROCM"];
 }
 
 #endif

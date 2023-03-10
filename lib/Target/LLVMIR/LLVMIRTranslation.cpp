@@ -16,10 +16,10 @@
 #include "triton/Conversion/TritonGPUToLLVM/ArithToIndexPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetPlatform.hpp"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "triton/Tools/Sys/GetPlatform.hpp"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
@@ -230,7 +230,7 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
   }
 
   // check if ROCM
-  if (!isROCM()){
+  if (!isROCM()) {
     if (name == "libdevice") {
       linkLibdevice(module);
     } else {
@@ -332,9 +332,10 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   if (::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     std::string mod_string;
     std::unique_ptr<llvm::raw_string_ostream> ir_ss(
-           new llvm::raw_string_ostream(mod_string));
+        new llvm::raw_string_ostream(mod_string));
     llvmIR->print(*ir_ss, nullptr);
-    std::cout << "// -----// LLVM IR Dump //----- //\n" << mod_string << std::endl;
+    std::cout << "// -----// LLVM IR Dump //----- //\n"
+              << mod_string << std::endl;
   }
 
   return llvmIR;

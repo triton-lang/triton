@@ -48,7 +48,7 @@ struct GCNBuilder {
     std::string dump() const;
   };
 
-struct Modifier {
+  struct Modifier {
     Value value;
     std::string modifier;
     std::string arg;
@@ -191,10 +191,12 @@ struct GCNInstrCommon {
   // clang-format on
 
   // Set operands of this instruction.
-  GCNInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs, llvm::ArrayRef<Modifier*> mods);
+  GCNInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,
+                                llvm::ArrayRef<Modifier *> mods);
 
 protected:
-  GCNInstrExecution &call(llvm::ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods);
+  GCNInstrExecution &call(llvm::ArrayRef<Operand *> oprs,
+                          ArrayRef<Modifier *> mods);
 
   GCNBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
@@ -218,17 +220,12 @@ template <class ConcreteT> struct GCNInstrBase : public GCNInstrCommon {
   }
 };
 
-enum VectorWidth {
-  Byte = 8,
-  Short = 16,
-  Dword = 32,
-  Qword = 64
-};
+enum VectorWidth { Byte = 8, Short = 16, Dword = 32, Qword = 64 };
 
 struct GCNInstr : public GCNInstrBase<GCNInstr> {
   using GCNInstrBase<GCNInstr>::GCNInstrBase;
 
-   GCNInstr &float_op_type(int width) {
+  GCNInstr &float_op_type(int width) {
     switch (width) {
     case Byte:
       assert(Byte != width);
@@ -258,8 +255,10 @@ struct GCNInstrExecution {
 
   GCNInstrExecution() = default;
   explicit GCNInstrExecution(GCNInstrCommon *instr,
-                             llvm::ArrayRef<Operand *> oprs, llvm::ArrayRef<Modifier *> modifiers)
-      : instr(instr), argsInOrder(oprs.begin(), oprs.end()), mods(modifiers.begin(), modifiers.end()) {}
+                             llvm::ArrayRef<Operand *> oprs,
+                             llvm::ArrayRef<Modifier *> modifiers)
+      : instr(instr), argsInOrder(oprs.begin(), oprs.end()),
+        mods(modifiers.begin(), modifiers.end()) {}
 
   std::string dump() const;
 
@@ -267,8 +266,6 @@ struct GCNInstrExecution {
 
   GCNInstrCommon *instr{};
 };
-
-
 
 struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   using GCNInstrBase<GCNMemInstr>::GCNInstrBase;

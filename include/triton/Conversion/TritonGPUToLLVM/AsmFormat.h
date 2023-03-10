@@ -16,7 +16,7 @@ namespace triton {
 using llvm::StringRef;
 
 inline std::string strJoin(llvm::ArrayRef<std::string> strs,
-                    llvm::StringRef delimiter) {
+                           llvm::StringRef delimiter) {
   std::string osStr;
   llvm::raw_string_ostream os(osStr);
   for (size_t i = 0; !strs.empty() && i < strs.size() - 1; ++i)

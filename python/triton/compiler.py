@@ -27,12 +27,14 @@ import triton._C.libtriton.triton as _triton
 from . import impl
 from .tools.disasm import extract
 
+
 def static_vars(**kwargs):
     def decorate(func):
         for k in kwargs:
             setattr(func, k, kwargs[k])
         return func
     return decorate
+
 
 def str_to_ty(name):
     if name[0] == "*":
@@ -1094,6 +1096,7 @@ def ptx_get_kernel_name(ptx: str) -> str:
         if line.startswith('// .globl'):
             return line.split()[-1]
 
+
 def amdgcn_get_kernel_name(amdgcn: str) -> str:
     '''
     Get kernel name from AMDGCN code.
@@ -1545,9 +1548,11 @@ def quiet():
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
+
 @functools.lru_cache()
 def rocm_path_dir():
     return os.getenv("ROCM_PATH", default="/opt/rocm")
+
 
 def _build(name, src, srcdir):
     if torch.version.hip is not None:
@@ -1661,6 +1666,7 @@ def read_or_execute(cache_manager, force_compile, file_name, metadata,
     cache_manager.put(data, file_name, True if isinstance(data, bytes) else data)
     return module, md5, True, False
 
+
 def get_amdgpu_arch_fulldetails():
     """
     get the amdgpu fulll ISA details for compiling:
@@ -1678,8 +1684,9 @@ def get_amdgpu_arch_fulldetails():
             arch_features = "+" + re.search('\\w+', arch_name_features[1]).group(0) + ","\
                             "-" + re.search('\\w+', arch_name_features[2]).group(0)
         return [arch_triple, arch_name, arch_features]
-    except:
+    except BaseException:
         return None
+
 
 def make_stub(name, signature, constants):
     # name of files that are cached
@@ -1762,7 +1769,7 @@ def _get_jsonable_constants(constants):
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
 
 
-@static_vars(discovered_gfx_arch_fulldetails = get_amdgpu_arch_fulldetails())
+@static_vars(discovered_gfx_arch_fulldetails=get_amdgpu_arch_fulldetails())
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
@@ -1788,7 +1795,7 @@ def compile(fn, **kwargs):
 
         for key in list(extern_libs):
             if extern_libs[key] == '' or extern_libs[key] is None:
-               extern_libs.pop(key)
+                extern_libs.pop(key)
 
         gfx_arch_full_details = compile.discovered_gfx_arch_fulldetails
         gfx_arch = os.environ.get('MI_GPU_ARCH', gfx_arch_full_details[1])
@@ -1804,8 +1811,8 @@ def compile(fn, **kwargs):
                      lambda src: ttgir_to_llir(src, extern_libs, capability)),
             "amdgcn": (lambda path: Path(path).read_text(),
                        lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch,
-                                                        gfx_arch_full_details[0],
-                                                        gfx_arch_full_details[2])),
+                                                            gfx_arch_full_details[0],
+                                                            gfx_arch_full_details[2])),
         }
     else:
         stages = {
@@ -1914,42 +1921,45 @@ def compile(fn, **kwargs):
     # return handle to compiled kernel
     return CompiledKernel(fn, so_path, metadata, asm)
 
-@static_vars(discovered_gfx_arch_fulldetails = get_amdgpu_arch_fulldetails())
+
+@static_vars(discovered_gfx_arch_fulldetails=get_amdgpu_arch_fulldetails())
 def _get_amdgcn_bitcode_paths():
-  if torch.version.hip is not None:
-      gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
-                                             "ocml.bc",
-                                             "ockl.bc",
-                                             "oclc_finite_only_off.bc",
-                                             "oclc_daz_opt_off.bc",
-                                             "oclc_correctly_rounded_sqrt_on.bc",
-                                             "oclc_unsafe_math_off.bc",
-                                             "oclc_wavefrontsize64_on.bc"]
-    
-      gfx_arch = _get_amdgcn_bitcode_paths.discovered_gfx_arch_fulldetails[1]
-      gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
+    if torch.version.hip is not None:
+        gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
+                                               "ocml.bc",
+                                               "ockl.bc",
+                                               "oclc_finite_only_off.bc",
+                                               "oclc_daz_opt_off.bc",
+                                               "oclc_correctly_rounded_sqrt_on.bc",
+                                               "oclc_unsafe_math_off.bc",
+                                               "oclc_wavefrontsize64_on.bc"]
 
-      gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
-      bitcode_path_dir = os.path.join(Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/")
+        gfx_arch = _get_amdgcn_bitcode_paths.discovered_gfx_arch_fulldetails[1]
+        gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
 
-      amdgcn_bitcode_paths = {}
-      i = 1
-      for bc_lib in gpu_arch_agnostic_bitcode_libraries:
-        bc_path = bitcode_path_dir + bc_lib
-        if os.path.exists(bc_path):
-            amdgcn_bitcode_paths['library_' + str(i)] = bc_path
-            i += 1
-      bc_gfx_path = bitcode_path_dir + gpu_arch_specific_bitcode_library
-      if os.path.exists(bc_gfx_path):
-        amdgcn_bitcode_paths['library_' + str(i)] = bc_gfx_path
-    
-      return amdgcn_bitcode_paths
-  else:
-      return {}
+        gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
+        bitcode_path_dir = os.path.join(Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/")
 
-@static_vars(amdgcn_bitcode_paths = _get_amdgcn_bitcode_paths())
+        amdgcn_bitcode_paths = {}
+        i = 1
+        for bc_lib in gpu_arch_agnostic_bitcode_libraries:
+            bc_path = bitcode_path_dir + bc_lib
+            if os.path.exists(bc_path):
+                amdgcn_bitcode_paths['library_' + str(i)] = bc_path
+                i += 1
+        bc_gfx_path = bitcode_path_dir + gpu_arch_specific_bitcode_library
+        if os.path.exists(bc_gfx_path):
+            amdgcn_bitcode_paths['library_' + str(i)] = bc_gfx_path
+
+        return amdgcn_bitcode_paths
+    else:
+        return {}
+
+
+@static_vars(amdgcn_bitcode_paths=_get_amdgcn_bitcode_paths())
 def get_amdgcn_bitcode_paths():
-  return get_amdgcn_bitcode_paths.amdgcn_bitcode_paths
+    return get_amdgcn_bitcode_paths.amdgcn_bitcode_paths
+
 
 class CompiledKernel:
 
@@ -2179,14 +2189,18 @@ def init_cuda_utils():
     if cuda_utils is None:
         cuda_utils = CudaUtils()
 
+
 cuda_utils = None
+
 
 def init_hip_utils():
     global hip_utils
     if hip_utils is None:
         hip_utils = HIPUtils()
 
+
 hip_utils = None
+
 
 class HIPUtils(object):
     def __new__(cls):

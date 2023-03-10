@@ -14,9 +14,9 @@
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
-#include "triton/Target/HSACO/HSACOTranslation.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
@@ -79,7 +79,8 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
       llvm::cl::init("-"));
 
   static llvm::cl::opt<std::string> targetKind(
-      "target", llvm::cl::desc("<translation target, options: llvmir/ptx/hsaco>"),
+      "target",
+      llvm::cl::desc("<translation target, options: llvmir/ptx/hsaco>"),
       llvm::cl::value_desc("target"), llvm::cl::init("llvmir"));
 
   static llvm::cl::opt<int> SMArch("sm", llvm::cl::desc("sm arch"),
@@ -132,10 +133,9 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
     llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
                                                    ptxVersion.getValue());
   else if (targetKind == "hsaco") {
-    auto [module, hsaco] =
-        ::triton::translateLLVMIRToHSACO(*llvmir, GCNArch.getValue(),
-                                                  GCNTriple.getValue(),
-                                                  GCNFeatures.getValue());
+    auto [module, hsaco] = ::triton::translateLLVMIRToHSACO(
+        *llvmir, GCNArch.getValue(), GCNTriple.getValue(),
+        GCNFeatures.getValue());
     llvm::outs() << hsaco;
   } else {
     llvm::errs() << "Error: Unknown target specified: " << targetKind << "\n";

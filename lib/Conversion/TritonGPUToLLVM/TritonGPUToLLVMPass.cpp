@@ -120,11 +120,11 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // Set an attribute to indicate this function is a kernel entry.
     newFuncOp->setAttr("nvvm.kernel",
                        rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-    if(!isROCM()){
+    if (!isROCM()) {
       // Set an attribute for maxntidx, it could be used in latter LLVM codegen
       // for `nvvm.annotation` metadata.
       newFuncOp->setAttr("nvvm.maxntid",
-                        rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
+                         rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
     }
 
     rewriter.eraseOp(funcOp);
@@ -226,11 +226,12 @@ public:
     populatePatterns1(populateLoadStoreOpToLLVMPatterns);
     populatePatterns1(populateReduceOpToLLVMPatterns);
     populatePatterns2(populateViewOpToLLVMPatterns);
-   
-     // Native lowering patterns
+
+    // Native lowering patterns
     if (isROCM()) {
-      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns, mlir::gpu::amd::HIP);
-    }else{
+      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
+                                                 mlir::gpu::amd::HIP);
+    } else {
       mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
     }
 
@@ -244,7 +245,8 @@ public:
       RewritePatternSet gcnPatterns(context);
       populateElementwiseOpToPTXPatterns(typeConverter, gcnPatterns,
                                          /*benefits=*/10);
-      if (failed(applyPartialConversion(mod, gcnTarget, std::move(gcnPatterns))))
+      if (failed(
+              applyPartialConversion(mod, gcnTarget, std::move(gcnPatterns))))
         return signalPassFailure();
     } else {
       // Use our custom converters to convert some operations to PTX to avoid
@@ -256,10 +258,10 @@ public:
       // Add patterns to convert LLVM to PTX
       populateElementwiseOpToPTXPatterns(typeConverter, ptxPatterns,
                                          /*benefits=*/10);
-      if (failed(applyPartialConversion(mod, ptxTarget, std::move(ptxPatterns))))
+      if (failed(
+              applyPartialConversion(mod, ptxTarget, std::move(ptxPatterns))))
         return signalPassFailure();
     }
-
   }
 
 private:

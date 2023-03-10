@@ -72,7 +72,7 @@ if __name__ == '__main__':
 
         # triton-ir -> triton-gpu-ir
         # use compute_capability == 80
-        module = triton.compiler.ttir_to_ttgir(module, num_warps=args.num_warps) # num_stages=3, compute_capability=80)
+        module = triton.compiler.ttir_to_ttgir(module, num_warps=args.num_warps)  # num_stages=3, compute_capability=80)
         module = triton.compiler.optimize_ttgir(module, num_stages=3, compute_capability=80)
         # triton-gpu-ir -> llvm-ir
         # use compute_capability == 80
