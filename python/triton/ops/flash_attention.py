@@ -63,7 +63,7 @@ def _fwd_kernel(
         p *= l_rcp
         acc *= (l_prev * l_rcp)[:, None]
         # update acc
-        p = p.to(tl.float16)
+        p = p.to(Q.dtype.element_ty)
         v = tl.load(v_ptrs)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -167,7 +167,7 @@ def _bwd_kernel(
             p = tl.exp(qk * sm_scale - m[:, None])
             # compute dv
             do = tl.load(do_ptrs)
-            dv += tl.dot(tl.trans(p.to(tl.float16)), do)
+            dv += tl.dot(tl.trans(p.to(Q.dtype.element_ty)), do)
             # compute dp = dot(v, do)
             Di = tl.load(D_ptrs + offs_m_curr)
             dp = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32) - Di[:, None]
@@ -175,10 +175,10 @@ def _bwd_kernel(
             # compute ds = p * (dp - delta[:, None])
             ds = p * dp * sm_scale
             # compute dk = dot(ds.T, q)
-            dk += tl.dot(tl.trans(ds.to(tl.float16)), q)
+            dk += tl.dot(tl.trans(ds.to(Q.dtype.element_ty)), q)
             # compute dq
             dq = tl.load(dq_ptrs)
-            dq += tl.dot(ds.to(tl.float16), k)
+            dq += tl.dot(ds.to(Q.dtype.element_ty), k)
             tl.store(dq_ptrs, dq)
             # increment pointers
             dq_ptrs += BLOCK_M * stride_qm
@@ -198,7 +198,7 @@ class _attention(torch.autograd.Function):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
-            raise RuntimeError("Flash attention currently only supported for compute capability < 80")
+            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
         BLOCK = 128
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
