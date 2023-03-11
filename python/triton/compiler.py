@@ -33,7 +33,8 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return triton.language.pointer_type(ty)
     tys = {
-        "fp8": triton.language.float8,
+        "fp8e5": triton.language.float8e5,
+        "fp8e4": triton.language.float8e4,
         "fp16": triton.language.float16,
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
