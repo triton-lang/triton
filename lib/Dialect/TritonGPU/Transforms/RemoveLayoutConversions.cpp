@@ -319,8 +319,8 @@ public:
     SetVector<Operation *> cvtSlices;
     auto stop = [&](Operation *op) {
       return op->getBlock() != cvt->getBlock() ||
-             isa<triton::ReduceOp, triton::ExpandDimsOp,
-                 triton::gpu::ConvertLayoutOp, scf::YieldOp>(op) ||
+             isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp, scf::YieldOp>(
+                 op) ||
              op->getNumResults() == 0 ||
              !op->getResult(0).getType().isa<RankedTensorType>();
     };
