@@ -183,9 +183,23 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
+    # TODO: should be its own AST visitor
     def contains_return_op(self, node):
         if isinstance(node, ast.Return):
             return True
+        elif isinstance(node, ast.Assign):
+            return self.contains_return_op(node.value)
+        elif isinstance(node, ast.Module):
+            pred = lambda s: self.contains_return_op(s)
+            return any(pred(s) for s in node.body)
+        elif isinstance(node, ast.FunctionDef):
+            pred = lambda s: self.contains_return_op(s)
+            return any(pred(s) for s in node.body)
+        elif isinstance(node, ast.Call):
+            fn = self.visit(node.func)
+            if isinstance(fn, triton.JITFunction):
+                return self.contains_return_op(fn.parse())
+            return False
         elif isinstance(node, ast.If):
             pred = lambda s: self.contains_return_op(s)
             ret = any(pred(s) for s in node.body)
