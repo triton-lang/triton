@@ -416,7 +416,7 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
-    // TODO: always assume sub-register typed are packed into int32
+    // A100
     if (mmaParent.isAmpere()) {
       int bitwidth = eltTy.getIntOrFloatBitWidth();
       int shapePerWarpM = 16;
@@ -433,6 +433,66 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
         int repN = std::max<int>(1, shape[1] / shapePerCTAN);
         int repK = std::max<int>(1, shape[0] / shapePerWarpK);
         return 4 * std::max(repN / 2, 1) * repK * (32 / bitwidth);
+      }
+    }
+    // V100
+    if (mmaParent.isVolta()) {
+      bool isRow = getIsMMAv1Row().cast<BoolAttr>().getValue();
+      bool isVec4 = getIsMMAv1Vec4().cast<BoolAttr>().getValue();
+      if (getOpIdx() == 0) {
+        int packSizeM = (isRow || isVec4) ? 1 : 2;
+        int repM = 2 * packSizeM;
+        int spwM = 2 * 4 * repM;
+        int numM = repM * shape[0] / (spwM * warpsPerCTAM);
+        int NK = shape[1];
+        int vec = 2 * repM;
+        // Here we mimic the logic in loadA, the result cannot be calculated
+        // directly.
+        llvm::DenseSet<std::pair<int, int>> visited;
+        auto ld = [&](int m, int k) {
+          visited.insert({m, k});
+          if (vec > 4) {
+            if (isRow)
+              visited.insert({m, k + 4});
+            else
+              visited.insert({m + 1, k});
+          }
+        };
+        for (unsigned k = 0; k < NK; k += 4)
+          for (unsigned m = 0; m < numM / 2; ++m)
+            if (!visited.count({m, k}))
+              ld(m, k);
+        return visited.size() * 2;
+      }
+      if (getOpIdx() == 1) {
+        int packSizeN = (isRow && !isVec4) ? 2 : 1;
+        int repN = 2 * packSizeN;
+        int spwN = 2 * 4 * repN;
+        int numN = repN * shape[1] / (spwN * warpsPerCTAN);
+        int vec = 2 * repN;
+
+        int NK = shape[0];
+        // Here we mimic the logic in loadA, the result cannot be calculated
+        // directly.
+        llvm::DenseSet<std::pair<int, int>> visited;
+        int elemsPerLd = vec > 4 ? 4 : 2;
+        auto ld = [&](int n, int k) {
+          visited.insert({n, k});
+          if (vec > 4) {
+            if (isRow)
+              visited.insert({n + 1, k});
+            else
+              visited.insert({n, k + 4});
+          }
+        };
+
+        for (unsigned k = 0; k < NK; k += 4)
+          for (unsigned n = 0; n < numN / 2; ++n) {
+            if (!visited.count({n, k}))
+              ld(n, k);
+          }
+
+        return visited.size() * 2;
       }
     }
   }
@@ -655,14 +715,18 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
   Attribute parent = attrs.get("parent");
   Attribute isMMAv1Row;
+  Attribute isMMAv1Vec4;
   if (parent.isa<MmaEncodingAttr>() &&
       parent.cast<MmaEncodingAttr>().isVolta()) {
     isMMAv1Row = attrs.get("isMMAv1Row");
     if (!isMMAv1Row)
       llvm::report_fatal_error("isMMAv1Row attribute is missing");
+    isMMAv1Vec4 = attrs.get("isMMAv1Vec4");
+    if (!isMMAv1Vec4)
+      llvm::report_fatal_error("isMMAv1Vec4 attribute is missing");
   }
-  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
-                                                   parent, isMMAv1Row);
+  return parser.getChecked<DotOperandEncodingAttr>(
+      parser.getContext(), opIdx, parent, isMMAv1Row, isMMAv1Vec4);
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {

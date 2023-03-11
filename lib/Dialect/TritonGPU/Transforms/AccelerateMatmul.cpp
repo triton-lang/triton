@@ -156,21 +156,30 @@ public:
                          .getParent()
                          .cast<triton::gpu::BlockedEncodingAttr>()
                          .getOrder();
+
     Attribute isMMAv1RowA;
     Attribute isMMAv1RowB;
+    Attribute isMMAv1Vec4A;
+    Attribute isMMAv1Vec4B;
     if (versionMajor == 1) {
-      isMMAv1RowA = BoolAttr::get(getContext(), oldAOrder[0] == 1);
-      isMMAv1RowB = BoolAttr::get(getContext(), oldBOrder[0] == 1);
+      auto [_isMMAv1RowA, _isMMAv1RowB, _isMMAv1Vec4A, _isMMAv1Vec4B, _] =
+          mmaEnc.decodeVoltaLayoutStates();
+      isMMAv1RowA = BoolAttr::get(getContext(), _isMMAv1RowA);
+      isMMAv1RowB = BoolAttr::get(getContext(), _isMMAv1RowB);
+      isMMAv1Vec4A = BoolAttr::get(getContext(), _isMMAv1Vec4A);
+      isMMAv1Vec4B = BoolAttr::get(getContext(), _isMMAv1Vec4B);
     }
 
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(
-            oldAType.getContext(), 0, newRetType.getEncoding(), isMMAv1RowA));
+        triton::gpu::DotOperandEncodingAttr::get(oldAType.getContext(), 0,
+                                                 newRetType.getEncoding(),
+                                                 isMMAv1RowA, isMMAv1Vec4A));
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(
-            oldBType.getContext(), 1, newRetType.getEncoding(), isMMAv1RowB));
+        triton::gpu::DotOperandEncodingAttr::get(oldBType.getContext(), 1,
+                                                 newRetType.getEncoding(),
+                                                 isMMAv1RowB, isMMAv1Vec4B));
 
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);

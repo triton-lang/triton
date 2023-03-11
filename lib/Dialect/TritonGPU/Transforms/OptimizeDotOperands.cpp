@@ -44,17 +44,35 @@ public:
         dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
     if (!dstDotOperandLayout)
       return failure();
-    if (!dstDotOperandLayout.getIsMMAv1Row())
-      return failure();
-    bool isMMAv1Row =
-        dstDotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
-    if ((order[0] == 1 && isMMAv1Row) || (order[0] == 0 && !isMMAv1Row))
+
+    auto dstMmaParent =
+        dstDotOperandLayout.getParent().dyn_cast<MmaEncodingAttr>();
+    if (!dstMmaParent || dstMmaParent.getVersionMajor() != 1)
       return failure();
 
-    auto newIsRow = BoolAttr::get(op->getContext(), !isMMAv1Row);
+    if (!dstDotOperandLayout.getIsMMAv1Row())
+      return failure();
+
+    bool isRow =
+        dstDotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+    bool isVec4 =
+        dstDotOperandLayout.getIsMMAv1Vec4().cast<BoolAttr>().getValue();
+
+    auto [isARow, isBRow, isAVec4, isBVec4, _] =
+        dstMmaParent.decodeVoltaLayoutStates();
+    bool newIsRow = dstDotOperandLayout.getOpIdx() == 0 ? isARow : isBRow;
+    bool newIsVec4 = dstDotOperandLayout.getOpIdx() == 0 ? isAVec4 : isBVec4;
+
+    // Nothing to change
+    if (isRow == newIsRow && isVec4 == newIsVec4)
+      return failure();
+
+    // Correct layouts
     auto newDstEncoding = triton::gpu::DotOperandEncodingAttr::get(
         op->getContext(), dstDotOperandLayout.getOpIdx(),
-        dstDotOperandLayout.getParent(), newIsRow);
+        dstDotOperandLayout.getParent(),
+        BoolAttr::get(op->getContext(), newIsRow),
+        BoolAttr::get(op->getContext(), newIsVec4));
     auto newDstType = RankedTensorType::get(
         dstType.getShape(), dstType.getElementType(), newDstEncoding);
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(

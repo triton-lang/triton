@@ -482,18 +482,21 @@ section 9.7.13.4.1 for more details.
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    "Attribute":$isMMAv1Row
+    "Attribute":$isMMAv1Row,
+    "Attribute":$isMMAv1Vec4
   );
 
   let builders = [
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent), [{
       Attribute isMMAv1Row;
+      Attribute isMMAv1Vec4;
       if(parent.isa<MmaEncodingAttr>() &&
          parent.cast<MmaEncodingAttr>().isVolta()){
         isMMAv1Row = BoolAttr::get(context, true);
+        isMMAv1Vec4 = BoolAttr::get(context, false);
       }
-      return $_get(context, opIdx, parent, isMMAv1Row);
+      return $_get(context, opIdx, parent, isMMAv1Row, isMMAv1Vec4);
     }]>
 
   ];

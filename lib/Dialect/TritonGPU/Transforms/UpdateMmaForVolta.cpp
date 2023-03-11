@@ -157,7 +157,8 @@ Type updateStaleType(
       if (!newMma)
         return Type();
       auto newDotOp = DotOperandEncodingAttr::get(
-          dotOp.getContext(), dotOp.getOpIdx(), newMma, dotOp.getIsMMAv1Row());
+          dotOp.getContext(), dotOp.getOpIdx(), newMma, dotOp.getIsMMAv1Row(),
+          dotOp.getIsMMAv1Vec4());
       return RankedTensorType::get(type.getShape(), type.getElementType(),
                                    newDotOp);
     }
