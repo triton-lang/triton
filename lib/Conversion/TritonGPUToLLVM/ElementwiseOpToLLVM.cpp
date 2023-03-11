@@ -195,13 +195,15 @@ struct FpToFpOpConversion
                            const Value &v3) {
     auto *ptxAsm = "{                                      \n"
                    ".reg .b32 a<2>, b<2>;                  \n"
-                   "shl.b32  b0, $1, 1;                    \n"
-                   "shl.b32  b1, $2, 1;                    \n"
-                   "add.u32   b0, b0, 128;                  \n"
-                   "add.u32   b1, b1, 128;                  \n"
-                   "lop3.b32  b0, b0, 0x80008000, $1, 0xf8;\n"
-                   "lop3.b32  b1, b1, 0x80008000, $2, 0xf8;\n"
-                   "prmt.b32  $0, b0, b1, 0x7531;          \n"
+                   "shl.b32 a0, $1, 1;                     \n"
+                   "shl.b32 a1, $2, 1;                     \n"
+                   "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
+                   "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n"
+                   "add.u32 a0, a0, 0x00800080;            \n"
+                   "add.u32 a1, a1, 0x00800080;            \n"
+                   "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
+                   "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
+                   "prmt.b32 $0, b0, b1, 0x7531;           \n"
                    "}";
     return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   }

@@ -917,7 +917,6 @@ def test_f16_to_f8_rounding(in_dtype):
         ),
         dim=1,
     )[0]
-    print(min_error)
     # 1.9375 is float8 max
     mismatch = torch.logical_and(
         abs_error != min_error, torch.logical_and(torch.isfinite(f16_input), torch.abs(f16_input) < 1.9375)
