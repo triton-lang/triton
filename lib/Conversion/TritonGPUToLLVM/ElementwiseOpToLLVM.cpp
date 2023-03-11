@@ -195,15 +195,13 @@ struct FpToFpOpConversion
                            const Value &v3) {
     auto *ptxAsm = "{                                      \n"
                    ".reg .b32 a<2>, b<2>;                  \n"
-                   "shl.b32 a0, $1, 1;                     \n"
-                   "shl.b32 a1, $2, 1;                     \n"
-                   "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-                   "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-                   "add.u32 a0, a0, 0x00800080;            \n"
-                   "add.u32 a1, a1, 0x00800080;            \n"
-                   "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
-                   "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
-                   "prmt.b32 $0, b0, b1, 0x7531;           \n"
+                   "shl.b32  b0, $1, 1;                    \n"
+                   "shl.b32  b1, $2, 1;                    \n"
+                   "add.u32   b0, b0, 128;                  \n"
+                   "add.u32   b1, b1, 128;                  \n"
+                   "lop3.b32  b0, b0, 0x80008000, $1, 0xf8;\n"
+                   "lop3.b32  b1, b1, 0x80008000, $2, 0xf8;\n"
+                   "prmt.b32  $0, b0, b1, 0x7531;          \n"
                    "}";
     return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   }
@@ -223,64 +221,25 @@ struct FpToFpOpConversion
   /* ------------------ */
 
   static SmallVector<Value>
-  convertFp32x4ToFp8x4(Location loc, ConversionPatternRewriter &rewriter,
-                       const char *ptxAsm, const Value &v0, const Value &v1,
-                       const Value &v2, const Value &v3) {
-    PTXBuilder builder;
-    auto &ptxOp = *builder.create(ptxAsm);
-
-    auto *o = builder.newOperand("=r");
-    auto *i0 = builder.newOperand(v0, "r");
-    auto *i1 = builder.newOperand(v1, "r");
-    auto *i2 = builder.newOperand(v2, "r");
-    auto *i3 = builder.newOperand(v3, "r");
-    ptxOp({o, i0, i1, i2, i3}, /*onlyAttachMLIRArgs=*/true);
-
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    auto fp8x4Vec = builder.launch(rewriter, loc, fp8x4VecTy, false);
-    return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(1)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(2)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(3))};
+  convertFp32x4ToFp8E4M3x4(Location loc, ConversionPatternRewriter &rewriter,
+                           const Value &v0, const Value &v1, const Value &v2,
+                           const Value &v3) {
+    auto c0 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v0);
+    auto c1 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v1);
+    auto c2 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v2);
+    auto c3 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v3);
+    return convertFp16x4ToFp8E4M3x4(loc, rewriter, c0, c1, c2, c3);
   }
 
   static SmallVector<Value>
   convertFp32x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    const char *ptxAsm = "{                    \n"
-                         ".reg .f16 v<4>;              \n"
-                         ".reg .u32 b<4>;              \n"
-                         "cvt.rn.f16.f32 v0, $1;       \n"
-                         "cvt.rn.f16.f32 v1, $2;       \n"
-                         "cvt.rn.f16.f32 v2, $3;       \n"
-                         "cvt.rn.f16.f32 v3, $4;       \n"
-                         "mov.b32 b0, {v0, v1};        \n"
-                         "mov.b32 b1, {v2, v3};        \n"
-                         "prmt.b32 $0, b0, b1, 0x7531; \n"
-                         "}";
-    return convertFp32x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-  }
-
-  static SmallVector<Value>
-  convertFp32x4ToFp8E4M3x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-    const char *ptxAsm = "{                                      \n"
-                         ".reg .b32 b<4>;                        \n"
-                         "shl.b32  b0, $1, 4;                    \n"
-                         "shl.b32  b1, $2, 4;                    \n"
-                         "shl.b32  b2, $3, 4;                    \n"
-                         "shl.b32  b3, $4, 4;                    \n"
-                         "lop3.b32 b0, b0, 0x80000000, $1, 0xf8; \n"
-                         "lop3.b32 b1, b1, 0x80000000, $2, 0xf8; \n"
-                         "lop3.b32 b2, b2, 0x80000000, $3, 0xf8; \n"
-                         "lop3.b32 b3, b3, 0x80000000, $4, 0xf8; \n"
-                         "prmt.b32 b0, b0, b1, 0x6273;           \n"
-                         "prmt.b32 b2, b2, b3, 0x6273;           \n"
-                         "prmt.b32 %0, b0, b2, 0x5410;           \n"
-                         "}";
-    return convertFp32x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+    auto c0 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v0);
+    auto c1 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v1);
+    auto c2 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v2);
+    auto c3 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v3);
+    return convertFp16x4ToFp8E5M2x4(loc, rewriter, c0, c1, c2, c3);
   }
 
   /* ------------------ */
@@ -360,20 +319,12 @@ struct FpToFpOpConversion
     return convertBf16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   };
 
-  static SmallVector<Value>
-  convertBf16x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-    auto newV0 =
-        rewriter.create<LLVM::FPExtOp>(loc, f32_ty, bitcast(v0, f16_ty));
-    auto newV1 =
-        rewriter.create<LLVM::FPExtOp>(loc, f32_ty, bitcast(v1, f16_ty));
-    auto newV2 =
-        rewriter.create<LLVM::FPExtOp>(loc, f32_ty, bitcast(v2, f16_ty));
-    auto newV3 =
-        rewriter.create<LLVM::FPExtOp>(loc, f32_ty, bitcast(v3, f16_ty));
-    return convertFp32x4ToFp8E5M2x4(loc, rewriter, newV0, newV1, newV2, newV3);
-  }
+  // TODO:
+  // static SmallVector<Value>
+  // convertBf16x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
+  //                          const Value &v0, const Value &v1, const Value &v2,
+  //                          const Value &v3) {
+  // }
 
   /* ------------------ */
   // FP8 -> FP32
@@ -384,10 +335,10 @@ struct FpToFpOpConversion
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
     auto fp16Values = convertFp8E4M3x4ToFp16x4(loc, rewriter, v0, v1, v2, v3);
-    return {rewriter.create<LLVM::FPExtOp>(loc, f32_ty, fp16Values[0]),
-            rewriter.create<LLVM::FPExtOp>(loc, f32_ty, fp16Values[1]),
-            rewriter.create<LLVM::FPExtOp>(loc, f32_ty, fp16Values[2]),
-            rewriter.create<LLVM::FPExtOp>(loc, f32_ty, fp16Values[3])};
+    return {convertFp16ToFp32(loc, rewriter, fp16Values[0]),
+            convertFp16ToFp32(loc, rewriter, fp16Values[1]),
+            convertFp16ToFp32(loc, rewriter, fp16Values[2]),
+            convertFp16ToFp32(loc, rewriter, fp16Values[3])};
   }
 
   static SmallVector<Value>
@@ -511,13 +462,14 @@ struct FpToFpOpConversion
         {{F8E5M2TyID, BF16TyID}, convertFp8E5M2x4ToBf16x4},
         // BF16 -> F8
         {{BF16TyID, F8E4M3TyID}, convertBf16x4ToFp8E4M3x4},
-        {{BF16TyID, F8E5M2TyID}, convertBf16x4ToFp8E5M2x4},
+        // TODO:
+        // {{BF16TyID, F8E5M2TyID}, convertBf16x4ToFp8E5M2x4},
         // F8 -> F32
         {{F8E4M3TyID, F32TyID}, convertFp8E4M3x4ToFp32x4},
         {{F8E5M2TyID, F32TyID}, convertFp8E5M2x4ToFp32x4},
         // F32 -> F8
-        {{F32TyID, F8E4M3TyID}, convertFp8E4M3x4ToFp32x4},
-        {{F32TyID, F8E5M2TyID}, convertFp32x4ToFp8E4M3x4},
+        {{F32TyID, F8E4M3TyID}, convertFp32x4ToFp8E4M3x4},
+        {{F32TyID, F8E5M2TyID}, convertFp32x4ToFp8E5M2x4},
     };
 
     auto convertor =
