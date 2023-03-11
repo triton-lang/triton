@@ -472,8 +472,14 @@ struct FpToFpOpConversion
         {{F32TyID, F8E5M2TyID}, convertFp32x4ToFp8E5M2x4},
     };
 
-    auto convertor =
-        convertorMap.lookup({srcEltType.getTypeID(), dstEltType.getTypeID()});
+    std::pair<TypeID, TypeID> key = {srcEltType.getTypeID(),
+                                     dstEltType.getTypeID()};
+    if (convertorMap.count(key) == 0) {
+      llvm::errs() << "Unsupported conversion from " << srcEltType << " to "
+                   << dstEltType << "\n";
+      llvm_unreachable("");
+    }
+    auto convertor = convertorMap.lookup(key);
 
     // Vectorized casting
     assert(elems % 4 == 0 &&
