@@ -131,6 +131,51 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
   return false;
 }
 
+SetVector<Operation *> getValidBlockArgCvts(BlockArgument arg) {
+  SetVector<Operation *> cvts;
+  auto users = arg.getUsers();
+  // check first condition
+  for (auto user : users) {
+    if (isa<triton::gpu::ConvertLayoutOp>(user)) {
+      auto newType = user->getResults()[0].getType().cast<RankedTensorType>();
+      auto oldType = user->getOperand(0).getType().cast<RankedTensorType>();
+      if (oldType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
+          newType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
+        continue;
+      }
+      if (newType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
+        if (newType.getEncoding()
+                .cast<triton::gpu::SharedEncodingAttr>()
+                .getVec() == 1)
+          continue;
+      }
+      cvts.insert(user);
+    }
+  }
+  return cvts;
+}
+
+LogicalResult canMoveOutOfLoop(BlockArgument arg, int allowedCvts) {
+  // we only move `iterArg` out of the loop if
+  //   - there is only a single conversion use
+  //   - moving this conversion out of the loop will not generate
+  //     any extra non-removable conversion
+  // Skip if arg is not defined in scf.for
+  auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
+  if (!forOp)
+    return success();
+  SetVector<Operation *> cvts = getValidBlockArgCvts(arg);
+  if (cvts.size() > allowedCvts)
+    return failure();
+  auto users = arg.getUsers();
+  // TODO: check second condition
+  for (auto user : users) {
+    if (isa<triton::gpu::ConvertLayoutOp>(user))
+      continue;
+  }
+  return success();
+}
+
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
@@ -170,10 +215,22 @@ int simulateBackwardRematerialization(
       // 2. Skip if there's no defining op
       // 3. Skip if the defining op has already been processed
       // 4. Skip or the defining op is in a different block
-      if (!argI.getType().isa<RankedTensorType>() || !opArgI ||
-          processed.contains(opArgI) ||
-          opArgI->getBlock() != currOp->getBlock())
+      if (!argI.getType().isa<RankedTensorType>() ||
+          (opArgI && (processed.contains(opArgI) ||
+                      opArgI->getBlock() != currOp->getBlock())))
         continue;
+      // scf.for blockArgument can be conditionally optimized only if
+      // there's a single conversion use.
+      SetVector<Type> cvtTargetTypes;
+      if (!opArgI) {
+        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), /*allowedNumCvts=*/0)
+                .failed())
+          // If this is true, we add a new conversion, resulting in two
+          // conversions
+          return INT_MAX;
+        else
+          continue;
+      }
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
       if (isa_and_nonnull<triton::ViewOp, triton::gpu::ConvertLayoutOp,

@@ -16,6 +16,10 @@ bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding);
 
 bool expensiveToRemat(Operation *op, Attribute &targetEncoding);
 
+SetVector<Operation *> getValidBlockArgCvts(BlockArgument arg);
+
+LogicalResult canMoveOutOfLoop(BlockArgument arg, int allowedCvts);
+
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,

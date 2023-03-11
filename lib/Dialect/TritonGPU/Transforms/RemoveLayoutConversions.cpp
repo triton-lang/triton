@@ -112,13 +112,16 @@ public:
     auto newReduce = rewriter.create<triton::ReduceOp>(
         op->getLoc(), reduce.getRedOp(), reduceArg.getOperand(),
         reduce.getAxis());
+    newReduce->moveAfter(reduce);
     Value newRet = newReduce.getResult();
     // it's still beneficial to move the conversion
     // to after the reduce if necessary since it will be
     // done on a rank-reduced tensor hence cheaper
-    if (newRet.getType() != reduce.getResult().getType())
+    if (newRet.getType() != reduce.getResult().getType()) {
       newRet = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), reduce.getResult().getType(), newRet);
+      newRet.getDefiningOp()->moveAfter(newReduce);
+    }
     rewriter.replaceOp(op, newRet);
 
     return success();
@@ -316,8 +319,8 @@ public:
     SetVector<Operation *> cvtSlices;
     auto stop = [&](Operation *op) {
       return op->getBlock() != cvt->getBlock() ||
-             isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp, scf::YieldOp>(
-                 op) ||
+             isa<triton::ReduceOp, triton::ExpandDimsOp,
+                 triton::gpu::ConvertLayoutOp, scf::YieldOp>(op) ||
              op->getNumResults() == 0 ||
              !op->getResult(0).getType().isa<RankedTensorType>();
     };
@@ -348,6 +351,13 @@ public:
         SetVector<Operation *> processed;
         SetVector<Attribute> layout;
         llvm::MapVector<Value, Attribute> toConvert;
+        // scf.for blockArgument can be conditionally optimized only if
+        // there's a single conversion use.
+        if (!argOp) {
+          if (canMoveOutOfLoop(arg.cast<BlockArgument>(), /*allowedNumCvts=*/0)
+                  .failed())
+            return failure();
+        }
         if (argOp && (argOp != cvt) && cvtSlices.count(argOp) == 0 &&
             simulateBackwardRematerialization(argOp, processed, layout,
                                               toConvert, srcEncoding) > 0) {
@@ -487,43 +497,13 @@ public:
       // if (iterArg.index() != 1)
       //   continue;
       // skip non-tensor types
-      if (!iterArg.value().getType().isa<RankedTensorType>())
+      auto arg = iterArg.value();
+      if (!arg.getType().isa<RankedTensorType>())
         continue;
-      // we only move `iterArg` out of the loop if
-      //   - there is only a single conversion use
-      //   - moving this conversion out of the loop will not generate
-      //     any extra non-removable conversion
-      auto users = iterArg.value().getUsers();
-      // check first condition
-      SetVector<Type> cvtTargetTypes;
-      for (auto user : users) {
-        if (isa<triton::gpu::ConvertLayoutOp>(user)) {
-          auto newType =
-              user->getResults()[0].getType().cast<RankedTensorType>();
-          auto oldType = user->getOperand(0).getType().cast<RankedTensorType>();
-          if (oldType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-              newType.getEncoding()
-                  .isa<triton::gpu::DotOperandEncodingAttr>()) {
-            continue;
-          }
-          if (newType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
-            if (newType.getEncoding()
-                    .cast<triton::gpu::SharedEncodingAttr>()
-                    .getVec() == 1)
-              continue;
-          }
-          cvtTargetTypes.insert(newType);
-        }
-      }
-      if (cvtTargetTypes.size() != 1)
-        continue;
-      // TODO: check second condition
-      for (auto user : users) {
-        if (isa<triton::gpu::ConvertLayoutOp>(user))
-          continue;
-      }
       // check
-      for (auto op : iterArg.value().getUsers()) {
+      if (canMoveOutOfLoop(arg, 1).failed())
+        return failure();
+      for (auto op : arg.getUsers()) {
         auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
         if (!cvt)
           continue;
