@@ -27,6 +27,7 @@
 #define smin(...) rewriter.create<LLVM::SMinOp>(loc, __VA_ARGS__)
 #define umin(...) rewriter.create<LLVM::UMinOp>(loc, __VA_ARGS__)
 #define fmin(...) rewriter.create<LLVM::MinNumOp>(loc, __VA_ARGS__)
+#define shl(...) rewriter.create<LLVM::ShlOp>(loc, __VA_ARGS__)
 #define and_(...) rewriter.create<LLVM::AndOp>(loc, __VA_ARGS__)
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)

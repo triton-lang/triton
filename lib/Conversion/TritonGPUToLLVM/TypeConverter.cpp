@@ -27,7 +27,11 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
     return convertTritonTensorType(type);
   });
-  addConversion([&](Float8E4M3FNType type) -> llvm::Optional<Type> {
+  // Internally store float8 as int8
+  addConversion([&](mlir::Float8E4M3FNType type) -> llvm::Optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
+  addConversion([&](mlir::Float8E5M2Type type) -> llvm::Optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
   // Internally store bfloat16 as int16

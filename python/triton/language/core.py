@@ -39,8 +39,7 @@ def _to_tensor(x, builder):
 class dtype:
     SINT_TYPES = ['int1', 'int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8', 'fp16', 'bf16', 'fp32', 'fp64']
-    CUSTOMIZED_FP_TYPES = ['fp8']
+    FP_TYPES = ['fp8e4', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -60,8 +59,11 @@ class dtype:
             self.int_bitwidth = int(name.split('int')[-1])
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
-            if name == 'fp8':
+            if name == 'fp8e4':
                 self.fp_mantissa_width = 3
+                self.primitive_bitwidth = 8
+            elif name == 'fp8e5':
+                self.fp_mantissa_width = 2
                 self.primitive_bitwidth = 8
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
@@ -75,11 +77,13 @@ class dtype:
             elif name == 'fp64':
                 self.fp_mantissa_width = 53
                 self.primitive_bitwidth = 64
+            else:
+                raise RuntimeError(f'Unsupported floating-point type {name}')
         elif name == 'void':
             self.primitive_bitwidth = 0
 
     def is_fp8(self):
-        return self.name == 'fp8'
+        return 'fp8' in self.name
 
     def is_fp16(self):
         return self.name == 'fp16'
@@ -122,9 +126,6 @@ class dtype:
 
     def is_floating(self):
         return self.name in dtype.FP_TYPES
-
-    def is_customized_floating(self):
-        return self.name in dtype.CUSTOMIZED_FP_TYPES
 
     def is_standard_floating(self):
         return self.name in dtype.STANDARD_FP_TYPES
@@ -181,8 +182,10 @@ class dtype:
             return builder.get_int32_ty()
         elif self.name in ('int64', 'uint64'):
             return builder.get_int64_ty()
-        elif self.name == 'fp8':
-            return builder.get_fp8_ty()
+        elif self.name == 'fp8e5':
+            return builder.get_fp8e5_ty()
+        elif self.name == 'fp8e4':
+            return builder.get_fp8e4_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
         elif self.name == 'bf16':
@@ -314,7 +317,8 @@ uint8 = dtype('uint8')
 uint16 = dtype('uint16')
 uint32 = dtype('uint32')
 uint64 = dtype('uint64')
-float8 = dtype('fp8')
+float8e5 = dtype('fp8e5')
+float8e4 = dtype('fp8e4')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')

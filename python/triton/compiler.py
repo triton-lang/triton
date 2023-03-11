@@ -33,7 +33,8 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return triton.language.pointer_type(ty)
     tys = {
-        "fp8": triton.language.float8,
+        "fp8e5": triton.language.float8e5,
+        "fp8e4": triton.language.float8e4,
         "fp16": triton.language.float16,
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
@@ -1725,6 +1726,8 @@ class CompiledKernel:
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
         mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
+        self.n_spills = n_spills
+        self.n_regs = n_regs
         self.cu_module = mod
         self.cu_function = func
 

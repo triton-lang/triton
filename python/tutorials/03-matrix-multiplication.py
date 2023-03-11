@@ -156,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -223,8 +223,8 @@ def matmul_kernel(
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         if IS_INT8:
-          a = a.to(tl.float8, bitcast=True).to(tl.float16)
-          b = b.to(tl.float8, bitcast=True).to(tl.float16)
+          a = a.to(tl.float8e5, bitcast=True).to(tl.float16)
+          b = b.to(tl.float8e5, bitcast=True).to(tl.float16)
         # b = b * 2
         # We accumulate along the K dimension
         accumulator += tl.dot(a, b)
@@ -292,12 +292,12 @@ def f8_to_f16(x):
         offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offs < N
         x = tl.load(X + offs, mask=mask)
-        y = x.to(tl.float16)
+        y = x.to(tl.float8e5)
         tl.store(Y + offs, y, mask=mask)
     
     ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
     grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
-    kernel[grid](ret, triton.reinterpret(x, tl.float8),ret.numel(), BLOCK_SIZE=1024)
+    kernel[grid](ret, triton.reinterpret(x, tl.float8e5),ret.numel(), BLOCK_SIZE=1024)
     return ret
 
 def f16_to_f8(x):
@@ -308,12 +308,12 @@ def f16_to_f8(x):
         offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offs < N
         x = tl.load(X + offs, mask=mask)
-        y = x.to(tl.float8)
+        y = x.to(tl.float8e5)
         tl.store(Y + offs, y, mask=mask)
     
     ret = torch.empty(x.shape, dtype=torch.int8, device=x.device)
     grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
-    kernel[grid](triton.reinterpret(ret, tl.float8), x, x.numel(), BLOCK_SIZE=1024)
+    kernel[grid](triton.reinterpret(ret, tl.float8e5), x, x.numel(), BLOCK_SIZE=1024)
     return ret
 # %%
 # Unit Test
@@ -323,8 +323,8 @@ def f16_to_f8(x):
 
 torch.manual_seed(0)
 # a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-a = torch.randint(-100, 100, (2048, 2048), dtype=torch.int8, device='cuda')
-b = torch.randint(-100, 100, (2048, 2048), dtype=torch.int8, device='cuda')
+a = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
+b = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
 # b[1:, :] = 0
 # b[:, 1:] = 0
 b = b.T
