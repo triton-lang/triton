@@ -861,7 +861,6 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
     copy_kernel[grid](f8, xf16, n_elements, BLOCK_SIZE=1024)
 
-
     f8_output_tensor = torch.empty_like(xf16, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, in_dtype)
     copy_kernel[grid](xf16, f8_output, n_elements, BLOCK_SIZE=1024)
