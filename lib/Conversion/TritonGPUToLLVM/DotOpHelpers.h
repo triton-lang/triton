@@ -46,38 +46,6 @@ struct DotOpMmaV1ConversionHelper {
   explicit DotOpMmaV1ConversionHelper(MmaEncodingAttr mmaLayout)
       : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()) {}
 
-  // Help to share some variables across multiple functions for A.
-  // TODO[Superjomn]: refactor and restrict this to only use in DotOp
-  // conversion.
-  struct AParam {
-    SmallVector<int> rep;
-    SmallVector<int> spw;
-    bool isAVec4{};
-    int vec{}; // This could only used in DotOp, not in
-               // loadA/loadB/TypeConverter
-
-    AParam(bool isARow, bool isAVec4) : isAVec4(isAVec4) { build(isARow); }
-
-  private:
-    void build(bool isARow);
-  };
-
-  // Help to share some variables across multiple functions for A.
-  // TODO[Superjomn]: refactor and restrict this to only use in DotOp
-  // conversion.
-  struct BParam {
-    SmallVector<int> rep;
-    SmallVector<int> spw;
-    bool isBVec4{};
-    int vec{}; // This could only used in DotOp, not in
-               // loadA/loadB/TypeConverter
-
-    BParam(bool isBRow, bool isBVec4) : isBVec4(isBVec4) { build(isBRow); }
-
-  private:
-    void build(bool isBRow);
-  };
-
   static ArrayRef<unsigned> getMmaInstrShape() { return instrShape; }
 
   static Type getMmaRetType(TensorType operand) {
@@ -93,12 +61,6 @@ struct DotOpMmaV1ConversionHelper {
     Type vecTy = vec_ty(fp16Ty, 2);
     return struct_ty(SmallVector<Type>{vecTy});
   }
-
-  // int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isARow, bool isAVec4,
-  //                        int vec) const;
-
-  // int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isBRow, bool isBVec4,
-  //                        int vec) const;
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
   Value loadA(Value tensor, const SharedMemoryObject &smemObj, Value thread,
@@ -128,15 +90,6 @@ struct DotOpMmaV1ConversionHelper {
   DotOpMmaV1ConversionHelper::ValueTable extractLoadedOperand(
       Value llStruct, int NK, ConversionPatternRewriter &rewriter,
       TritonGPUToLLVMTypeConverter *typeConverter, Type type) const;
-
-  // Get the number of elements of this thread in M axis. The N axis could be
-  // further deduced with the accSize / elemsM. \param wpt: the wpt in M axis
-  // \param M: the shape in M axis
-  int getElemsM(int wpt, int M, bool isARow, bool isAVec4) {
-    DotOpMmaV1ConversionHelper::AParam param(isARow, isAVec4);
-    int shapePerCTAM = param.spw[0] * wpt;
-    return M / shapePerCTAM * param.rep[0];
-  }
 
   using CoordTy = SmallVector<Value>;
   // Get the coordinates(m,n) of the elements emit by a thread in accumulator.

@@ -422,23 +422,6 @@ DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
   return coords; // {M,N} in row-major
 }
 
-void DotOpMmaV1ConversionHelper::AParam::build(bool isARow) {
-  int packSize0 = (isARow || isAVec4) ? 1 : 2;
-  int repM = 2 * packSize0;
-  int repK = 1;
-  int spwM = fpw[0] * 4 * repM;
-  rep.assign({repM, 0, repK});
-  spw.assign({spwM, 0, 1});
-  vec = 2 * rep[0];
-}
-
-void DotOpMmaV1ConversionHelper::BParam::build(bool isBRow) {
-  int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
-  rep.assign({0, 2 * packSize1, 1});
-  spw.assign({0, fpw[1] * 4 * rep[1], 1});
-  vec = 2 * rep[1];
-}
-
 std::tuple<int, int>
 DotOpMmaV2ConversionHelper::getRepMN(const RankedTensorType &tensorTy) {
   auto mmaLayout = tensorTy.getEncoding().cast<MmaEncodingAttr>();

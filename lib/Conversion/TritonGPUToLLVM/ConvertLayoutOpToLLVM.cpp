@@ -293,12 +293,9 @@ private:
       }
 
       if (needTrans) {
-        auto [isARow, isBRow, isAVec4, isBVec4, _] =
-            mma.decodeVoltaLayoutStates();
-        DotOpMmaV1ConversionHelper helper(mma);
         // do transpose
-        int numM = helper.getElemsM(mma.getWarpsPerCTA()[0], shape[0], isARow,
-                                    isAVec4);
+        auto aEncoding = DotOperandEncodingAttr::get(mma.getContext(), 0, mma);
+        int numM = aEncoding.getMMAv1NumOuter(shape);
         int numN = accumSizePerThread / numM;
 
         for (int r = 0; r < numM; r++) {
