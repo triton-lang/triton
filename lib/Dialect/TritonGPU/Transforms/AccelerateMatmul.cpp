@@ -41,10 +41,37 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
   }
 }
 
-SmallVector<unsigned, 2> warpsPerTileV1(const ArrayRef<int64_t> shape,
+// Get the wpt for MMAv1 using more information.
+// Reference the original logic here
+// https://github.com/openai/triton/blob/0e4691e6dd91e001a8d33b71badf8b3314325459/lib/codegen/analysis/layout.cc#L223
+SmallVector<unsigned, 2> warpsPerTileV1(ArrayRef<int64_t> shape, bool isARow,
+                                        bool isBRow, bool isAVec4, bool isBVec4,
                                         int numWarps) {
-  // Set a default value that ensures product of wpt equals numWarps
-  return {static_cast<unsigned>(numWarps), 1};
+  // TODO: Share code with
+  // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
+  // rep,spw and fpw.
+  SmallVector<unsigned> wpt({1, 1});
+  SmallVector<unsigned> wpt_nm1;
+
+  SmallVector<int, 2> rep(2), spw(2);
+  std::array<int, 3> fpw{{2, 2, 1}};
+  int packSize0 = (isARow || isAVec4) ? 1 : 2;
+  rep[0] = 2 * packSize0;
+  spw[0] = fpw[0] * 4 * rep[0];
+
+  int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+  rep[1] = 2 * packSize1;
+  spw[1] = fpw[1] * 4 * rep[1];
+
+  do {
+    wpt_nm1 = wpt;
+    if (wpt[0] * wpt[1] < numWarps)
+      wpt[0] = std::clamp<int>(wpt[0] * 2, 1, shape[0] / spw[0]);
+    if (wpt[0] * wpt[1] < numWarps)
+      wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shape[1] / spw[1]);
+  } while (wpt_nm1 != wpt);
+
+  return wpt;
 }
 
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
@@ -90,19 +117,6 @@ public:
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context),
         computeCapability(computeCapability) {}
 
-  static SmallVector<unsigned, 2> getWarpsPerTile(triton::DotOp dotOp,
-                                                  const ArrayRef<int64_t> shape,
-                                                  int version, int numWarps) {
-    switch (version) {
-    case 1:
-      return warpsPerTileV1(shape, numWarps);
-    case 2:
-      return warpsPerTileV2(dotOp, shape, numWarps);
-    default:
-      llvm_unreachable("unsupported MMA version");
-    }
-  }
-
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -129,8 +143,6 @@ public:
     auto oldAType = a.getType().cast<RankedTensorType>();
     auto oldBType = b.getType().cast<RankedTensorType>();
 
-    auto warpsPerTile =
-        getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
     triton::gpu::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
       SetVector<Operation *> aBwdSlices, bBwdSlices;
@@ -155,10 +167,10 @@ public:
         isBRow = getCvtArgOrder(bBwdSlices[0])[0] == 1;
 
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
-          oldRetType.getContext(), versionMajor, warpsPerTile,
-          oldAType.getShape(), oldBType.getShape(), isARow, isBRow,
-          mmaV1Counter++);
+          oldRetType.getContext(), versionMajor, numWarps, oldAType.getShape(),
+          oldBType.getShape(), retShape, isARow, isBRow, mmaV1Counter++);
     } else if (versionMajor == 2) {
+      auto warpsPerTile = warpsPerTileV2(dotOp, retShape, numWarps);
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
           warpsPerTile);

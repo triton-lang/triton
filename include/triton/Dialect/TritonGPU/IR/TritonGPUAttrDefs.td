@@ -376,9 +376,10 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let builders = [
     // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
-                     "ArrayRef<unsigned>":$warpsPerCTA,
+                     "int":$numWarps,
                      "ArrayRef<int64_t>":$shapeA,
                      "ArrayRef<int64_t>":$shapeB,
+                     "ArrayRef<int64_t>":$shapeC,
                      "bool":$isARow,
                      "bool":$isBRow,
                      "int":$id), [{
@@ -392,7 +393,33 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                          (isBVec4 * (1<<3));
 
 
-      return $_get(context, versionMajor, versionMinor, warpsPerCTA);
+      // TODO: Share code with
+      // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
+      // rep,spw and fpw.
+      SmallVector<unsigned> wpt({1, 1});
+      SmallVector<unsigned> wpt_nm1;
+
+      SmallVector<int, 2> rep(2), spw(2);
+      std::array<int, 3> fpw{{2, 2, 1}};
+      int packSize0 = (isARow || isAVec4) ? 1 : 2;
+      rep[0] = 2 * packSize0;
+      spw[0] = fpw[0] * 4 * rep[0];
+
+      int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+      rep[1] = 2 * packSize1;
+      spw[1] = fpw[1] * 4 * rep[1];
+
+      do {
+        wpt_nm1 = wpt;
+        if (wpt[0] * wpt[1] < numWarps)
+          wpt[0] = std::clamp<int>(wpt[0] * 2, 1, shapeC[0] / spw[0]);
+        if (wpt[0] * wpt[1] < numWarps)
+          wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
+      } while (wpt_nm1 != wpt);
+
+
+
+      return $_get(context, versionMajor, versionMinor, wpt);
     }]>
   ];
 
