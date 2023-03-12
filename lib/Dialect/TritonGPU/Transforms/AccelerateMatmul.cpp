@@ -155,8 +155,9 @@ public:
         isBRow = getCvtArgOrder(bBwdSlices[0])[0] == 1;
 
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
-          oldRetType.getContext(), versionMajor, numWarps, oldAType.getShape(),
-          oldBType.getShape(), isARow, isBRow, mmaV1Counter++);
+          oldRetType.getContext(), versionMajor, warpsPerTile,
+          oldAType.getShape(), oldBType.getShape(), isARow, isBRow,
+          mmaV1Counter++);
     } else if (versionMajor == 2) {
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
