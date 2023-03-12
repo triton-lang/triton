@@ -355,7 +355,8 @@ public:
         // there's a single conversion use.
         if (!argOp) {
           SetVector<Operation *> cvts;
-          if (canMoveOutOfLoop(arg.cast<BlockArgument>(), /*allowedNumCvts=*/0, cvts)
+          if (canMoveOutOfLoop(arg.cast<BlockArgument>(), /*allowedNumCvts=*/0,
+                               cvts)
                   .failed())
             return failure();
         }
