@@ -774,6 +774,8 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
           << "parent = " << getParent();
   if (getIsMMAv1Row())
     printer << ", isMMAv1Row = " << getIsMMAv1Row();
+  if (getIsMMAv1Vec4())
+    printer << ", isMMAv1Vec4 = " << getIsMMAv1Vec4();
   printer << "}>";
 }
 
