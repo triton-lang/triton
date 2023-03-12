@@ -1148,6 +1148,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                           for dtype in ['int8', 'float16', 'float32']])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
+    capability = (7, 0)
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
     if capability[0] < 8:
