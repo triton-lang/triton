@@ -436,10 +436,12 @@ public:
 
   SmallVector<Value, 4>
   rematerializeForLoop(mlir::PatternRewriter &rewriter, scf::ForOp &forOp,
-                       size_t i, RankedTensorType newType,
+                       size_t i,
                        triton::gpu::ConvertLayoutOp origConversion) const {
     // Rewrite init argument
     Type origType = forOp.getInitArgs()[i].getType();
+    RankedTensorType newType =
+        origConversion.getResult().getType().cast<RankedTensorType>();
     SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
     newInitArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newInitArgs[i].getLoc(), newType, newInitArgs[i]);
@@ -500,19 +502,13 @@ public:
       auto arg = iterArg.value();
       if (!arg.getType().isa<RankedTensorType>())
         continue;
-      // check
-      if (canMoveOutOfLoop(arg, 1).failed())
-        return failure();
-      for (auto op : arg.getUsers()) {
-        auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
-        if (!cvt)
-          continue;
-        auto targetType = op->getResultTypes()[0].cast<RankedTensorType>();
-        auto newFor = rematerializeForLoop(rewriter, forOp, iterArg.index(),
-                                           targetType, cvt);
-        rewriter.replaceOp(forOp, newFor);
-        return success();
-      }
+      SetVector<Operation *> cvts = getValidBlockArgCvts(arg);
+      if (cvts.size() != 1)
+        continue;
+      auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(cvts.front());
+      auto newFor = rematerializeForLoop(rewriter, forOp, iterArg.index(), cvt);
+      rewriter.replaceOp(forOp, newFor);
+      return success();
     }
     return failure();
   }
