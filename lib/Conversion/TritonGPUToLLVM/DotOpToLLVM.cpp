@@ -123,8 +123,8 @@ private:
 
     DotOpMmaV1ConversionHelper helper(mmaLayout);
 
-    unsigned numM = helper.getNumM(AShape[0], isARow, isAVec4_);
-    unsigned numN = helper.getNumN(BShape[1], isBRow, isBVec4_);
+    unsigned numM = ALayout.getMMAv1NumOuter(AShape);
+    unsigned numN = BLayout.getMMAv1NumOuter(BShape);
     unsigned NK = AShape[1];
 
     auto has = helper.extractLoadedOperand(adaptor.getA(), NK, rewriter,

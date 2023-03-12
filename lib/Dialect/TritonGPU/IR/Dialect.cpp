@@ -425,44 +425,6 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       int shapePerCTAM = shapePerWarpM * warpsPerCTAM;
       int shapePerCTAN = shapePerWarpN * warpsPerCTAN;
 
-      //
-      // static int getNumRepM(Type operand, int M, int wpt) {
-      //   auto tensorCoreType =
-      //       DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
-      //   int mmaInstrM =
-      //       DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[0];
-      //   return std::max<int>(M / (wpt * mmaInstrM), 1);
-      // }
-
-      // static int getNumRepN(Type operand, int N, int wpt) {
-      //   auto tensorCoreType =
-      //       DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
-      //   int mmaInstrN =
-      //       DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[1];
-      //   return std::max<int>(N / (wpt * mmaInstrN), 1);
-      // }
-
-      // static int getNumRepK_(Type operand, int K) {
-      //   auto tensorCoreType =
-      //       DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
-      //   int mmaInstrK =
-      //       DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[2];
-      //   return std::max<int>(K / mmaInstrK, 1);
-      // }
-
-      //
-      // getA elems per thread
-      // auto shape = operand.getShape();
-      // int repM = getNumRepM(operand, shape[0], wpt);
-      // int repK = getNumRepK_(operand, shape[1]);
-      // return 4 * repM * repK;
-
-      // getB elems per thread
-      // auto shape = operand.getShape();
-      // int repK = getNumRepK_(operand, shape[0]);
-      // int repN = getNumRepN(operand, shape[1], wpt);
-      // return 4 * std::max(repN / 2, 1) * repK;
-
       if (getOpIdx() == 0) {
         int repM = std::max<int>(1, shape[0] / shapePerCTAM);
         int repK = std::max<int>(1, shape[1] / shapePerWarpK);
@@ -482,7 +444,7 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
         int packSizeM = (isRow || isVec4) ? 1 : 2;
         int repM = 2 * packSizeM;
         int spwM = 2 * 4 * repM;
-        int numM = repM * shape[0] / (spwM * warpsPerCTAM);
+        int numM = getMMAv1NumOuter(shape);
         int NK = shape[1];
         int vec = 2 * repM;
         // Here we mimic the logic in loadA, the result cannot be calculated
@@ -507,7 +469,7 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
         int packSizeN = (isRow && !isVec4) ? 2 : 1;
         int repN = 2 * packSizeN;
         int spwN = 2 * 4 * repN;
-        int numN = repN * shape[1] / (spwN * warpsPerCTAN);
+        int numN = getMMAv1NumOuter(shape);
         int vec = 2 * repN;
 
         int NK = shape[0];
@@ -803,6 +765,17 @@ SmallVector<int> DotOperandEncodingAttr::getMMAv1ShapePerWarp() const {
 int DotOperandEncodingAttr::getMMAv1Vec() const {
   size_t opIdx = getOpIdx();
   return 2 * getMMAv1Rep()[opIdx];
+}
+
+int DotOperandEncodingAttr::getMMAv1NumOuter(ArrayRef<int64_t> shape) const {
+  auto spw = getMMAv1ShapePerWarp();
+  auto rep = getMMAv1Rep();
+  auto warpsPerCTA = getParent().cast<MmaEncodingAttr>().getWarpsPerCTA();
+  if (getOpIdx() == 0) {
+    return rep[0] * shape[0] / (spw[0] * warpsPerCTA[0]);
+  } else {
+    return rep[1] * shape[1] / (spw[1] * warpsPerCTA[1]);
+  }
 }
 
 //===----------------------------------------------------------------------===//

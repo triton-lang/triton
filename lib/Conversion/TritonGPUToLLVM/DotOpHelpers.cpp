@@ -4,60 +4,6 @@
 namespace mlir {
 namespace LLVM {
 
-// int DotOpMmaV1ConversionHelper::numElemsPerThreadA(ArrayRef<int64_t> shape,
-//                                                    bool isARow, bool isAVec4,
-//                                                    int vec) const {
-//   int numM = getNumM(shape[0], isARow, isAVec4);
-//   int NK = shape[1];
-//   // Here we mimic the logic in loadA, the result cannot be calculated
-//   // directly.
-//   llvm::DenseSet<std::pair<int, int>> visited;
-//   auto ld = [&](int m, int k) {
-//     visited.insert({m, k});
-//     if (vec > 4) {
-//       if (isARow)
-//         visited.insert({m, k + 4});
-//       else
-//         visited.insert({m + 1, k});
-//     }
-//   };
-
-//   for (unsigned k = 0; k < NK; k += 4)
-//     for (unsigned m = 0; m < numM / 2; ++m)
-//       if (!visited.count({m, k}))
-//         ld(m, k);
-
-//   return visited.size() * 2;
-// }
-
-// int DotOpMmaV1ConversionHelper::numElemsPerThreadB(ArrayRef<int64_t> shape,
-//                                                    bool isBRow, bool isBVec4,
-//                                                    int vec) const {
-//   unsigned numN = getNumN(shape[1], isBRow, isBVec4);
-//   int NK = shape[0];
-//   // Here we mimic the logic in loadA, the result cannot be calculated
-//   // directly.
-//   llvm::DenseSet<std::pair<int, int>> visited;
-//   int elemsPerLd = vec > 4 ? 4 : 2;
-//   auto ld = [&](int n, int k) {
-//     visited.insert({n, k});
-//     if (vec > 4) {
-//       if (isBRow)
-//         visited.insert({n + 1, k});
-//       else
-//         visited.insert({n, k + 4});
-//     }
-//   };
-
-//   for (unsigned k = 0; k < NK; k += 4)
-//     for (unsigned n = 0; n < numN / 2; ++n) {
-//       if (!visited.count({n, k}))
-//         ld(n, k);
-//     }
-
-//   return visited.size() * 2;
-// }
-
 Value DotOpMmaV1ConversionHelper::loadA(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
     TritonGPUToLLVMTypeConverter *typeConverter,
@@ -156,7 +102,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   bool isARow_ = resultEncoding.getMMAv1IsRow();
   bool isAVec4 = resultEncoding.getMMAv1IsVec4();
-  unsigned numM = getNumM(shape[0], isARow_, isAVec4);
+  unsigned numM = resultEncoding.getMMAv1NumOuter(shape);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
       if (!has.count({m, k}))
@@ -273,7 +219,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
   bool isBRow_ = resultEncoding.getMMAv1IsRow();
   assert(isBRow == isBRow_ && "B need smem isRow");
   bool isBVec4 = resultEncoding.getMMAv1IsVec4();
-  unsigned numN = getNumN(shape[1], isBRow_, isBVec4);
+  unsigned numN = resultEncoding.getMMAv1NumOuter(shape);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))
@@ -370,10 +316,12 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
   return rcds;
 }
 
+// TODO: Mostly a duplicate of TritonGPUToLLVMBase::emitBaseIndexforMMaLayoutV1
 SmallVector<DotOpMmaV1ConversionHelper::CoordTy>
 DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
                                         ConversionPatternRewriter &rewriter,
                                         ArrayRef<unsigned int> wpt,
+                                        const MmaEncodingAttr &mmaLayout,
                                         ArrayRef<int64_t> shape, bool isARow,
                                         bool isBRow, bool isAVec4,
                                         bool isBVec4) {
@@ -388,11 +336,17 @@ DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
   Value _fpw0 = i32_val(fpw[0]);
   Value _fpw1 = i32_val(fpw[1]);
 
-  DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
-  DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+  // A info
+  auto aEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaLayout);
+  auto aRep = aEncoding.getMMAv1Rep();
+  auto aSpw = aEncoding.getMMAv1ShapePerWarp();
+  // B info
+  auto bEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaLayout);
+  auto bSpw = bEncoding.getMMAv1ShapePerWarp();
+  auto bRep = bEncoding.getMMAv1Rep();
 
-  SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
-  SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
+  SmallVector<int, 2> rep({aRep[0], bRep[1]});
+  SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
   SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
 
   Value lane = urem(thread, _32);

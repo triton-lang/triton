@@ -377,15 +377,13 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
-                     "ArrayRef<int64_t>":$shapeA,
-                     "ArrayRef<int64_t>":$shapeB,
                      "ArrayRef<int64_t>":$shapeC,
                      "bool":$isARow,
                      "bool":$isBRow,
+                     "bool":$isAVec4,
+                     "bool":$isBVec4,
                      "int":$id), [{
       assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
-      bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
-      bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
       int versionMinor = (isARow * (1<<0)) |\
                          (isBRow * (1<<1)) |\
@@ -416,10 +414,23 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
         if (wpt[0] * wpt[1] < numWarps)
           wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
       } while (wpt_nm1 != wpt);
-
-
-
+      
       return $_get(context, versionMajor, versionMinor, wpt);
+    }]>,
+
+
+    AttrBuilder<(ins "int":$versionMajor,
+                     "int":$numWarps,
+                     "ArrayRef<int64_t>":$shapeA,
+                     "ArrayRef<int64_t>":$shapeB,
+                     "ArrayRef<int64_t>":$shapeC,
+                     "bool":$isARow,
+                     "bool":$isBRow,
+                     "int":$id), [{
+      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
+      bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
+      bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
+      return get(context, versionMajor, numWarps, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
     }]>
   ];
 
@@ -502,6 +513,7 @@ section 9.7.13.4.1 for more details.
     SmallVector<int> getMMAv1Rep() const;
     SmallVector<int> getMMAv1ShapePerWarp() const;
     int getMMAv1Vec() const;
+    int getMMAv1NumOuter(ArrayRef<int64_t> shape) const;
   }];
 }
 

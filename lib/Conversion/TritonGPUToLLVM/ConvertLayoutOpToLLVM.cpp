@@ -140,8 +140,8 @@ private:
         auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
         auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
-            threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
-            isBRow, isAVec4, isBVec4);
+            threadId, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
+            isARow, isBRow, isAVec4, isBVec4);
         return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
       } else {
         llvm_unreachable("Unexpected MMALayout version");
