@@ -70,8 +70,8 @@ LogicalResult getOptimizedV100MMaLayout(triton::DotOp dotOp,
   // We have an MmaEncodingAttr here. Find the correct layout for it.
   auto dotOperandA = AT.getEncoding().cast<DotOperandEncodingAttr>();
   auto dotOperandB = BT.getEncoding().cast<DotOperandEncodingAttr>();
-  bool isARow = dotOperandA.getIsMMAv1Row().cast<BoolAttr>().getValue();
-  bool isBRow = dotOperandB.getIsMMAv1Row().cast<BoolAttr>().getValue();
+  bool isARow = dotOperandA.getMMAv1IsRow();
+  bool isBRow = dotOperandB.getMMAv1IsRow();
   auto [isARow_, isBRow_, isAVec4_, isBVec4_, mmaId] =
       mmaLayout.decodeVoltaLayoutStates();
   bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
@@ -156,9 +156,8 @@ Type updateStaleType(
       auto newMma = layoutMap.lookup(mma);
       if (!newMma)
         return Type();
-      auto newDotOp = DotOperandEncodingAttr::get(
-          dotOp.getContext(), dotOp.getOpIdx(), newMma, dotOp.getIsMMAv1Row(),
-          dotOp.getIsMMAv1Vec4());
+      auto newDotOp = DotOperandEncodingAttr::get(dotOp.getContext(),
+                                                  dotOp.getOpIdx(), newMma);
       return RankedTensorType::get(type.getShape(), type.getElementType(),
                                    newDotOp);
     }

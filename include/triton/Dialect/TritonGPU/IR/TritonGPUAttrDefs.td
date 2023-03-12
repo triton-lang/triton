@@ -374,21 +374,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   );
 
   let builders = [
-     // Specially for MMAV1(Volta)
-    AttrBuilder<(ins "int":$versionMajor,
-                     "int":$numWarps,
-                     "int":$id), [{
-      assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
-      SmallVector<unsigned> wpt({static_cast<unsigned>(numWarps), 1});
-      int versionMinor = 0;
-
-      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
-      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
-        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
-
-      return $_get(context, versionMajor, versionMinor, wpt);
-    }]>,
-
     // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "ArrayRef<unsigned>":$warpsPerCTA,
@@ -481,28 +466,20 @@ section 9.7.13.4.1 for more details.
   let parameters = (
     ins
     "unsigned":$opIdx,
-    "Attribute":$parent,
-    "Attribute":$isMMAv1Row,
-    "Attribute":$isMMAv1Vec4
+    "Attribute":$parent
   );
 
   let builders = [
-    AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent), [{
-      Attribute isMMAv1Row;
-      Attribute isMMAv1Vec4;
-      if(parent.isa<MmaEncodingAttr>() &&
-         parent.cast<MmaEncodingAttr>().isVolta()){
-        isMMAv1Row = BoolAttr::get(context, true);
-        isMMAv1Vec4 = BoolAttr::get(context, false);
-      }
-      return $_get(context, opIdx, parent, isMMAv1Row, isMMAv1Vec4);
-    }]>
-
   ];
 
   let hasCustomAssemblyFormat = 1;
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    bool getMMAv1IsRow() const;
+    bool getMMAv1IsVec4() const;
+    SmallVector<int> getMMAv1Rep() const;
+    SmallVector<int> getMMAv1ShapePerWarp() const;
+    int getMMAv1Vec() const;
+  }];
 }
 
 

@@ -638,8 +638,7 @@ private:
       }
     } else if (!isOuter && mmaLayout.isVolta() && isHMMA) { // tensor core v1
       DotOpMmaV1ConversionHelper helper(mmaLayout);
-      bool isMMAv1Row =
-          dotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+      bool isMMAv1Row = dotOperandLayout.getMMAv1IsRow();
       auto srcSharedLayout = src.getType()
                                  .cast<RankedTensorType>()
                                  .getEncoding()

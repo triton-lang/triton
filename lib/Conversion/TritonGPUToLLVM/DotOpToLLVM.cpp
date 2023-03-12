@@ -114,8 +114,8 @@ private:
     auto AShape = ATensorTy.getShape();
     auto BShape = BTensorTy.getShape();
 
-    bool isARow = ALayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
-    bool isBRow = BLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+    bool isARow = ALayout.getMMAv1IsRow();
+    bool isBRow = BLayout.getMMAv1IsRow();
     auto [isARow_, isBRow_, isAVec4_, isBVec4_, mmaId] =
         mmaLayout.decodeVoltaLayoutStates();
     assert(isARow == isARow_);

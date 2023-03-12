@@ -4,59 +4,59 @@
 namespace mlir {
 namespace LLVM {
 
-int DotOpMmaV1ConversionHelper::numElemsPerThreadA(ArrayRef<int64_t> shape,
-                                                   bool isARow, bool isAVec4,
-                                                   int vec) const {
-  int numM = getNumM(shape[0], isARow, isAVec4);
-  int NK = shape[1];
-  // Here we mimic the logic in loadA, the result cannot be calculated
-  // directly.
-  llvm::DenseSet<std::pair<int, int>> visited;
-  auto ld = [&](int m, int k) {
-    visited.insert({m, k});
-    if (vec > 4) {
-      if (isARow)
-        visited.insert({m, k + 4});
-      else
-        visited.insert({m + 1, k});
-    }
-  };
+// int DotOpMmaV1ConversionHelper::numElemsPerThreadA(ArrayRef<int64_t> shape,
+//                                                    bool isARow, bool isAVec4,
+//                                                    int vec) const {
+//   int numM = getNumM(shape[0], isARow, isAVec4);
+//   int NK = shape[1];
+//   // Here we mimic the logic in loadA, the result cannot be calculated
+//   // directly.
+//   llvm::DenseSet<std::pair<int, int>> visited;
+//   auto ld = [&](int m, int k) {
+//     visited.insert({m, k});
+//     if (vec > 4) {
+//       if (isARow)
+//         visited.insert({m, k + 4});
+//       else
+//         visited.insert({m + 1, k});
+//     }
+//   };
 
-  for (unsigned k = 0; k < NK; k += 4)
-    for (unsigned m = 0; m < numM / 2; ++m)
-      if (!visited.count({m, k}))
-        ld(m, k);
+//   for (unsigned k = 0; k < NK; k += 4)
+//     for (unsigned m = 0; m < numM / 2; ++m)
+//       if (!visited.count({m, k}))
+//         ld(m, k);
 
-  return visited.size() * 2;
-}
+//   return visited.size() * 2;
+// }
 
-int DotOpMmaV1ConversionHelper::numElemsPerThreadB(ArrayRef<int64_t> shape,
-                                                   bool isBRow, bool isBVec4,
-                                                   int vec) const {
-  unsigned numN = getNumN(shape[1], isBRow, isBVec4);
-  int NK = shape[0];
-  // Here we mimic the logic in loadA, the result cannot be calculated
-  // directly.
-  llvm::DenseSet<std::pair<int, int>> visited;
-  int elemsPerLd = vec > 4 ? 4 : 2;
-  auto ld = [&](int n, int k) {
-    visited.insert({n, k});
-    if (vec > 4) {
-      if (isBRow)
-        visited.insert({n + 1, k});
-      else
-        visited.insert({n, k + 4});
-    }
-  };
+// int DotOpMmaV1ConversionHelper::numElemsPerThreadB(ArrayRef<int64_t> shape,
+//                                                    bool isBRow, bool isBVec4,
+//                                                    int vec) const {
+//   unsigned numN = getNumN(shape[1], isBRow, isBVec4);
+//   int NK = shape[0];
+//   // Here we mimic the logic in loadA, the result cannot be calculated
+//   // directly.
+//   llvm::DenseSet<std::pair<int, int>> visited;
+//   int elemsPerLd = vec > 4 ? 4 : 2;
+//   auto ld = [&](int n, int k) {
+//     visited.insert({n, k});
+//     if (vec > 4) {
+//       if (isBRow)
+//         visited.insert({n + 1, k});
+//       else
+//         visited.insert({n, k + 4});
+//     }
+//   };
 
-  for (unsigned k = 0; k < NK; k += 4)
-    for (unsigned n = 0; n < numN / 2; ++n) {
-      if (!visited.count({n, k}))
-        ld(n, k);
-    }
+//   for (unsigned k = 0; k < NK; k += 4)
+//     for (unsigned n = 0; n < numN / 2; ++n) {
+//       if (!visited.count({n, k}))
+//         ld(n, k);
+//     }
 
-  return visited.size() * 2;
-}
+//   return visited.size() * 2;
+// }
 
 Value DotOpMmaV1ConversionHelper::loadA(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
@@ -72,12 +72,12 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   bool isARow = order[0] != 0;
-  auto [isARow_, _0, isAVec4, _1, _2] = mmaLayout.decodeVoltaLayoutStates();
-
-  AParam param(isARow_, isAVec4);
-
+  auto resultEncoding = resultTy.cast<RankedTensorType>()
+                            .getEncoding()
+                            .cast<DotOperandEncodingAttr>();
   auto [offsetAM, offsetAK, _3, _4] = computeOffsets(
-      thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
+      thread, isARow, false, fpw, resultEncoding.getMMAv1ShapePerWarp(),
+      resultEncoding.getMMAv1Rep(), rewriter, loc);
 
   int vecA = sharedLayout.getVec();
 
@@ -154,7 +154,9 @@ Value DotOpMmaV1ConversionHelper::loadA(
     }
   };
 
-  unsigned numM = getNumM(shape[0], isARow, isAVec4);
+  bool isARow_ = resultEncoding.getMMAv1IsRow();
+  bool isAVec4 = resultEncoding.getMMAv1IsVec4();
+  unsigned numM = getNumM(shape[0], isARow_, isAVec4);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
       if (!has.count({m, k}))
@@ -188,10 +190,9 @@ Value DotOpMmaV1ConversionHelper::loadB(
   Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
   bool isBRow = order[0] != 0; // is row-major in shared memory layout
   // isBRow_ indicates whether B is row-major in DotOperand layout
-  auto [_0, isBRow_, _1, isBVec4, _2] = mmaLayout.decodeVoltaLayoutStates();
-  assert(isBRow == isBRow_ && "B need smem isRow");
-
-  BParam param(isBRow_, isBVec4);
+  auto resultEncoding = resultTy.cast<RankedTensorType>()
+                            .getEncoding()
+                            .cast<DotOperandEncodingAttr>();
 
   int vecB = sharedLayout.getVec();
   Value strideBN = isBRow ? i32_val(1) : strides[1];
@@ -202,7 +203,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
   int strideRepK = 1;
 
   auto [_3, _4, offsetBN, offsetBK] = computeOffsets(
-      thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);
+      thread, false, isBRow, fpw, resultEncoding.getMMAv1ShapePerWarp(),
+      resultEncoding.getMMAv1Rep(), rewriter, loc);
 
   // swizzling
   int perPhaseB = sharedLayout.getPerPhase();
@@ -268,7 +270,10 @@ Value DotOpMmaV1ConversionHelper::loadB(
     }
   };
 
-  unsigned numN = getNumN(shape[1], isBRow, isBVec4);
+  bool isBRow_ = resultEncoding.getMMAv1IsRow();
+  assert(isBRow == isBRow_ && "B need smem isRow");
+  bool isBVec4 = resultEncoding.getMMAv1IsVec4();
+  unsigned numN = getNumN(shape[1], isBRow_, isBVec4);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))

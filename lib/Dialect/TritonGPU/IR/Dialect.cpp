@@ -476,8 +476,8 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     }
     // V100
     if (mmaParent.isVolta()) {
-      bool isRow = getIsMMAv1Row().cast<BoolAttr>().getValue();
-      bool isVec4 = getIsMMAv1Vec4().cast<BoolAttr>().getValue();
+      bool isRow = getMMAv1IsRow();
+      bool isVec4 = getMMAv1IsVec4();
       if (getOpIdx() == 0) {
         int packSizeM = (isRow || isVec4) ? 1 : 2;
         int repM = 2 * packSizeM;
@@ -753,30 +753,56 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
   unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
   Attribute parent = attrs.get("parent");
-  Attribute isMMAv1Row;
-  Attribute isMMAv1Vec4;
-  if (parent.isa<MmaEncodingAttr>() &&
-      parent.cast<MmaEncodingAttr>().isVolta()) {
-    isMMAv1Row = attrs.get("isMMAv1Row");
-    if (!isMMAv1Row)
-      llvm::report_fatal_error("isMMAv1Row attribute is missing");
-    isMMAv1Vec4 = attrs.get("isMMAv1Vec4");
-    if (!isMMAv1Vec4)
-      llvm::report_fatal_error("isMMAv1Vec4 attribute is missing");
-  }
-  return parser.getChecked<DotOperandEncodingAttr>(
-      parser.getContext(), opIdx, parent, isMMAv1Row, isMMAv1Vec4);
+  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
+                                                   parent);
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", "
           << "parent = " << getParent();
-  if (getIsMMAv1Row())
-    printer << ", isMMAv1Row = " << getIsMMAv1Row();
-  if (getIsMMAv1Vec4())
-    printer << ", isMMAv1Vec4 = " << getIsMMAv1Vec4();
   printer << "}>";
+}
+
+bool DotOperandEncodingAttr::getMMAv1IsRow() const {
+  auto [isARow, isBRow, _0, _1, _2] =
+      getParent().cast<MmaEncodingAttr>().decodeVoltaLayoutStates();
+  return getOpIdx() == 0 ? isARow : isBRow;
+}
+
+bool DotOperandEncodingAttr::getMMAv1IsVec4() const {
+  auto [_0, _1, isAVec4, isBVec4, _2] =
+      getParent().cast<MmaEncodingAttr>().decodeVoltaLayoutStates();
+  return getOpIdx() == 0 ? isAVec4 : isBVec4;
+}
+
+SmallVector<int> DotOperandEncodingAttr::getMMAv1Rep() const {
+  auto [isARow, isBRow, isAVec4, isBVec4, _] =
+      getParent().cast<MmaEncodingAttr>().decodeVoltaLayoutStates();
+  // A
+  if (getOpIdx() == 0) {
+    int packSize = (isARow || isAVec4) ? 1 : 2;
+    return {2 * packSize, 0, 1};
+  }
+  // B
+  else {
+    int packSize = (isBRow && !isBVec4) ? 2 : 1;
+    return {0, 2 * packSize, 1};
+  }
+}
+
+SmallVector<int> DotOperandEncodingAttr::getMMAv1ShapePerWarp() const {
+  auto rep = getMMAv1Rep();
+  if (getOpIdx() == 0) {
+    return {8 * rep[0], 0, 1};
+  } else {
+    return {0, 8 * rep[1], 1};
+  }
+}
+
+int DotOperandEncodingAttr::getMMAv1Vec() const {
+  size_t opIdx = getOpIdx();
+  return 2 * getMMAv1Rep()[opIdx];
 }
 
 //===----------------------------------------------------------------------===//

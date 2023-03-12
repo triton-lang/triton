@@ -117,11 +117,11 @@ struct DotOpMmaV1ConversionHelper {
     return numN;
   }
 
-  int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isARow, bool isAVec4,
-                         int vec) const;
+  // int numElemsPerThreadA(ArrayRef<int64_t> shape, bool isARow, bool isAVec4,
+  //                        int vec) const;
 
-  int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isBRow, bool isBVec4,
-                         int vec) const;
+  // int numElemsPerThreadB(ArrayRef<int64_t> shape, bool isBRow, bool isBVec4,
+  //                        int vec) const;
 
   // Loading $a from smem to registers, returns a LLVM::Struct.
   Value loadA(Value tensor, const SharedMemoryObject &smemObj, Value thread,
