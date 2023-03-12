@@ -424,15 +424,54 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       int shapePerWarpK = 4 * 64 / bitwidth;
       int shapePerCTAM = shapePerWarpM * warpsPerCTAM;
       int shapePerCTAN = shapePerWarpN * warpsPerCTAN;
+
+      //
+      // static int getNumRepM(Type operand, int M, int wpt) {
+      //   auto tensorCoreType =
+      //       DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
+      //   int mmaInstrM =
+      //       DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[0];
+      //   return std::max<int>(M / (wpt * mmaInstrM), 1);
+      // }
+
+      // static int getNumRepN(Type operand, int N, int wpt) {
+      //   auto tensorCoreType =
+      //       DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
+      //   int mmaInstrN =
+      //       DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[1];
+      //   return std::max<int>(N / (wpt * mmaInstrN), 1);
+      // }
+
+      // static int getNumRepK_(Type operand, int K) {
+      //   auto tensorCoreType =
+      //       DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(operand);
+      //   int mmaInstrK =
+      //       DotOpMmaV2ConversionHelper::getMmaInstrShape(tensorCoreType)[2];
+      //   return std::max<int>(K / mmaInstrK, 1);
+      // }
+
+      //
+      // getA elems per thread
+      // auto shape = operand.getShape();
+      // int repM = getNumRepM(operand, shape[0], wpt);
+      // int repK = getNumRepK_(operand, shape[1]);
+      // return 4 * repM * repK;
+
+      // getB elems per thread
+      // auto shape = operand.getShape();
+      // int repK = getNumRepK_(operand, shape[0]);
+      // int repN = getNumRepN(operand, shape[1], wpt);
+      // return 4 * std::max(repN / 2, 1) * repK;
+
       if (getOpIdx() == 0) {
         int repM = std::max<int>(1, shape[0] / shapePerCTAM);
         int repK = std::max<int>(1, shape[1] / shapePerWarpK);
-        return 4 * repM * repK * (32 / bitwidth);
+        return 4 * repM * repK;
       }
       if (getOpIdx() == 1) {
         int repN = std::max<int>(1, shape[1] / shapePerCTAN);
         int repK = std::max<int>(1, shape[0] / shapePerWarpK);
-        return 4 * std::max(repN / 2, 1) * repK * (32 / bitwidth);
+        return 4 * std::max(repN / 2, 1) * repK;
       }
     }
     // V100
