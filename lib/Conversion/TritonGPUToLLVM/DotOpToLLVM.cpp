@@ -116,7 +116,7 @@ private:
 
     bool isARow = ALayout.getMMAv1IsRow();
     bool isBRow = BLayout.getMMAv1IsRow();
-    auto [isARow_, isBRow_, isAVec4_, isBVec4_, mmaId] =
+    auto [isARow_, isBRow_, isAVec4_, isBVec4_, _] =
         mmaLayout.decodeVoltaLayoutStates();
     assert(isARow == isARow_);
     assert(isBRow == isBRow_);

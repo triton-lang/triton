@@ -133,16 +133,27 @@ public:
         getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
     triton::gpu::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
-      auto aParentEncoding = oldAType.getEncoding()
-                                 .cast<DotOperandEncodingAttr>()
-                                 .getParent()
-                                 .cast<BlockedEncodingAttr>();
-      auto bParentEncoding = oldBType.getEncoding()
-                                 .cast<DotOperandEncodingAttr>()
-                                 .getParent()
-                                 .cast<BlockedEncodingAttr>();
-      bool isARow = aParentEncoding.getOrder()[0] == 1;
-      bool isBRow = bParentEncoding.getOrder()[0] == 1;
+      SetVector<Operation *> aBwdSlices, bBwdSlices;
+      auto isCvt = [](Operation *op) { return isa<ConvertLayoutOp>(op); };
+      getBackwardSlice(a, &aBwdSlices, isCvt);
+      getBackwardSlice(b, &bBwdSlices, isCvt);
+      // get the source of the first conversion found in slices
+      auto getCvtArgOrder = [](Operation *op) {
+        return cast<ConvertLayoutOp>(op)
+            .getOperand()
+            .getType()
+            .cast<RankedTensorType>()
+            .getEncoding()
+            .cast<BlockedEncodingAttr>()
+            .getOrder();
+      };
+      bool isARow = true;
+      bool isBRow = true;
+      if (!aBwdSlices.empty())
+        isARow = getCvtArgOrder(aBwdSlices[0])[0] == 1;
+      if (!bBwdSlices.empty())
+        isBRow = getCvtArgOrder(bBwdSlices[0])[0] == 1;
+
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, numWarps, oldAType.getShape(),
           oldBType.getShape(), isARow, isBRow, mmaV1Counter++);

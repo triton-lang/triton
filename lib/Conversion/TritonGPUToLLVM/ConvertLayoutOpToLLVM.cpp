@@ -137,7 +137,7 @@ private:
         multiDimOffset[1] = add(
             multiDimOffset[1], i32_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
       } else if (mmaLayout.isVolta()) {
-        auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
+        auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
         auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
@@ -293,7 +293,7 @@ private:
       }
 
       if (needTrans) {
-        auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
+        auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mma.decodeVoltaLayoutStates();
         DotOpMmaV1ConversionHelper helper(mma);
         // do transpose

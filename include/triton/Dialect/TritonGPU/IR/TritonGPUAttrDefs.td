@@ -386,15 +386,11 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
       // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
-      // 3-bits to encode the MMA ID to make each unique
       int versionMinor = (isARow * (1<<0)) |\
                          (isBRow * (1<<1)) |\
                          (isAVec4 * (1<<2)) |\
                          (isBVec4 * (1<<3));
 
-      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
-      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
-        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
 
       return $_get(context, versionMajor, versionMinor, warpsPerCTA);
     }]>

@@ -701,7 +701,7 @@ private:
 
     auto wpt = mmaLayout.getWarpsPerCTA();
     auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
-    auto [isARow, isBRow, isAVec4, isBVec4, id] =
+    auto [isARow, isBRow, isAVec4, isBVec4, _] =
         mmaLayout.decodeVoltaLayoutStates();
 
     Value thread = getThreadId(rewriter, loc);
@@ -764,7 +764,7 @@ private:
                            RankedTensorType type) const {
     auto shape = type.getShape();
 
-    auto [isARow, isBRow, isAVec4, isBVec4, id] =
+    auto [isARow, isBRow, isAVec4, isBVec4, _] =
         mmaLayout.decodeVoltaLayoutStates();
     LLVM::DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
     LLVM::DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
