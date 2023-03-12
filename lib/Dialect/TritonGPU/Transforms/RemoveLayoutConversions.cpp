@@ -354,7 +354,8 @@ public:
         // scf.for blockArgument can be conditionally optimized only if
         // there's a single conversion use.
         if (!argOp) {
-          if (canMoveOutOfLoop(arg.cast<BlockArgument>(), /*allowedNumCvts=*/0)
+          SetVector<Operation *> cvts;
+          if (canMoveOutOfLoop(arg.cast<BlockArgument>(), /*allowedNumCvts=*/0, cvts)
                   .failed())
             return failure();
         }
@@ -502,8 +503,8 @@ public:
       auto arg = iterArg.value();
       if (!arg.getType().isa<RankedTensorType>())
         continue;
-      SetVector<Operation *> cvts = getValidBlockArgCvts(arg);
-      if (cvts.size() != 1)
+      SetVector<Operation *> cvts;
+      if (canMoveOutOfLoop(arg, /*allowedCvts=*/1, cvts).failed())
         continue;
       auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(cvts.front());
       auto newFor = rematerializeForLoop(rewriter, forOp, iterArg.index(), cvt);

@@ -131,11 +131,9 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
   return false;
 }
 
-SetVector<Operation *> getValidBlockArgCvts(BlockArgument arg) {
-  SetVector<Operation *> cvts;
-  auto users = arg.getUsers();
-  // check first condition
-  for (auto user : users) {
+namespace {
+void getValidBlockArgCvts(BlockArgument arg, SetVector<Operation *> &cvts) {
+  for (auto user : arg.getUsers()) {
     if (isa<triton::gpu::ConvertLayoutOp>(user)) {
       auto newType = user->getResults()[0].getType().cast<RankedTensorType>();
       auto oldType = user->getOperand(0).getType().cast<RankedTensorType>();
@@ -152,10 +150,11 @@ SetVector<Operation *> getValidBlockArgCvts(BlockArgument arg) {
       cvts.insert(user);
     }
   }
-  return cvts;
 }
+} // namespace
 
-LogicalResult canMoveOutOfLoop(BlockArgument arg, int allowedCvts) {
+LogicalResult canMoveOutOfLoop(BlockArgument arg, int allowedCvts,
+                               SetVector<Operation *> &cvts) {
   // we only move `iterArg` out of the loop if
   //   - there is only a single conversion use
   //   - moving this conversion out of the loop will not generate
@@ -164,8 +163,9 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg, int allowedCvts) {
   auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
   if (!forOp)
     return success();
-  SetVector<Operation *> cvts = getValidBlockArgCvts(arg);
-  if (cvts.size() > allowedCvts)
+  // check first condition
+  getValidBlockArgCvts(arg, cvts);
+  if (cvts.size() != allowedCvts)
     return failure();
   auto users = arg.getUsers();
   // TODO: check second condition
@@ -223,7 +223,9 @@ int simulateBackwardRematerialization(
       // there's a single conversion use.
       SetVector<Type> cvtTargetTypes;
       if (!opArgI) {
-        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), /*allowedNumCvts=*/0)
+        SetVector<Operation *> cvts;
+        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), /*allowedNumCvts=*/0,
+                             cvts)
                 .failed())
           // If this is true, we add a new conversion, resulting in two
           // conversions
