@@ -156,18 +156,19 @@ public:
                          .getParent()
                          .cast<triton::gpu::BlockedEncodingAttr>()
                          .getOrder();
-
     Attribute isMMAv1RowA;
     Attribute isMMAv1RowB;
     Attribute isMMAv1Vec4A;
     Attribute isMMAv1Vec4B;
     if (versionMajor == 1) {
-      auto [_isMMAv1RowA, _isMMAv1RowB, _isMMAv1Vec4A, _isMMAv1Vec4B, _] =
-          mmaEnc.decodeVoltaLayoutStates();
-      isMMAv1RowA = BoolAttr::get(getContext(), _isMMAv1RowA);
-      isMMAv1RowB = BoolAttr::get(getContext(), _isMMAv1RowB);
-      isMMAv1Vec4A = BoolAttr::get(getContext(), _isMMAv1Vec4A);
-      isMMAv1Vec4B = BoolAttr::get(getContext(), _isMMAv1Vec4B);
+      bool isARow = oldAOrder[0] == 1;
+      bool isBRow = oldBOrder[0] == 1;
+      bool isAVec4 = !isARow && (oldAType.getShape()[isARow] <= 16);
+      bool isBVec4 = isBRow && (oldBType.getShape()[isBRow] <= 16);
+      isMMAv1RowA = BoolAttr::get(getContext(), isARow);
+      isMMAv1RowB = BoolAttr::get(getContext(), isBRow);
+      isMMAv1Vec4A = BoolAttr::get(getContext(), isAVec4);
+      isMMAv1Vec4B = BoolAttr::get(getContext(), isBVec4);
     }
 
     auto newAType = RankedTensorType::get(
