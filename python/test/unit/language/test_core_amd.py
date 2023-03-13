@@ -1952,7 +1952,7 @@ if torch.version.hip is not None:
         # MmaLayout(version=(2, 0), warps_per_cta=[1, 4]),
         # MmaLayout(version=1, warps_per_cta=[4, 1]),
         # MmaLayout(version=(2, 0), warps_per_cta=[4, 1]),
-        BlockedLayout([1, 4], [2, 32], [2, 2], [1, 0]),
+        BlockedLayout([1, 2], [2, 32], [2, 2], [1, 0]),
         BlockedLayout([2, 2], [4, 16], [2, 2], [1, 0]),
         BlockedLayout([1, 1], [1, 64], [2, 2], [1, 0]),
         BlockedLayout([4, 2], [16, 4], [1, 4], [0, 1]),
