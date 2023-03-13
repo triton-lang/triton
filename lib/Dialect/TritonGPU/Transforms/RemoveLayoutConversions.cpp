@@ -312,7 +312,8 @@ public:
     auto dstEncoding =
         cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
     // XXX: why is this needed?
-    if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
+    if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>() ||
+        srcEncoding.isa<triton::gpu::MmaEncodingAttr>())
       return failure();
     // Step 1: Find all the operations that are forward slices of the
     // conversion.
@@ -326,9 +327,6 @@ public:
     };
     auto filter = [&](Operation *op) { return !stop(op); };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
-    if (cvtSlices.empty()) {
-      return failure();
-    }
     // Step 2: Check if the conversion can be pushed forward.
     for (Operation *op : cvtSlices) {
       if (stop(op)) {
@@ -374,6 +372,8 @@ public:
       if (!stop(op))
         candidates.insert(op);
     }
+    if (candidates.empty())
+      return failure();
     // Step 4: Push the conversion forward.
     pushConversionForward(cvt, candidates, rewriter);
     return success();
