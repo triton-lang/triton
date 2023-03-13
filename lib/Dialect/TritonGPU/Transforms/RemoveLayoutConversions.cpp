@@ -317,21 +317,19 @@ public:
     // Step 1: Find all the operations that are forward slices of the
     // conversion.
     SetVector<Operation *> cvtSlices;
-    auto stop = [&](Operation *op) {
-      return op->getBlock() != cvt->getBlock() ||
-             isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp, scf::YieldOp>(
-                 op) ||
-             op->getNumResults() == 0 ||
-             !op->getResult(0).getType().isa<RankedTensorType>();
+    auto isStopOp = [&](Operation *op) {
+      return isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp, scf::YieldOp>(
+          op);
     };
-    auto filter = [&](Operation *op) { return !stop(op); };
+    auto filter = [&](Operation *op) {
+      return !(op->getBlock() != cvt->getBlock() || isStopOp(op) ||
+               op->getNumResults() == 0 ||
+               !op->getResult(0).getType().isa<RankedTensorType>());
+    };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     // Step 2: Check if the conversion can be pushed forward.
     for (Operation *op : cvtSlices) {
-      if (stop(op)) {
-        if (isa<triton::ReduceOp>(op) &&
-            srcEncoding.isa<triton::gpu::MmaEncodingAttr>())
-          return failure();
+      if (isStopOp(op)) {
         continue;
       }
       // don't rematerialize anything expensive
@@ -371,7 +369,7 @@ public:
     // These must be the last operations on the slice path.
     llvm::SetVector<Operation *> candidates;
     for (Operation *op : cvtSlices) {
-      if (!stop(op))
+      if (!isStopOp(op))
         candidates.insert(op);
     }
     if (candidates.empty())
