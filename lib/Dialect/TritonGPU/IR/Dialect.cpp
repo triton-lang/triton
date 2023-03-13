@@ -416,7 +416,7 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
-    // TODO: always assume sub-register typed are packed into int32
+    // A100
     if (mmaParent.isAmpere()) {
       int bitwidth = eltTy.getIntOrFloatBitWidth();
       int shapePerWarpM = 16;
@@ -424,15 +424,76 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       int shapePerWarpK = 4 * 64 / bitwidth;
       int shapePerCTAM = shapePerWarpM * warpsPerCTAM;
       int shapePerCTAN = shapePerWarpN * warpsPerCTAN;
+
       if (getOpIdx() == 0) {
         int repM = std::max<int>(1, shape[0] / shapePerCTAM);
         int repK = std::max<int>(1, shape[1] / shapePerWarpK);
-        return 4 * repM * repK * (32 / bitwidth);
+        return 4 * repM * repK;
       }
       if (getOpIdx() == 1) {
         int repN = std::max<int>(1, shape[1] / shapePerCTAN);
         int repK = std::max<int>(1, shape[0] / shapePerWarpK);
-        return 4 * std::max(repN / 2, 1) * repK * (32 / bitwidth);
+        return 4 * std::max(repN / 2, 1) * repK;
+      }
+    }
+    // V100
+    if (mmaParent.isVolta()) {
+      bool isRow = getMMAv1IsRow();
+      bool isVec4 = getMMAv1IsVec4();
+      if (getOpIdx() == 0) {
+        int packSizeM = (isRow || isVec4) ? 1 : 2;
+        int repM = 2 * packSizeM;
+        int spwM = 2 * 4 * repM;
+        int numM = getMMAv1NumOuter(shape);
+        int NK = shape[1];
+        int vec = 2 * repM;
+        // Here we mimic the logic in loadA, the result cannot be calculated
+        // directly.
+        llvm::DenseSet<std::pair<int, int>> visited;
+        auto ld = [&](int m, int k) {
+          visited.insert({m, k});
+          if (vec > 4) {
+            if (isRow)
+              visited.insert({m, k + 4});
+            else
+              visited.insert({m + 1, k});
+          }
+        };
+        for (unsigned k = 0; k < NK; k += 4)
+          for (unsigned m = 0; m < numM / 2; ++m)
+            if (!visited.count({m, k}))
+              ld(m, k);
+        return visited.size() * 2;
+      }
+      if (getOpIdx() == 1) {
+        int packSizeN = (isRow && !isVec4) ? 2 : 1;
+        int repN = 2 * packSizeN;
+        int spwN = 2 * 4 * repN;
+        int numN = getMMAv1NumOuter(shape);
+        int vec = 2 * repN;
+
+        int NK = shape[0];
+        // Here we mimic the logic in loadA, the result cannot be calculated
+        // directly.
+        llvm::DenseSet<std::pair<int, int>> visited;
+        int elemsPerLd = vec > 4 ? 4 : 2;
+        auto ld = [&](int n, int k) {
+          visited.insert({n, k});
+          if (vec > 4) {
+            if (isRow)
+              visited.insert({n + 1, k});
+            else
+              visited.insert({n, k + 4});
+          }
+        };
+
+        for (unsigned k = 0; k < NK; k += 4)
+          for (unsigned n = 0; n < numN / 2; ++n) {
+            if (!visited.count({n, k}))
+              ld(n, k);
+          }
+
+        return visited.size() * 2;
       }
     }
   }
@@ -654,24 +715,67 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
   unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
   Attribute parent = attrs.get("parent");
-  Attribute isMMAv1Row;
-  if (parent.isa<MmaEncodingAttr>() &&
-      parent.cast<MmaEncodingAttr>().isVolta()) {
-    isMMAv1Row = attrs.get("isMMAv1Row");
-    if (!isMMAv1Row)
-      llvm::report_fatal_error("isMMAv1Row attribute is missing");
-  }
   return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
-                                                   parent, isMMAv1Row);
+                                                   parent);
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", "
           << "parent = " << getParent();
-  if (getIsMMAv1Row())
-    printer << ", isMMAv1Row = " << getIsMMAv1Row();
   printer << "}>";
+}
+
+bool DotOperandEncodingAttr::getMMAv1IsRow() const {
+  auto [isARow, isBRow, _0, _1, _2] =
+      getParent().cast<MmaEncodingAttr>().decodeVoltaLayoutStates();
+  return getOpIdx() == 0 ? isARow : isBRow;
+}
+
+bool DotOperandEncodingAttr::getMMAv1IsVec4() const {
+  auto [_0, _1, isAVec4, isBVec4, _2] =
+      getParent().cast<MmaEncodingAttr>().decodeVoltaLayoutStates();
+  return getOpIdx() == 0 ? isAVec4 : isBVec4;
+}
+
+SmallVector<int> DotOperandEncodingAttr::getMMAv1Rep() const {
+  auto [isARow, isBRow, isAVec4, isBVec4, _] =
+      getParent().cast<MmaEncodingAttr>().decodeVoltaLayoutStates();
+  // A
+  if (getOpIdx() == 0) {
+    int packSize = (isARow || isAVec4) ? 1 : 2;
+    return {2 * packSize, 0, 1};
+  }
+  // B
+  else {
+    int packSize = (isBRow && !isBVec4) ? 2 : 1;
+    return {0, 2 * packSize, 1};
+  }
+}
+
+SmallVector<int> DotOperandEncodingAttr::getMMAv1ShapePerWarp() const {
+  auto rep = getMMAv1Rep();
+  if (getOpIdx() == 0) {
+    return {8 * rep[0], 0, 1};
+  } else {
+    return {0, 8 * rep[1], 1};
+  }
+}
+
+int DotOperandEncodingAttr::getMMAv1Vec() const {
+  size_t opIdx = getOpIdx();
+  return 2 * getMMAv1Rep()[opIdx];
+}
+
+int DotOperandEncodingAttr::getMMAv1NumOuter(ArrayRef<int64_t> shape) const {
+  auto spw = getMMAv1ShapePerWarp();
+  auto rep = getMMAv1Rep();
+  auto warpsPerCTA = getParent().cast<MmaEncodingAttr>().getWarpsPerCTA();
+  if (getOpIdx() == 0) {
+    return rep[0] * shape[0] / (spw[0] * warpsPerCTA[0]);
+  } else {
+    return rep[1] * shape[1] / (spw[1] * warpsPerCTA[1]);
+  }
 }
 
 //===----------------------------------------------------------------------===//
