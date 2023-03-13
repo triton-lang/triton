@@ -222,6 +222,7 @@ public:
     return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
   }
 
+
   // -----------------------------------------------------------------------
   // Shared memory utilities
   // -----------------------------------------------------------------------
@@ -500,6 +501,12 @@ public:
   // -----------------------------------------------------------------------
   // Get offsets / indices for any layout
   // -----------------------------------------------------------------------
+
+  //SmallVector<Value> emitWarpId(Location loc,
+  //                              ConversionPatternRewriter &rewriter,
+  //                              const Attribute &layout,
+  //                              RankedTensorType type) {
+  //                              }
 
   SmallVector<Value> emitBaseIndexForLayout(Location loc,
                                             ConversionPatternRewriter &rewriter,
