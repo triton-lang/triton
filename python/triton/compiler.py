@@ -1020,6 +1020,7 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()

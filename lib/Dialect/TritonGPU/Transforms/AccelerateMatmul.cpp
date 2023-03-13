@@ -128,10 +128,16 @@ public:
       };
       bool isARow = true;
       bool isBRow = true;
+      Operation *aOp = a.getDefiningOp();
+      Operation *bOp = b.getDefiningOp();
       if (!aBwdSlices.empty())
-        isARow = getCvtArgOrder(aBwdSlices[0])[0] == 1;
+        aOp = aBwdSlices[0];
       if (!bBwdSlices.empty())
-        isBRow = getCvtArgOrder(bBwdSlices[0])[0] == 1;
+        bOp = bBwdSlices[0];
+      if (aOp)
+        isARow = getCvtArgOrder(aOp)[0] == 1;
+      if (bOp)
+        isBRow = getCvtArgOrder(bOp)[0] == 1;
 
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, numWarps, oldAType.getShape(),
