@@ -17,7 +17,7 @@ bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding);
 bool expensiveToRemat(Operation *op, Attribute &targetEncoding);
 
 LogicalResult canMoveOutOfLoop(BlockArgument arg, int allowedCvts,
-                               SetVector<Operation *> &cvts);
+                               SmallVector<Operation *> &cvts);
 
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,

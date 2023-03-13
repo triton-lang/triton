@@ -132,7 +132,7 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
 }
 
 namespace {
-void getValidBlockArgCvts(BlockArgument arg, SetVector<Operation *> &cvts) {
+void getValidBlockArgCvts(BlockArgument arg, SmallVector<Operation *> &cvts) {
   for (auto user : arg.getUsers()) {
     if (isa<triton::gpu::ConvertLayoutOp>(user)) {
       auto newType = user->getResults()[0].getType().cast<RankedTensorType>();
@@ -147,16 +147,16 @@ void getValidBlockArgCvts(BlockArgument arg, SetVector<Operation *> &cvts) {
                 .getVec() == 1)
           continue;
       }
-      cvts.insert(user);
+      cvts.emplace_back(user);
     }
   }
 }
 } // namespace
 
 LogicalResult canMoveOutOfLoop(BlockArgument arg, int allowedCvts,
-                               SetVector<Operation *> &cvts) {
+                               SmallVector<Operation *> &cvts) {
   // we only move `iterArg` out of the loop if
-  //   - there is only a single conversion use
+  //   - there is only a single conversion type
   //   - moving this conversion out of the loop will not generate
   //     any extra non-removable conversion
   // Skip if arg is not defined in scf.for
@@ -165,7 +165,10 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg, int allowedCvts,
     return success();
   // check first condition
   getValidBlockArgCvts(arg, cvts);
-  if (cvts.size() != allowedCvts)
+  DenseSet<Type> cvtTypes;
+  for (auto cvt : cvts)
+    cvtTypes.insert(cvt->getResult(0).getType());
+  if (cvtTypes.size() > allowedCvts)
     return failure();
   auto users = arg.getUsers();
   // TODO: check second condition
@@ -223,8 +226,8 @@ int simulateBackwardRematerialization(
       // there's a single conversion use.
       SetVector<Type> cvtTargetTypes;
       if (!opArgI) {
-        SetVector<Operation *> cvts;
-        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), /*allowedNumCvts=*/0,
+        SmallVector<Operation *> cvts;
+        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), /*allowedNumCvts=*/1,
                              cvts)
                 .failed())
           // If this is true, we add a new conversion, resulting in two
