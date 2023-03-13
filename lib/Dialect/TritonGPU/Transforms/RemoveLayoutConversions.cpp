@@ -312,8 +312,7 @@ public:
     auto dstEncoding =
         cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
     // XXX: why is this needed?
-    if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>() ||
-        srcEncoding.isa<triton::gpu::MmaEncodingAttr>())
+    if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     // Step 1: Find all the operations that are forward slices of the
     // conversion.
@@ -330,6 +329,9 @@ public:
     // Step 2: Check if the conversion can be pushed forward.
     for (Operation *op : cvtSlices) {
       if (stop(op)) {
+        if (isa<triton::ReduceOp>(op) &&
+            srcEncoding.isa<triton::gpu::MmaEncodingAttr>())
+          return failure();
         continue;
       }
       // don't rematerialize anything expensive
