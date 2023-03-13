@@ -8,6 +8,7 @@
 using namespace mlir;
 namespace {
 using triton::DotOp;
+using triton::gpu::BlockedEncodingAttr;
 using triton::gpu::ConvertLayoutOp;
 using triton::gpu::DotOperandEncodingAttr;
 using triton::gpu::MmaEncodingAttr;
@@ -38,12 +39,6 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
     assert(false && "version not supported");
     return {0, 0};
   }
-}
-
-SmallVector<unsigned, 2> warpsPerTileV1(const ArrayRef<int64_t> shape,
-                                        int numWarps) {
-  // Set a default value that ensures product of wpt equals numWarps
-  return {static_cast<unsigned>(numWarps), 1};
 }
 
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
@@ -89,19 +84,6 @@ public:
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context),
         computeCapability(computeCapability) {}
 
-  static SmallVector<unsigned, 2> getWarpsPerTile(triton::DotOp dotOp,
-                                                  const ArrayRef<int64_t> shape,
-                                                  int version, int numWarps) {
-    switch (version) {
-    case 1:
-      return warpsPerTileV1(shape, numWarps);
-    case 2:
-      return warpsPerTileV2(dotOp, shape, numWarps);
-    default:
-      llvm_unreachable("unsupported MMA version");
-    }
-  }
-
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -122,13 +104,46 @@ public:
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
-    auto warpsPerTile =
-        getWarpsPerTile(dotOp, retShape, versionMajor, numWarps);
+    // operands
+    Value a = dotOp.getA();
+    Value b = dotOp.getB();
+    auto oldAType = a.getType().cast<RankedTensorType>();
+    auto oldBType = b.getType().cast<RankedTensorType>();
+
     triton::gpu::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
+      SetVector<Operation *> aBwdSlices, bBwdSlices;
+      auto isCvt = [](Operation *op) { return isa<ConvertLayoutOp>(op); };
+      getBackwardSlice(a, &aBwdSlices, isCvt);
+      getBackwardSlice(b, &bBwdSlices, isCvt);
+      // get the source of the first conversion found in slices
+      auto getCvtArgOrder = [](Operation *op) {
+        return cast<ConvertLayoutOp>(op)
+            .getOperand()
+            .getType()
+            .cast<RankedTensorType>()
+            .getEncoding()
+            .cast<BlockedEncodingAttr>()
+            .getOrder();
+      };
+      bool isARow = true;
+      bool isBRow = true;
+      Operation *aOp = a.getDefiningOp();
+      Operation *bOp = b.getDefiningOp();
+      if (!aBwdSlices.empty())
+        aOp = aBwdSlices[0];
+      if (!bBwdSlices.empty())
+        bOp = bBwdSlices[0];
+      if (aOp)
+        isARow = getCvtArgOrder(aOp)[0] == 1;
+      if (bOp)
+        isBRow = getCvtArgOrder(bOp)[0] == 1;
+
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
-          oldRetType.getContext(), versionMajor, numWarps, mmaV1Counter++);
+          oldRetType.getContext(), versionMajor, numWarps, oldAType.getShape(),
+          oldBType.getShape(), retShape, isARow, isBRow, mmaV1Counter++);
     } else if (versionMajor == 2) {
+      auto warpsPerTile = warpsPerTileV2(dotOp, retShape, numWarps);
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
           warpsPerTile);
@@ -142,10 +157,6 @@ public:
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
-    Value a = dotOp.getA();
-    Value b = dotOp.getB();
-    auto oldAType = a.getType().cast<RankedTensorType>();
-    auto oldBType = b.getType().cast<RankedTensorType>();
     auto oldAOrder = oldAType.getEncoding()
                          .cast<triton::gpu::DotOperandEncodingAttr>()
                          .getParent()
@@ -156,21 +167,15 @@ public:
                          .getParent()
                          .cast<triton::gpu::BlockedEncodingAttr>()
                          .getOrder();
-    Attribute isMMAv1RowA;
-    Attribute isMMAv1RowB;
-    if (versionMajor == 1) {
-      isMMAv1RowA = BoolAttr::get(getContext(), oldAOrder[0] == 1);
-      isMMAv1RowB = BoolAttr::get(getContext(), oldBOrder[0] == 1);
-    }
 
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(
-            oldAType.getContext(), 0, newRetType.getEncoding(), isMMAv1RowA));
+        triton::gpu::DotOperandEncodingAttr::get(oldAType.getContext(), 0,
+                                                 newRetType.getEncoding()));
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(
-            oldBType.getContext(), 1, newRetType.getEncoding(), isMMAv1RowB));
+        triton::gpu::DotOperandEncodingAttr::get(oldBType.getContext(), 1,
+                                                 newRetType.getEncoding()));
 
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);

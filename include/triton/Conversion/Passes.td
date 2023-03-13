@@ -60,7 +60,7 @@ def TritonConvertArithToIndex : Pass<"triton-convert-arith-to-index", "mlir::Mod
       We need this because SCFToCF conversion currently generates arith ops on indices.
     }];
 
-    let dependentDialects = ["mlir::arith::ArithDialect"];
+    let dependentDialects = ["mlir::index::IndexDialect"];
 }
 
 #endif

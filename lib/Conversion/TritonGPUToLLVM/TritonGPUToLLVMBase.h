@@ -19,6 +19,7 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
@@ -701,7 +702,7 @@ private:
 
     auto wpt = mmaLayout.getWarpsPerCTA();
     auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
-    auto [isARow, isBRow, isAVec4, isBVec4, id] =
+    auto [isARow, isBRow, isAVec4, isBVec4, _] =
         mmaLayout.decodeVoltaLayoutStates();
 
     Value thread = getThreadId(rewriter, loc);
@@ -714,11 +715,17 @@ private:
     Value _fpw0 = i32_val(fpw[0]);
     Value _fpw1 = i32_val(fpw[1]);
 
-    LLVM::DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
-    LLVM::DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+    // A info
+    auto aEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaLayout);
+    auto aRep = aEncoding.getMMAv1Rep();
+    auto aSpw = aEncoding.getMMAv1ShapePerWarp();
+    // B info
+    auto bEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaLayout);
+    auto bSpw = bEncoding.getMMAv1ShapePerWarp();
+    auto bRep = bEncoding.getMMAv1Rep();
 
-    SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
-    SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
+    SmallVector<int, 2> rep({aRep[0], bRep[1]});
+    SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
     SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
 
     Value lane = urem(thread, _32);
@@ -764,14 +771,25 @@ private:
                            RankedTensorType type) const {
     auto shape = type.getShape();
 
-    auto [isARow, isBRow, isAVec4, isBVec4, id] =
+    auto [isARow, isBRow, isAVec4, isBVec4, _] =
         mmaLayout.decodeVoltaLayoutStates();
-    LLVM::DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
-    LLVM::DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+
+    // TODO: seems like the apttern below to get `rep`/`spw` appears quite often
+    // A info
+    auto aEncoding =
+        DotOperandEncodingAttr::get(type.getContext(), 0, mmaLayout);
+    auto aRep = aEncoding.getMMAv1Rep();
+    auto aSpw = aEncoding.getMMAv1ShapePerWarp();
+    // B info
+    auto bEncoding =
+        DotOperandEncodingAttr::get(type.getContext(), 1, mmaLayout);
+    auto bSpw = bEncoding.getMMAv1ShapePerWarp();
+    auto bRep = bEncoding.getMMAv1Rep();
+
     auto wpt = mmaLayout.getWarpsPerCTA();
     auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
-    SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
-    SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
+    SmallVector<int, 2> rep({aRep[0], bRep[1]});
+    SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
     SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
 
     SmallVector<unsigned> idxM;

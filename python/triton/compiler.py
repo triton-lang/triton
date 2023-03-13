@@ -33,7 +33,8 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return triton.language.pointer_type(ty)
     tys = {
-        "fp8": triton.language.float8,
+        "fp8e5": triton.language.float8e5,
+        "fp8e4": triton.language.float8e4,
         "fp16": triton.language.float16,
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
@@ -182,9 +183,23 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
+    # TODO: should be its own AST visitor
     def contains_return_op(self, node):
         if isinstance(node, ast.Return):
             return True
+        elif isinstance(node, ast.Assign):
+            return self.contains_return_op(node.value)
+        elif isinstance(node, ast.Module):
+            pred = lambda s: self.contains_return_op(s)
+            return any(pred(s) for s in node.body)
+        elif isinstance(node, ast.FunctionDef):
+            pred = lambda s: self.contains_return_op(s)
+            return any(pred(s) for s in node.body)
+        elif isinstance(node, ast.Call):
+            fn = self.visit(node.func)
+            if isinstance(fn, triton.JITFunction):
+                return self.contains_return_op(fn.parse())
+            return False
         elif isinstance(node, ast.If):
             pred = lambda s: self.contains_return_op(s)
             ret = any(pred(s) for s in node.body)
@@ -1019,6 +1034,7 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
@@ -1027,10 +1043,6 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
-    if compute_capability // 10 == 7:
-        # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
-        # NOTE this pass should be placed after all the passes those modifies mma layout
-        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
