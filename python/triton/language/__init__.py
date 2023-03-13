@@ -10,6 +10,7 @@ from .core import (
     abs,
     arange,
     argmin,
+    argmin2,
     argmax,
     atomic_add,
     atomic_and,

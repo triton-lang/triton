@@ -11,29 +11,39 @@
 namespace mlir {
 
 class ReduceOpHelper {
-  ReduceOpHelper(Operation *op, int axis, bool withIndex)
-    : op(op), axis(axis), withIndex(withIndex) {
-    srcTy = op->getOperands().front().getType().cast<RankedTensorType>();
-  }
-
 public:
-  explicit ReduceOpHelper(triton::ReduceOp op):
-    ReduceOpHelper(
-        op.getOperation(),
-        op.getAxis(),
-        triton::ReduceOp::withIndex(op.getRedOp())) {
+  explicit ReduceOpHelper(triton::ReduceOp rop):
+      op(rop.getOperation()), axis(rop.getAxis()) {
+    auto srcTy = rop.getOperand().getType().cast<RankedTensorType>();
+    srcShape = srcTy.getShape();
+    srcEncoding = srcTy.getEncoding();
+    srcElementTypes.push_back(srcTy.getElementType());
+
+    if (triton::ReduceOp::withIndex(rop.getRedOp())) {
+      srcElementTypes.push_back(Builder(op).getI32Type());
+    }
   }
 
-  explicit ReduceOpHelper(triton::GenericReduceOp op):
-    ReduceOpHelper(
-        op.getOperation(),
-        op.getAxis(),
-        /*withIndex*/false) {
+  explicit ReduceOpHelper(triton::GenericReduceOp rop):
+      op(rop.getOperation()), axis(rop.getAxis()) {
+    auto firstTy = rop.getOperands()[0].getType().cast<RankedTensorType>();
+    srcShape = firstTy.getShape();
+    srcEncoding = firstTy.getEncoding();
+    srcElementTypes = rop.getElementTypes();
+
+    for (const auto &t : rop.getInputTypes()) {
+      if (t.getShape() != srcShape) {
+        rop.emitError() << "shape mismatch";
+      }
+      if (t.getEncoding() != srcEncoding) {
+        rop.emitError() << "encoding mismatch";
+      }
+    }
   }
 
-  ArrayRef<int64_t> getSrcShape() { return srcTy.getShape(); }
+  ArrayRef<int64_t> getSrcShape() { return srcShape; }
 
-  Attribute getSrcLayout() { return srcTy.getEncoding(); }
+  Attribute getSrcLayout() { return srcEncoding; }
 
   bool isFastReduction();
 
@@ -51,9 +61,10 @@ public:
 
 private:
   Operation *op;
-  RankedTensorType srcTy{};
+  ArrayRef<int64_t> srcShape;
+  Attribute srcEncoding;
+  SmallVector<Type> srcElementTypes;
   int axis;
-  bool withIndex;
 };
 
 bool isSharedEncoding(Value value);

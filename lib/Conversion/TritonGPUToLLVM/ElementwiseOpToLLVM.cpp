@@ -972,6 +972,8 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
   POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
   POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
+  POPULATE_BINARY_OP(arith::MinFOp, LLVM::MinNumOp) // fmin
+  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp) // smin
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \

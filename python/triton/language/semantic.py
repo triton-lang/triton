@@ -1186,23 +1186,32 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
         raise ValueError("xor_sum only supported for integers")
     return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.XOR, ir.REDUCE_OP.XOR)
 
-def reduction(input: tl.tensor, axis: int, region_builder_fn, builder: ir.builder) -> tl.tensor:
-    scalar_ty = input.type.scalar
-
-    # get result type
-    shape = input.type.shape
+def reduction(
+    inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
+) -> Tuple[tl.tensor, ...]:
+    # get result shape
+    shape = inputs[0].type.shape
+    print(shape, axis)
     ret_shape = [s for i, s in enumerate(shape) if i != axis]
-    if ret_shape:
-        res_ty = tl.block_type(scalar_ty, ret_shape)
-    else:
-        # 0d-tensor -> scalar
-        res_ty = out_scalar_ty
+    for t in inputs:
+        assert t.type.shape == shape
 
-    reduce_op = builder.create_generic_reduce(input.handle, axis)
+    def wrap_tensor(x, scalar_ty):
+        if ret_shape:
+            res_ty = tl.block_type(scalar_ty, ret_shape)
+        else:
+            # 0d-tensor -> scalar
+            res_ty = out_scalar_ty
+        return tl.tensor(x, res_ty)
+
+    reduce_op = builder.create_generic_reduce([t.handle for t in inputs], axis)
     region_builder_fn(reduce_op)
     reduce_op.verify()
 
-    return tl.tensor(reduce_op.get_result(0), res_ty)
+    return tuple(
+        wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar)
+        for i in range(len(inputs))
+    )
 
 @contextmanager
 def insertion_guard(builder):
@@ -1220,7 +1229,27 @@ def prod(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
             fmul = builder.create_fmul(block.arg(0), block.arg(1))
             builder.create_reduce_ret(fmul)
 
-    return reduction(input, axis, make_mul, builder)
+    return reduction((input,), axis, make_mul, builder)[0]
+
+def min_with_index(keys: tl.tensor, values: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+
+    def make_min_with_index_combine(reduce_op):
+        ir_key_ty = keys.type.scalar.to_ir(builder)
+        ir_value_ty = values.type.scalar.to_ir(builder)
+        region = reduce_op.get_region(0)
+        with insertion_guard(builder):
+            block = builder.create_block_with_parent(region, [ir_key_ty, ir_value_ty] * 2)
+            value1, index1, value2, index2 = [block.arg(i) for i in range(4)]
+            lt = builder.create_fcmpOLT(value1, value2)
+            gt = builder.create_fcmpOGT(value1, value2)
+            index_min = builder.create_smin(index1, index2)
+            index_ret = builder.create_select(
+                lt, index1, builder.create_select(gt, index2, index_min))
+
+            value_min = builder.create_fmin(value1, value2)
+            builder.create_reduce_ret(value_min, index_ret)
+
+    return reduction((keys, values), axis, make_min_with_index_combine, builder)
 
 # ===----------------------------------------------------------------------===
 #                               Math

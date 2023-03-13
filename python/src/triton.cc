@@ -889,6 +889,18 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::RemUIOp>(loc, lhs, rhs);
            })
+      .def("create_fmin",
+           [](mlir::OpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::arith::MinFOp>(loc, lhs, rhs);
+           })
+      .def("create_smin",
+           [](mlir::OpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::arith::MinSIOp>(loc, lhs, rhs);
+           })
       .def("create_add",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
@@ -1329,24 +1341,21 @@ void init_triton_ir(py::module &&m) {
                                                         operand, axis);
            })
       .def("create_generic_reduce",
-           [](mlir::OpBuilder &self, mlir::Value &operand, int axis) -> mlir::triton::GenericReduceOp {
+           [](
+               mlir::OpBuilder &self, std::vector<mlir::Value> operands, int axis
+             ) -> mlir::triton::GenericReduceOp {
              auto loc = self.getUnknownLoc();
-             auto inputTensorType =
-                 operand.getType().dyn_cast<mlir::RankedTensorType>();
-             std::vector<int64_t> shape = inputTensorType.getShape();
-             shape.erase(shape.begin() + axis);
-             mlir::Type resType = inputTensorType.getElementType();
-             if (!shape.empty()) {
-               resType = mlir::RankedTensorType::get(shape, resType);
-             }
-             return self.create<mlir::triton::GenericReduceOp>(
-                 loc, resType, operand, axis);
+             return self.create<mlir::triton::GenericReduceOp>(loc, operands, axis);
            })
       .def("create_reduce_ret",
-           [](mlir::OpBuilder &self, mlir::Value &return_value) -> mlir::OpState {
+           [](mlir::OpBuilder &self, py::args args) -> mlir::OpState {
              auto loc = self.getUnknownLoc();
+             llvm::SmallVector<mlir::Value> return_values;
+             for (const auto & arg: args) {
+               return_values.push_back(py::cast<mlir::Value>(arg));
+             }
              return self.create<mlir::triton::GenericReduceReturnOp>(
-                 loc, return_value);
+                 loc, return_values);
            })
       .def("create_ptr_to_int",
            [](mlir::OpBuilder &self, mlir::Value &val,

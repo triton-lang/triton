@@ -1170,9 +1170,25 @@ def xor_sum(input, axis, _builder=None):
 
 @builtin
 @_add_reduction_docstr("prod")
-def prod(input, axis, _builder):
+def prod(input, axis, _builder=None):
     axis = _constexpr_to_value(axis)
     return semantic.prod(input, axis, _builder)
+
+
+@builtin
+@_add_reduction_docstr("argmin2")
+def argmin2(input, axis, _builder=None):
+
+    axis = _constexpr_to_value(axis)
+    n = input.shape[axis]
+    index = arange(0, n, _builder=_builder)
+    new_shape = [constexpr(1)] * len(input.shape)
+    new_shape[axis] = constexpr(n)
+    index = view(index, new_shape, _builder=_builder)
+    index = broadcast_to(index, input.shape, _builder=_builder)
+
+    values, indices = semantic.min_with_index(input, index, axis, _builder)
+    return indices
 
 
 # -----------------------

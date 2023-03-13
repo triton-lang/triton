@@ -70,13 +70,15 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = getTypeConverter()->convertType(op.getType());
     auto value = adaptor.getValue().dyn_cast<DenseElementsAttr>();
-    assert(value);
-    if (value.getElementType().isInteger(1) && value.isSplat())
-      // Workaround until https://reviews.llvm.org/D133743 is included.
-      value = DenseElementsAttr::get(retType, value.getSplatValue<bool>());
-    else
-      // This is a hack. We just want to add encoding
-      value = value.reshape(retType);
+    if (dyn_cast<RankedTensorType>(retType)) {
+      assert(value);
+      if (value.getElementType().isInteger(1) && value.isSplat())
+        // Workaround until https://reviews.llvm.org/D133743 is included.
+        value = DenseElementsAttr::get(retType, value.getSplatValue<bool>());
+      else
+        // This is a hack. We just want to add encoding
+        value = value.reshape(retType);
+    }
     addNamedAttrs(
         rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, retType, value),
         adaptor.getAttributes());
@@ -484,11 +486,11 @@ struct TritonGenericReducePattern : public OpConversionPattern<triton::GenericRe
       matchAndRewrite(triton::GenericReduceOp op, OpAdaptor adaptor,
                       ConversionPatternRewriter &rewriter) const override {
     auto newReduce = rewriter.create<triton::GenericReduceOp>(
-        op.getLoc(), adaptor.getOperand(), adaptor.getAxis());
+        op.getLoc(), adaptor.getOperands(), adaptor.getAxis());
     addNamedAttrs(newReduce, adaptor.getAttributes());
 
-    auto &newRegion = newReduce.getRegion();
-    rewriter.inlineRegionBefore(op.getRegion(), newRegion, newRegion.end());
+    auto &newCombineOp = newReduce.getCombineOp();
+    rewriter.inlineRegionBefore(op.getCombineOp(), newCombineOp, newCombineOp.end());
     rewriter.replaceOp(op, newReduce.getResult());
     return success();
   }

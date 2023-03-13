@@ -372,16 +372,25 @@ def TT_ReduceOp : TT_Op<"reduce", [Pure,
 def TT_GenericReduceOp: TT_Op<"generic_reduce",
                              [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>, SingleBlock]> {
     let summary = "Reduction using generic combination algorithm";
-    let arguments = (ins TT_Tensor:$operand, I32Attr:$axis);
-    let results = (outs TT_Type:$result);
-    let regions = (region SizedRegion<1>:$region);
+    let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
+    let results = (outs Variadic<TT_Type>:$result);
+    let regions = (region SizedRegion<1>:$combineOp);
+    let builders = [
+        OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
+    ];
+    let hasVerifier = 1;
     let hasRegionVerifier = 1;
+    let extraClassDeclaration = [{
+      llvm::SmallVector<RankedTensorType> getInputTypes();
+      llvm::SmallVector<Type> getElementTypes();
+      unsigned getNumOperands();
+    }];
 }
 
 def TT_GenericReduceReturnOp: TT_Op<"generic_reduce.return",
                                     [HasParent<"GenericReduceOp">, Pure, Terminator, ReturnLike]> {
     let summary = "terminator for reduce operator";
-    let arguments = (ins AnyType:$result);
+    let arguments = (ins Variadic<AnyType>:$result);
     let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 

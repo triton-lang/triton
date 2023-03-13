@@ -24,71 +24,111 @@ public:
 
 private:
 
-  void accumulate(ConversionPatternRewriter &rewriter,
-                  Region &reduceOp, Value &acc, Value cur, bool isFirst) const {
+  void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
+                  llvm::SmallVectorImpl<Value> &acc, ValueRange cur, bool isFirst) const {
     if (isFirst) {
-      acc = cur;
+      acc.resize(cur.size());
+      for (unsigned i = 0; i < cur.size(); ++i) {
+        acc[i] = cur[i];
+      }
       return;
     }
 
     // Create a new copy of the reduce block, and inline it
     Block *currentBlock = rewriter.getBlock();
     Region &parent = *currentBlock->getParent();
-    rewriter.cloneRegionBefore(reduceOp, &parent.front());
+    rewriter.cloneRegionBefore(combineOp, &parent.front());
     auto &newReduce = parent.front();
     auto returnOp = dyn_cast<triton::GenericReduceReturnOp>(newReduce.getTerminator());
-    rewriter.mergeBlockBefore(&newReduce, &*rewriter.getInsertionPoint(), {acc, cur});
-    acc = returnOp.getResult();
+
+    llvm::SmallVector<Value> combineArgs(2*acc.size());
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      combineArgs[i] = acc[i];
+      combineArgs[acc.size() + i] = cur[i];
+    }
+
+    rewriter.mergeBlockBefore(&newReduce, &*rewriter.getInsertionPoint(), combineArgs);
+
+    auto results = returnOp.getResult();
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      acc[i] = results[i];
+    }
+
     // Delete the terminator, which is no longer used
     rewriter.eraseOp(returnOp);
+  }
+
+  SmallVector<SmallVector<Value>> unpackInputs(
+      Location loc, triton::GenericReduceOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    auto types = op.getInputTypes();
+    auto operands = adaptor.getOperands();
+    unsigned srcElems = getElemsPerThread(types[0]);
+    SmallVector<SmallVector<Value>> srcValues(srcElems);
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      auto values = getTypeConverter()->unpackLLElements(
+          loc, operands[i], rewriter, types[i]);
+
+      assert(values.size() == srcValues.size());
+      for (unsigned j = 0; j < srcValues.size(); ++j) {
+        srcValues[j].push_back(values[j]);
+      }
+    }
+    return srcValues;
   }
 
   // Use shared memory for reduction within warps and across warps
   LogicalResult
   matchAndRewriteBasic(triton::GenericReduceOp op, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
-    Location loc = op->getLoc();
+    Location loc = op.getLoc();
     unsigned axis = op.getAxis();
 
-    auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
-    auto srcOrd = srcLayout.getOrder();
-    auto srcShape = srcTy.getShape();
-
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-    auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
-    smemBase = bitcast(smemBase, elemPtrTy);
-
     ReduceOpHelper helper(op);
+    auto srcTys = op.getInputTypes();
+    auto srcLayout = helper.getSrcLayout().cast<BlockedEncodingAttr>();
+    auto srcOrd = srcLayout.getOrder();
+    auto srcShape = helper.getSrcShape();
+
+    SmallVector<Type> elemPtrTys(srcTys.size());
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      auto ty = srcTys[i].getElementType();
+      auto llvmElemTy = getTypeConverter()->convertType(ty);
+      elemPtrTys[i] = LLVM::LLVMPointerType::get(llvmElemTy, 3);
+    }
+    auto llvmIndexTy = getTypeConverter()->getIndexType();
+    auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
+
     auto smemShape = helper.getScratchConfigBasic();
     unsigned elems = product<unsigned>(smemShape);
-    Value indexSmemBase = gep(elemPtrTy, smemBase, i32_val(elems));
-    indexSmemBase = bitcast(indexSmemBase, indexPtrTy);
 
-    unsigned srcElems = getElemsPerThread(srcTy);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
-    auto srcValues = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getOperand(), rewriter, srcTy);
+    SmallVector<Value> smemBases(op.getNumOperands());
+    smemBases[0] = bitcast(
+        getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
+    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
+      smemBases[i] = gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(elems));
+    }
 
+    unsigned srcElems = getElemsPerThread(srcTys[0]);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);
+    auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
+
+    // Assumes offsets don't actually depend on type
     SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForLayout(srcLayout, srcTy);
+        emitOffsetForLayout(srcLayout, srcTys[0]);
 
-    std::map<SmallVector<unsigned>, Value> accs;
-    std::map<SmallVector<unsigned>, Value> accIndices;
+    std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
     std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
 
 
-    Region *reduceOp = &op.getRegion();
+    Region *combineOp = &op.getCombineOp();
 
     // reduce within threads
     for (unsigned i = 0; i < srcElems; ++i) {
       SmallVector<unsigned> key = offset[i];
       key[axis] = 0;
       bool isFirst = accs.find(key) == accs.end();
-      accumulate(rewriter, *reduceOp, accs[key], srcValues[i], isFirst);
+      accumulate(rewriter, *combineOp, accs[key], srcValues[i], isFirst);
       if (isFirst)
         indices[key] = srcIndices[i];
     }
@@ -103,14 +143,17 @@ private:
     // reduce across threads
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
-      Value acc = it.second;
+      auto &acc = it.second;
       SmallVector<Value> writeIdx = indices[key];
 
       writeIdx[axis] = udiv(writeIdx[axis], sizePerThread);
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
-      Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
-      Value indexWritePtr = gep(indexPtrTy, indexSmemBase, writeOffset);
-      store(acc, writePtr);
+      SmallVector<Value> writePtrs(op.getNumOperands());
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        writePtrs[i] = gep(elemPtrTys[i], smemBases[i], writeOffset);
+        store(acc[i], writePtrs[i]);
+      }
+
 
       SmallVector<Value> readIdx(writeIdx.size(), ints[0]);
       for (int N = smemShape[axis] / 2; N > 0; N >>= 1) {
@@ -119,44 +162,56 @@ private:
         Value readOffset = select(
             readMask, linearize(rewriter, loc, readIdx, smemShape, srcOrd),
             ints[0]);
-        Value readPtr = gep(elemPtrTy, writePtr, readOffset);
+        SmallVector<Value> readPtrs(op.getNumOperands());
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          readPtrs[i] = gep(elemPtrTys[i], writePtrs[i], readOffset);
+        }
+
         barrier();
-        Value cur = load(readPtr);
-        accumulate(rewriter, *reduceOp, acc, cur, false);
+        SmallVector<Value> cur(op.getNumOperands());
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          cur[i] = load(gep(elemPtrTys[i], readPtrs[i], readOffset));
+        }
+        accumulate(rewriter, *combineOp, acc, cur, false);
         barrier();
-        store(acc, writePtr);
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          store(acc[i], writePtrs[i]);
+        }
       }
     }
 
     barrier();
 
     // set output values
-    if (auto resultTy = op.getType().dyn_cast<RankedTensorType>()) {
-      // nd-tensor where n >= 1
-      auto resultLayout = resultTy.getEncoding();
+    SmallVector<Value> results(op.getNumOperands());
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      if (auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+        // nd-tensor where n >= 1
 
-      unsigned resultElems = getElemsPerThread(resultTy);
-      auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
-      assert(resultIndices.size() == resultElems);
+        auto resultLayout = resultTy.getEncoding();
 
-      SmallVector<Value> resultVals(resultElems);
-      for (unsigned i = 0; i < resultElems; ++i) {
-        SmallVector<Value> readIdx = resultIndices[i];
-        readIdx.insert(readIdx.begin() + axis, ints[0]);
-        Value readOffset = linearize(rewriter, loc, readIdx, smemShape, srcOrd);
-        Value readPtr = gep(elemPtrTy, smemBase, readOffset);
-        Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
-        resultVals[i] = load(readPtr);
+        unsigned resultElems = getElemsPerThread(resultTy);
+        auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
+        assert(resultIndices.size() == resultElems);
+
+        SmallVector<Value> resultVals(resultElems);
+        for (unsigned j = 0; j < resultElems; ++j) {
+          SmallVector<Value> readIdx = resultIndices[j];
+          readIdx.insert(readIdx.begin() + axis, ints[0]);
+          Value readOffset = linearize(rewriter, loc, readIdx, smemShape, srcOrd);
+          Value readPtr = gep(elemPtrTys[i], smemBases[i], readOffset);
+          resultVals[j] = load(readPtr);
+        }
+        results[i] = getTypeConverter()->packLLElements(
+            loc, resultVals, rewriter, resultTy);
+      } else {
+        // 0d-tensor -> scalar
+        results[i] = load(smemBases[i]);
       }
-      Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
-                                                     resultTy);
-      rewriter.replaceOp(op, ret);
-    } else {
-      // 0d-tensor -> scalar
-      Value resultVal = load(smemBase);
-      rewriter.replaceOp(op, resultVal);
     }
 
+    auto parentBlock = op.getOperation()->getBlock();
+    rewriter.replaceOp(op, results);
     return success();
   }
 
@@ -168,52 +223,54 @@ private:
     Location loc = op->getLoc();
     unsigned axis = adaptor.getAxis();
 
-    auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding();
-    auto srcShape = srcTy.getShape();
-    auto order = getOrder(srcLayout);
-
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcLayout);
-
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-    auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
-    smemBase = bitcast(smemBase, elemPtrTy);
-
     ReduceOpHelper helper(op);
+    auto srcTys = op.getInputTypes();
+    auto srcLayout = helper.getSrcLayout().cast<BlockedEncodingAttr>();
+    auto srcOrd = srcLayout.getOrder();
+    auto srcShape = helper.getSrcShape();
+
+    SmallVector<Type> elemPtrTys(srcTys.size());
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      auto ty = srcTys[i].getElementType();
+      auto llvmElemTy = getTypeConverter()->convertType(ty);
+      elemPtrTys[i] = LLVM::LLVMPointerType::get(llvmElemTy, 3);
+    }
+    auto llvmIndexTy = getTypeConverter()->getIndexType();
+    auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
+
     auto smemShapes = helper.getScratchConfigsFast();
     unsigned elems = product<unsigned>(smemShapes[0]);
     unsigned maxElems = std::max(elems, product<unsigned>(smemShapes[1]));
-    Value indexSmemBase = gep(elemPtrTy, smemBase, i32_val(maxElems));
-    indexSmemBase = bitcast(indexSmemBase, indexPtrTy);
+
+    SmallVector<Value> smemBases(op.getNumOperands());
+    smemBases[0] = bitcast(
+        getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
+    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
+      smemBases[i] = gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems));
+    }
 
     unsigned sizeIntraWarps = helper.getIntraWarpSize();
     unsigned sizeInterWarps = helper.getInterWarpSize();
 
-    unsigned srcElems = getElemsPerThread(srcTy);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
-    auto srcValues = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getOperand(), rewriter, srcTy);
+    unsigned srcElems = getElemsPerThread(srcTys[0]);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);
+    auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
 
-    SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForLayout(srcLayout, srcTy);
-
-    std::map<SmallVector<unsigned>, Value> accs;
-    std::map<SmallVector<unsigned>, Value> accIndices;
+    std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
     std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
 
-    auto &currentBlock = *rewriter.getBlock();
-    auto *reduceOp = &op.getRegion();
+    // Assumes offsets don't actually depend on type
+    SmallVector<SmallVector<unsigned>> offset =
+        emitOffsetForLayout(srcLayout, srcTys[0]);
+
+    auto *combineOp = &op.getCombineOp();
 
     // reduce within threads
     for (unsigned i = 0; i < srcElems; ++i) {
       SmallVector<unsigned> key = offset[i];
       key[axis] = 0;
       bool isFirst = accs.find(key) == accs.end();
-      accumulate(rewriter, *reduceOp, accs[key], srcValues[i], isFirst);
+      accumulate(rewriter, *combineOp, accs[key], srcValues[i], isFirst);
       if (isFirst)
         indices[key] = srcIndices[i];
     }
@@ -223,6 +280,9 @@ private:
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
 
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
+    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcLayout);
+    auto order = getOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
     SmallVector<Value> multiDimWarpId =
@@ -236,21 +296,25 @@ private:
 
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
-      Value acc = it.second;
-      Value accIndex;
+      SmallVector<Value> acc = it.second;
 
       // Reduce within warps
       for (unsigned N = sizeIntraWarps / 2; N > 0; N >>= 1) {
-        Value shfl = shflSync(loc, rewriter, acc, N);
-        accumulate(rewriter, *reduceOp, acc, shfl, false);
+        SmallVector<Value> shfl(op.getNumOperands());
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          shfl[i] = shflSync(loc, rewriter, acc[i], N);
+        }
+        accumulate(rewriter, *combineOp, acc, shfl, false);
       }
 
       SmallVector<Value> writeIdx = indices[key];
       writeIdx[axis] = (sizeInterWarps == 1) ? zero : warpIdAxis;
       Value writeOffset =
           linearize(rewriter, loc, writeIdx, smemShapes[0], order);
-      Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
-      storeShared(rewriter, loc, writePtr, acc, laneZero);
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        Value writePtr = gep(elemPtrTys[i], smemBases[i], writeOffset);
+        storeShared(rewriter, loc, writePtr, acc[i], laneZero);
+      }
     }
 
     barrier();
@@ -266,26 +330,37 @@ private:
     unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
     Value readOffset = threadId;
     for (unsigned round = 0; round < elemsPerThread; ++round) {
-      Value readPtr = gep(elemPtrTy, smemBase, readOffset);
       // FIXME(Qingyi): need predicate icmp_slt(threadId,
       // i32_val(sizeInerWarps))
-      Value acc = load(readPtr);
-      Value accIndex;
+      SmallVector<Value> acc(op.getNumOperands());
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        Value readPtr = gep(elemPtrTys[i], smemBases[i], readOffset);
+        acc[i] = load(readPtr);
+      }
 
       for (unsigned N = sizeInterWarps / 2; N > 0; N >>= 1) {
-        Value shfl = shflSync(loc, rewriter, acc, N);
-        accumulate(rewriter, *reduceOp, acc, shfl, false);
+        SmallVector<Value> shfl(op.getNumOperands());
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          shfl[i] = shflSync(loc, rewriter, acc[i], N);
+        }
+        accumulate(rewriter, *combineOp, acc, shfl, false);
       }
 
       // only the first thread in each sizeInterWarps is writing
       Value writeOffset = readOffset;
-      Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
+      SmallVector<Value> writePtrs(op.getNumOperands());
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        writePtrs[i] = gep(elemPtrTys[i], smemBases[i], writeOffset);
+      }
       Value threadIsNeeded = icmp_slt(threadId, i32_val(elems));
       Value laneIdModSizeInterWarps = urem(laneId, i32_val(sizeInterWarps));
       Value laneIdModSizeInterWarpsIsZero =
           icmp_eq(laneIdModSizeInterWarps, zero);
       Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
-      storeShared(rewriter, loc, writePtr, acc, pred);
+
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
+      }
 
       if (round != elemsPerThread - 1) {
         readOffset = add(readOffset, i32_val(numThreads));
@@ -298,32 +373,33 @@ private:
     barrier();
 
     // set output values
-    if (auto resultTy = op.getType().dyn_cast<RankedTensorType>()) {
-      // nd-tensor where n >= 1
-      auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
-      unsigned resultElems = getElemsPerThread(resultTy);
-      auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
-      assert(resultIndices.size() == resultElems);
+    SmallVector<Value> results(op.getNumOperands());
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      if (auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+        // nd-tensor where n >= 1
+        auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
+        unsigned resultElems = getElemsPerThread(resultTy);
+        auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
+        assert(resultIndices.size() == resultElems);
 
-      SmallVector<Value> resultVals(resultElems);
-      for (size_t i = 0; i < resultElems; ++i) {
-        SmallVector<Value> readIdx = resultIndices[i];
-        readIdx.insert(readIdx.begin() + axis, i32_val(0));
-        Value readOffset =
-            linearize(rewriter, loc, readIdx, smemShapes[0], order);
-        Value readPtr = gep(elemPtrTy, smemBase, readOffset);
-        Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
-        resultVals[i] = load(readPtr);
+        SmallVector<Value> resultVals(resultElems);
+        for (size_t j = 0; j < resultElems; ++j) {
+          SmallVector<Value> readIdx = resultIndices[j];
+          readIdx.insert(readIdx.begin() + axis, i32_val(0));
+          Value readOffset =
+              linearize(rewriter, loc, readIdx, smemShapes[0], order);
+          Value readPtr = gep(elemPtrTys[i], smemBases[i], readOffset);
+          resultVals[j] = load(readPtr);
+        }
+
+        results[i] = getTypeConverter()->packLLElements(
+            loc, resultVals, rewriter, resultTy);
+      } else {
+        // 0d-tensor -> scalar
+        results[i] = load(smemBases[i]);
       }
-
-      Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
-                                                     resultTy);
-      rewriter.replaceOp(op, ret);
-    } else {
-      // 0d-tensor -> scalar
-      Value resultVal = load(smemBase);
-      rewriter.replaceOp(op, resultVal);
     }
+    rewriter.replaceOp(op, results);
 
     return success();
   }

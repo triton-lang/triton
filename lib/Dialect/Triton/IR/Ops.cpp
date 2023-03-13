@@ -295,42 +295,110 @@ bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
 }
 
 //-- GenericReduceOp --
+void GenericReduceOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                            mlir::ValueRange operands, int axis) {
+  SmallVector<Type> inferredReturnTypes;
+  for (unsigned i = 0; i < operands.size(); ++i) {
+    auto argTy = operands[i].getType().cast<RankedTensorType>();
+    auto retEltTy = argTy.getElementType();
+    (void)inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
+  }
+
+  GenericReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+}
+
 mlir::LogicalResult mlir::triton::GenericReduceOp::inferReturnTypes(
     MLIRContext *context, Optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
-  Value arg = operands[0];
-  auto argTy = arg.getType().cast<RankedTensorType>();
-  auto retEltTy = argTy.getElementType();
-  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
-  return inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
+  for (auto arg : operands) {
+    auto argTy = arg.getType().cast<RankedTensorType>();
+    auto retEltTy = argTy.getElementType();
+    int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+    if (
+        inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes)
+        .failed()) {
+      return failure();
+    }
+  }
+  return success();
+}
+
+mlir::LogicalResult mlir::triton::GenericReduceOp::verify() {
+  if (this->getOperands().size() < 1) {
+    return this->emitOpError() << "tt.generic_reduce must have at least 1 operand";
+  }
+  for (const auto &operand: this->getOperands()) {
+    if (!dyn_cast<RankedTensorType>(operand.getType())) {
+      return this->emitOpError() << "tt.generic_reduce operands must be RankedTensorType";
+    }
+  }
+  return success();
 }
 
 mlir::LogicalResult mlir::triton::GenericReduceOp::verifyRegions() {
-  auto argTy = getOperand().getType().cast<RankedTensorType>();
-  auto argElemTy = argTy.getElementType();
-
-  constexpr unsigned num_args = 2;
-  auto &block = this->getBody();
-  if (block.getNumArguments() != num_args) {
-    return emitOpError() << "nested block must take " << num_args
-                         << " arguments, but given block with "
-                         << block.getNumArguments() << " arguments";
+  auto argElementTypes = this->getElementTypes();
+  const auto &operands = this->getOperands();
+  const auto numArgs = 2 * operands.size();
+  auto &block = *this->getBody();
+  if (block.getNumArguments() != numArgs) {
+    return this->emitOpError() << "nested block must take " << numArgs
+                               << " arguments, but given block with "
+                               << block.getNumArguments() << " arguments";
   }
   unsigned i = 0;
-  for (const auto & blockArgTy: block.getArgumentTypes()) {
+  const auto &blockArgTypes = block.getArgumentTypes();
+  for (unsigned i = 0; i < numArgs; ++i) {
+    const auto &blockArgTy = blockArgTypes[i];
+    const auto &argElemTy = argElementTypes[i % operands.size()];
     if (blockArgTy != argElemTy) {
-      return this->emitOpError() << "types mismatch on reduction block. Expected argument " << i
+      return this->emitOpError() << "type mismatch on combine operation. Expected argument " << i
                                  << " to have type " << argElemTy << " but got " << blockArgTy;
     }
-    ++i;
   }
 
-  if (!mlir::isa<mlir::triton::GenericReduceReturnOp>(block.getTerminator())) {
-    return this->emitOpError("the GenericReduceOp region must be terminated "
-                             "with a GenericReduceReturnOp but got") << block.getTerminator();
+  auto terminator = dyn_cast<mlir::triton::GenericReduceReturnOp>(block.getTerminator());
+  if (!terminator) {
+    return this->emitOpError() << "combine operation must be terminated "
+                               << "with a GenericReduceReturnOp but got "
+                               << block.getTerminator();
+  }
+  const auto &combineResults = terminator->getOperands();
+  if (combineResults.size() != operands.size()) {
+    return this->emitOpError() << "expected combine operation to return " << operands.size()
+                               << " values but got " << combineResults.size();
+  }
+  for (unsigned i = 0; i < combineResults.size(); ++i) {
+    const auto &resultTy = combineResults[i].getType();
+    const auto &argElemTy = argElementTypes[i];
+    if (resultTy != argElemTy) {
+      return this->emitOpError() << "type mismatch on combine operation. Expected argument " << i
+                                 << " to have type " << argElemTy << " but got " << resultTy;
+    }
   }
   return mlir::success();
+}
+
+llvm::SmallVector<mlir::RankedTensorType> GenericReduceOp::getInputTypes() {
+  llvm::SmallVector<RankedTensorType> srcTys;
+  srcTys.reserve(this->getNumOperands());
+  for (const auto &ty: this->getOperands().getTypes()) {
+    srcTys.push_back(ty.cast<RankedTensorType>());
+  }
+  return srcTys;
+}
+
+llvm::SmallVector<Type> GenericReduceOp::getElementTypes() {
+  llvm::SmallVector<Type> srcElemTys;
+  srcElemTys.reserve(this->getNumOperands());
+  for (const auto &op: this->getOperands()) {
+    srcElemTys.push_back(op.getType().cast<RankedTensorType>().getElementType());
+  }
+  return srcElemTys;
+}
+
+unsigned GenericReduceOp::getNumOperands() {
+  return this->getOperands().size();
 }
 
 //-- SplatOp --
