@@ -140,9 +140,10 @@ private:
     bool withIndex = triton::ReduceOp::withIndex(op.getRedOp());
 
     auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
-    auto srcOrd = srcLayout.getOrder();
+    auto srcLayout = srcTy.getEncoding();
+    auto srcOrd = triton::gpu::getOrder(srcLayout);
     auto srcShape = srcTy.getShape();
+    auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto llvmIndexTy = getTypeConverter()->getIndexType();
@@ -191,7 +192,7 @@ private:
     ints[0] = i32_val(0);
     for (int N = smemShape[axis] / 2; N > 0; N >>= 1)
       ints[N] = i32_val(N);
-    Value sizePerThread = i32_val(srcLayout.getSizePerThread()[axis]);
+    Value axisSizePerThread = i32_val(sizePerThread[axis]);
 
     // reduce across threads
     for (auto it : accs) {
@@ -202,7 +203,7 @@ private:
         accIndex = accIndices[key];
       SmallVector<Value> writeIdx = indices[key];
 
-      writeIdx[axis] = udiv(writeIdx[axis], sizePerThread);
+      writeIdx[axis] = udiv(writeIdx[axis], axisSizePerThread);
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
       Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
       Value indexWritePtr = gep(indexPtrTy, indexSmemBase, writeOffset);
@@ -282,6 +283,7 @@ private:
     auto srcLayout = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
     auto order = getOrder(srcLayout);
+    auto interWarpOrder = triton::gpu::getInterWarpOrder(srcLayout);
 
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcLayout);
