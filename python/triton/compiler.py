@@ -1034,6 +1034,7 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
@@ -1042,10 +1043,6 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
-    if compute_capability // 10 == 7:
-        # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
-        # NOTE this pass should be placed after all the passes those modifies mma layout
-        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
