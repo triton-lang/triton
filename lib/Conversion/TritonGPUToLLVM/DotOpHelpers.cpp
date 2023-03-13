@@ -1,65 +1,13 @@
 #include "DotOpHelpers.h"
+#include "TypeConverter.h"
 
 namespace mlir {
 namespace LLVM {
 
-int DotOpMmaV1ConversionHelper::numElemsPerThreadA(ArrayRef<int64_t> shape,
-                                                   bool isARow, bool isAVec4,
-                                                   int vec) const {
-  int numM = getNumM(shape[0], isARow, isAVec4);
-  int NK = shape[1];
-  // Here we mimic the logic in loadA, the result cannot be calculated
-  // directly.
-  llvm::DenseSet<std::pair<int, int>> visited;
-  auto ld = [&](int m, int k) {
-    visited.insert({m, k});
-    if (vec > 4) {
-      if (isARow)
-        visited.insert({m, k + 4});
-      else
-        visited.insert({m + 1, k});
-    }
-  };
-
-  for (unsigned k = 0; k < NK; k += 4)
-    for (unsigned m = 0; m < numM / 2; ++m)
-      if (!visited.count({m, k}))
-        ld(m, k);
-
-  return visited.size() * 2;
-}
-
-int DotOpMmaV1ConversionHelper::numElemsPerThreadB(ArrayRef<int64_t> shape,
-                                                   bool isBRow, bool isBVec4,
-                                                   int vec) const {
-  unsigned numN = getNumN(shape[1], isBRow, isBVec4);
-  int NK = shape[0];
-  // Here we mimic the logic in loadA, the result cannot be calculated
-  // directly.
-  llvm::DenseSet<std::pair<int, int>> visited;
-  int elemsPerLd = vec > 4 ? 4 : 2;
-  auto ld = [&](int n, int k) {
-    visited.insert({n, k});
-    if (vec > 4) {
-      if (isBRow)
-        visited.insert({n + 1, k});
-      else
-        visited.insert({n, k + 4});
-    }
-  };
-
-  for (unsigned k = 0; k < NK; k += 4)
-    for (unsigned n = 0; n < numN / 2; ++n) {
-      if (!visited.count({n, k}))
-        ld(n, k);
-    }
-
-  return visited.size() * 2;
-}
-
 Value DotOpMmaV1ConversionHelper::loadA(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
+    TritonGPUToLLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, Type resultTy) const {
   auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -70,12 +18,12 @@ Value DotOpMmaV1ConversionHelper::loadA(
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
   bool isARow = order[0] != 0;
-  auto [isARow_, _0, isAVec4, _1, _2] = mmaLayout.decodeVoltaLayoutStates();
-
-  AParam param(isARow_, isAVec4);
-
+  auto resultEncoding = resultTy.cast<RankedTensorType>()
+                            .getEncoding()
+                            .cast<DotOperandEncodingAttr>();
   auto [offsetAM, offsetAK, _3, _4] = computeOffsets(
-      thread, isARow, false, fpw, param.spw, param.rep, rewriter, loc);
+      thread, isARow, false, fpw, resultEncoding.getMMAv1ShapePerWarp(),
+      resultEncoding.getMMAv1Rep(), rewriter, loc);
 
   int vecA = sharedLayout.getVec();
 
@@ -152,7 +100,9 @@ Value DotOpMmaV1ConversionHelper::loadA(
     }
   };
 
-  unsigned numM = getNumM(shape[0], isARow, isAVec4);
+  bool isARow_ = resultEncoding.getMMAv1IsRow();
+  bool isAVec4 = resultEncoding.getMMAv1IsVec4();
+  unsigned numM = resultEncoding.getMMAv1NumOuter(shape);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
       if (!has.count({m, k}))
@@ -165,14 +115,14 @@ Value DotOpMmaV1ConversionHelper::loadA(
     elems.push_back(item.second.second);
   }
 
-  Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
-  Value res = getStructFromElements(loc, elems, rewriter, resTy);
+  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
   return res;
 }
 
 Value DotOpMmaV1ConversionHelper::loadB(
     Value tensor, const SharedMemoryObject &smemObj, Value thread, Location loc,
-    ConversionPatternRewriter &rewriter) const {
+    TritonGPUToLLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, Type resultTy) const {
   // smem
   auto strides = smemObj.strides;
 
@@ -186,10 +136,9 @@ Value DotOpMmaV1ConversionHelper::loadB(
   Value smem = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
   bool isBRow = order[0] != 0; // is row-major in shared memory layout
   // isBRow_ indicates whether B is row-major in DotOperand layout
-  auto [_0, isBRow_, _1, isBVec4, _2] = mmaLayout.decodeVoltaLayoutStates();
-  assert(isBRow == isBRow_ && "B need smem isRow");
-
-  BParam param(isBRow_, isBVec4);
+  auto resultEncoding = resultTy.cast<RankedTensorType>()
+                            .getEncoding()
+                            .cast<DotOperandEncodingAttr>();
 
   int vecB = sharedLayout.getVec();
   Value strideBN = isBRow ? i32_val(1) : strides[1];
@@ -200,7 +149,8 @@ Value DotOpMmaV1ConversionHelper::loadB(
   int strideRepK = 1;
 
   auto [_3, _4, offsetBN, offsetBK] = computeOffsets(
-      thread, false, isBRow, fpw, param.spw, param.rep, rewriter, loc);
+      thread, false, isBRow, fpw, resultEncoding.getMMAv1ShapePerWarp(),
+      resultEncoding.getMMAv1Rep(), rewriter, loc);
 
   // swizzling
   int perPhaseB = sharedLayout.getPerPhase();
@@ -266,7 +216,10 @@ Value DotOpMmaV1ConversionHelper::loadB(
     }
   };
 
-  unsigned numN = getNumN(shape[1], isBRow, isBVec4);
+  bool isBRow_ = resultEncoding.getMMAv1IsRow();
+  assert(isBRow == isBRow_ && "B need smem isRow");
+  bool isBVec4 = resultEncoding.getMMAv1IsVec4();
+  unsigned numN = resultEncoding.getMMAv1NumOuter(shape);
   for (unsigned k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))
@@ -279,8 +232,7 @@ Value DotOpMmaV1ConversionHelper::loadB(
     elems.push_back(item.second.second);
   }
 
-  Type resTy = struct_ty(SmallVector<Type>(elems.size(), elemX2Ty));
-  Value res = getStructFromElements(loc, elems, rewriter, resTy);
+  Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
   return res;
 }
 
@@ -350,10 +302,11 @@ DotOpMmaV1ConversionHelper::computeOffsets(Value threadId, bool isARow,
 
 DotOpMmaV1ConversionHelper::ValueTable
 DotOpMmaV1ConversionHelper::extractLoadedOperand(
-    Value llStruct, int NK, ConversionPatternRewriter &rewriter) const {
+    Value llStruct, int NK, ConversionPatternRewriter &rewriter,
+    TritonGPUToLLVMTypeConverter *typeConverter, Type type) const {
   ValueTable rcds;
-  SmallVector<Value> elems =
-      getElementsFromStruct(llStruct.getLoc(), llStruct, rewriter);
+  SmallVector<Value> elems = typeConverter->unpackLLElements(
+      llStruct.getLoc(), llStruct, rewriter, type);
 
   int offset = 0;
   for (int i = 0; offset < elems.size(); ++i) {
@@ -366,10 +319,12 @@ DotOpMmaV1ConversionHelper::extractLoadedOperand(
   return rcds;
 }
 
+// TODO: Mostly a duplicate of TritonGPUToLLVMBase::emitBaseIndexforMMaLayoutV1
 SmallVector<DotOpMmaV1ConversionHelper::CoordTy>
 DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
                                         ConversionPatternRewriter &rewriter,
                                         ArrayRef<unsigned int> wpt,
+                                        const MmaEncodingAttr &mmaLayout,
                                         ArrayRef<int64_t> shape, bool isARow,
                                         bool isBRow, bool isAVec4,
                                         bool isBVec4) {
@@ -388,11 +343,17 @@ DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
   Value _fpw0 = i32_val(fpw[0]);
   Value _fpw1 = i32_val(fpw[1]);
 
-  DotOpMmaV1ConversionHelper::AParam aParam(isARow, isAVec4);
-  DotOpMmaV1ConversionHelper::BParam bParam(isBRow, isBVec4);
+  // A info
+  auto aEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaLayout);
+  auto aRep = aEncoding.getMMAv1Rep();
+  auto aSpw = aEncoding.getMMAv1ShapePerWarp();
+  // B info
+  auto bEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaLayout);
+  auto bSpw = bEncoding.getMMAv1ShapePerWarp();
+  auto bRep = bEncoding.getMMAv1Rep();
 
-  SmallVector<int, 2> rep({aParam.rep[0], bParam.rep[1]});
-  SmallVector<int, 2> spw({aParam.spw[0], bParam.spw[1]});
+  SmallVector<int, 2> rep({aRep[0], bRep[1]});
+  SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
   SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
 
   Value lane = urem(thread, warpSize);
@@ -466,23 +427,6 @@ DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
   }
 
   return coords; // {M,N} in row-major
-}
-
-void DotOpMmaV1ConversionHelper::AParam::build(bool isARow) {
-  int packSize0 = (isARow || isAVec4) ? 1 : 2;
-  int repM = 2 * packSize0;
-  int repK = 1;
-  int spwM = fpw[0] * 4 * repM;
-  rep.assign({repM, 0, repK});
-  spw.assign({spwM, 0, 1});
-  vec = 2 * rep[0];
-}
-
-void DotOpMmaV1ConversionHelper::BParam::build(bool isBRow) {
-  int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
-  rep.assign({0, 2 * packSize1, 1});
-  spw.assign({0, fpw[1] * 4 * rep[1], 1});
-  vec = 2 * rep[1];
 }
 
 std::tuple<int, int>
@@ -1077,6 +1021,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   helper.deduceMmaType(op);
 
   auto aTensorTy = a.getType().cast<RankedTensorType>();
+  auto bTensorTy = b.getType().cast<RankedTensorType>();
   auto dTensorTy = d.getType().cast<RankedTensorType>();
 
   SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
@@ -1090,10 +1035,10 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   int numRepK = getNumRepK(aTensorTy, aShape[1]);
 
   ValueTable ha =
-      getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK);
+      getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK, aTensorTy);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
-      loadedB, std::max(numRepN / 2, 1), numRepK);
-  auto fc = getElementsFromStruct(loc, loadedC, rewriter);
+      loadedB, std::max(numRepN / 2, 1), numRepK, bTensorTy);
+  auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter, dTensorTy);
 
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = numRepN * 2;
@@ -1139,7 +1084,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(fc.size(), resElemTy));
-  Value res = getStructFromElements(loc, fc, rewriter, structTy);
+  Value res = typeConverter->packLLElements(loc, fc, rewriter, structTy);
   rewriter.replaceOp(op, res);
 
   return success();
@@ -1218,14 +1163,14 @@ Value MMA16816ConversionHelper::composeValuesToDotOperandLayoutStruct(
   Type elemTy = elems[0].getType();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(elems.size(), elemTy));
-  auto result = getStructFromElements(loc, elems, rewriter, structTy);
+  auto result = typeConverter->packLLElements(loc, elems, rewriter, structTy);
   return result;
 }
 MMA16816ConversionHelper::ValueTable
 MMA16816ConversionHelper::getValuesFromDotOperandLayoutStruct(Value value,
-                                                              int n0,
-                                                              int n1) const {
-  auto elems = getElementsFromStruct(loc, value, rewriter);
+                                                              int n0, int n1,
+                                                              Type type) const {
+  auto elems = typeConverter->unpackLLElements(loc, value, rewriter, type);
 
   int offset{};
   ValueTable vals;
@@ -1257,6 +1202,7 @@ SmallVector<Value> DotOpFMAConversionHelper::getThreadIds(
 }
 Value DotOpFMAConversionHelper::loadA(
     Value A, Value llA, BlockedEncodingAttr dLayout, Value thread, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter,
     ConversionPatternRewriter &rewriter) const {
   auto aTensorTy = A.getType().cast<RankedTensorType>();
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -1316,10 +1262,11 @@ Value DotOpFMAConversionHelper::loadA(
         vas.emplace_back(va);
       }
 
-  return getStructFromValueTable(vas, rewriter, loc, elemTy);
+  return getStructFromValueTable(vas, rewriter, loc, typeConverter, elemTy);
 }
 Value DotOpFMAConversionHelper::loadB(
     Value B, Value llB, BlockedEncodingAttr dLayout, Value thread, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter,
     ConversionPatternRewriter &rewriter) const {
   auto bTensorTy = B.getType().cast<RankedTensorType>();
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -1379,14 +1326,15 @@ Value DotOpFMAConversionHelper::loadB(
         vbs.emplace_back(vb);
       }
 
-  return getStructFromValueTable(vbs, rewriter, loc, elemTy);
+  return getStructFromValueTable(vbs, rewriter, loc, typeConverter, elemTy);
 }
 DotOpFMAConversionHelper::ValueTable
 DotOpFMAConversionHelper::getValueTableFromStruct(
     Value val, int K, int n0, int shapePerCTA, int sizePerThread,
-    ConversionPatternRewriter &rewriter, Location loc) const {
+    ConversionPatternRewriter &rewriter, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter, Type type) const {
   ValueTable res;
-  auto elems = getElementsFromStruct(loc, val, rewriter);
+  auto elems = typeConverter->unpackLLElements(loc, val, rewriter, type);
   int index = 0;
   for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTA)
@@ -1398,7 +1346,7 @@ DotOpFMAConversionHelper::getValueTableFromStruct(
 }
 Value DotOpFMAConversionHelper::getStructFromValueTable(
     ArrayRef<Value> vals, ConversionPatternRewriter &rewriter, Location loc,
-    Type elemTy) const {
+    TritonGPUToLLVMTypeConverter *typeConverter, Type elemTy) const {
   SmallVector<Type> elemTypes(vals.size(), elemTy);
   SmallVector<Value> elems;
   elems.reserve(vals.size());
@@ -1407,7 +1355,7 @@ Value DotOpFMAConversionHelper::getStructFromValueTable(
   }
 
   Type structTy = struct_ty(elemTypes);
-  return getStructFromElements(loc, elems, rewriter, structTy);
+  return typeConverter->packLLElements(loc, elems, rewriter, structTy);
 }
 int DotOpFMAConversionHelper::getNumElemsPerThread(
     ArrayRef<int64_t> shape, DotOperandEncodingAttr dotOpLayout) {

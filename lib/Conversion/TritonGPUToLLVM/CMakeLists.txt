@@ -1,17 +1,16 @@
 add_mlir_conversion_library(TritonGPUToLLVM
-    TritonGPUToLLVM.cpp
-    GCNAsmFormat.cpp
-    PTXAsmFormat.cpp
-    TritonGPUToLLVMPass.cpp
+    ArithToIndexPass.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     TritonGPUToLLVMPass.cpp
+    GCNAsmFormat.cpp
     PTXAsmFormat.cpp
     ReduceOpToLLVM.cpp
     Utility.cpp
+    TypeConverter.cpp
     ViewOpToLLVM.cpp
     DotOpHelpers.cpp
 

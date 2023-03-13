@@ -60,7 +60,7 @@ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::Modul
 
 }
 
-def TritonGPUFuseTranspositions : Pass<"tritongpu-fuse-transposition", "mlir::ModuleOp"> {
+def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "fuse transpositions";
 
   let description = [{
@@ -68,7 +68,7 @@ def TritonGPUFuseTranspositions : Pass<"tritongpu-fuse-transposition", "mlir::Mo
     hardware-accelerated transpositions.
   }];
 
-  let constructor = "mlir::createTritonGPUFuseTranspositionsPass()";
+  let constructor = "mlir::createTritonGPUOptimizeDotOperandsPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
@@ -85,6 +85,7 @@ def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
+
 
 def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions", "mlir::ModuleOp"> {
   let summary = "remove superfluous layout conversions";
@@ -120,18 +121,6 @@ def TritonGPUDecomposeConversions: Pass<"tritongpu-decompose-conversions", "mlir
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
-}
-
-def UpdateMmaForVolta : Pass<"tritongpu-update-mma-for-volta", "mlir::ModuleOp"> {
-  let summary = "Update mma encodings for Volta";
-
-  let description = [{
-    This helps to update the mma encodings for Volta.
-  }];
-
-  let constructor = "mlir::createTritonGPUUpdateMmaForVoltaPass()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
 
 #endif

@@ -23,7 +23,7 @@ std::unique_ptr<Pass> createTritonGPURemoveLayoutConversionsPass();
 
 std::unique_ptr<Pass> createTritonGPUVerifier();
 
-std::unique_ptr<Pass> createTritonGPUFuseTranspositionsPass();
+std::unique_ptr<Pass> createTritonGPUOptimizeDotOperandsPass();
 
 std::unique_ptr<Pass> createTritonGPUUpdateMmaForVoltaPass();
 

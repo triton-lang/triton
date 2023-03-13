@@ -55,49 +55,6 @@ func.func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
   // CHECK: return %6 : tensor<1024xi32, [[$target_layout]]>
 }
 
-// CHECK-LABEL: remat_load_store
-func.func @remat_load_store(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-  %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout0>
-  %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout0>
-  %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout0>, tensor<64xi32, #layout0>
-  %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xi32, #layout0>
-  // CHECK-NOT: triton_gpu.convert_layout
-  %4 = triton_gpu.convert_layout %3 : (tensor<64xi32, #layout0>) -> tensor<64xi32, #layout1>
-  %5 = triton_gpu.convert_layout %2 : (tensor<64x!tt.ptr<i32>, #layout0>) -> tensor<64x!tt.ptr<i32>, #layout1>
-  tt.store %5, %4 : tensor<64xi32, #layout1>
-  return
-}
-
-// Don't rematerialize vectorized loads
-// CHECK-LABEL: remat_expensive
-func.func @remat_expensive(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-  %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout1>
-  %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout1>
-  %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout1>, tensor<64xi32, #layout1>
-  %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xi32, #layout1>
-  // CHECK: triton_gpu.convert_layout
-  // CHECK-NOT: triton_gpu.convert_layout
-  %4 = triton_gpu.convert_layout %3 : (tensor<64xi32, #layout1>) -> tensor<64xi32, #layout0>
-  %5 = triton_gpu.convert_layout %2 : (tensor<64x!tt.ptr<i32>, #layout1>) -> tensor<64x!tt.ptr<i32>, #layout0>
-  tt.store %5, %4 : tensor<64xi32, #layout0>
-  return
-}
-
-// Don't rematerialize loads when original and target layouts are different
-// CHECK-LABEL: remat_multi_layout
-func.func @remat_multi_layout(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
-  %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #layout0>
-  %1 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<64x!tt.ptr<i32>, #layout0>
-  %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #layout0>, tensor<64xi32, #layout0>
-  %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64xi32, #layout0>
-  // CHECK: triton_gpu.convert_layout
-  // CHECK-NOT: triton_gpu.convert_layout
-  %4 = triton_gpu.convert_layout %3 : (tensor<64xi32, #layout0>) -> tensor<64xi32, #layout2>
-  %5 = triton_gpu.convert_layout %2 : (tensor<64x!tt.ptr<i32>, #layout0>) -> tensor<64x!tt.ptr<i32>, #layout2>
-  tt.store %5, %4 : tensor<64xi32, #layout2>
-  return
-}
-
 // Always rematerialize single value loads
 // CHECK-LABEL: remat_single_value
 func.func @remat_single_value(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
@@ -996,5 +953,32 @@ func.func public @cmp(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !
     %82 = triton_gpu.convert_layout %54 : (tensor<64x64xi1, #blocked2>) -> tensor<64x64xi1, #blocked4>
     tt.store %80, %81, %82 : tensor<64x64xf16, #blocked4>
   }
+  return
+}
+
+
+// Just make sure it doesn't crash on non-tensor types.
+// CHECK-LABEL: if_no_tensor
+func.func public @if_no_tensor(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32}) {
+  // CHECK-NOT: triton_gpu.convert_layout
+  %c-1_i64 = arith.constant -1 : i64
+  %cst = arith.constant 0.000000e+00 : f32
+  %c-1_i32 = arith.constant -1 : i32
+  %0 = tt.get_program_id {axis = 0 : i32} : i32
+  %1 = tt.addptr %arg3, %0 : !tt.ptr<i64>, i32
+  %2 = tt.load %1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : i64
+  %3 = arith.cmpi eq, %2, %c-1_i64 : i64
+  %4 = arith.select %3, %c-1_i32, %arg2 : i32
+  %5 = scf.if %3 -> (!tt.ptr<f32>) {
+    scf.yield %arg0 : !tt.ptr<f32>
+  } else {
+    %10 = tt.addptr %arg0, %2 : !tt.ptr<f32>, i64
+    scf.yield %10 : !tt.ptr<f32>
+  }
+  %6 = arith.extsi %4 : i32 to i64
+  %7 = arith.cmpi slt, %2, %6 : i64
+  %8 = tt.load %5, %7, %cst {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : f32
+  %9 = tt.addptr %arg1, %0 : !tt.ptr<f32>, i32
+  tt.store %9, %8 {cache = 1 : i32, evict = 1 : i32} : f32
   return
 }

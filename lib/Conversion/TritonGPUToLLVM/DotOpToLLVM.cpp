@@ -7,8 +7,6 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::getElementsFromStruct;
-using ::mlir::LLVM::getStructFromElements;
 using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
@@ -116,28 +114,30 @@ private:
     auto AShape = ATensorTy.getShape();
     auto BShape = BTensorTy.getShape();
 
-    bool isARow = ALayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
-    bool isBRow = BLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
-    auto [isARow_, isBRow_, isAVec4_, isBVec4_, mmaId] =
+    bool isARow = ALayout.getMMAv1IsRow();
+    bool isBRow = BLayout.getMMAv1IsRow();
+    auto [isARow_, isBRow_, isAVec4_, isBVec4_, _] =
         mmaLayout.decodeVoltaLayoutStates();
     assert(isARow == isARow_);
     assert(isBRow == isBRow_);
 
     DotOpMmaV1ConversionHelper helper(mmaLayout);
 
-    unsigned numM = helper.getNumM(AShape[0], isARow, isAVec4_);
-    unsigned numN = helper.getNumN(BShape[1], isBRow, isBVec4_);
+    unsigned numM = ALayout.getMMAv1NumOuter(AShape);
+    unsigned numN = BLayout.getMMAv1NumOuter(BShape);
     unsigned NK = AShape[1];
 
-    auto has = helper.extractLoadedOperand(adaptor.getA(), NK, rewriter);
-    auto hbs = helper.extractLoadedOperand(adaptor.getB(), NK, rewriter);
+    auto has = helper.extractLoadedOperand(adaptor.getA(), NK, rewriter,
+                                           getTypeConverter(), ATensorTy);
+    auto hbs = helper.extractLoadedOperand(adaptor.getB(), NK, rewriter,
+                                           getTypeConverter(), BTensorTy);
 
     // Initialize accumulators with external values, the acc holds the
     // accumulator value that is shared between the MMA instructions inside a
     // DotOp, we can call the order of the values the accumulator-internal
     // order.
-    SmallVector<Value> acc =
-        getElementsFromStruct(loc, adaptor.getC(), rewriter);
+    SmallVector<Value> acc = getTypeConverter()->unpackLLElements(
+        loc, adaptor.getC(), rewriter, DTensorTy);
     size_t resSize = acc.size();
 
     // The resVals holds the final result of the DotOp.
@@ -209,9 +209,8 @@ private:
       resVals[i] = acc[i];
     }
 
-    Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(resSize, type::f32Ty(ctx)));
-    Value res = getStructFromElements(loc, resVals, rewriter, structTy);
+    Value res =
+        getTypeConverter()->packLLElements(loc, resVals, rewriter, DTensorTy);
     rewriter.replaceOp(op, res);
     return success();
   }
@@ -236,7 +235,8 @@ private:
     BlockedEncodingAttr dLayout =
         dTensorTy.getEncoding().cast<BlockedEncodingAttr>();
     auto order = dLayout.getOrder();
-    auto cc = getElementsFromStruct(loc, adaptor.getC(), rewriter);
+    auto cc = getTypeConverter()->unpackLLElements(loc, adaptor.getC(),
+                                                   rewriter, dTensorTy);
 
     DotOpFMAConversionHelper helper(dLayout);
     Value llA = adaptor.getA();
@@ -259,9 +259,11 @@ private:
         order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
     auto has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
-                                              mSizePerThread, rewriter, loc);
+                                              mSizePerThread, rewriter, loc,
+                                              getTypeConverter(), aTensorTy);
     auto hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
-                                              nSizePerThread, rewriter, loc);
+                                              nSizePerThread, rewriter, loc,
+                                              getTypeConverter(), bTensorTy);
 
     SmallVector<Value> ret = cc;
     bool isCRow = order[0] == 1;
@@ -281,16 +283,15 @@ private:
             }
     }
 
-    auto res = getStructFromElements(
-        loc, ret, rewriter,
-        struct_ty(SmallVector<Type>(ret.size(), ret[0].getType())));
+    auto res =
+        getTypeConverter()->packLLElements(loc, ret, rewriter, dTensorTy);
     rewriter.replaceOp(op, res);
 
     return success();
   }
 };
 
-void populateDotOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
                                  AxisInfoAnalysis &axisInfoAnalysis,
                                  const Allocation *allocation, Value smem,

@@ -1,7 +1,10 @@
 #include "Utility.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -58,6 +61,201 @@ LogicalResult fixupLoops(ModuleOp mod) {
   if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
     return failure();
   return success();
+}
+
+// -------------------------------------------------------------------------- //
+
+// TODO: Interface
+LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
+                             Attribute &ret) {
+  ret = targetEncoding;
+  if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
+    ret = triton::gpu::SliceEncodingAttr::get(
+        op->getContext(), expand_dims.getAxis(), targetEncoding);
+  }
+  if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
+    auto sliceEncoding =
+        targetEncoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
+    if (!sliceEncoding)
+      return failure();
+    if (sliceEncoding.getDim() != reduce.getAxis())
+      return failure();
+    ret = sliceEncoding.getParent();
+  }
+  if (auto view = dyn_cast<triton::ViewOp>(op)) {
+    return failure();
+  }
+  return success();
+}
+
+bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
+  // Case 1: A size 1 tensor is not expensive since all threads will load the
+  // same
+  if (isSingleValue(op->getOperand(0)))
+    return false;
+  // auto ptr = op->getOperand(0);
+  //// Case 2: We assume that `evict_last` loads/stores have high hit rate
+  // if (auto load = dyn_cast<triton::LoadOp>(op))
+  //   if (load.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+  //     return false;
+  // if (auto store = dyn_cast<triton::StoreOp>(op))
+  //   if (store.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+  //     return false;
+  // if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
+  //   auto encoding = tensorTy.getEncoding();
+  //   // Case 3: Different type conversion is expensive (e.g., mma <-> block)
+  //   if (encoding.getTypeID() != targetEncoding.getTypeID())
+  //     return true;
+  //   auto sizePerThread = triton::gpu::getSizePerThread(encoding);
+  //   auto targetSizePerThread = triton::gpu::getSizePerThread(targetEncoding);
+  //   auto order = triton::gpu::getOrder(encoding);
+  //   auto targetOrder = triton::gpu::getOrder(targetEncoding);
+  //   // Case 4: The targeEncoding may expose more vectorization opportunities
+  //   return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
+  // }
+  return true;
+}
+
+bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
+  if (!op)
+    return true;
+  if (isa<triton::LoadOp, triton::StoreOp>(op))
+    return expensiveLoadOrStore(op, targetEncoding);
+  if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
+          triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
+          triton::AtomicCASOp, triton::DotOp>(op))
+    return true;
+  if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
+          op))
+    return true;
+  return false;
+}
+
+int simulateBackwardRematerialization(
+    Operation *initOp, SetVector<Operation *> &processed,
+    SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
+    const Attribute &targetEncoding) {
+  // DFS
+  std::vector<std::pair<Operation *, Attribute>> queue;
+  queue.emplace_back(initOp, targetEncoding);
+  // We want to see the effect of converting `initOp` to a new layout
+  // so we initialize `numCvts = 1`.
+  int numCvts = 1;
+  while (!queue.empty()) {
+    Operation *currOp;
+    Attribute currLayout;
+    std::tie(currOp, currLayout) = queue.back();
+    queue.pop_back();
+    // If the current operation is expensive to rematerialize,
+    // we stop everything
+    if (expensiveToRemat(currOp, currLayout))
+      break;
+    // A conversion will be removed here (i.e. transferred to operands)
+    numCvts -= 1;
+    // Done processing
+    processed.insert(currOp);
+    layout.insert(currLayout);
+    // Add all operands to the queue
+    for (Value argI : currOp->getOperands()) {
+      Attribute newEncoding;
+      // Cannot invert the current encoding for this operand
+      // we stop everything
+      if (failed(invertEncoding(currLayout, currOp, newEncoding)))
+        return INT_MAX;
+      if (toConvert.count(argI) && toConvert[argI] != newEncoding)
+        return INT_MAX;
+      Operation *opArgI = argI.getDefiningOp();
+      toConvert.insert({argI, newEncoding});
+      // 1. Only convert RankedTensorType
+      // 2. Skip if there's no defining op
+      // 3. Skip if the defining op has already been processed
+      // 4. Skip or the defining op is in a different block
+      if (!argI.getType().isa<RankedTensorType>() || !opArgI ||
+          processed.contains(opArgI) ||
+          opArgI->getBlock() != currOp->getBlock())
+        continue;
+      // If the conversion can be folded into opArgI then
+      // we don't count this conversion as expensive
+      if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
+              triton::MakeRangeOp, triton::SplatOp>(*opArgI))
+        continue;
+      if (auto view = dyn_cast<triton::ViewOp>(opArgI))
+        continue;
+
+      // We add one expensive conversion for the current operand
+      numCvts += 1;
+      queue.emplace_back(opArgI, newEncoding);
+    }
+  }
+  // return net number of conversions
+  return numCvts;
+}
+
+//
+
+Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
+                              IRMapping &mapping) {
+  Operation *newOp = rewriter.clone(*op, mapping);
+  auto origType = op->getResult(0).getType().cast<RankedTensorType>();
+  auto argType = newOp->getOperand(0).getType().cast<RankedTensorType>();
+  auto newType = RankedTensorType::get(
+      origType.getShape(), origType.getElementType(), argType.getEncoding());
+  newOp->getResult(0).setType(newType);
+  auto typeInfer = dyn_cast<InferTypeOpInterface>(newOp);
+  if (typeInfer) {
+    SmallVector<Type, 1> newTypes;
+    auto success = typeInfer.inferReturnTypes(
+        newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
+        newOp->getAttrDictionary(), newOp->getRegions(), newTypes);
+    if (succeeded(success))
+      newOp->getResult(0).setType(newTypes.front());
+  }
+  return newOp;
+}
+
+void rematerializeConversionChain(
+    const llvm::MapVector<Value, Attribute> &toConvert,
+    mlir::PatternRewriter &rewriter, SetVector<Operation *> &processed,
+    IRMapping &mapping) {
+  SmallVector<Value, 4> sortedValues;
+  SetVector<Operation *> tmp;
+  for (auto &item : toConvert) {
+    Value v = item.first;
+    if (v.getDefiningOp())
+      tmp.insert(v.getDefiningOp());
+    else
+      sortedValues.push_back(v);
+  }
+  tmp = mlir::multiRootTopologicalSort(tmp);
+  for (Operation *op : tmp)
+    sortedValues.push_back(op->getResult(0));
+
+  for (Value currOperand : sortedValues) {
+    // unpack information
+    Attribute targetLayout = toConvert.lookup(currOperand);
+    // rematerialize the operand if necessary
+    Operation *currOperation = currOperand.getDefiningOp();
+    if (processed.contains(currOperation)) {
+      Operation *newOperation =
+          cloneWithInferType(rewriter, currOperation, mapping);
+      newOperation->moveAfter(currOperation);
+      currOperation = newOperation;
+      currOperand = currOperation->getResult(0);
+    }
+    // compute target type for the layout cast
+    auto currType = currOperand.getType().cast<RankedTensorType>();
+    auto newType = RankedTensorType::get(
+        currType.getShape(), currType.getElementType(), targetLayout);
+    auto newOperand = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        currOperand.getLoc(), newType, currOperand);
+    if (currOperation)
+      newOperand->moveAfter(currOperation);
+    else {
+      Block *block = currOperand.cast<BlockArgument>().getOwner();
+      newOperand->moveAfter(block, block->begin());
+    }
+    mapping.map(currOperand, newOperand);
+  }
 }
 
 } // namespace mlir
