@@ -1,4 +1,5 @@
 #include "ReduceOpToLLVM.h"
+#include "TritonGPUToLLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -17,8 +18,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (ReduceOpHelper(op).isFastReduction())
-      return matchAndRewriteFast(op, adaptor, rewriter);
+    //if (ReduceOpHelper(op).isFastReduction())
+    //  return matchAndRewriteFast(op, adaptor, rewriter);
     return matchAndRewriteBasic(op, adaptor, rewriter);
   }
 
@@ -142,7 +143,6 @@ private:
     auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
     auto srcOrd = triton::gpu::getOrder(srcLayout);
-    auto srcShape = srcTy.getShape();
     auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
@@ -258,6 +258,9 @@ private:
         Value readPtr = gep(elemPtrTy, smemBase, readOffset);
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
+        Value threadId = getThreadId(rewriter, loc);
+        mlir::LLVM::vprintf("tid %d: %f\n", {threadId, resultVals[i]},
+                            rewriter);
       }
       Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
                                                      resultTy);

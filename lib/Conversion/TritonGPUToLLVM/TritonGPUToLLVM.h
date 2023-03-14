@@ -13,4 +13,12 @@ void populateTritonGPUToLLVMPatterns(
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit);
 
+namespace mlir {
+namespace LLVM {
+
+void vprintf(StringRef msg, ValueRange args,
+             ConversionPatternRewriter &rewriter);
+}
+}
+
 #endif
