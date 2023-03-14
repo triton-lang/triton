@@ -84,8 +84,8 @@ def get_thirdparty_packages(triton_cache_path):
             package_dir = os.environ[p.syspath_var_name]
         version_file_path = os.path.join(package_dir, "version.txt")
         if not p.syspath_var_name in os.environ and\
-           (not os.path.exists(version_file_path) or\
-           Path(version_file_path).read_text() != p.url):
+           (not os.path.exists(version_file_path) or
+                Path(version_file_path).read_text() != p.url):
             try:
                 shutil.rmtree(package_root_dir)
             except Exception:
