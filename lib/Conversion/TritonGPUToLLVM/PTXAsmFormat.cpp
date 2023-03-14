@@ -19,12 +19,22 @@ PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
   return opr;
 }
 
-PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint) {
+void PTXBuilder::initOperand(Operand *opr) {
+  auto *zero = newConstantOperand(0);
+  auto numBits = opr->constraint[1] == 'r' ? 32 : 64;
+  auto &init = create<>("mov")->o("u" + std::to_string(numBits));
+  init(opr, zero);
+}
+
+PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint, bool init) {
   // Constraint should be something like "=r"
   assert(!constraint.empty() && constraint[0] == '=');
   auto *opr = newOperand();
   opr->idx = oprCounter++;
   opr->constraint = constraint;
+  if (init) {
+    initOperand(opr);
+  }
   return opr;
 }
 

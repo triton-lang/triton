@@ -138,18 +138,12 @@ struct LoadOpConversion
       const std::string writeConstraint =
           (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
 
-      PTXInstr &init =
-          ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
-      PTXInstr::Operand *zero = ptxBuilder.newConstantOperand(0);
-
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        auto *opr = ptxBuilder.newOperand(writeConstraint); // =r operations
+        auto *opr = ptxBuilder.newOperand(writeConstraint,
+                                          /*init=*/true); // =r operations
         dstsOpr->listAppend(opr);
-        // Initialize the destination register, otherwise the register will
-        // be undefined if the predicate is false.
-        init(opr, zero);
       }
 
       auto *addrOpr =
@@ -424,13 +418,12 @@ struct AtomicCASOpConversion
 
     Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
     atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
-
     Value casPtr = ptrElements[0];
     Value casCmp = cmpElements[0];
     Value casVal = valElements[0];
 
     PTXBuilder ptxBuilderAtomicCAS;
-    auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=r");
+    auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=r", /*init=*/true);
     auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
     auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, "r");
     auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, "r");
@@ -441,7 +434,7 @@ struct AtomicCASOpConversion
     barrier();
 
     PTXBuilder ptxBuilderStore;
-    auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "l");
+    auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "r");
     auto *valOprStore = ptxBuilderStore.newOperand(old, "r");
     auto &st = *ptxBuilderStore.create<PTXInstr>("st");
     st.shared().o("b32");
@@ -532,7 +525,7 @@ struct AtomicRMWOpConversion
       std::string tyId = valueElemNbits * vec == 64
                              ? "l"
                              : (valueElemNbits * vec == 32 ? "r" : "h");
-      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId);
+      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
       auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
       auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
 
@@ -598,7 +591,13 @@ struct AtomicRMWOpConversion
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
-        store(old, atomPtr);
+        // Only threads with rmwMask = True store the result
+        PTXBuilder ptxBuilderStore;
+        auto &storeShared = ptxBuilderStore.create<>("st")->shared().o(sTy);
+        auto *ptrOpr = ptxBuilderStore.newAddrOperand(atomPtr, "r");
+        auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
+        storeShared(ptrOpr, valOpr).predicate(rmwMask);
+        ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
         barrier();
         Value ret = load(atomPtr);
         barrier();
