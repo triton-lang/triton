@@ -177,7 +177,10 @@ struct DotOpMmaV2ConversionHelper {
   }
 
   // Deduce the TensorCoreType from either $a or $b's type.
-  static TensorCoreType getTensorCoreTypeFromOperand(Type operandTy, bool allowF16Acc = false);
+  // TODO: both the input type ($a or $b) and output type ($c or $d) are
+  // needed to differentiate TensorCoreType::FP32_FP16_FP16_FP32 from
+  // TensorCoreType::FP16_FP16_FP16_FP16
+  static TensorCoreType getTensorCoreTypeFromOperand(Type operandTy);
 
   int getVec() const {
     assert(mmaType != TensorCoreType::NOT_APPLICABLE &&

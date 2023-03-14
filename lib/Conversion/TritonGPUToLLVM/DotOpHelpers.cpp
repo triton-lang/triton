@@ -555,11 +555,11 @@ int DotOpMmaV2ConversionHelper::getMmaRetSize() const {
 }
 
 DotOpMmaV2ConversionHelper::TensorCoreType
-DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(Type operandTy, bool allowF16Acc) {
+DotOpMmaV2ConversionHelper::getTensorCoreTypeFromOperand(Type operandTy) {
   auto tensorTy = operandTy.cast<RankedTensorType>();
   auto elemTy = tensorTy.getElementType();
   if (elemTy.isF16())
-    return allowF16Acc? TensorCoreType::FP16_FP16_FP16_FP16 : TensorCoreType::FP32_FP16_FP16_FP32;
+    return TensorCoreType::FP32_FP16_FP16_FP32;
   if (elemTy.isF32())
     return TensorCoreType::FP32_TF32_TF32_FP32;
   if (elemTy.isBF16())
