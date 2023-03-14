@@ -1126,11 +1126,13 @@ def _add_reduction_docstr(name: str) -> Callable[[T], T]:
 
     return _decorator
 
+
 @contextmanager
 def _insertion_guard(builder):
     ip = builder.get_insertion_point()
     yield
     builder.restore_insertion_point(ip)
+
 
 @builtin
 def reduction(input, axis, combine_fn, _builder=None, _generator=None):

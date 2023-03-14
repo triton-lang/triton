@@ -870,18 +870,6 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::RemUIOp>(loc, lhs, rhs);
            })
-      .def("create_fmin",
-           [](mlir::OpBuilder &self, mlir::Value &lhs,
-              mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::MinFOp>(loc, lhs, rhs);
-           })
-      .def("create_smin",
-           [](mlir::OpBuilder &self, mlir::Value &lhs,
-              mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::MinSIOp>(loc, lhs, rhs);
-           })
       .def("create_add",
            [](mlir::OpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {

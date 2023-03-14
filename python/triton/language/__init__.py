@@ -156,7 +156,6 @@ __all__ = [
     "philox_impl",
     "pi32_t",
     "pointer_type",
-    "prod",
     "program_id",
     "rand",
     "rand4x",
