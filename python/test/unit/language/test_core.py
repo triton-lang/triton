@@ -1135,7 +1135,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
         kernel = triton.compile(f.name)
     kernel[(1,1,1)](x_triton.data_ptr(), 16, y_triton.data_ptr(), 16, z_triton.data_ptr(), 16)
 
-    z = np.sum(x @ y, axis=0, keepdims=True)
+    print(x @ y)
+    z = np.sum(x @ y, axis=1, keepdims=True)
+    print(z, z_triton)
     np.testing.assert_allclose(z, to_numpy(z_triton), rtol=0.01)
 
 # ---------------

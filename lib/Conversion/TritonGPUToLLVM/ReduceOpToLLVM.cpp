@@ -185,6 +185,11 @@ private:
       }
       if (isFirst)
         indices[key] = srcIndices[i];
+      auto threadId = getThreadId(rewriter, loc);
+      mlir::LLVM::vprintf(
+          "tid: %d, value: %f, [%d, %d]",
+          {threadId, srcValues[i], srcIndices[i][0], srcIndices[i][1]},
+          rewriter);
     }
 
     // cached int32 constants
@@ -205,6 +210,9 @@ private:
 
       writeIdx[axis] = udiv(writeIdx[axis], axisSizePerThread);
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
+      auto threadId = getThreadId(rewriter, loc);
+      mlir::LLVM::vprintf("tid: %d, writeIdx [%d, %d], writeOffset: %d, acc %f", {threadId, writeIdx[0], writeIdx[1], writeOffset, acc},
+                          rewriter);
       Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
       Value indexWritePtr = gep(indexPtrTy, indexSmemBase, writeOffset);
       store(acc, writePtr);
@@ -258,9 +266,6 @@ private:
         Value readPtr = gep(elemPtrTy, smemBase, readOffset);
         Value indexReadPtr = gep(indexPtrTy, indexSmemBase, readOffset);
         resultVals[i] = withIndex ? load(indexReadPtr) : load(readPtr);
-        Value threadId = getThreadId(rewriter, loc);
-        mlir::LLVM::vprintf("tid %d: %f\n", {threadId, resultVals[i]},
-                            rewriter);
       }
       Value ret = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
                                                      resultTy);
