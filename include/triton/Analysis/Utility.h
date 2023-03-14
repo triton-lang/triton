@@ -14,18 +14,6 @@ class ReduceOpHelper {
 public:
   explicit ReduceOpHelper(triton::ReduceOp rop):
       op(rop.getOperation()), axis(rop.getAxis()) {
-    auto srcTy = rop.getOperand().getType().cast<RankedTensorType>();
-    srcShape = srcTy.getShape();
-    srcEncoding = srcTy.getEncoding();
-    srcElementTypes.push_back(srcTy.getElementType());
-
-    if (triton::ReduceOp::withIndex(rop.getRedOp())) {
-      srcElementTypes.push_back(Builder(op).getI32Type());
-    }
-  }
-
-  explicit ReduceOpHelper(triton::GenericReduceOp rop):
-      op(rop.getOperation()), axis(rop.getAxis()) {
     auto firstTy = rop.getOperands()[0].getType().cast<RankedTensorType>();
     srcShape = firstTy.getShape();
     srcEncoding = firstTy.getEncoding();

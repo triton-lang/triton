@@ -166,10 +166,6 @@ private:
       ReduceOpHelper helper(reduceOp);
       unsigned bytes = helper.getScratchSizeInBytes();
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
-    }  else if (auto reduceOp = dyn_cast<triton::GenericReduceOp>(op)) {
-      ReduceOpHelper helper(reduceOp);
-      unsigned bytes = helper.getScratchSizeInBytes();
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
       auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();

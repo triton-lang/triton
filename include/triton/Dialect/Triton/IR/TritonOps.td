@@ -348,29 +348,8 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 //
 // Reduce Op
 //
-def TT_ReduceOp : TT_Op<"reduce", [Pure,
-                                   DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-    let summary = "reduce";
-
-    let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);
-
-    let results = (outs TT_Type:$result);
-
-    let builders = [
-        OpBuilder<(ins "triton::RedOp":$redOp, "Value":$operand, "int":$axis)>,
-    ];
-
-    let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
-
-    let extraClassDeclaration = [{
-        // This member function is marked static because we need to call it before the ReduceOp
-        // is constructed, see the implementation of create_reduce in triton.cc.
-        static bool withIndex(mlir::triton::RedOp redOp);
-    }];
-}
-
-def TT_GenericReduceOp: TT_Op<"generic_reduce",
-                             [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>, SingleBlock]> {
+def TT_ReduceOp: TT_Op<"reduce",
+                       [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>, SingleBlock]> {
     let summary = "Reduction using generic combination algorithm";
     let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
@@ -387,8 +366,8 @@ def TT_GenericReduceOp: TT_Op<"generic_reduce",
     }];
 }
 
-def TT_GenericReduceReturnOp: TT_Op<"generic_reduce.return",
-                                    [HasParent<"GenericReduceOp">, Pure, Terminator, ReturnLike]> {
+def TT_ReduceReturnOp: TT_Op<"reduce.return",
+                             [HasParent<"ReduceOp">, Pure, Terminator, ReturnLike]> {
     let summary = "terminator for reduce operator";
     let arguments = (ins Variadic<AnyType>:$result);
     let assemblyFormat = "$result attr-dict `:` type($result)";

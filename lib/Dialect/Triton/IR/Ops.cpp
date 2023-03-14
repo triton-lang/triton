@@ -269,34 +269,8 @@ static mlir::LogicalResult inferReduceReturnShape(
   return mlir::success();
 }
 
-mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
-  Value arg = operands[0];
-  auto argTy = arg.getType().cast<RankedTensorType>();
-  auto argEltTy = argTy.getElementType();
-  auto i32Ty = IntegerType::get(argEltTy.getContext(), 32);
-  auto redOp =
-      attributes.get("redOp").cast<mlir::triton::RedOpAttr>().getValue();
-  bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
-  auto retEltTy = withIndex ? i32Ty : argEltTy;
-  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
-  return inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
-}
-
-bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
-  return redOp == mlir::triton::RedOp::ARGMIN ||
-         redOp == mlir::triton::RedOp::ARGMAX ||
-         redOp == mlir::triton::RedOp::ARGUMIN ||
-         redOp == mlir::triton::RedOp::ARGUMAX ||
-         redOp == mlir::triton::RedOp::ARGFMIN ||
-         redOp == mlir::triton::RedOp::ARGFMAX;
-}
-
-//-- GenericReduceOp --
-void GenericReduceOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
-                            mlir::ValueRange operands, int axis) {
+void ReduceOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                     mlir::ValueRange operands, int axis) {
   SmallVector<Type> inferredReturnTypes;
   for (unsigned i = 0; i < operands.size(); ++i) {
     auto argTy = operands[i].getType().cast<RankedTensorType>();
@@ -304,10 +278,10 @@ void GenericReduceOp::build(mlir::OpBuilder &builder, mlir::OperationState &stat
     (void)inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
   }
 
-  GenericReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
 }
 
-mlir::LogicalResult mlir::triton::GenericReduceOp::inferReturnTypes(
+mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
     MLIRContext *context, Optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
@@ -324,19 +298,19 @@ mlir::LogicalResult mlir::triton::GenericReduceOp::inferReturnTypes(
   return success();
 }
 
-mlir::LogicalResult mlir::triton::GenericReduceOp::verify() {
+mlir::LogicalResult mlir::triton::ReduceOp::verify() {
   if (this->getOperands().size() < 1) {
-    return this->emitOpError() << "tt.generic_reduce must have at least 1 operand";
+    return this->emitOpError() << "must have at least 1 operand";
   }
   for (const auto &operand: this->getOperands()) {
     if (!dyn_cast<RankedTensorType>(operand.getType())) {
-      return this->emitOpError() << "tt.generic_reduce operands must be RankedTensorType";
+      return this->emitOpError() << "operands must be RankedTensorType";
     }
   }
   return success();
 }
 
-mlir::LogicalResult mlir::triton::GenericReduceOp::verifyRegions() {
+mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
   auto argElementTypes = this->getElementTypes();
   const auto &operands = this->getOperands();
   const auto numArgs = 2 * operands.size();
@@ -357,10 +331,10 @@ mlir::LogicalResult mlir::triton::GenericReduceOp::verifyRegions() {
     }
   }
 
-  auto terminator = dyn_cast<mlir::triton::GenericReduceReturnOp>(block.getTerminator());
+  auto terminator = dyn_cast<mlir::triton::ReduceReturnOp>(block.getTerminator());
   if (!terminator) {
     return this->emitOpError() << "combine operation must be terminated "
-                               << "with a GenericReduceReturnOp but got "
+                               << "with a ReduceReturnOp but got "
                                << block.getTerminator();
   }
   const auto &combineResults = terminator->getOperands();
@@ -379,7 +353,7 @@ mlir::LogicalResult mlir::triton::GenericReduceOp::verifyRegions() {
   return mlir::success();
 }
 
-llvm::SmallVector<mlir::RankedTensorType> GenericReduceOp::getInputTypes() {
+llvm::SmallVector<mlir::RankedTensorType> ReduceOp::getInputTypes() {
   llvm::SmallVector<RankedTensorType> srcTys;
   srcTys.reserve(this->getNumOperands());
   for (const auto &ty: this->getOperands().getTypes()) {
@@ -388,7 +362,7 @@ llvm::SmallVector<mlir::RankedTensorType> GenericReduceOp::getInputTypes() {
   return srcTys;
 }
 
-llvm::SmallVector<Type> GenericReduceOp::getElementTypes() {
+llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   llvm::SmallVector<Type> srcElemTys;
   srcElemTys.reserve(this->getNumOperands());
   for (const auto &op: this->getOperands()) {
@@ -397,7 +371,7 @@ llvm::SmallVector<Type> GenericReduceOp::getElementTypes() {
   return srcElemTys;
 }
 
-unsigned GenericReduceOp::getNumOperands() {
+unsigned ReduceOp::getNumOperands() {
   return this->getOperands().size();
 }
 

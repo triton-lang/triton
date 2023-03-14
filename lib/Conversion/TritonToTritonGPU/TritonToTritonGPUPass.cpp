@@ -469,23 +469,9 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   using OpConversionPattern<triton::ReduceOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<triton::ReduceOp>(
-            op, adaptor.getRedOp(), adaptor.getOperand(), adaptor.getAxis()),
-        adaptor.getAttributes());
-    return success();
-  }
-};
-
-struct TritonGenericReducePattern : public OpConversionPattern<triton::GenericReduceOp> {
-  using OpConversionPattern<triton::GenericReduceOp>::OpConversionPattern;
-
-  LogicalResult
-      matchAndRewrite(triton::GenericReduceOp op, OpAdaptor adaptor,
+      matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                       ConversionPatternRewriter &rewriter) const override {
-    auto newReduce = rewriter.create<triton::GenericReduceOp>(
+    auto newReduce = rewriter.create<triton::ReduceOp>(
         op.getLoc(), adaptor.getOperands(), adaptor.getAxis());
     addNamedAttrs(newReduce, adaptor.getAttributes());
 
@@ -496,15 +482,15 @@ struct TritonGenericReducePattern : public OpConversionPattern<triton::GenericRe
   }
 };
 
-struct TritonGenericReduceReturnPattern :
-    public OpConversionPattern<triton::GenericReduceReturnOp> {
-  using OpConversionPattern<triton::GenericReduceReturnOp>::OpConversionPattern;
+struct TritonReduceReturnPattern :
+    public OpConversionPattern<triton::ReduceReturnOp> {
+  using OpConversionPattern<triton::ReduceReturnOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::GenericReduceReturnOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::ReduceReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     addNamedAttrs(
-        rewriter.replaceOpWithNewOp<triton::GenericReduceReturnOp>(
+        rewriter.replaceOpWithNewOp<triton::ReduceReturnOp>(
             op, adaptor.getResult()),
         adaptor.getAttributes());
     return success();
@@ -551,8 +537,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
           TritonGenericPattern<triton::PtrToIntOp>,
           TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
           TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-          TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
-          TritonGenericReducePattern, TritonGenericReduceReturnPattern,
+          TritonReducePattern, TritonReduceReturnPattern,
+          TritonTransPattern, TritonExpandDimsPattern,
           TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
           TritonStorePattern, TritonExtElemwisePattern, TritonPrintPattern,
           TritonAssertPattern, TritonAtomicRMWPattern>(typeConverter, context);
