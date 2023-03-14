@@ -1,7 +1,3 @@
-add_subdirectory(FileCheck)
-# add_llvm_executable(FileCheck FileCheck/FileCheck.cpp)
-# target_link_libraries(FileCheck PRIVATE LLVMFileCheck LLVMSupport)
-
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 

@@ -103,11 +103,9 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   if (offsetK)
     offset[kIdx] = *offsetK;
 
-  Value newSmem = builder.create<tensor::ExtractSliceOp>(
-      v.getLoc(),
-      // TODO: encoding?
-      RankedTensorType::get(shape, elementType, type.getEncoding()), v,
-      SmallVector<OpFoldResult>{intAttr(offset[0]), intAttr(offset[1])},
+  Value newSmem = builder.create<triton::gpu::ExtractSliceOp>(
+      v.getLoc(), RankedTensorType::get(shape, elementType, type.getEncoding()),
+      v, SmallVector<OpFoldResult>{intAttr(offset[0]), intAttr(offset[1])},
       SmallVector<OpFoldResult>{intAttr(shape[0]), intAttr(shape[1])},
       SmallVector<OpFoldResult>{intAttr(1), intAttr(1)});
 

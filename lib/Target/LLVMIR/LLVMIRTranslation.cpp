@@ -13,6 +13,7 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Conversion/TritonGPUToLLVM/ArithToIndexPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/IR/CallingConv.h"
@@ -309,12 +310,14 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
   pm.addPass(mlir::createConvertSCFToCFPass());
+  pm.addPass(createTritonConvertArithToIndexPass());
+  pm.addPass(mlir::createConvertIndexToLLVMPass());
   pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
-  // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
+  pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(mlir::createCSEPass()); // Simplify the IR to improve readability.
+  // Simplify the IR
+  pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createSymbolDCEPass());
-  pm.addPass(mlir::createCanonicalizerPass());
 #ifdef USE_ROCM
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(createConvertControlFlowToLLVMPass());
@@ -325,6 +328,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
+  // llvm::outs() << module << "\n";
   auto llvmIR = translateLLVMToLLVMIR(llvmContext, module);
   if (!llvmIR) {
     llvm::errs() << "Translate to LLVM IR failed";

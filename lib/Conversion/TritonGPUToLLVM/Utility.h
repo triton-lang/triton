@@ -14,6 +14,8 @@
 #define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
 #define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
+#define sext(...) rewriter.create<LLVM::SExtOp>(loc, __VA_ARGS__)
+#define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
@@ -30,9 +32,11 @@
 #define smin(...) rewriter.create<LLVM::SMinOp>(loc, __VA_ARGS__)
 #define umin(...) rewriter.create<LLVM::UMinOp>(loc, __VA_ARGS__)
 #define fmin(...) rewriter.create<LLVM::MinNumOp>(loc, __VA_ARGS__)
+#define shl(...) rewriter.create<LLVM::ShlOp>(loc, __VA_ARGS__)
 #define and_(...) rewriter.create<LLVM::AndOp>(loc, __VA_ARGS__)
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
+#define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
 #define bitcast(val__, type__)                                                 \
   rewriter.create<LLVM::BitcastOp>(loc, type__, val__)
 #define addrspacecast(val__, type__)                                           \
@@ -53,6 +57,9 @@
 #define fcmp_olt(lhs, rhs)                                                     \
   rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
                                 LLVM::FCmpPredicate::olt, lhs, rhs)
+#define fcmp_eq(lhs, rhs)                                                      \
+  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
+                                LLVM::FCmpPredicate::oeq, lhs, rhs)
 #define icmp_eq(...)                                                           \
   rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq, __VA_ARGS__)
 #define icmp_ne(...)                                                           \
@@ -77,30 +84,31 @@
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
+#define null(...) rewriter.create<LLVM::NullOp>(loc, __VA_ARGS__)
+#define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
 
 // Types
+#define i64_ty rewriter.getIntegerType(64)
 #define i32_ty rewriter.getIntegerType(32)
 #define i16_ty rewriter.getIntegerType(16)
 #define ui32_ty rewriter.getIntegerType(32, false)
 #define f16_ty rewriter.getF16Type()
 #define bf16_ty rewriter.getBF16Type()
 #define i8_ty rewriter.getIntegerType(8)
+#define i1_ty rewriter.getI1Type()
 #define f32_ty rewriter.getF32Type()
 #define f64_ty rewriter.getF64Type()
 #define vec_ty(type, num) VectorType::get(num, type)
-#define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
-#define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
 #define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
 #define struct_ty(...) LLVM::LLVMStructType::getLiteral(ctx, __VA_ARGS__)
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
+#define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
+#define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
 #define int_val(width, val)                                                    \
   LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
-#define idx_val(...)                                                           \
-  LLVM::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
-                            __VA_ARGS__)
 #define tid_val() getThreadId(rewriter, loc)
 
 // Attributes
@@ -173,14 +181,6 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 namespace LLVM {
 using namespace mlir::triton;
 
-Value getStructFromElements(Location loc, ValueRange resultVals,
-                            ConversionPatternRewriter &rewriter,
-                            Type structType);
-
-SmallVector<Value> getElementsFromStruct(Location loc, Value llvmStruct,
-                                         ConversionPatternRewriter &rewriter);
-
-/// Create a 32-bit integer constant.
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v);
 
 /// Create a 32-bit float constant.
@@ -270,6 +270,9 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
+
+Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
+                        StringRef key, StringRef content);
 
 } // namespace LLVM
 } // namespace mlir
