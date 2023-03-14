@@ -20,6 +20,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
 #include <dlfcn.h>
@@ -261,7 +262,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   }
 
   auto optPipeline = mlir::makeOptimizingTransformer(
-      /*optLevel=*/3, /*sizeLevel=*/0,
+      /*optLevel=*/0, /*sizeLevel=*/0,
       /*targetMachine=*/nullptr);
 
   if (auto err = optPipeline(llvmModule.get())) {
