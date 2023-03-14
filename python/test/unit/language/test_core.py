@@ -1071,6 +1071,73 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         else:
             np.testing.assert_equal(z_ref, z_tri)
 
+def test_reduce_mma():
+    ir = """
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #triton_gpu.mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4]}>
+#shared = #triton_gpu.shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#shared1 = #triton_gpu.shared<{vec = 8, perPhase = 2, maxPhase = 2, order = [1, 0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  func.func public @kernel_(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg6: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : (tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<16x1xi32, #blocked>
+    %2 = tt.splat %arg1 : (i32) -> tensor<16x1xi32, #blocked>
+    %3 = arith.muli %1, %2 : tensor<16x1xi32, #blocked>
+    %4 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<16x1x!tt.ptr<f32>, #blocked>
+    %5 = tt.addptr %4, %3 : tensor<16x1x!tt.ptr<f32>, #blocked>, tensor<16x1xi32, #blocked>
+    %6 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+    %7 = tt.expand_dims %6 {axis = 0 : i32} : (tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>) -> tensor<1x16xi32, #blocked>
+    %8 = tt.broadcast %5 : (tensor<16x1x!tt.ptr<f32>, #blocked>) -> tensor<16x16x!tt.ptr<f32>, #blocked>
+    %9 = tt.broadcast %7 : (tensor<1x16xi32, #blocked>) -> tensor<16x16xi32, #blocked>
+    %10 = tt.addptr %8, %9 : tensor<16x16x!tt.ptr<f32>, #blocked>, tensor<16x16xi32, #blocked>
+    %11 = tt.splat %arg3 : (i32) -> tensor<16x1xi32, #blocked>
+    %12 = arith.muli %1, %11 : tensor<16x1xi32, #blocked>
+    %13 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<16x1x!tt.ptr<f32>, #blocked>
+    %14 = tt.addptr %13, %12 : tensor<16x1x!tt.ptr<f32>, #blocked>, tensor<16x1xi32, #blocked>
+    %15 = tt.broadcast %14 : (tensor<16x1x!tt.ptr<f32>, #blocked>) -> tensor<16x16x!tt.ptr<f32>, #blocked>
+    %16 = tt.addptr %15, %9 : tensor<16x16x!tt.ptr<f32>, #blocked>, tensor<16x16xi32, #blocked>
+    %17 = tt.splat %arg7 : (i32) -> tensor<16x1xi32, #blocked>
+    %18 = arith.muli %1, %17 : tensor<16x1xi32, #blocked>
+    %19 = tt.splat %arg6 : (!tt.ptr<f32>) -> tensor<16x1x!tt.ptr<f32>, #blocked>
+    %20 = tt.addptr %19, %18 : tensor<16x1x!tt.ptr<f32>, #blocked>, tensor<16x1xi32, #blocked>
+    %21 = tt.broadcast %20 : (tensor<16x1x!tt.ptr<f32>, #blocked>) -> tensor<16x16x!tt.ptr<f32>, #blocked>
+    %22 = tt.addptr %21, %9 : tensor<16x16x!tt.ptr<f32>, #blocked>, tensor<16x16xi32, #blocked>
+    %23 = tt.load %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf32, #blocked>
+    %24 = triton_gpu.convert_layout %23 : (tensor<16x16xf32, #blocked>) -> tensor<16x16xf32, #shared>
+    %25 = tt.load %16 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf32, #blocked>
+    %26 = triton_gpu.convert_layout %25 : (tensor<16x16xf32, #blocked>) -> tensor<16x16xf32, #shared1>
+    %27 = triton_gpu.convert_layout %24 : (tensor<16x16xf32, #shared>) -> tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>>
+    %28 = triton_gpu.convert_layout %26 : (tensor<16x16xf32, #shared1>) -> tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>>
+    %29 = tt.dot %27, %28, %cst {allowTF32 = true} : tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #mma}>> * tensor<16x16xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #mma}>> -> tensor<16x16xf32, #mma>
+    %30 = tt.reduce %29 {axis = 1 : i32, redOp = 12 : i32} : tensor<16x16xf32, #mma> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
+    %31 = tt.expand_dims %30 {axis = 1 : i32} : (tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>) -> tensor<16x1xf32, #mma>
+    %32 = tt.broadcast %31 : (tensor<16x1xf32, #mma>) -> tensor<16x16xf32, #mma>
+    %39 = triton_gpu.convert_layout %32 : (tensor<16x16xf32, #mma>) -> tensor<16x16xf32, #blocked>
+    tt.store %22, %39 {cache = 1 : i32, evict = 1 : i32} : tensor<16x16xf32, #blocked>
+    return
+  }
+}
+"""
+    dtype_str = "float32"
+    x = numpy_random((16, 16), dtype_str=dtype_str)
+    y = numpy_random((16, 16), dtype_str=dtype_str)
+    z = numpy_random((16, 16), dtype_str=dtype_str)
+    x_triton = to_triton(x)
+    y_triton = to_triton(y)
+    z_triton = to_triton(z)
+
+    # write the IR to a temporary file using mkstemp
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+    kernel[(1,1,1)](x_triton.data_ptr(), 16, y_triton.data_ptr(), 16, z_triton.data_ptr(), 16)
+
+    z = np.sum(x @ y, axis=0, keepdims=True)
+    np.testing.assert_allclose(z, to_numpy(z_triton), rtol=0.01)
+
 # ---------------
 # test permute
 # ---------------
