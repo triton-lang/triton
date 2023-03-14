@@ -334,14 +334,7 @@ private:
     if (lhs.getConstantValue().has_value() &&
         lhs.getConstantValue().value() == 0)
       return lhs.getDivisibility(dim);
-    // Case 2: rhs is constant
-    if (rhs.getConstantValue().has_value()) {
-      auto lhsDivisibility = lhs.getDivisibility(dim);
-      auto rhsValue = rhs.getConstantValue().value();
-      if (lhsDivisibility % rhsValue == 0)
-        return lhsDivisibility / rhsValue;
-    }
-    // Case 3: both are not constant
+    // otherwise: return 1
     return 1;
   }
 
