@@ -1201,7 +1201,7 @@ def reduction(
             res_ty = tl.block_type(scalar_ty, ret_shape)
         else:
             # 0d-tensor -> scalar
-            res_ty = out_scalar_ty
+            res_ty = scalar_ty
         return tl.tensor(x, res_ty)
 
     reduce_op = builder.create_generic_reduce([t.handle for t in inputs], axis)
