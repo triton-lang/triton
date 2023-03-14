@@ -20,7 +20,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/SourceMgr.h"
 #include <dlfcn.h>
