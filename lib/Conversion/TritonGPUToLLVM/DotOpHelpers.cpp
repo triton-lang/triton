@@ -1057,7 +1057,7 @@ Value MMA16816ConversionHelper::loadC(Value tensor, Value llTensor) const {
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(cPack.size(), cPackTy));
-    Value result = getStructFromElements(loc, cPack, rewriter, structTy);
+    Value result = typeConverter->packLLElements(loc, cPack, rewriter, structTy);
     return result;
   }
   return llTensor;

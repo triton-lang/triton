@@ -376,7 +376,8 @@ struct MMA16816ConversionHelper {
 
   MMA16816ConversionHelper(DotOp op, MmaEncodingAttr mmaLayout,
                            Value thread, ConversionPatternRewriter &rewriter,
-                           TypeConverter *typeConverter, Location loc)
+                           TritonGPUToLLVMTypeConverter *typeConverter,
+                           Location loc)
       : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()), thread(thread),
         helper(mmaLayout), rewriter(rewriter), typeConverter(typeConverter),
         loc(loc), ctx(mmaLayout.getContext()) {
