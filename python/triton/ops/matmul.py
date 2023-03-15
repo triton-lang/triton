@@ -133,17 +133,15 @@ class _matmul(torch.autograd.Function):
         # allocates output
         c = torch.empty((M, N), device=device, dtype=a.dtype)
         if dot_out_dtype is None:
-            if a.dtype in [torch.float16, torch.bfloat16]:
-                dot_out_dtype = tl.float16
-            elif a.dtype == torch.float32:
+            if a.dtype in [torch.float16, torch.float32, torch.bfloat16]:
                 dot_out_dtype = tl.float32
             else:
                 dot_out_dtype = tl.int32
         else:
             assert isinstance(dot_out_dtype, torch.dtype), "dot_out_dtype must be a torch.dtype"
-            if dot_out_dtype in [torch.float16, torch.bfloat16]:
+            if dot_out_dtype == torch.float16:
                 dot_out_dtype = tl.float16
-            elif dot_out_dtype == torch.float32:
+            elif dot_out_dtype in [torch.float32, torch.bfloat16]:
                 dot_out_dtype = tl.float32
             else:
                 dot_out_dtype = tl.int32
