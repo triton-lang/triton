@@ -202,6 +202,44 @@ public:
   }
 };
 
+class LLVMConstantOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<LLVM::ConstantOp> {
+public:
+  using AxisInfoVisitorImpl<LLVM::ConstantOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(LLVM::ConstantOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    auto intAttr = op.getValue().dyn_cast<IntegerAttr>();
+    auto boolAttr = op.getValue().dyn_cast<BoolAttr>();
+    if (intAttr || boolAttr) {
+      int64_t value{};
+      if (intAttr)
+        value = intAttr.getValue().getZExtValue();
+      else
+        value = boolAttr.getValue() ? 1 : 0;
+      return AxisInfo(/*contiguity=*/{1},
+                      /*divisibility=*/{highestPowOf2Divisor(value)},
+                      /*constancy=*/{1},
+                      /*knownConstantValue=*/{value});
+    }
+    // TODO: generalize to dense attr
+    auto splatAttr = op.getValue().dyn_cast<SplatElementsAttr>();
+    if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
+      int64_t value = splatAttr.getSplatValue<APInt>().getZExtValue();
+      TensorType ty = splatAttr.getType().cast<TensorType>();
+      return AxisInfo(
+          /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
+          /*divisibility=*/
+          AxisInfo::DimVectorT(ty.getRank(), highestPowOf2Divisor(value)),
+          /*constancy=*/
+          AxisInfo::DimVectorT(ty.getShape().begin(), ty.getShape().end()),
+          /*knownConstantValue=*/{value});
+    }
+    return AxisInfo();
+  }
+};
+
 template <typename OpTy>
 class AddSubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
@@ -233,7 +271,8 @@ private:
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
       if constexpr (std::is_same_v<OpTy, arith::AddIOp> ||
-                    std::is_same_v<OpTy, triton::AddPtrOp>) {
+                    std::is_same_v<OpTy, triton::AddPtrOp> ||
+                    std::is_same_v<OpTy, LLVM::AddOp>) {
         return {lhs.getConstantValue().value() +
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
@@ -813,10 +852,12 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
-  visitors.append<ConstantOpAxisInfoVisitor>();
+  visitors.append<ConstantOpAxisInfoVisitor,
+                  LLVMConstantOpAxisInfoVisitor>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
                   AddSubOpAxisInfoVisitor<arith::AddIOp>,
-                  AddSubOpAxisInfoVisitor<arith::SubIOp>>();
+                  AddSubOpAxisInfoVisitor<arith::SubIOp>,
+                  AddSubOpAxisInfoVisitor<LLVM::AddOp>>();
   visitors.append<MulIOpAxisInfoVisitor>();
   visitors.append<DivOpAxisInfoVisitor<arith::DivSIOp>,
                   DivOpAxisInfoVisitor<arith::DivUIOp>>();
