@@ -916,7 +916,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if not isinstance(evaluated, triton.language.constexpr):
                     raise NotImplementedError("Cannot evaluate f-string containing non-constexpr conversion values,"
                                               " found conversion of type " + str(type(evaluated)))
-                values[i] = ("{}" if conversion_code < 0 else "{:!" + chr(conversion_code) + "}").format(evaluated.value)
+                values[i] = ("{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}").format(evaluated.value)
             else:
                 raise AssertionError("encountered unexpected node of type {} in a JoinedStr node".format(type(value)))
         return ''.join(values)
