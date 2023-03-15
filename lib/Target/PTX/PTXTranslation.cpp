@@ -11,6 +11,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include <llvm/Transforms/IPO/PassManagerBuilder.h>
 
 namespace triton {
 
@@ -89,8 +90,14 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
       f.addFnAttr(llvm::Attribute::AlwaysInline);
     llvm::legacy::PassManager pass;
     // emit
+    llvm::PassManagerBuilder passBuilder;
+    passBuilder.OptLevel = 0;
+    llvm::legacy::PassManager modulePassManager;
+    passBuilder.populateModulePassManager(modulePassManager);
+
     machine->addPassesToEmitFile(pass, pstream, nullptr,
                                  llvm::CodeGenFileType::CGFT_AssemblyFile);
+    modulePassManager.run(module);
     pass.run(module);
   }
   // post-process
