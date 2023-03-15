@@ -82,7 +82,7 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
       return failure();
     ret = sliceEncoding.getParent();
   }
-  if (auto view = dyn_cast<triton::ViewOp>(op)) {
+  if (isa<triton::ViewOp, triton::CatOp>(op)) {
     return failure();
   }
   return success();
@@ -93,27 +93,27 @@ bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
   // same
   if (isSingleValue(op->getOperand(0)))
     return false;
-  auto ptr = op->getOperand(0);
-  // Case 2: We assume that `evict_last` loads/stores have high hit rate
-  if (auto load = dyn_cast<triton::LoadOp>(op))
-    if (load.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-      return false;
-  if (auto store = dyn_cast<triton::StoreOp>(op))
-    if (store.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-      return false;
-  if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
-    auto encoding = tensorTy.getEncoding();
-    // Case 3: Different type conversion is expensive (e.g., mma <-> block)
-    if (encoding.getTypeID() != targetEncoding.getTypeID())
-      return true;
-    auto sizePerThread = triton::gpu::getSizePerThread(encoding);
-    auto targetSizePerThread = triton::gpu::getSizePerThread(targetEncoding);
-    auto order = triton::gpu::getOrder(encoding);
-    auto targetOrder = triton::gpu::getOrder(targetEncoding);
-    // Case 4: The targeEncoding may expose more vectorization opportunities
-    return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
-  }
-  return false;
+  // auto ptr = op->getOperand(0);
+  //// Case 2: We assume that `evict_last` loads/stores have high hit rate
+  // if (auto load = dyn_cast<triton::LoadOp>(op))
+  //   if (load.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+  //     return false;
+  // if (auto store = dyn_cast<triton::StoreOp>(op))
+  //   if (store.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+  //     return false;
+  // if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
+  //   auto encoding = tensorTy.getEncoding();
+  //   // Case 3: Different type conversion is expensive (e.g., mma <-> block)
+  //   if (encoding.getTypeID() != targetEncoding.getTypeID())
+  //     return true;
+  //   auto sizePerThread = triton::gpu::getSizePerThread(encoding);
+  //   auto targetSizePerThread = triton::gpu::getSizePerThread(targetEncoding);
+  //   auto order = triton::gpu::getOrder(encoding);
+  //   auto targetOrder = triton::gpu::getOrder(targetEncoding);
+  //   // Case 4: The targeEncoding may expose more vectorization opportunities
+  //   return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
+  // }
+  return true;
 }
 
 bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
@@ -178,8 +178,6 @@ int simulateBackwardRematerialization(
       // we don't count this conversion as expensive
       if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
               triton::MakeRangeOp, triton::SplatOp>(*opArgI))
-        continue;
-      if (auto view = dyn_cast<triton::ViewOp>(opArgI))
         continue;
 
       // We add one expensive conversion for the current operand

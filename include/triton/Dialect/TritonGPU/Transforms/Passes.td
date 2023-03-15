@@ -123,16 +123,4 @@ def TritonGPUDecomposeConversions: Pass<"tritongpu-decompose-conversions", "mlir
                            "mlir::triton::TritonDialect"];
 }
 
-def UpdateMmaForVolta : Pass<"tritongpu-update-mma-for-volta", "mlir::ModuleOp"> {
-  let summary = "Update mma encodings for Volta";
-
-  let description = [{
-    This helps to update the mma encodings for Volta.
-  }];
-
-  let constructor = "mlir::createTritonGPUUpdateMmaForVoltaPass()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
-}
-
 #endif

@@ -1,8 +1,10 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.18)
 
+if(POLICY CMP0116)
 # Introduced in cmake 3.20
 # https://cmake.org/cmake/help/latest/policy/CMP0116.html
-cmake_policy(SET CMP0116 OLD)
+  cmake_policy(SET CMP0116 OLD)
+endif()
 
 include(ExternalProject)
 
@@ -238,9 +240,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
       ${TRITON_LIBRARIES}
     )
   else()
-    target_link_libraries(triton ${LLVM_LIBRARIES} z stdc++fs
+    target_link_libraries(triton ${LLVM_LIBRARIES} z
       ${TRITON_LIBRARIES}
     )
+    # TODO: Figure out which target is sufficient to fix errors; triton is
+    # apparently not enough
+    link_libraries(stdc++fs)
   endif()
 
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})

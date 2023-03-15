@@ -602,9 +602,13 @@ void init_triton_ir(py::module &&m) {
       .def(
           "get_int64_ty",
           [](mlir::OpBuilder &self) -> mlir::Type { return self.getI64Type(); })
-      .def("get_fp8_ty",
+      .def("get_fp8e4_ty",
            [](mlir::OpBuilder &self) -> mlir::Type {
-             return self.getType<mlir::triton::Float8Type>();
+             return self.getType<mlir::Float8E4M3FNType>();
+           })
+      .def("get_fp8e5_ty",
+           [](mlir::OpBuilder &self) -> mlir::Type {
+             return self.getType<mlir::Float8E5M2Type>();
            })
       .def(
           "get_half_ty",
@@ -1457,10 +1461,6 @@ void init_triton_ir(py::module &&m) {
       .def("add_tritongpu_remove_layout_conversions_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPURemoveLayoutConversionsPass());
-           })
-      .def("add_tritongpu_update_mma_for_volta_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::createTritonGPUUpdateMmaForVoltaPass());
            })
       .def("add_tritongpu_reorder_instructions_pass",
            [](mlir::PassManager &self) {
