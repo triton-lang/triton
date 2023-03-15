@@ -141,14 +141,12 @@ struct LoadOpConversion
       PTXInstr &init =
           ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
       PTXInstr::Operand *zero = ptxBuilder.newConstantOperand(0);
-
+      
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto *opr = ptxBuilder.newOperand(writeConstraint); // =r operations
         dstsOpr->listAppend(opr);
-        // Initialize the destination register, otherwise the register will
-        // be undefined if the predicate is false.
         init(opr, zero);
       }
 
