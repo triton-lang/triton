@@ -1180,7 +1180,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                            # triggers nvptx/ptxas bug on V100 curently
                                            # [128, 128, 64, 2],
                                            [64, 128, 128, 2]]
-                          for allow_tf32 in [True]
+                          for allow_tf32 in [False]
                           for col_a in [True, False]
                           for col_b in [True, False]
                           for dtype in ['int8', 'float16', 'float32']])

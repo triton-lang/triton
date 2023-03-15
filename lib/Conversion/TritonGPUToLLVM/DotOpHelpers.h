@@ -534,10 +534,6 @@ struct DotOpFMAConversionHelper {
                                 TritonGPUToLLVMTypeConverter *typeConverter,
                                 Type elemTy) const;
 
-  // get number of elements per thread for $a or $b.
-  static int getNumElemsPerThread(ArrayRef<int64_t> shape,
-                                  DotOperandEncodingAttr dotOpLayout);
-
   // Get shapePerCTA for M or N axis.
   static int getShapePerCTAForMN(BlockedEncodingAttr layout, bool isM) {
     auto order = layout.getOrder();

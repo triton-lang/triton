@@ -497,7 +497,31 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       }
     }
   }
-  llvm_unreachable("unknown mma version");
+  if (auto blockedLayout = getParent().dyn_cast<BlockedEncodingAttr>()) {
+    auto shapePerCTA = getShapePerCTA(blockedLayout);
+    auto order = blockedLayout.getOrder();
+    auto sizePerThread = getSizePerThread(blockedLayout);
+
+    int K = getOpIdx() == 0 ? shape[1] : shape[0];
+    int otherDim = getOpIdx() == 1 ? shape[1] : shape[0];
+
+    bool isM = getOpIdx() == 0;
+
+    int mSizePerThread =
+        order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+    int nSizePerThread =
+        order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+    int sizePerThreadMN = isM ? mSizePerThread : nSizePerThread;
+
+    int mShapePerCTA =
+        order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+    int nShapePerCTA =
+        order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+    int shapePerCTAMN = isM ? mShapePerCTA : nShapePerCTA;
+
+    return K * std::max<int>(otherDim / shapePerCTAMN, 1) * sizePerThreadMN;
+  }
+  llvm_unreachable("unknown dot operand parent layout");
   return 0;
 }
 

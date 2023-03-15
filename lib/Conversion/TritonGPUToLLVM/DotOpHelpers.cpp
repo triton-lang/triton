@@ -1350,21 +1350,6 @@ Value DotOpFMAConversionHelper::getStructFromValueTable(
   Type structTy = struct_ty(elemTypes);
   return typeConverter->packLLElements(loc, elems, rewriter, structTy);
 }
-int DotOpFMAConversionHelper::getNumElemsPerThread(
-    ArrayRef<int64_t> shape, DotOperandEncodingAttr dotOpLayout) {
-  auto blockedLayout = dotOpLayout.getParent().cast<BlockedEncodingAttr>();
-  auto shapePerCTA = getShapePerCTA(blockedLayout);
-  auto sizePerThread = getSizePerThread(blockedLayout);
 
-  // TODO[Superjomn]: we assume the k aixs is fixed for $a and $b here, fix it
-  // if not.
-  int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
-  int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];
-
-  bool isM = dotOpLayout.getOpIdx() == 0;
-  int shapePerCTAMN = getShapePerCTAForMN(blockedLayout, isM);
-  int sizePerThreadMN = getSizePerThreadForMN(blockedLayout, isM);
-  return K * std::max<int>(otherDim / shapePerCTAMN, 1) * sizePerThreadMN;
-}
 } // namespace LLVM
 } // namespace mlir
