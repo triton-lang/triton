@@ -1269,6 +1269,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
         # XXX: Somehow there's a larger difference when we use float32
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
     else:
+        torch.set_printoptions(profile="full")
+        print(z_tri)
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
