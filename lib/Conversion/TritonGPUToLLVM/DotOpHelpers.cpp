@@ -515,8 +515,8 @@ Type DotOpMmaV2ConversionHelper::getMmaRetType() const {
       LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
   Type i32x4Ty =
       LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i32Ty));
-  Type fp16x2Pack2Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(2, vec_ty(fp16Ty, 2)));
+  Type fp16x2Pack2Ty = LLVM::LLVMStructType::getLiteral(
+      ctx, SmallVector<Type>(2, vec_ty(fp16Ty, 2)));
   switch (mmaType) {
   case TensorCoreType::FP32_FP16_FP16_FP32:
     return fp32x4Ty;
@@ -1050,14 +1050,16 @@ Value MMA16816ConversionHelper::loadC(Value tensor, Value llTensor) const {
     for (int i = 0; i < fcSize; i += numCPackedElem) {
       Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
       for (int j = 0; j < numCPackedElem; ++j) {
-        pack = insert_element(cPackTy, pack, extract_val(cElemTy, llTensor, i + j), i32_val(j));
+        pack = insert_element(
+            cPackTy, pack, extract_val(cElemTy, llTensor, i + j), i32_val(j));
       }
       cPack.push_back(pack);
     }
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(cPack.size(), cPackTy));
-    Value result = typeConverter->packLLElements(loc, cPack, rewriter, structTy);
+        ctx, SmallVector<Type>(cPack.size(), cPackTy));
+    Value result =
+        typeConverter->packLLElements(loc, cPack, rewriter, structTy);
     return result;
   }
   return llTensor;
@@ -1098,7 +1100,8 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
     // using =r for float32 works but leads to less readable ptx.
     bool isIntMMA = dTensorTy.getElementType().isInteger(32);
     bool isAccF16 = dTensorTy.getElementType().isF16();
-    auto retArgs = builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
+    auto retArgs =
+        builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
     auto aArgs = builder.newListOperand({
         {ha[{m, k}], "r"},
         {ha[{m + 1, k}], "r"},
@@ -1138,9 +1141,10 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   SmallVector<Value> results(fc.size() * numCPackedElem);
   for (int i = 0; i < fc.size(); ++i) {
     for (int j = 0; j < numCPackedElem; ++j) {
-      results[i * numCPackedElem + j] = numCPackedElem > 1
-        ? bitcast(extract_element(fc[i], i32_val(j)), resElemTy)
-        : bitcast(fc[i], resElemTy);
+      results[i * numCPackedElem + j] =
+          numCPackedElem > 1
+              ? bitcast(extract_element(fc[i], i32_val(j)), resElemTy)
+              : bitcast(fc[i], resElemTy);
     }
   }
   Value res = typeConverter->packLLElements(loc, results, rewriter, structTy);

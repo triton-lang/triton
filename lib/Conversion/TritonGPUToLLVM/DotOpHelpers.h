@@ -377,8 +377,8 @@ struct MMA16816ConversionHelper {
     warp = udiv(thread, _32);
   }
 
-  MMA16816ConversionHelper(DotOp op, MmaEncodingAttr mmaLayout,
-                           Value thread, ConversionPatternRewriter &rewriter,
+  MMA16816ConversionHelper(DotOp op, MmaEncodingAttr mmaLayout, Value thread,
+                           ConversionPatternRewriter &rewriter,
                            TritonGPUToLLVMTypeConverter *typeConverter,
                            Location loc)
       : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()), thread(thread),

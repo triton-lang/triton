@@ -71,7 +71,6 @@ private:
                                        getThreadId(rewriter, loc), rewriter,
                                        getTypeConverter(), loc);
 
-
     auto ATensorTy = A.getType().cast<RankedTensorType>();
     auto BTensorTy = B.getType().cast<RankedTensorType>();
 
