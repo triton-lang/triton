@@ -141,7 +141,7 @@ struct LoadOpConversion
       PTXInstr &init =
           ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
       PTXInstr::Operand *zero = ptxBuilder.newConstantOperand(0);
-      
+
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
