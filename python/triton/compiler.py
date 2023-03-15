@@ -905,6 +905,22 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_NoneType(self, node):
         return None
 
+    def visit_JoinedStr(self, node):
+        values = list(node.values)
+        for i, value in enumerate(values):
+            if isinstance(value, ast.Constant):
+                values[i] = str(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                conversion_code = value.conversion
+                evaluated = self.visit(value.value)
+                if not isinstance(evaluated, triton.language.constexpr):
+                    raise NotImplementedError("Cannot evaluate f-string containing non-constexpr conversion values,"
+                                              " found conversion of type " + str(type(evaluated)))
+                values[i] = ("{}" if conversion_code < 0 else "{:!" + chr(conversion_code) + "}").format(evaluated.value)
+            else:
+                raise AssertionError("encountered unexpected node of type {} in a JoinedStr node".format(type(value)))
+        return ''.join(values)
+
     def visit(self, node):
         if node is not None:
             self.last_node = node
