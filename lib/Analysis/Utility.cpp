@@ -299,7 +299,6 @@ multiRootTopologicalSort(const SetVector<Operation *> &toSort) {
        it != eit; ++it) {
     res.insert(*it);
   }
-
   return res;
 }
 
