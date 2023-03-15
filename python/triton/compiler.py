@@ -57,7 +57,9 @@ def mangle_ty(ty):
     if ty.is_ptr():
         return 'P' + mangle_ty(ty.element_ty)
     if ty.is_int():
-        return 'i' + str(ty.int_bitwidth)
+        SIGNED = triton.language.dtype.SIGNEDNESS.SIGNED
+        prefix = 'i' if ty.int_signedness == SIGNED else 'u'
+        return prefix + str(ty.int_bitwidth)
     if ty.is_fp8():
         return 'fp8'
     if ty.is_fp16():

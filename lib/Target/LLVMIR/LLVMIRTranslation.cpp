@@ -260,6 +260,15 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
       return nullptr;
   }
 
+  auto optPipeline = mlir::makeOptimizingTransformer(
+      /*optLevel=*/0, /*sizeLevel=*/0,
+      /*targetMachine=*/nullptr);
+
+  if (auto err = optPipeline(llvmModule.get())) {
+    llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
+    return nullptr;
+  }
+
   for (auto &func : llvmModule->functions()) {
     auto it = nvvmMetadata.find(func.getName());
     if (it != nvvmMetadata.end())
