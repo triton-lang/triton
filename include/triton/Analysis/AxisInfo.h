@@ -112,7 +112,8 @@ private:
 
   /// The _divisibility_ information maps the `d`-th
   /// dimension to the largest power-of-two that
-  /// divides the first element of all the values along it
+  /// divides the first element of all groups of
+  // _contiguity_ values along it
   /// For example:
   /// [10, 11, 12, 13, 18, 19, 20, 21]
   /// [20, 21, 22, 23, 28, 29, 30, 31]
@@ -123,6 +124,10 @@ private:
   /// [14, 18, 22, 26]
   /// [15, 19, 23, 27]
   //  would have divisibility [4, 1]
+  //  On the other hand:
+  //  [0, 1, 2, 0, 4, 5, 6, 7]
+  //  would have divisibility 1 because
+  //  _contiguity_=1
   DimVectorT divisibility;
 
   /// The _constancy_ information maps the `d`-th
