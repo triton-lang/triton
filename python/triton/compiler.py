@@ -1014,7 +1014,7 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
         generator.visit(fn.parse())
     except Exception as e:
         node = generator.last_node
-        if node is None or isinstance(e, (NotImplementedError, CompilationError)):
+        if node is None or isinstance(e, CompilationError):
             raise e
         raise CompilationError(fn.src, node) from e
     ret = generator.module
