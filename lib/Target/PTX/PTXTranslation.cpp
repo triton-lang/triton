@@ -91,13 +91,18 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
     llvm::legacy::PassManager pass;
     // emit
     llvm::PassManagerBuilder passBuilder;
-    passBuilder.OptLevel = 0;
-    llvm::legacy::PassManager modulePassManager;
-    passBuilder.populateModulePassManager(modulePassManager);
+    passBuilder.OptLevel = 3;
+    llvm::legacy::FunctionPassManager functionPassManager(&module);
+    passBuilder.populateFunctionPassManager(functionPassManager);
+    // Run the optimization passes
+    functionPassManager.doInitialization();
+    for (auto &function : module) {
+      functionPassManager.run(function);
+    }
+    functionPassManager.doFinalization();
 
     machine->addPassesToEmitFile(pass, pstream, nullptr,
                                  llvm::CodeGenFileType::CGFT_AssemblyFile);
-    modulePassManager.run(module);
     pass.run(module);
   }
   // post-process
