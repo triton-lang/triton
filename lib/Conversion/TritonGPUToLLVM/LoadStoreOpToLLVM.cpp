@@ -147,6 +147,8 @@ struct LoadOpConversion
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto *opr = ptxBuilder.newOperand(writeConstraint); // =r operations
         dstsOpr->listAppend(opr);
+        // Initialize the destination register, otherwise the register will
+        // be undefined if the predicate is false.
         init(opr, zero);
       }
 
