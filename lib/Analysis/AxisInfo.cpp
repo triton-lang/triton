@@ -334,6 +334,10 @@ private:
     if (lhs.getConstantValue().has_value() &&
         lhs.getConstantValue().value() == 0)
       return lhs.getDivisibility(dim);
+    // Case 2: rhs is 1
+    if (rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().value() == 1)
+      return lhs.getDivisibility(dim);
     // otherwise: return 1
     return 1;
   }
