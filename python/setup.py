@@ -222,6 +222,7 @@ setup(
     install_requires=[
         "cmake>=3.20",
         "filelock",
+        "torch",
         "lit",
     ],
     package_data={"triton": ["third_party/**/*"]},
