@@ -9,4 +9,3 @@ set(LLVM_TARGET_DEFINITIONS TritonGPUAttrDefs.td)
 mlir_tablegen(TritonGPUAttrDefs.h.inc -gen-attrdef-decls)
 mlir_tablegen(TritonGPUAttrDefs.cpp.inc -gen-attrdef-defs)
 add_public_tablegen_target(TritonGPUAttrDefsIncGen)
-

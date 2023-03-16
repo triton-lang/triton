@@ -1,4 +1,3 @@
-
 # - Find LLVM headers and libraries.
 # This module locates LLVM and adapts the llvm-config output for use with
 # CMake.
