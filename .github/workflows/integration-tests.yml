@@ -22,7 +22,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A100", "cuda"], ["self-hosted", "V100", "cuda"], ["self-hosted", "gfx908", "rocm"], "macos-10.15"]'
+            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "gfx908"], "macos-10.15"]'
           else
             echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]'
           fi
@@ -39,6 +39,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+
+      -name: Set ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908'}}
+        env:
+          BACKEND: "ROCM"
 
       - name: Clear cache
         run: |
@@ -74,13 +79,13 @@ jobs:
           flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
 
       - name: Install Triton
-        if: ${{matrix.runner[2] != 'rocm'}}
+        if: ${{ env.BACKEND != 'ROCM'}}
         run: |
           cd python
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       - name: Install Triton on ROCM
-        if: ${{matrix.runner[2] == 'rocm'}}
+        if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python
           pip3 uninstall --yes torch torchvision torchaudio
@@ -88,7 +93,7 @@ jobs:
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       - name: Run lit tests
-        if: ${{matrix.runner[2] != 'rocm'}}
+        if: ${{ env.BACKEND != 'ROCM'}}
         run: |
           cd python
           LIT_TEST_DIR="build/$(ls build)/test"
@@ -98,19 +103,19 @@ jobs:
           lit -v "$LIT_TEST_DIR"
 
       - name: Run python tests on CUDA
-        if: ${{matrix.runner[2] == 'cuda'}}
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python/test/unit/
           pytest
       
       - name: Run python tests on ROCM
-        if: ${{matrix.runner[2] == 'rocm'}}
+        if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python/test/unit/language/
           pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
 
       - name: Run CXX unittests
-        if: ${{matrix.runner[2] != 'rocm'}}
+        if: ${{ env.BACKEND != 'ROCM'}}
         run: |
           cd python/
           cd "build/$(ls build)"
