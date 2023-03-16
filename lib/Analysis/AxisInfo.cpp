@@ -852,8 +852,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
-  visitors.append<ConstantOpAxisInfoVisitor,
-                  LLVMConstantOpAxisInfoVisitor>();
+  visitors.append<ConstantOpAxisInfoVisitor, LLVMConstantOpAxisInfoVisitor>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
                   AddSubOpAxisInfoVisitor<arith::AddIOp>,
                   AddSubOpAxisInfoVisitor<arith::SubIOp>,
