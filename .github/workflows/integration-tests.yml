@@ -40,7 +40,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      -name: Set ENV
+      - name: Set ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908'}}
         env:
           BACKEND: "ROCM"
