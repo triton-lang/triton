@@ -3,15 +3,16 @@ Layer Normalization
 ====================
 In this tutorial, you will write a high-performance layer normalization
 kernel that runs faster than the PyTorch implementation.
-You will specifically learn about:
 
-- How to implement backward pass in Triton
-- How to implement parallel reduction in Triton
+In doing so, you will learn about:
+- Implementing backward pass in Triton
+- Implementing parallel reduction in Triton
 """
 
 # %%
 # Motivations
-# -------------
+# -----------
+#
 # The *LayerNorm* operator was first introduced in [BA2016]_ as a way to improve the performance
 # of sequential models (e.g., Transformers) or neural networks with small batch size.
 # It takes a vector :math:`x` as input and produces a vector :math:`y` of the same shape as output.
@@ -23,7 +24,7 @@ You will specifically learn about:
 #    y = \frac{ x - \text{E}[x] }{ \sqrt{\text{Var}(x) + \epsilon} } * w + b
 #
 # where :math:`\epsilon` is a small constant added to the denominator for numerical stability.
-# Let’s first take a look at the foward pass implementation.
+# Let’s first take a look at the forward pass implementation.
 
 import torch
 
@@ -91,7 +92,8 @@ def _layer_norm_fwd_fused(
 
 # %%
 # Backward pass
-# ---------------------------------
+# -------------
+#
 # The backward pass for the layer normalization operator is a bit more involved than the forward pass.
 # Let :math:`\hat{x}` be the normalized inputs :math:`\frac{ x - \text{E}[x] }{ \sqrt{\text{Var}(x) + \epsilon} }` before the linear transformation,
 # the Vector-Jacobian Products (VJP) :math:`\nabla_{x}` of :math:`x` are given by:
@@ -218,7 +220,8 @@ def _layer_norm_bwd_dwdb(
 
 # %%
 # Benchmark
-# ---------------------------------
+# ---------
+#
 # We can now compare the performance of our kernel against that of PyTorch.
 # Here we focus on inputs that have Less than 64KB per feature.
 # Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward pass.
@@ -362,6 +365,6 @@ bench_layer_norm.run(save_path='.', print_data=True)
 
 # %%
 # References
-# --------------
+# ----------
 #
 # .. [BA2016] Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, "Layer Normalization", Arxiv 2016
