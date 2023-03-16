@@ -164,16 +164,16 @@ public:
   }
 };
 
-class ConstantOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<arith::ConstantOp> {
+template <typename OpTy>
+class ConstantOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
 public:
-  using AxisInfoVisitorImpl<arith::ConstantOp>::AxisInfoVisitorImpl;
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
 
   AxisInfo
-  getAxisInfo(arith::ConstantOp op,
+  getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto intAttr = op.getValue().dyn_cast<IntegerAttr>();
-    auto boolAttr = op.getValue().dyn_cast<BoolAttr>();
+    auto intAttr = op.getValue().template dyn_cast<IntegerAttr>();
+    auto boolAttr = op.getValue().template dyn_cast<BoolAttr>();
     if (intAttr || boolAttr) {
       int64_t value{};
       if (intAttr)
@@ -186,48 +186,10 @@ public:
                       /*knownConstantValue=*/{value});
     }
     // TODO: generalize to dense attr
-    auto splatAttr = op.getValue().dyn_cast<SplatElementsAttr>();
+    auto splatAttr = op.getValue().template dyn_cast<SplatElementsAttr>();
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      int64_t value = splatAttr.getSplatValue<APInt>().getZExtValue();
-      TensorType ty = splatAttr.getType().cast<TensorType>();
-      return AxisInfo(
-          /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
-          /*divisibility=*/
-          AxisInfo::DimVectorT(ty.getRank(), highestPowOf2Divisor(value)),
-          /*constancy=*/
-          AxisInfo::DimVectorT(ty.getShape().begin(), ty.getShape().end()),
-          /*knownConstantValue=*/{value});
-    }
-    return AxisInfo();
-  }
-};
-
-class LLVMConstantOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<LLVM::ConstantOp> {
-public:
-  using AxisInfoVisitorImpl<LLVM::ConstantOp>::AxisInfoVisitorImpl;
-
-  AxisInfo
-  getAxisInfo(LLVM::ConstantOp op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto intAttr = op.getValue().dyn_cast<IntegerAttr>();
-    auto boolAttr = op.getValue().dyn_cast<BoolAttr>();
-    if (intAttr || boolAttr) {
-      int64_t value{};
-      if (intAttr)
-        value = intAttr.getValue().getZExtValue();
-      else
-        value = boolAttr.getValue() ? 1 : 0;
-      return AxisInfo(/*contiguity=*/{1},
-                      /*divisibility=*/{highestPowOf2Divisor(value)},
-                      /*constancy=*/{1},
-                      /*knownConstantValue=*/{value});
-    }
-    // TODO: generalize to dense attr
-    auto splatAttr = op.getValue().dyn_cast<SplatElementsAttr>();
-    if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      int64_t value = splatAttr.getSplatValue<APInt>().getZExtValue();
-      TensorType ty = splatAttr.getType().cast<TensorType>();
+      int64_t value = splatAttr.template getSplatValue<APInt>().getZExtValue();
+      TensorType ty = splatAttr.getType().template cast<TensorType>();
       return AxisInfo(
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
           /*divisibility=*/
@@ -851,8 +813,11 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
+  // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
+  // when scf.for supports integers induction variable
   visitors.append<MakeRangeOpAxisInfoVisitor>();
-  visitors.append<ConstantOpAxisInfoVisitor, LLVMConstantOpAxisInfoVisitor>();
+  visitors.append<ConstantOpAxisInfoVisitor<arith::ConstantOp>,
+                  ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
                   AddSubOpAxisInfoVisitor<arith::AddIOp>,
                   AddSubOpAxisInfoVisitor<arith::SubIOp>,
