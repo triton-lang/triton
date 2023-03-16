@@ -6,10 +6,40 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
-using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
+
+// v1
+using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
+
+static Type getMmaRetType(TensorType operand) {
+  auto *ctx = operand.getContext();
+  Type fp32Ty = type::f32Ty(ctx);
+  // f16*f16+f32->f32
+  return struct_ty(SmallVector<Type>{8, fp32Ty});
+}
+
+static ValueTable
+extractLoadedOperand(Value llStruct, int NK,
+                     ConversionPatternRewriter &rewriter,
+                     TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
+  ValueTable rcds;
+  SmallVector<Value> elems = typeConverter->unpackLLElements(
+      llStruct.getLoc(), llStruct, rewriter, type);
+
+  int offset = 0;
+  for (int i = 0; offset < elems.size(); ++i) {
+    for (int k = 0; k < NK; k += 4) {
+      rcds[{i, k}] = std::make_pair(elems[offset], elems[offset + 1]);
+      offset += 2;
+    }
+  }
+
+  return rcds;
+}
+
+// v2
 
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -87,6 +117,7 @@ private:
                                 op, adaptor);
   }
   /// Convert to mma.m8n8k4
+
   LogicalResult convertMMA884(triton::DotOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     auto *ctx = op.getContext();
@@ -121,16 +152,14 @@ private:
     assert(isARow == isARow_);
     assert(isBRow == isBRow_);
 
-    DotOpMmaV1ConversionHelper helper(mmaLayout);
-
     unsigned numM = ALayout.getMMAv1NumOuter(AShape);
     unsigned numN = BLayout.getMMAv1NumOuter(BShape);
     unsigned NK = AShape[1];
 
-    auto has = helper.extractLoadedOperand(adaptor.getA(), NK, rewriter,
-                                           getTypeConverter(), ATensorTy);
-    auto hbs = helper.extractLoadedOperand(adaptor.getB(), NK, rewriter,
-                                           getTypeConverter(), BTensorTy);
+    auto has = extractLoadedOperand(adaptor.getA(), NK, rewriter,
+                                    getTypeConverter(), ATensorTy);
+    auto hbs = extractLoadedOperand(adaptor.getB(), NK, rewriter,
+                                    getTypeConverter(), BTensorTy);
 
     // Initialize accumulators with external values, the acc holds the
     // accumulator value that is shared between the MMA instructions inside a
@@ -189,8 +218,7 @@ private:
 
       mma(resOprs, AOprs, BOprs, COprs);
 
-      Value res =
-          builder.launch(rewriter, loc, helper.getMmaRetType(ATensorTy));
+      Value res = builder.launch(rewriter, loc, getMmaRetType(ATensorTy));
 
       for (auto i = 0; i < 8; i++) {
         Value elem = extract_val(f32_ty, res, i);
