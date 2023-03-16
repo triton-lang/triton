@@ -44,6 +44,7 @@ jobs:
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908'}}
         env:
           BACKEND: "ROCM"
+        run: echo "Set BACKEND to $BACKEND"
 
       - name: Clear cache
         run: |
