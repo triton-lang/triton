@@ -39,7 +39,13 @@ extractLoadedOperand(Value llStruct, int NK,
   return rcds;
 }
 
+// ---
 // v2
+
+// ---
+// fma
+
+// ---
 
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
