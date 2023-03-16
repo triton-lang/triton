@@ -62,4 +62,3 @@ func.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16
   }
   return
 }
-

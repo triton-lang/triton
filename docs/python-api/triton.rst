@@ -1,5 +1,5 @@
 triton
-========
+======
 
 .. currentmodule:: triton
 

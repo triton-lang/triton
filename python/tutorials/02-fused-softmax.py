@@ -1,18 +1,20 @@
 """
 Fused Softmax
-=================
+=============
+
 In this tutorial, you will write a fused softmax operation that is significantly faster
 than PyTorch's native op for a particular class of matrices: those whose rows can fit in
 the GPU's SRAM.
-You will learn about:
 
+In doing so, you will learn about:
 - The benefits of kernel fusion for bandwidth-bound operations.
 - Reduction operators in Triton.
 """
 
 # %%
 # Motivations
-# ------------
+# -----------
+#
 # Custom GPU kernels for elementwise additions are educationally valuable but won't get you very far in practice.
 # Let us consider instead the case of a simple (numerically stabilized) softmax operation:
 
@@ -55,9 +57,11 @@ def naive_softmax(x):
 
 # %%
 # Compute Kernel
-# ----------------
+# --------------
+#
 # Our softmax kernel works as follows: each program loads a row of the input matrix X,
 # normalizes it and writes back the result to the output Y.
+#
 # Note that one important limitation of Triton is that each block must have a
 # power-of-two number of elements, so we need to internally "pad" each row and guard the
 # memory operations properly if we want to handle any possible input shapes:
@@ -93,6 +97,7 @@ def softmax_kernel(
 # %%
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
+
 def softmax(x):
     n_rows, n_cols = x.shape
     # The block size is the smallest power of two greater than the number of columns in `x`
@@ -124,7 +129,7 @@ def softmax(x):
 
 # %%
 # Unit Test
-# ----------
+# ---------
 
 # %%
 # We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
@@ -141,7 +146,8 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 
 # %%
 # Benchmark
-# -------------
+# ---------
+#
 # Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
 # We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
@@ -185,7 +191,6 @@ benchmark.run(show_plots=True, print_data=True)
 
 # %%
 # In the above plot, we can see that:
-#
 #  - Triton is 4x faster than the Torch JIT. This confirms our suspicions that the Torch JIT does not do any fusion here.
 #  - Triton is noticeably faster than :code:`torch.softmax` -- in addition to being **easier to read, understand and maintain**.
 #    Note however that the PyTorch `softmax` operation is more general and will work on tensors of any shape.
