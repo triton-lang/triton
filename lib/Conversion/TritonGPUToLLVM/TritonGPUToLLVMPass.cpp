@@ -117,24 +117,15 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     auto ctx = funcOp->getContext();
 
-    if (isROCM()) {
-      // Set an attribute to indicate this function is a kernel entry.
-      newFuncOp->setAttr("rocdl.kernel",
-                         rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-
-      // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-      newFuncOp->setAttr("rocdl.maxntid",
-                         rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
-    } else {
-      // Set an attribute to indicate this function is a kernel entry.
-      newFuncOp->setAttr("nvvm.kernel",
-                         rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-
-      // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-      // for `nvvm.annotation` metadata.
-      newFuncOp->setAttr("nvvm.maxntid",
-                         rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
-    }
+    // Set an attribute to indicate this function is a kernel entry.
+    newFuncOp->setAttr("nvvm.kernel",
+                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
+    // if (!isROCM()) {
+    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+    // for `nvvm.annotation` metadata.
+    newFuncOp->setAttr("nvvm.maxntid",
+                        rewriter.getIntegerAttr(i32_ty, 32 * numWarps));
+    // }
 
     rewriter.eraseOp(funcOp);
     return success();
