@@ -150,3 +150,63 @@ func.func @test_canonicalize_masked_store_fail_pattern(%ptr: tensor<8x!tt.ptr<f3
     tt.store %ptr, %val, %mask : tensor<8xf32>
     return
 }
+
+// CHECK-LABEL: @test_canonicalize_expand_dims
+func.func @test_canonicalize_expand_dims(%arg0: tensor<f32>) -> (tensor<1x8xf32>) {
+    %splat = tt.splat %arg0 : (tensor<f32>) -> tensor<8xf32>
+    // CHECK: %{{.*}} = tt.splat %arg0 : (tensor<f32>) -> tensor<1x8xf32>
+    %ed = tt.expand_dims %splat {axis = 0 : i32} : (tensor<8xf32>) -> tensor<1x8xf32>
+
+    return %ed : tensor<1x8xf32>
+}
+
+
+// CHECK-LABEL: @test_canonicalize_view
+func.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>) {
+    %view0 = tt.view %arg0 : (tensor<8xf32>) -> tensor<2x4xf32>
+    // CHECK: %{{.*}} = tt.view %arg0 : (tensor<8xf32>) -> tensor<4x2xf32>
+    %view1 = tt.view %view0 : (tensor<2x4xf32>) -> tensor<4x2xf32>
+
+    %splat = tt.splat %arg1 : (tensor<f32>) -> tensor<8xf32>
+    // CHECK: %{{.*}} = tt.splat %arg1 : (tensor<f32>) -> tensor<2x2x2xf32>
+    %view2 = tt.view %splat : (tensor<8xf32>) -> tensor<2x2x2xf32>
+
+    %view3 = tt.view %arg0 : (tensor<8xf32>) -> tensor<8xf32>
+    // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<8xf32>
+    %add = arith.addf %view3, %arg0 : tensor<8xf32>
+
+    return %view1, %view2, %add : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>
+}
+
+// CHECK-LABEL: @test_canonicalize_broadcast
+func.func @test_canonicalize_broadcast(%arg0: tensor<1x1x8xf32>, %arg1: tensor<f32>) -> (tensor<4x2x8xf32>, tensor<8x8xf32>, tensor<1x1x8xf32>) {
+    %broadcast0 = tt.broadcast %arg0 : (tensor<1x1x8xf32>) -> tensor<1x2x8xf32>
+    // CHECK: %{{.*}} = tt.broadcast %arg0 : (tensor<1x1x8xf32>) -> tensor<4x2x8xf32>
+    %broadcast1 = tt.broadcast %broadcast0 : (tensor<1x2x8xf32>) -> tensor<4x2x8xf32>
+
+    %splat = tt.splat %arg1 : (tensor<f32>) -> tensor<1x8xf32>
+    // CHECK: %{{.*}} = tt.splat %arg1 : (tensor<f32>) -> tensor<8x8xf32>
+    %broadcast2 = tt.broadcast %splat : (tensor<1x8xf32>) -> tensor<8x8xf32>
+
+    %broadcast3 = tt.broadcast %arg0 : (tensor<1x1x8xf32>) -> tensor<1x1x8xf32>
+    // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<1x1x8xf32>
+    %add = arith.addf %broadcast3, %arg0 : tensor<1x1x8xf32>
+
+    return %broadcast1, %broadcast2, %add : tensor<4x2x8xf32>, tensor<8x8xf32>, tensor<1x1x8xf32>
+}
+
+// CHECK-LABEL: @test_fold_views
+func.func @test_fold_views() -> (tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x128xf32>) {
+    %a = arith.constant dense<1.0> : tensor<1x128xf32>
+
+    // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<16x8xf32>
+    %b = tt.view %a : (tensor<1x128xf32>) -> tensor<16x8xf32>
+
+    // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<16x128xf32>
+    %c = tt.broadcast %a : (tensor<1x128xf32>) -> tensor<16x128xf32>
+
+    // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<1x1x128xf32>
+    %d = tt.expand_dims %a {axis = 0: i32} : (tensor<1x128xf32>) -> tensor<1x1x128xf32>
+
+    return %b, %c, %d : tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x128xf32>
+}
