@@ -608,6 +608,7 @@ LogicalResult MMA16816ConversionHelper::convertDot(Value a, Value b, Value c,
   int numRepM = getNumRepM(aTensorTy, dShape[0]);
   int numRepN = getNumRepN(aTensorTy, dShape[1]);
   int numRepK = getNumRepK(aTensorTy, aShape[1]);
+  llvm::outs() << numRepM << " " << numRepN << " " << numRepK << "\n";
 
   ValueTable ha =
       getValuesFromDotOperandLayoutStruct(loadedA, numRepM, numRepK, aTensorTy);
