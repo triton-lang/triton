@@ -52,9 +52,11 @@ Version 2.0 is out! New features include:
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open GitHub issues about your contribution ideas, and we will review them. A contributor's guide containing general guidelines is coming soon!
+Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open GitHub issues about your contribution ideas, and we will review them. 
+Please do not submit PRs that simply fix typos in our documentation.
 
-If you’re interested in joining our team and working on Triton & GPU kernels, [we’re hiring](https://openai.com/jobs/#acceleration)!
+Note 1: A more detailed contributor's guide containing general guidelines is coming soon!
+Note 2: If you’re interested in joining our team and working on Triton & GPU kernels, [we’re hiring](https://openai.com/jobs/#acceleration)!
 
 
 # Compatibility

@@ -42,6 +42,34 @@ extractLoadedOperand(Value llStruct, int NK,
 // ---
 // v2
 
+std::tuple<int, int> getRepMN(const RankedTensorType &tensorTy) {
+  auto mmaLayout = tensorTy.getEncoding().cast<MmaEncodingAttr>();
+  auto wpt = mmaLayout.getWarpsPerCTA();
+
+  int M = tensorTy.getShape()[0];
+  int N = tensorTy.getShape()[1];
+  int instrM = 16, instrN = 8;
+  int repM = std::max<int>(M / (wpt[0] * instrM), 1);
+  int repN = std::max<int>(N / (wpt[1] * instrN), 1);
+  return {repM, repN};
+}
+
+Value loadC(Value tensor, Value llTensor) {
+  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  auto [repM, repN] = getRepMN(tensorTy);
+  size_t fcSize = 4 * repM * repN;
+
+  assert(tensorTy.getEncoding().isa<MmaEncodingAttr>() &&
+         "Currently, we only support $c with a mma layout.");
+  // Load a normal C tensor with mma layout, that should be a
+  // LLVM::struct with fcSize elements.
+  auto structTy = llTensor.getType().cast<LLVM::LLVMStructType>();
+  assert(structTy.getBody().size() == fcSize &&
+         "DotOp's $c operand should pass the same number of values as $d in "
+         "mma layout.");
+  return llTensor;
+}
+
 // ---
 // fma
 
