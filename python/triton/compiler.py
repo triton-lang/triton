@@ -996,6 +996,7 @@ class CompilationError(Exception):
 
 class CompileTimeAssertionFailure(CompilationError):
     """Specific exception for failed tests in `static_assert` invocations"""
+
     def set_source_code(self, src: Optional[str]):
         self.src = src
         self.message = self._format_message()
