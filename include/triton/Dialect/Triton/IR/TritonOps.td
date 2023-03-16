@@ -349,7 +349,10 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 // Reduce Op
 //
 def TT_ReduceOp: TT_Op<"reduce",
-                       [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>, SingleBlock]> {
+                       [Pure,
+                        SameOperandsEncoding,
+                        SingleBlock,
+                        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Reduction using generic combination algorithm";
     let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
