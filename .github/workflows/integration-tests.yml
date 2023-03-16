@@ -110,7 +110,7 @@ jobs:
           pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
 
       - name: Run CXX unittests
-        if: ${{matrix.runner[2] == 'cuda'}}
+        if: ${{matrix.runner[2] != 'rocm'}}
         run: |
           cd python/
           cd "build/$(ls build)"
