@@ -40,11 +40,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Set ENV
+      - name: Set CUDA ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100')}}
+        run: |
+          echo "BACKEND=CUDA" >> $GITHUB_ENV
+
+      - name: Set ROCM ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
-        env:
-          BACKEND: "ROCM"
-        run: echo "Set BACKEND to $BACKEND"
+        run: |
+          echo "BACKEND=ROCM" >> $GITHUB_ENV
 
       - name: Clear cache
         run: |
