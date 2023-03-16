@@ -350,7 +350,11 @@ static OpFoldResult foldViewLikeOp(ViewLikeOp op, Attribute value) {
 
   auto shapedType = op.getType().template cast<mlir::ShapedType>();
   if (auto denseElemsAttr = value.dyn_cast<DenseElementsAttr>()) {
-    return denseElemsAttr.reshape(shapedType);
+    if (denseElemsAttr.isSplat()) {
+      return denseElemsAttr.resizeSplat(shapedType);
+    } else {
+      return denseElemsAttr.reshape(shapedType);
+    }
   }
   return {};
 }
@@ -415,7 +419,7 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
 
   if (auto denseElemsAttr = value.dyn_cast<SplatElementsAttr>()) {
     auto shapedType = getType().cast<ShapedType>();
-    return denseElemsAttr.reshape(shapedType);
+    return denseElemsAttr.resizeSplat(shapedType);
   }
   return {};
 }
