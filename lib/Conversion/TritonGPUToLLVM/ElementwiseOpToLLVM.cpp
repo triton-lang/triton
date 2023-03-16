@@ -966,14 +966,14 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
   POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
   POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
-  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
-  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
-  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
-  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)    // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)      // |
+  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)    // ^
+  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)    // <<
+  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)  // >>
+  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)  // >>
   POPULATE_BINARY_OP(arith::MinFOp, LLVM::MinNumOp) // fmin
-  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp) // smin
+  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)  // smin
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \

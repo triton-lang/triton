@@ -72,7 +72,7 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
   }
 
   unsigned bytes_per_elem = 0;
-  for (const auto &ty: srcElementTypes) {
+  for (const auto &ty : srcElementTypes) {
     bytes_per_elem += ty.getIntOrFloatBitWidth() / 8;
   }
   return bytes_per_elem * elems;

@@ -105,10 +105,7 @@ public:
     }
     newOperands[0] = firstArgConversionOp.getOperand();
     auto newEncoding =
-        newOperands[0]
-        .getType()
-        .cast<RankedTensorType>()
-        .getEncoding();
+        newOperands[0].getType().cast<RankedTensorType>().getEncoding();
 
     if (!newEncoding.isa<triton::gpu::BlockedEncodingAttr>()) {
       // ReduceOpToLLVM requires block encoding
@@ -120,10 +117,10 @@ public:
       return failure();
     }
 
-
     for (unsigned i = 1; i < newOperands.size(); ++i) {
       auto oldTy = newOperands[i].getType().cast<RankedTensorType>();
-      RankedTensorType newTy = RankedTensorType::Builder(oldTy).setEncoding(newEncoding);
+      RankedTensorType newTy =
+          RankedTensorType::Builder(oldTy).setEncoding(newEncoding);
 
       newOperands[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newTy, newOperands[i]);
@@ -132,7 +129,8 @@ public:
     auto newReduce = rewriter.create<triton::ReduceOp>(
         op->getLoc(), newOperands, reduce.getAxis());
     auto &newCombineOp = newReduce.getCombineOp();
-    rewriter.inlineRegionBefore(reduce.getCombineOp(), newCombineOp, newCombineOp.end());
+    rewriter.inlineRegionBefore(reduce.getCombineOp(), newCombineOp,
+                                newCombineOp.end());
 
     SmallVector<Value> newRet = newReduce.getResult();
     auto oldTypes = reduce.getResult().getType();

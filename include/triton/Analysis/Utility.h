@@ -12,8 +12,8 @@ namespace mlir {
 
 class ReduceOpHelper {
 public:
-  explicit ReduceOpHelper(triton::ReduceOp rop):
-      op(rop.getOperation()), axis(rop.getAxis()) {
+  explicit ReduceOpHelper(triton::ReduceOp rop)
+      : op(rop.getOperation()), axis(rop.getAxis()) {
     auto firstTy = rop.getOperands()[0].getType().cast<RankedTensorType>();
     srcShape = firstTy.getShape();
     srcEncoding = firstTy.getEncoding();

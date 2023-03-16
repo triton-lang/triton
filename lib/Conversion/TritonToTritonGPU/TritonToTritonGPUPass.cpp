@@ -469,30 +469,30 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   using OpConversionPattern<triton::ReduceOp>::OpConversionPattern;
 
   LogicalResult
-      matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
-                      ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto newReduce = rewriter.create<triton::ReduceOp>(
         op.getLoc(), adaptor.getOperands(), adaptor.getAxis());
     addNamedAttrs(newReduce, adaptor.getAttributes());
 
     auto &newCombineOp = newReduce.getCombineOp();
-    rewriter.inlineRegionBefore(op.getCombineOp(), newCombineOp, newCombineOp.end());
+    rewriter.inlineRegionBefore(op.getCombineOp(), newCombineOp,
+                                newCombineOp.end());
     rewriter.replaceOp(op, newReduce.getResult());
     return success();
   }
 };
 
-struct TritonReduceReturnPattern :
-    public OpConversionPattern<triton::ReduceReturnOp> {
+struct TritonReduceReturnPattern
+    : public OpConversionPattern<triton::ReduceReturnOp> {
   using OpConversionPattern<triton::ReduceReturnOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::ReduceReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<triton::ReduceReturnOp>(
-            op, adaptor.getResult()),
-        adaptor.getAttributes());
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ReduceReturnOp>(
+                      op, adaptor.getResult()),
+                  adaptor.getAttributes());
     return success();
   }
 };
@@ -537,11 +537,11 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
           TritonGenericPattern<triton::PtrToIntOp>,
           TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
           TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-          TritonReducePattern, TritonReduceReturnPattern,
-          TritonTransPattern, TritonExpandDimsPattern,
-          TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
-          TritonStorePattern, TritonExtElemwisePattern, TritonPrintPattern,
-          TritonAssertPattern, TritonAtomicRMWPattern>(typeConverter, context);
+          TritonReducePattern, TritonReduceReturnPattern, TritonTransPattern,
+          TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,
+          TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern,
+          TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern>(
+          typeConverter, context);
 }
 
 //

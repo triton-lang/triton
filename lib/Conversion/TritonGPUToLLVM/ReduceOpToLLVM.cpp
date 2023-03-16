@@ -23,9 +23,9 @@ public:
   }
 
 private:
-
   void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
-                  llvm::SmallVectorImpl<Value> &acc, ValueRange cur, bool isFirst) const {
+                  llvm::SmallVectorImpl<Value> &acc, ValueRange cur,
+                  bool isFirst) const {
     if (isFirst) {
       acc.resize(cur.size());
       for (unsigned i = 0; i < cur.size(); ++i) {
@@ -41,13 +41,14 @@ private:
     auto &newReduce = parent.front();
     auto returnOp = dyn_cast<triton::ReduceReturnOp>(newReduce.getTerminator());
 
-    llvm::SmallVector<Value> combineArgs(2*acc.size());
+    llvm::SmallVector<Value> combineArgs(2 * acc.size());
     for (unsigned i = 0; i < acc.size(); ++i) {
       combineArgs[i] = acc[i];
       combineArgs[acc.size() + i] = cur[i];
     }
 
-    rewriter.mergeBlockBefore(&newReduce, &*rewriter.getInsertionPoint(), combineArgs);
+    rewriter.mergeBlockBefore(&newReduce, &*rewriter.getInsertionPoint(),
+                              combineArgs);
 
     auto results = returnOp.getResult();
     for (unsigned i = 0; i < acc.size(); ++i) {
@@ -58,16 +59,16 @@ private:
     rewriter.eraseOp(returnOp);
   }
 
-  SmallVector<SmallVector<Value>> unpackInputs(
-      Location loc, triton::ReduceOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const {
+  SmallVector<SmallVector<Value>>
+  unpackInputs(Location loc, triton::ReduceOp op, OpAdaptor adaptor,
+               ConversionPatternRewriter &rewriter) const {
     auto types = op.getInputTypes();
     auto operands = adaptor.getOperands();
     unsigned srcElems = getElemsPerThread(types[0]);
     SmallVector<SmallVector<Value>> srcValues(srcElems);
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto values = getTypeConverter()->unpackLLElements(
-          loc, operands[i], rewriter, types[i]);
+      auto values = getTypeConverter()->unpackLLElements(loc, operands[i],
+                                                         rewriter, types[i]);
 
       assert(values.size() == srcValues.size());
       for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -106,8 +107,9 @@ private:
     smemBases[0] = bitcast(
         getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] = bitcast(
-          gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(elems)), elemPtrTys[i]);
+      smemBases[i] =
+          bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(elems)),
+                  elemPtrTys[i]);
     }
 
     unsigned srcElems = getElemsPerThread(srcTys[0]);
@@ -120,7 +122,6 @@ private:
 
     std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
     std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
-
 
     Region *combineOp = &op.getCombineOp();
 
@@ -155,7 +156,6 @@ private:
         store(acc[i], writePtrs[i]);
       }
 
-
       SmallVector<Value> readIdx(writeIdx.size(), ints[0]);
       for (int N = smemShape[axis] / 2; N > 0; N >>= 1) {
         readIdx[axis] = ints[N];
@@ -186,7 +186,8 @@ private:
     // set output values
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      if (auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+      if (auto resultTy =
+              op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
         // nd-tensor where n >= 1
 
         auto resultLayout = resultTy.getEncoding();
@@ -199,12 +200,13 @@ private:
         for (unsigned j = 0; j < resultElems; ++j) {
           SmallVector<Value> readIdx = resultIndices[j];
           readIdx.insert(readIdx.begin() + axis, ints[0]);
-          Value readOffset = linearize(rewriter, loc, readIdx, smemShape, srcOrd);
+          Value readOffset =
+              linearize(rewriter, loc, readIdx, smemShape, srcOrd);
           Value readPtr = gep(elemPtrTys[i], smemBases[i], readOffset);
           resultVals[j] = load(readPtr);
         }
-        results[i] = getTypeConverter()->packLLElements(
-            loc, resultVals, rewriter, resultTy);
+        results[i] = getTypeConverter()->packLLElements(loc, resultVals,
+                                                        rewriter, resultTy);
       } else {
         // 0d-tensor -> scalar
         results[i] = load(smemBases[i]);
@@ -247,8 +249,9 @@ private:
     smemBases[0] = bitcast(
         getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] = bitcast(
-          gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems)), elemPtrTys[i]);
+      smemBases[i] =
+          bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems)),
+                  elemPtrTys[i]);
     }
 
     unsigned sizeIntraWarps = helper.getIntraWarpSize();
@@ -377,7 +380,8 @@ private:
     // set output values
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      if (auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+      if (auto resultTy =
+              op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
         // nd-tensor where n >= 1
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getElemsPerThread(resultTy);
@@ -394,8 +398,8 @@ private:
           resultVals[j] = load(readPtr);
         }
 
-        results[i] = getTypeConverter()->packLLElements(
-            loc, resultVals, rewriter, resultTy);
+        results[i] = getTypeConverter()->packLLElements(loc, resultVals,
+                                                        rewriter, resultTy);
       } else {
         // 0d-tensor -> scalar
         results[i] = load(smemBases[i]);
@@ -414,5 +418,5 @@ void populateReduceOpToLLVMPatterns(
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, allocation, smem,
-                                          indexCacheInfo, benefit);
+                                   indexCacheInfo, benefit);
 }

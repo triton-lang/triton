@@ -65,13 +65,14 @@ Value TritonGPUToLLVMTypeConverter::packLLElements(
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
   for (const auto &v : llvm::enumerate(resultVals)) {
     if (!v.value()) {
-      emitError(loc) << "cannot insert null values into struct, but tried to insert"
-                     << v.value();
+      emitError(loc)
+          << "cannot insert null values into struct, but tried to insert"
+          << v.value();
     }
     if (v.value().getType() != elementTypes[v.index()]) {
       emitError(loc) << "invalid element type in packLLEElements. Expected "
-                     << elementTypes[v.index()] << " but got " << v.value().getType();
-
+                     << elementTypes[v.index()] << " but got "
+                     << v.value().getType();
     }
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
