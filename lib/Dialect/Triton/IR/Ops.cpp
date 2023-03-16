@@ -295,8 +295,7 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   if (!value)
     return {};
   auto shapedType = getType().cast<ShapedType>();
-  auto ret = SplatElementsAttr::get(
-      shapedType, ArrayRef<Attribute>(value));
+  auto ret = SplatElementsAttr::get(shapedType, ArrayRef<Attribute>(value));
   return ret;
 }
 
@@ -329,15 +328,16 @@ mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
   return mlir::success();
 }
 
-LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op, PatternRewriter &rewriter) {
+LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
+                                         PatternRewriter &rewriter) {
   auto definingOp = op.getOperand().getDefiningOp();
   if (!definingOp) {
     return mlir::failure();
   }
   // expand_dims(splat) -> splat
   if (auto splat = dyn_cast<triton::SplatOp>(definingOp)) {
-    rewriter.replaceOpWithNewOp<triton::SplatOp>(
-      op, op.getType(), splat.getOperand());
+    rewriter.replaceOpWithNewOp<triton::SplatOp>(op, op.getType(),
+                                                 splat.getOperand());
     return mlir::success();
   }
   return mlir::failure();
@@ -361,7 +361,8 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
 
 //-- ViewOp --
 template <typename OpType>
-LogicalResult canonicalizeViewOrBroadcast(OpType op, PatternRewriter &rewriter) {
+LogicalResult canonicalizeViewOrBroadcast(OpType op,
+                                          PatternRewriter &rewriter) {
   auto definingOp = op.getOperand().getDefiningOp();
   if (!definingOp) {
     return mlir::failure();
@@ -369,15 +370,15 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op, PatternRewriter &rewriter) 
 
   // view(view) -> view
   if (auto parent_view = dyn_cast<OpType>(definingOp)) {
-    rewriter.replaceOpWithNewOp<OpType>(
-      op, op.getType(), parent_view.getOperand());
+    rewriter.replaceOpWithNewOp<OpType>(op, op.getType(),
+                                        parent_view.getOperand());
     return mlir::success();
   }
 
   // view(splat) -> splat
   if (auto splat = dyn_cast<triton::SplatOp>(definingOp)) {
-    rewriter.replaceOpWithNewOp<triton::SplatOp>(
-      op, op.getType(), splat.getOperand());
+    rewriter.replaceOpWithNewOp<triton::SplatOp>(op, op.getType(),
+                                                 splat.getOperand());
     return mlir::success();
   }
 
@@ -386,7 +387,6 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op, PatternRewriter &rewriter) 
 LogicalResult ViewOp::canonicalize(ViewOp op, PatternRewriter &rewriter) {
   return canonicalizeViewOrBroadcast(op, rewriter);
 }
-
 
 OpFoldResult ViewOp::fold(FoldAdaptor adaptor) {
   if (getType() == getOperand().getType()) {
@@ -398,7 +398,8 @@ OpFoldResult ViewOp::fold(FoldAdaptor adaptor) {
 }
 
 //-- BroadcastOp --
-LogicalResult BroadcastOp::canonicalize(BroadcastOp op, PatternRewriter &rewriter) {
+LogicalResult BroadcastOp::canonicalize(BroadcastOp op,
+                                        PatternRewriter &rewriter) {
   return canonicalizeViewOrBroadcast(op, rewriter);
 }
 
