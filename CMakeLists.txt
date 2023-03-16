@@ -249,9 +249,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
       ${TRITON_LIBRARIES}
     )
   else()
-    target_link_libraries(triton ${LLVM_LIBRARIES} z stdc++fs
+    target_link_libraries(triton ${LLVM_LIBRARIES} z
       ${TRITON_LIBRARIES}
     )
+    # TODO: Figure out which target is sufficient to fix errors; triton is
+    # apparently not enough
+    link_libraries(stdc++fs)
   endif()
 
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
