@@ -96,7 +96,7 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
       llvm::cl::value_desc("target triple"), llvm::cl::init("-amd-amdhsa"));
 
   static llvm::cl::opt<std::string> GCNFeatures(
-      "", llvm::cl::desc("AMDGCN features. e.g. '+sramecc,-xnack'"),
+      "features", llvm::cl::desc("AMDGCN features. e.g. '+sramecc,-xnack'"),
       llvm::cl::value_desc("features"), llvm::cl::init("+sramecc,-xnack"));
 
   llvm::InitLLVM y(argc, argv);
