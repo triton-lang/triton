@@ -246,6 +246,9 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+
+    let hasCanonicalizeMethod = 1;
+    let hasFolder = 1;
 }
 
 // view is not `pure` because it may reorder elements
@@ -259,6 +262,8 @@ def TT_ViewOp : TT_Op<"view", [NoMemoryEffect,
 
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 
+    let hasCanonicalizeMethod = 1;
+    let hasFolder = 1;
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
@@ -272,6 +277,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
     let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 
+    let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
 }
 
