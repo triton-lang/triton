@@ -1003,11 +1003,11 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
 }
 
 Value loadAv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
+              DotOperandEncodingAttr aEncoding,
               const SharedMemoryObject &smemObj,
               TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
   int bitwidth = aTensorTy.getElementTypeBitWidth();
-  auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
   auto mmaLayout = aEncoding.getParent().cast<MmaEncodingAttr>();
 
   SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
@@ -1054,12 +1054,12 @@ Value loadAv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
 }
 
 Value loadBv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
+              DotOperandEncodingAttr bEncoding,
               const SharedMemoryObject &smemObj,
               TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
   ValueTableV2 hb;
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   int bitwidth = tensorTy.getElementTypeBitWidth();
-  auto bEncoding = tensorTy.getEncoding().cast<DotOperandEncodingAttr>();
   auto mmaLayout = bEncoding.getParent().cast<MmaEncodingAttr>();
 
   SmallVector<int64_t> shape(tensorTy.getShape().begin(),
@@ -1074,9 +1074,7 @@ Value loadBv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
 
-  auto numRep =
-      tensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
-          tensorTy.getShape(), bitwidth);
+  auto numRep = bEncoding.getMMAv2Rep(tensorTy.getShape(), bitwidth);
   int numRepK = numRep[0];
   int numRepN = numRep[1];
 
@@ -1718,12 +1716,12 @@ private:
 
       if (dotOperandLayout.getOpIdx() == 0) {
         // operand $a
-        res =
-            loadAv2(rewriter, loc, src, smemObj, getTypeConverter(), tid_val());
+        res = loadAv2(rewriter, loc, src, dotOperandLayout, smemObj,
+                      getTypeConverter(), tid_val());
       } else if (dotOperandLayout.getOpIdx() == 1) {
         // operand $b
-        res =
-            loadBv2(rewriter, loc, src, smemObj, getTypeConverter(), tid_val());
+        res = loadBv2(rewriter, loc, src, dotOperandLayout, smemObj,
+                      getTypeConverter(), tid_val());
       }
     } else if (!isOuter && mmaLayout.isVolta() && isHMMA) { // tensor core v1
       bool isMMAv1Row = dotOperandLayout.getMMAv1IsRow();
