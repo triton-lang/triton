@@ -520,6 +520,17 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 def test_math_op(expr, device='cuda'):
     _test_unary('float32', f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
 
+# ----------------
+# test abs
+# ----------------
+
+
+@pytest.mark.parametrize("dtype_x", [
+    (dtype_x)
+    for dtype_x in dtypes_with_bfloat16
+])
+def test_abs(dtype_x, device='cuda'):
+    _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
 # ----------------
 # test indexing
