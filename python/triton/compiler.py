@@ -16,7 +16,7 @@ import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-from typing import Any, Callable, Dict, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import setuptools
 import torch
@@ -41,7 +41,8 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return triton.language.pointer_type(ty)
     tys = {
-        "fp8": triton.language.float8,
+        "fp8e5": triton.language.float8e5,
+        "fp8e4": triton.language.float8e4,
         "fp16": triton.language.float16,
         "bf16": triton.language.bfloat16,
         "fp32": triton.language.float32,
@@ -64,7 +65,9 @@ def mangle_ty(ty):
     if ty.is_ptr():
         return 'P' + mangle_ty(ty.element_ty)
     if ty.is_int():
-        return 'i' + str(ty.int_bitwidth)
+        SIGNED = triton.language.dtype.SIGNEDNESS.SIGNED
+        prefix = 'i' if ty.int_signedness == SIGNED else 'u'
+        return prefix + str(ty.int_bitwidth)
     if ty.is_fp8():
         return 'fp8'
     if ty.is_fp16():
@@ -114,10 +117,11 @@ class enter_sub_region:
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, module=None, is_kernel=False, function_types=dict(), debug=False):
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name,
+                 module=None, is_kernel=False, function_types: Optional[Dict] = None, debug=False):
         self.builder = _triton.ir.builder(context)
         self.module = self.builder.create_module() if module is None else module
-        self.function_ret_types = function_types
+        self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
         self.gscope = gscope
         self.lscope = dict()
@@ -127,45 +131,45 @@ class CodeGenerator(ast.NodeVisitor):
         self.is_kernel = is_kernel
         self.last_node = None
         self.debug = debug
-        self.builtins = {
-            'range': range,
-            'min': triton.language.minimum,
-            'float': float,
-            'int': int,
-            'print': triton.language.core.device_print,
-            'isinstance': isinstance,
-            'getattr': getattr,
-        }
-        self.static_functions = [
-            'static_print', 'static_assert'
-        ]
         self.scf_stack = []
         # SSA-construction
         # name => triton.language.tensor
         self.local_defs: Dict[str, triton.language.tensor] = {}
         self.global_uses: Dict[str, triton.language.tensor] = {}
+        self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
 
-    def get_value(self, name):
-        ''' This function:
-        1. make sure `name` is defined
-        2. if `name` is triton.language.tensor, get stored tensor by calling
-           `self._get_tensor()`
-        '''
-        # search node.id in local scope
-        ret = None
-        if name in self.lscope:
-            ret = self.lscope[name]
-            if name not in self.local_defs:
-                self.global_uses[name] = ret
-        # search node.id in global scope
-        elif name in self.gscope:
-            ret = self.gscope[name]
-        # search node.id in builtins
-        elif name in self.builtins:
-            ret = self.builtins[name]
-        else:
-            raise ValueError(f'{name} is not defined')
-        return ret
+    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (range, float, int, isinstance, getattr)}
+
+    def _define_name_lookup(self):
+        # TODO: this needs to be moved to class scope when cyclic imports untangled and `triton.language` can be imported at module level
+        self.builtin_namespace.update((
+            ('print', triton.language.core.device_print),
+            ('min', triton.language.minimum),  # TODO: why `min`? if `min`, why not `max`? `sum`? `all`?
+        ))
+        # TODO: this needs to be moved to class scope when cyclic imports untangled and `triton.language` can be imported at module level
+        self.statically_implemented_functions.update((
+            (triton.language.core.static_assert, self.execute_static_assert),
+            (triton.language.core.static_print, self.execute_static_print),
+        ))
+
+        def local_lookup(name: str, absent):
+            value = self.lscope.get(name, absent)  # this needs to be re-fetched from `self` every time, because it gets switched occasionally
+            if value is not absent and name not in self.local_defs:
+                self.global_uses[name] = value
+            return value
+
+        lookup_order = local_lookup, self.gscope.get, self.builtin_namespace.get
+        absent_marker = object()
+
+        def name_lookup(name: str) -> Any:
+            absent = absent_marker
+            for lookup_function in lookup_order:
+                value = lookup_function(name, absent)
+                if value is not absent:
+                    return value
+            raise NameError(f'{name} is not defined')
+
+        return name_lookup
 
     def set_value(self, name: str,
                   value: Union[triton.language.tensor, triton.language.constexpr]) -> None:
@@ -190,9 +194,23 @@ class CodeGenerator(ast.NodeVisitor):
                 break
         return stmts and isinstance(stmt, ast.Return)
 
+    # TODO: should be its own AST visitor
     def contains_return_op(self, node):
         if isinstance(node, ast.Return):
             return True
+        elif isinstance(node, ast.Assign):
+            return self.contains_return_op(node.value)
+        elif isinstance(node, ast.Module):
+            pred = lambda s: self.contains_return_op(s)
+            return any(pred(s) for s in node.body)
+        elif isinstance(node, ast.FunctionDef):
+            pred = lambda s: self.contains_return_op(s)
+            return any(pred(s) for s in node.body)
+        elif isinstance(node, ast.Call):
+            fn = self.visit(node.func)
+            if isinstance(fn, triton.JITFunction):
+                return self.contains_return_op(fn.parse())
+            return False
         elif isinstance(node, ast.If):
             pred = lambda s: self.contains_return_op(s)
             ret = any(pred(s) for s in node.body)
@@ -319,7 +337,8 @@ class CodeGenerator(ast.NodeVisitor):
         _names = []
         for target in node.targets:
             _names += [self.visit(target)]
-        assert len(_names) == 1
+        if len(_names) > 1:
+            raise NotImplementedError("Multiple assignment is not supported.")
         names = _names[0]
         values = self.visit(node.value)
         if not isinstance(names, tuple):
@@ -340,12 +359,12 @@ class CodeGenerator(ast.NodeVisitor):
         rhs = ast.BinOp(lhs, node.op, node.value)
         assign = ast.Assign(targets=[node.target], value=rhs)
         self.visit(assign)
-        return self.get_value(name)
+        return self.dereference_name(name)
 
     def visit_Name(self, node):
         if type(node.ctx) == ast.Store:
             return node.id
-        return self.get_value(node.id)
+        return self.dereference_name(node.id)
 
     def visit_Store(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -662,7 +681,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ast.NodeVisitor.generic_visit(self, stmt)
             return
 
-        if IteratorClass != self.builtins['range']:
+        if IteratorClass is not range:
             raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
 
         # visit iterator arguments
@@ -776,8 +795,8 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Index(self, node):
         return self.visit(node.value)
 
-    def visit_keyword(self, node):
-        return {node.arg: self.visit(node.value)}
+    def visit_keyword(self, node) -> Tuple[str, Any]:
+        return node.arg, self.visit(node.value)
 
     def visit_Assert(self, node) -> Any:
         if not self.debug:
@@ -791,21 +810,15 @@ class CodeGenerator(ast.NodeVisitor):
         fn = self.visit(node.func)
         if isinstance(fn, triton.language.constexpr):
             fn = fn.value
-        kws = dict()
-        for keyword in node.keywords:
-            kws.update(self.visit(keyword))
+
+        static_implementation = self.statically_implemented_functions.get(fn)
+        if static_implementation is not None:
+            return static_implementation(node)
+
+        kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
-        if fn.__name__ == "print":
-            fn = self.builtins["print"]
-        elif fn.__name__ == "device_assert":
+        if fn is triton.language.core.device_assert:   # TODO: this should not be so hardcoded
             if not self.debug:
-                return
-        elif fn.__name__ in self.static_functions:
-            if fn.__name__ == "static_print":
-                print(*args, **kws)
-                return
-            elif fn.__name__ == "static_assert":
-                assert args[0], args[1]
                 return
         if isinstance(fn, triton.runtime.JITFunction):
             from inspect import getcallargs
@@ -844,12 +857,10 @@ class CodeGenerator(ast.NodeVisitor):
                 for i in range(call_op.get_num_results()):
                     results.append(triton.language.tensor(call_op.get_result(i), callee_ret_type[i]))
                 return tuple(results)
-        if (hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__)) \
-                or impl.is_builtin(fn):
+        if (hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__)) or impl.is_builtin(fn):
             return fn(*args, _builder=self.builder, **kws)
-        if fn in self.builtins.values():
-            args = [arg.value if isinstance(arg, triton.language.constexpr) else arg
-                    for arg in args]
+        if fn in self.builtin_namespace.values():
+            args = [arg.value if isinstance(arg, triton.language.constexpr) else arg for arg in args]
         return fn(*args, **kws)
 
     def visit_Constant(self, node):
@@ -896,6 +907,22 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_NoneType(self, node):
         return None
 
+    def visit_JoinedStr(self, node):
+        values = list(node.values)
+        for i, value in enumerate(values):
+            if isinstance(value, ast.Constant):
+                values[i] = str(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                conversion_code = value.conversion
+                evaluated = self.visit(value.value)
+                if not isinstance(evaluated, triton.language.constexpr):
+                    raise NotImplementedError("Cannot evaluate f-string containing non-constexpr conversion values,"
+                                              " found conversion of type " + str(type(evaluated)))
+                values[i] = ("{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}").format(evaluated.value)
+            else:
+                raise AssertionError("encountered unexpected node of type {} in a JoinedStr node".format(type(value)))
+        return ''.join(values)
+
     def visit(self, node):
         if node is not None:
             self.last_node = node
@@ -910,19 +937,77 @@ class CodeGenerator(ast.NodeVisitor):
         typename = type(node).__name__
         raise NotImplementedError("Unsupported node: {}".format(typename))
 
+    # TODO: populate this here (rather than inside `_define_name_lookup`) once cyclic imports resolved
+    statically_implemented_functions: Dict[object, Callable[[ast.Call], Any]] = {}
+
+    def execute_static_print(self, node: ast.Call) -> None:
+        # TODO: too simplistic? Perhaps do something else with non-constexpr
+        def unwrap(_):
+            return _.value if isinstance(_, triton.language.constexpr) else _
+
+        kws = {name: unwrap(value) for name, value in (self.visit(keyword) for keyword in node.keywords)}
+        args = [unwrap(self.visit(arg)) for arg in node.args]
+        print(*args, **kws)
+
+    def execute_static_assert(self, node: ast.Call) -> None:
+        arg_count = len(node.args)
+        if not (0 < arg_count <= 2) or len(node.keywords):
+            raise TypeError("`static_assert` requires one or two positional arguments only")
+
+        passed = self.visit(node.args[0])
+        if not isinstance(passed, bool):
+            raise NotImplementedError("Assertion condition could not be determined at compile-time. Make sure that it depends only on `constexpr` values")
+        if not passed:
+            if arg_count == 1:
+                message = ""
+            else:
+                try:
+                    message = self.visit(node.args[1])
+                except Exception as e:
+                    message = "<failed to evaluate assertion message: " + repr(e) + ">"
+
+            raise CompileTimeAssertionFailure(None, node, message)
+        return None
+
 
 class CompilationError(Exception):
-    def __init__(self, src, node):
-        self.message = f'at {node.lineno}:{node.col_offset}:\n'
-        self.message += '\n'.join(src.split('\n')[:node.lineno])
-        self.message += '\n' + ' ' * node.col_offset + '^'
+    source_line_count_max_in_message = 12
+
+    def _format_message(self) -> str:
+        node = self.node
+        message = f'at {node.lineno}:{node.col_offset}:'
+        if self.src is None:
+            message += " <source unavailable>"
+        else:
+            message += '\n'.join(self.src.split('\n')[:node.lineno][-self.source_line_count_max_in_message:])
+            message += '\n' + ' ' * node.col_offset + '^'
+        if self.error_message:
+            message += '\n' + self.error_message
+        return message
+
+    def __init__(self, src: Optional[str], node: ast.AST, error_message: Optional[str]):
         self.src = src
         self.node = node
-        super().__init__(self.message)
+        self.error_message = error_message
+        self.message = self._format_message()
+
+    def __str__(self):
+        return self.message
+
+    def __repr__(self):
+        return "{}({!r})".format(type(self).__name__, self.message)
 
     def __reduce__(self):
         # this is necessary to make CompilationError picklable
-        return (type(self), (self.src, self.node))
+        return type(self), (self.src, self.node, self.error_message)
+
+
+class CompileTimeAssertionFailure(CompilationError):
+    """Specific exception for failed tests in `static_assert` invocations"""
+
+    def set_source_code(self, src: Optional[str]):
+        self.src = src
+        self.message = self._format_message()
 
 
 class OutOfResources(Exception):
@@ -987,11 +1072,16 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True, debug=debug)
     try:
         generator.visit(fn.parse())
+    except CompileTimeAssertionFailure as e:
+        e.set_source_code(fn.src)
+        raise
+    except CompilationError:  # (can this ever happen? nobody has access to fn.src except here)
+        raise  # unchanged
     except Exception as e:
         node = generator.last_node
-        if node is None or isinstance(e, (NotImplementedError, CompilationError)):
-            raise e
-        raise CompilationError(fn.src, node) from e
+        if node is None:
+            raise
+        raise CompilationError(fn.src, node, repr(e)) from e
     ret = generator.module
     # module takes ownership of the context
     ret.context = context
@@ -1027,6 +1117,7 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
@@ -1035,10 +1126,6 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
-    if compute_capability // 10 == 7:
-        # The update_mma_for_volta pass helps to compute some information for MMA encoding specifically for MMAv1
-        # NOTE this pass should be placed after all the passes those modifies mma layout
-        pm.add_tritongpu_update_mma_for_volta_pass()
     pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()

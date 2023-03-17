@@ -1,5 +1,5 @@
 triton.testing
-================
+==============
 
 .. currentmodule:: triton.testing
 

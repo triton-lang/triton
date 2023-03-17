@@ -673,8 +673,8 @@ def cast(input: tl.tensor,
     dst_sca_ty = dst_ty.scalar
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
-    if (src_sca_ty.is_customized_floating() and dst_sca_ty.is_floating()) or \
-       (src_sca_ty.is_floating() and dst_sca_ty.is_customized_floating()):
+    if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
+       (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()):
         return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder)),
                          dst_ty)
 
