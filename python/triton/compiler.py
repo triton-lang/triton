@@ -89,6 +89,14 @@ def mangle_fn(name, arg_tys, constants):
     return ret
 
 
+def _is_constexpr(o: Any) -> bool:
+    return isinstance(o, triton.language.constexpr)  # TODO: fetch triton.language.constexpr to a global after circular imports untangled, saving getattr
+
+
+def _unwrap_if_constexpr(o: Any):
+    return o.value if isinstance(o, triton.language.constexpr) else o
+
+
 class enter_sub_region:
     def __init__(self, generator: CodeGenerator):
         self.generator = generator
@@ -267,7 +275,7 @@ class CodeGenerator(ast.NodeVisitor):
         for i, arg_name in enumerate(arg_names):
             if i in self.constants:
                 cst = self.constants[i]
-                if not isinstance(cst, triton.language.constexpr):
+                if not _is_constexpr(cst):
                     cst = triton.language.constexpr(self.constants[i])
                 arg_values.append(cst)
                 continue
@@ -318,7 +326,7 @@ class CodeGenerator(ast.NodeVisitor):
             if target in self.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
-            if not isinstance(value, triton.language.constexpr):
+            if not _is_constexpr(value):
                 value = triton.language.constexpr(value)
             self.lscope[target] = value
             return self.lscope[target]
@@ -330,7 +338,7 @@ class CodeGenerator(ast.NodeVisitor):
         for target in node.targets:
             _names += [self.visit(target)]
         if len(_names) > 1:
-            raise NotImplementedError("Multiple assignment is not supported.")
+            raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple assignment is not supported.")
         names = _names[0]
         values = self.visit(node.value)
         if not isinstance(names, tuple):
@@ -339,8 +347,7 @@ class CodeGenerator(ast.NodeVisitor):
             values = [values]
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
-            if isinstance(value, triton.language.constexpr):
-                value = value.value
+            value = _unwrap_if_constexpr(value)
             if not isinstance(value, triton.language.tensor):
                 value = triton.language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
@@ -513,13 +520,17 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_if_scf(cond, node)
             else:
                 self.visit_if_top_level(cond, node)
-        else:
-            if isinstance(cond, triton.language.constexpr):
-                cond = cond.value
+        elif _is_constexpr(cond):
+            try:
+                cond = bool(cond.value)
+            except (TypeError, ValueError):
+                raise UnsupportedLanguageConstruct(None, node, "the boolean value of constexpr of type {} cannot be determined".format(type(cond.value)))
             if cond:
                 self.visit_compound_statement(node.body)
             else:
                 self.visit_compound_statement(node.orelse)
+        else:
+            raise UnsupportedLanguageConstruct(None, node, "conditionals are supported only for `tensor` and `constexpr` values.")
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
@@ -532,14 +543,10 @@ class CodeGenerator(ast.NodeVisitor):
         pass
 
     def visit_Compare(self, node):
-        assert len(node.comparators) == 1
-        assert len(node.ops) == 1
-        lhs = self.visit(node.left)
-        rhs = self.visit(node.comparators[0])
-        if isinstance(lhs, triton.language.constexpr):
-            lhs = lhs.value
-        if isinstance(rhs, triton.language.constexpr):
-            rhs = rhs.value
+        if not (len(node.comparators) == 1 and len(node.ops) == 1):
+            raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple comparison is not supported")
+        lhs = _unwrap_if_constexpr(self.visit(node.left))
+        rhs = _unwrap_if_constexpr(self.visit(node.comparators[0]))
         if type(node.ops[0]) == ast.Is:
             return triton.language.constexpr(lhs is rhs)
         if type(node.ops[0]) == ast.IsNot:
@@ -684,7 +691,7 @@ class CodeGenerator(ast.NodeVisitor):
         step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Num(1))
         # handle negative constant step (not supported by scf.for in MLIR)
         negative_step = False
-        if isinstance(step, triton.language.constexpr) and step.value < 0:
+        if _is_constexpr(step) and step.value < 0:
             step = triton.language.constexpr(-step.value)
             negative_step = True
             lb, ub = ub, lb
@@ -799,9 +806,7 @@ class CodeGenerator(ast.NodeVisitor):
         return triton.language.core.device_assert(test, msg, _builder=self.builder)
 
     def visit_Call(self, node):
-        fn = self.visit(node.func)
-        if isinstance(fn, triton.language.constexpr):
-            fn = fn.value
+        fn = _unwrap_if_constexpr(self.visit(node.func))
 
         static_implementation = self.statically_implemented_functions.get(fn)
         if static_implementation is not None:
@@ -820,7 +825,7 @@ class CodeGenerator(ast.NodeVisitor):
                     else triton.language.constexpr(arg) for arg in args]
             # generate function def
             attributes = dict()
-            constexprs = [i for i, arg in enumerate(args) if isinstance(arg, triton.language.constexpr)]
+            constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
             constants = {i: args[i] for i in constexprs}
             # generate call
             args = [None if i in constexprs else arg for i, arg in enumerate(args)]
@@ -852,7 +857,7 @@ class CodeGenerator(ast.NodeVisitor):
         if (hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__)) or impl.is_builtin(fn):
             return fn(*args, _builder=self.builder, **kws)
         if fn in self.builtin_namespace.values():
-            args = [arg.value if isinstance(arg, triton.language.constexpr) else arg for arg in args]
+            args = map(_unwrap_if_constexpr, args)
         return fn(*args, **kws)
 
     def visit_Constant(self, node):
@@ -907,9 +912,9 @@ class CodeGenerator(ast.NodeVisitor):
             elif isinstance(value, ast.FormattedValue):
                 conversion_code = value.conversion
                 evaluated = self.visit(value.value)
-                if not isinstance(evaluated, triton.language.constexpr):
-                    raise NotImplementedError("Cannot evaluate f-string containing non-constexpr conversion values,"
-                                              " found conversion of type " + str(type(evaluated)))
+                if not _is_constexpr(evaluated):
+                    raise UnsupportedLanguageConstruct(
+                        None, node, "Cannot evaluate f-string containing non-constexpr conversion values, found conversion of type " + str(type(evaluated)))
                 values[i] = ("{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}").format(evaluated.value)
             else:
                 raise AssertionError("encountered unexpected node of type {} in a JoinedStr node".format(type(value)))
@@ -926,19 +931,16 @@ class CodeGenerator(ast.NodeVisitor):
             return super().visit(node)
 
     def generic_visit(self, node):
-        typename = type(node).__name__
-        raise NotImplementedError("Unsupported node: {}".format(typename))
+        raise UnsupportedLanguageConstruct(None, node, "unsupported AST node type: {}".format(type(node).__name__))
 
     # TODO: populate this here (rather than inside `_define_name_lookup`) once cyclic imports resolved
     statically_implemented_functions: Dict[object, Callable[[ast.Call], Any]] = {}
 
     def execute_static_print(self, node: ast.Call) -> None:
         # TODO: too simplistic? Perhaps do something else with non-constexpr
-        def unwrap(_):
-            return _.value if isinstance(_, triton.language.constexpr) else _
 
-        kws = {name: unwrap(value) for name, value in (self.visit(keyword) for keyword in node.keywords)}
-        args = [unwrap(self.visit(arg)) for arg in node.args]
+        kws = {name: _unwrap_if_constexpr(value) for name, value in (self.visit(keyword) for keyword in node.keywords)}
+        args = [_unwrap_if_constexpr(self.visit(arg)) for arg in node.args]
         print(*args, **kws)
 
     def execute_static_assert(self, node: ast.Call) -> None:
@@ -967,20 +969,29 @@ class CompilationError(Exception):
 
     def _format_message(self) -> str:
         node = self.node
-        message = f'at {node.lineno}:{node.col_offset}:'
         if self.src is None:
-            message += " <source unavailable>"
+            source_excerpt = " <source unavailable>"
         else:
-            message += '\n'.join(self.src.split('\n')[:node.lineno][-self.source_line_count_max_in_message:])
-            message += '\n' + ' ' * node.col_offset + '^'
+            source_excerpt = self.src.split('\n')[:node.lineno][-self.source_line_count_max_in_message:]
+            if source_excerpt:
+                source_excerpt.append(' ' * node.col_offset + '^')
+                source_excerpt = '\n'.join(source_excerpt)
+            else:
+                source_excerpt = " <source empty>"
+
+        message = "at {}:{}:{}".format(node.lineno, node.col_offset, source_excerpt)
         if self.error_message:
             message += '\n' + self.error_message
         return message
 
-    def __init__(self, src: Optional[str], node: ast.AST, error_message: Optional[str]):
+    def __init__(self, src: Optional[str], node: ast.AST, error_message: Union[str, 'triton.language.core.constexpr', None]):
         self.src = src
         self.node = node
-        self.error_message = error_message
+        self.error_message = _unwrap_if_constexpr(error_message)
+        self.message = self._format_message()
+
+    def set_source_code(self, src: Optional[str]):
+        self.src = src
         self.message = self._format_message()
 
     def __str__(self):
@@ -996,10 +1007,11 @@ class CompilationError(Exception):
 
 class CompileTimeAssertionFailure(CompilationError):
     """Specific exception for failed tests in `static_assert` invocations"""
+    pass
 
-    def set_source_code(self, src: Optional[str]):
-        self.src = src
-        self.message = self._format_message()
+
+class UnsupportedLanguageConstruct(CompilationError):
+    pass
 
 
 class OutOfResources(Exception):
@@ -1064,11 +1076,10 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True, debug=debug)
     try:
         generator.visit(fn.parse())
-    except CompileTimeAssertionFailure as e:
-        e.set_source_code(fn.src)
+    except CompilationError as e:
+        if e.src is None:
+            e.set_source_code(fn.src)
         raise
-    except CompilationError:  # (can this ever happen? nobody has access to fn.src except here)
-        raise  # unchanged
     except Exception as e:
         node = generator.last_node
         if node is None:
