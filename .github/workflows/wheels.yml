@@ -32,8 +32,8 @@ jobs:
 
       - name: Append build number
         run: |
-          mkdir wheelhouse-1
-          for i in wheelhouse/*; do
+          mkdir -p wheelhouse-1
+          for i in $(find wheelhouse -type f); do
             python3 -mwheel unpack $i
             python3 -mwheel pack triton-2.0.0 --build-number 1 --dest-dir wheelhouse-1
             rm -rf triton-2.0.0
