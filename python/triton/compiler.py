@@ -1351,6 +1351,7 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
         ptr_info.valid = false;
     }}
     ptr_info.dev_ptr = dev_ptr;
+    Py_DECREF(ret);  // Thanks ChatGPT!
     return ptr_info;
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
