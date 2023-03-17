@@ -1346,147 +1346,136 @@ def generate_launcher(constants, signature):
     """
     else:
         src = f"""
-    #include \"cuda.h\"
-    #include <stdbool.h>
-    #include <Python.h>
-    static inline void gpuAssert(CUresult code, const char *file, int line)
-    {{
-       if (code != CUDA_SUCCESS)
-       {{
-          const char* prefix = "Triton Error [CUDA]: ";
-          const char* str;
-          cuGetErrorString(code, &str);
-          char err[1024] = {{0}};
-          strcat(err, prefix);
-          strcat(err, str);
-          PyErr_SetString(PyExc_RuntimeError, err);
-       }}
-    }}
+#include \"cuda.h\"
+#include <stdbool.h>
+#include <Python.h>
 
-    #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+static inline void gpuAssert(CUresult code, const char *file, int line)
+{{
+   if (code != CUDA_SUCCESS)
+   {{
+      const char* prefix = "Triton Error [CUDA]: ";
+      const char* str;
+      cuGetErrorString(code, &str);
+      char err[1024] = {{0}};
+      strcat(err, prefix);
+      strcat(err, str);
+      PyErr_SetString(PyExc_RuntimeError, err);
+   }}
+}}
 
-    void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
-      void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-      if(gridX*gridY*gridZ > 0){{
-        CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
-      }}
-    }}
+#define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-    typedef struct _DevicePtrInfo {{
-        CUdeviceptr dev_ptr;
-        bool valid;
-    }} DevicePtrInfo;
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
+  void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+  if(gridX*gridY*gridZ > 0){{
+    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
+  }}
+}}
 
-    static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
-      DevicePtrInfo ptr_info;
-      ptr_info.dev_ptr = 0;
-      ptr_info.valid = true;
-      if (PyLong_Check(obj)) {{
-        ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(obj);
-        return ptr_info;
-      }}
-      if (obj == Py_None) {{
-        // valid nullptr
-        return ptr_info;
-      }}
-      PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-      if(ptr){{
-        PyObject *empty_tuple = PyTuple_New(0);
-        PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
-        Py_DECREF(empty_tuple);
-        Py_DECREF(ptr);
-        if (!PyLong_Check(ret)) {{
-          PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
-          ptr_info.valid = false;
-          return ptr_info;
-        }}
-        ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
-        unsigned attr;
-        CUresult status =
-            cuPointerGetAttribute(&attr, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr_info.dev_ptr);
-        if (ptr_info.dev_ptr &&
-           (!(attr == CU_MEMORYTYPE_DEVICE || attr == CU_MEMORYTYPE_UNIFIED) ||
-            !(status == CUDA_SUCCESS))) {{
-            PyErr_Format(PyExc_ValueError,
-                         "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
-            ptr_info.valid = false;
-        }}
-        return ptr_info;
-      }}
-      PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+typedef struct _DevicePtrInfo {{
+    CUdeviceptr dev_ptr;
+    bool valid;
+}} DevicePtrInfo;
+
+static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
+  DevicePtrInfo ptr_info;
+  ptr_info.dev_ptr = 0;
+  ptr_info.valid = true;
+  if (PyLong_Check(obj)) {{
+    ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(obj);
+    return ptr_info;
+  }}
+  if (obj == Py_None) {{
+    // valid nullptr
+    return ptr_info;
+  }}
+  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if(ptr){{
+    PyObject *empty_tuple = PyTuple_New(0);
+    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
+    Py_DECREF(empty_tuple);
+    Py_DECREF(ptr);
+    if (!PyLong_Check(ret)) {{
+      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+      ptr_info.valid = false;
       return ptr_info;
     }}
-
-    static PyObject* launch(PyObject* self, PyObject* args) {{
-      int gridX, gridY, gridZ;
-      uint64_t _stream;
-      uint64_t _function;
-      int num_warps;
-      int shared_memory;
-      PyObject *launch_enter_hook = NULL;
-      PyObject *launch_exit_hook = NULL;
-      PyObject *compiled_kernel = NULL;
-      PyObject *hook_ret = NULL;
-      {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
-        return NULL;
-      }}
-
-      if (launch_enter_hook != Py_None) {{
-        PyObject *new_args = PyTuple_Pack(1, compiled_kernel);
-        hook_ret = PyObject_CallObject(launch_enter_hook, new_args);
-        Py_DECREF(new_args);
-      }}
-
-
-      // raise exception asap
-      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-      _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
-
-      if (launch_exit_hook != Py_None) {{
-        PyObject *new_args = NULL;
-        if (hook_ret) {{
-            new_args = PyTuple_Pack(2, compiled_kernel, hook_ret);
-        }} else {{
-            new_args = PyTuple_Pack(1, compiled_kernel);
-        }}
-        hook_ret = PyObject_CallObject(launch_exit_hook, new_args);
-        Py_DECREF(new_args);
-      }}
-
-      if (hook_ret) {{
-          Py_DECREF(hook_ret);
-      }}
-      if(PyErr_Occurred()) {{
-          return NULL;
-      }}
-      // return None
-      Py_INCREF(Py_None);
-      return Py_None;
+    ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
+    if(!ptr_info.dev_ptr)
+      return ptr_info;
+    uint64_t dev_ptr;
+    int status = cuPointerGetAttribute(&dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
+    if (status == CUDA_ERROR_INVALID_VALUE) {{
+        PyErr_Format(PyExc_ValueError,
+                     "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
+        ptr_info.valid = false;
     }}
+    ptr_info.dev_ptr = dev_ptr;
+    Py_DECREF(ret);  // Thanks ChatGPT!
+    return ptr_info;
+  }}
+  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  return ptr_info;
+}}
 
-    static PyMethodDef ModuleMethods[] = {{
-      {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-      {{NULL, NULL, 0, NULL}} // sentinel
-    }};
+static PyObject* launch(PyObject* self, PyObject* args) {{
+  int gridX, gridY, gridZ;
+  uint64_t _stream;
+  uint64_t _function;
+  int num_warps;
+  int shared_memory;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  PyObject *compiled_kernel = NULL;
+  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+    return NULL;
+  }}
 
-    static struct PyModuleDef ModuleDef = {{
-      PyModuleDef_HEAD_INIT,
-      \"launcher\",
-      NULL, //documentation
-      -1, //size
-      ModuleMethods
-    }};
+  if (launch_enter_hook != Py_None) {{
+    PyObject_CallObject(launch_enter_hook, args);
+  }}
 
-    PyMODINIT_FUNC PyInit_launcher(void) {{
-      PyObject *m = PyModule_Create(&ModuleDef);
-      if(m == NULL) {{
-          return NULL;
-      }}
-      PyModule_AddFunctions(m, ModuleMethods);
-      return m;
-    }}
-      """
+
+  // raise exception asap
+  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+
+  if (launch_exit_hook != Py_None) {{
+    PyObject_CallObject(launch_exit_hook, args);
+  }}
+
+  if(PyErr_Occurred()) {{
+    return NULL;
+  }}
+  // return None
+  Py_INCREF(Py_None);
+  return Py_None;
+}}
+
+static PyMethodDef ModuleMethods[] = {{
+  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+  {{NULL, NULL, 0, NULL}} // sentinel
+}};
+
+static struct PyModuleDef ModuleDef = {{
+  PyModuleDef_HEAD_INIT,
+  \"__triton_launcher\",
+  NULL, //documentation
+  -1, //size
+  ModuleMethods
+}};
+
+PyMODINIT_FUNC PyInit___triton_launcher(void) {{
+  PyObject *m = PyModule_Create(&ModuleDef);
+  if(m == NULL) {{
+    return NULL;
+  }}
+  PyModule_AddFunctions(m, ModuleMethods);
+  return m;
+}}
+"""
     return src
 
 
