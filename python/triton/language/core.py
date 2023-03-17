@@ -898,7 +898,7 @@ def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", 
     :param other: if mask[idx] is false, return other[idx]
     :type other: Block, optional
     :param cache_modifier: changes cache option in nvidia ptx
-    'type cache_modifier: str, optional
+    :type cache_modifier: str, optional
     """
     # mask, other can be constexpr
     if _constexpr_to_value(mask) is not None:
@@ -1065,7 +1065,7 @@ def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
-    Computes the element-wise {name} of :code:`x`
+    Computes the element-wise {name} of :code:`x`.
 
     :param x: the input values
     :type x: Block
@@ -1275,7 +1275,7 @@ def softmax(x, ieee_rounding=False):
 @triton.jit
 def ravel(x):
     """
-    Returns a contiguous flattened view of :code:`x`
+    Returns a contiguous flattened view of :code:`x`.
 
     :param x: the input tensor
     :type x: Block

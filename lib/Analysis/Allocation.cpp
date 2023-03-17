@@ -65,7 +65,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
         return {};
 
   assert(srcLayout && dstLayout &&
-         "Unexpect layout in getScratchConfigForCvtLayout()");
+         "Unexpected layout in getScratchConfigForCvtLayout()");
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
   unsigned srcContigPerThread = getContigPerThread(srcLayout)[inOrd[0]];
   unsigned dstContigPerThread = getContigPerThread(dstLayout)[outOrd[0]];
