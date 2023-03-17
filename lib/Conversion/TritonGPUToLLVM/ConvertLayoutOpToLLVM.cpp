@@ -443,7 +443,262 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   return res;
 }
 
-// ---
+// --- v2 ----
+
+using ValueTableV2 = std::map<std::pair<unsigned, unsigned>, Value>;
+
+// Data loader for mma.16816 instruction.
+class MMA16816SmemLoader {
+public:
+  MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, uint32_t kOrder,
+                     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
+                     ArrayRef<int> instrShape, ArrayRef<int> matShape,
+                     int perPhase, int maxPhase, int elemBytes,
+                     ConversionPatternRewriter &rewriter,
+                     TypeConverter *typeConverter, const Location &loc);
+
+  // lane = thread % 32
+  // warpOff = (thread/32) % wpt(0)
+  llvm::SmallVector<Value> computeOffsets(Value warpOff, Value lane,
+                                          Value cSwizzleOffset) {
+    if (canUseLdmatrix)
+      return computeLdmatrixMatOffs(warpOff, lane, cSwizzleOffset);
+    else if (elemBytes == 4 && needTrans)
+      return computeB32MatOffs(warpOff, lane, cSwizzleOffset);
+    else if (elemBytes == 1 && needTrans)
+      return computeB8MatOffs(warpOff, lane, cSwizzleOffset);
+    else
+      llvm::report_fatal_error("Invalid smem load config");
+
+    return {};
+  }
+
+  int getNumPtrs() const { return numPtrs; }
+
+  // Compute the offset to the matrix this thread(indexed by warpOff and lane)
+  // mapped to.
+  SmallVector<Value> computeLdmatrixMatOffs(Value warpId, Value lane,
+                                            Value cSwizzleOffset);
+
+  // Compute 32-bit matrix offsets.
+  SmallVector<Value> computeB32MatOffs(Value warpOff, Value lane,
+                                       Value cSwizzleOffset);
+
+  // compute 8-bit matrix offset.
+  SmallVector<Value> computeB8MatOffs(Value warpOff, Value lane,
+                                      Value cSwizzleOffset);
+
+  // Load 4 matrices and returns 4 vec<2> elements.
+  std::tuple<Value, Value, Value, Value>
+  loadX4(int mat0, int mat1, ArrayRef<Value> offs, ArrayRef<Value> ptrs,
+         Type matTy, Type shemPtrTy) const;
+
+private:
+  SmallVector<uint32_t> order;
+  int kOrder;
+  SmallVector<int64_t> tileShape;
+  SmallVector<int> instrShape;
+  SmallVector<int> matShape;
+  int perPhase;
+  int maxPhase;
+  int elemBytes;
+  ConversionPatternRewriter &rewriter;
+  const Location &loc;
+  MLIRContext *ctx{};
+
+  int cMatShape;
+  int sMatShape;
+
+  Value sStride;
+
+  bool needTrans;
+  bool canUseLdmatrix;
+
+  int numPtrs;
+
+  int pLoadStrideInMat;
+  int sMatStride;
+
+  int matArrStride;
+  int warpOffStride;
+};
+
+Type getShemPtrTy(Type argType) {
+  MLIRContext *ctx = argType.getContext();
+  if (argType.isF16())
+    return ptr_ty(type::f16Ty(ctx), 3);
+  else if (argType.isBF16())
+    return ptr_ty(type::i16Ty(ctx), 3);
+  else if (argType.isF32())
+    return ptr_ty(type::f32Ty(ctx), 3);
+  else if (argType.isInteger(8))
+    return ptr_ty(type::i8Ty(ctx), 3);
+  else
+    llvm::report_fatal_error("mma16816 data type not supported");
+}
+
+std::function<void(int, int)>
+getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
+                MmaEncodingAttr mmaLayout, int wpt, uint32_t kOrder,
+                SmallVector<int> instrShape, SmallVector<int> matShape,
+                Value warpId, Value lane, ValueTableV2 &vals, bool isA,
+                TritonGPUToLLVMTypeConverter *typeConverter,
+                ConversionPatternRewriter &rewriter, Location loc) {
+  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  // We assumes that the input operand of Dot should be from shared layout.
+  // TODO(Superjomn) Consider other layouts if needed later.
+  auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+  const int perPhase = sharedLayout.getPerPhase();
+  const int maxPhase = sharedLayout.getMaxPhase();
+  const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
+  auto order = sharedLayout.getOrder();
+
+  // the original register_lds2, but discard the prefetch logic.
+  auto ld2 = [](ValueTableV2 &vals, int mn, int k, Value val) {
+    vals[{mn, k}] = val;
+  };
+
+  // (a, b) is the coordinate.
+  auto load = [=, &rewriter, &vals, &ld2](int a, int b) {
+    MMA16816SmemLoader loader(
+        wpt, sharedLayout.getOrder(), kOrder, smemObj.strides,
+        tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
+        maxPhase, elemBytes, rewriter, typeConverter, loc);
+    Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+    SmallVector<Value> offs =
+        loader.computeOffsets(warpId, lane, cSwizzleOffset);
+    const int numPtrs = loader.getNumPtrs();
+    SmallVector<Value> ptrs(numPtrs);
+
+    Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
+
+    Type smemPtrTy = getShemPtrTy(tensorTy.getElementType());
+    for (int i = 0; i < numPtrs; ++i) {
+      ptrs[i] =
+          bitcast(gep(smemPtrTy, smemBase, ValueRange({offs[i]})), smemPtrTy);
+    }
+
+    auto [ha0, ha1, ha2, ha3] = loader.loadX4(
+        (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
+        ptrs, helper.getMatType(), getShemPtrTy(tensorTy.getElementType()));
+
+    if (isA) {
+      ld2(vals, a, b, ha0);
+      ld2(vals, a + 1, b, ha1);
+      ld2(vals, a, b + 1, ha2);
+      ld2(vals, a + 1, b + 1, ha3);
+    } else {
+      ld2(vals, a, b, ha0);
+      ld2(vals, a + 1, b, ha2);
+      ld2(vals, a, b + 1, ha1);
+      ld2(vals, a + 1, b + 1, ha3);
+    }
+  };
+
+  return load;
+}
+
+Value loadAv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
+              const SharedMemoryObject &smemObj,
+              TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
+  auto aTensorTy = tensor.getType().cast<RankedTensorType>();
+  int bitwidth = aTensorTy.getElementTypeBitWidth();
+  auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto mmaLayout = aEncoding.getParent().cast<MmaEncodingAttr>();
+
+  SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
+                             aTensorTy.getShape().end());
+
+  ValueTableV2 ha;
+  std::function<void(int, int)> loadFn;
+  int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
+  int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
+
+  auto numRep = aEncoding.getMMAv2Rep(aTensorTy.getShape(), bitwidth);
+  int numRepM = numRep[0], numRepK = numRep[1];
+
+  if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
+    int wpt0 = mmaLayout.getWarpsPerCTA()[0];
+    Value warp = udiv(thread, i32_val(32));
+    Value lane = urem(thread, i32_val(32));
+    Value warpM = urem(urem(warp, i32_val(wpt0)), i32_val(shape[0] / 16));
+    // load from smem
+    // we use ldmatrix.x4 so each warp processes 16x16 elements.
+    int wpt = std::min<int>(wpt0, shape[0] / 16);
+    loadFn = getLoadMatrixFn(
+        tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
+        {mmaInstrM, mmaInstrK} /*instrShape*/,
+        {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, lane /*laneId*/,
+        ha /*vals*/, true /*isA*/, typeConverter /* typeConverter */,
+        rewriter /*rewriter*/, loc /*loc*/);
+  } else if (aTensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
+    // load from registers, used in gemm fuse
+    // TODO(Superjomn) Port the logic.
+    assert(false && "Loading A from register is not supported yet.");
+  } else {
+    assert(false && "A's layout is not supported.");
+  }
+
+  // step1. Perform loading.
+  for (int m = 0; m < numRepM; ++m)
+    for (int k = 0; k < numRepK; ++k)
+      loadFn(2 * m, 2 * k);
+
+  // step2. Format the values to LLVM::Struct to passing to mma codegen.
+  return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK);
+}
+
+Value loadBv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
+              const SharedMemoryObject &smemObj, Value thread,
+              TritonGPUToLLVMTypeConverter *typeConverter) {
+  ValueTableV2 hb;
+  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  int bitwidth = tensorTy.getElementTypeBitWidth();
+  auto bEncoding = tensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+  auto mmaLayout = bEncoding.getParent().cast<MmaEncodingAttr>();
+
+  SmallVector<int64_t> shape(tensorTy.getShape().begin(),
+                             tensorTy.getShape().end());
+
+  // TODO[Superjomn]: transB cannot be accessed in ConvertLayoutOp.
+  bool transB = false;
+  if (transB) {
+    std::swap(shape[0], shape[1]);
+  }
+
+  int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
+  int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
+
+  auto numRep =
+      tensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
+          tensorTy.getShape(), bitwidth);
+  int numRepK = numRep[0];
+  int numRepN = numRep[1];
+
+  int wpt0 = mmaLayout.getWarpsPerCTA()[0];
+  int wpt1 = mmaLayout.getWarpsPerCTA()[1];
+  Value warp = udiv(thread, i32_val(32));
+  Value lane = urem(thread, i32_val(32));
+  Value warpMN = udiv(warp, i32_val(wpt0));
+  Value warpN = urem(urem(warpMN, i32_val(wpt1)), i32_val(shape[1] / 8));
+  // we use ldmatrix.x4 so each warp processes 16x16 elements.
+  int wpt = std::min<int>(wpt1, shape[1] / 16);
+  auto loadFn = getLoadMatrixFn(
+      tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
+      {mmaInstrK, mmaInstrN} /*instrShape*/,
+      {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, lane /*laneId*/,
+      hb /*vals*/, false /*isA*/, typeConverter /* typeConverter */,
+      rewriter /*rewriter*/, loc /*loc*/);
+
+  for (int n = 0; n < std::max(numRepN / 2, 1); ++n) {
+    for (int k = 0; k < numRepK; ++k)
+      loadFn(2 * n, 2 * k);
+  }
+
+  Value result = composeValuesToDotOperandLayoutStruct(
+      hb, std::max(numRepN / 2, 1), numRepK);
+  return result;
+}
 
 struct ConvertLayoutOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {

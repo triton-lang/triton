@@ -389,14 +389,6 @@ struct MMA16816ConversionHelper {
   // Loading $c to registers, returns a Value.
   Value loadC(Value tensor, Value llTensor) const;
 
-  // Conduct the Dot conversion.
-  // \param a, \param b, \param c and \param d are DotOp operands.
-  // \param loadedA, \param loadedB, \param loadedC, all of them are result of
-  // loading.
-  LogicalResult convertDot(Value a, Value b, Value c, Value d, Value loadedA,
-                           Value loadedB, Value loadedC, DotOp op,
-                           DotOpAdaptor adaptor) const;
-
 private:
   std::function<void(int, int)>
   getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,

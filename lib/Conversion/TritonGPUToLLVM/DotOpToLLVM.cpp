@@ -6,7 +6,6 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::DotOpFMAConversionHelper;
-using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 
@@ -42,7 +41,7 @@ extractLoadedOperand(Value llStruct, int NK,
 // ---
 // v2
 
-typedef MMA16816ConversionHelper::ValueTable ValueTableV2;
+using ValueTableV2 = std::map<std::pair<unsigned, unsigned>, Value>;
 
 Value loadC(Value tensor, Value llTensor) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -310,13 +309,6 @@ private:
     loadedA = adaptor.getA();
     loadedB = adaptor.getB();
     loadedC = loadC(op.getC(), adaptor.getC());
-
-    MMA16816ConversionHelper mmaHelper(A.getType(), mmaLayout,
-                                       getThreadId(rewriter, loc), rewriter,
-                                       getTypeConverter(), loc);
-    // return mmaHelper.convertDot(A, B, C, op.getD(), loadedA, loadedB,
-    // loadedC,
-    //                             op, adaptor);
 
     return convertDot(getTypeConverter(), rewriter, op.getLoc(), A, B, C,
                       op.getD(), loadedA, loadedB, loadedC, op, adaptor);
