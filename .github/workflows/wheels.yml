@@ -34,8 +34,8 @@ jobs:
         run: |
           mkdir wheelhouse-1
           for i in wheelhouse/*; do
-            python -mwheel unpack $i
-            python -mwheel pack triton-2.0.0 --build-number 1 --dest-dir wheelhouse-1
+            python3 -mwheel unpack $i
+            python3 -mwheel pack triton-2.0.0 --build-number 1 --dest-dir wheelhouse-1
             rm -rf triton-2.0.0
           done
 
