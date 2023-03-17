@@ -82,7 +82,7 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
       return failure();
     ret = sliceEncoding.getParent();
   }
-  if (auto view = dyn_cast<triton::ViewOp>(op)) {
+  if (isa<triton::ViewOp, triton::CatOp>(op)) {
     return failure();
   }
   return success();
@@ -178,8 +178,6 @@ int simulateBackwardRematerialization(
       // we don't count this conversion as expensive
       if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
               triton::MakeRangeOp, triton::SplatOp>(*opArgI))
-        continue;
-      if (auto view = dyn_cast<triton::ViewOp>(opArgI))
         continue;
 
       // We add one expensive conversion for the current operand

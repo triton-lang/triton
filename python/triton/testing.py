@@ -106,10 +106,8 @@ def allclose(x, y, atol=0, rtol=1e-2):
         return torch.sum(x ^ y) == 0
     if x.dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
         rtol = 0
-    diff = abs(x - y)
-    x_max = torch.max(x)
-    y_max = torch.max(y)
-    return torch.max(diff) <= atol + rtol * torch.max(x_max, y_max)
+        atol = 0
+    return torch.allclose(x, y, rtol=rtol, atol=atol)
 
 
 def nvsmi(attrs):

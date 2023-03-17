@@ -37,8 +37,8 @@ def _to_tensor(x, builder):
 
 
 class dtype:
-    SINT_TYPES = ['int1', 'int8', 'int16', 'int32', 'int64']
-    UINT_TYPES = ['uint8', 'uint16', 'uint32', 'uint64']
+    SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
+    UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = ['fp8e4', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']

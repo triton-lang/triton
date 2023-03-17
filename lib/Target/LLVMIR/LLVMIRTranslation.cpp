@@ -275,7 +275,11 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   }
 
   auto optPipeline = mlir::makeOptimizingTransformer(
+#ifdef USE_ROCM
       /*optLevel=*/3, /*sizeLevel=*/0,
+#else
+      /*optLevel=*/0, /*sizeLevel=*/0,
+#endif
       /*targetMachine=*/nullptr);
 
   if (auto err = optPipeline(llvmModule.get())) {
@@ -328,7 +332,6 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
-  // llvm::outs() << module << "\n";
   auto llvmIR = translateLLVMToLLVMIR(llvmContext, module);
   if (!llvmIR) {
     llvm::errs() << "Translate to LLVM IR failed";
