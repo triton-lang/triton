@@ -1,11 +1,9 @@
 #include "DotOpToLLVM.h"
-#include "DotOpHelpers.h"
 #include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::DotOpFMAConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 
@@ -240,6 +238,24 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 // ---
 // fma
 
+using ValueTableFMA = std::map<std::pair<int, int>, Value>;
+
+static ValueTableFMA getValueTableFromStructFMA(
+    Value val, int K, int n0, int shapePerCTA, int sizePerThread,
+    ConversionPatternRewriter &rewriter, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
+  ValueTableFMA res;
+  auto elems = typeConverter->unpackLLElements(loc, val, rewriter, type);
+  int index = 0;
+  for (unsigned k = 0; k < K; ++k) {
+    for (unsigned m = 0; m < n0; m += shapePerCTA)
+      for (unsigned mm = 0; mm < sizePerThread; ++mm) {
+        res[{m + mm, k}] = elems[index++];
+      }
+  }
+  return res;
+}
+
 // ---
 
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
@@ -463,7 +479,6 @@ private:
     auto cc = getTypeConverter()->unpackLLElements(loc, adaptor.getC(),
                                                    rewriter, dTensorTy);
 
-    DotOpFMAConversionHelper helper(dLayout);
     Value llA = adaptor.getA();
     Value llB = adaptor.getB();
 
@@ -483,12 +498,12 @@ private:
     int nSizePerThread =
         order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
 
-    auto has = helper.getValueTableFromStruct(llA, K, M, mShapePerCTA,
-                                              mSizePerThread, rewriter, loc,
-                                              getTypeConverter(), aTensorTy);
-    auto hbs = helper.getValueTableFromStruct(llB, K, N, nShapePerCTA,
-                                              nSizePerThread, rewriter, loc,
-                                              getTypeConverter(), bTensorTy);
+    auto has = getValueTableFromStructFMA(llA, K, M, mShapePerCTA,
+                                          mSizePerThread, rewriter, loc,
+                                          getTypeConverter(), aTensorTy);
+    auto hbs = getValueTableFromStructFMA(llB, K, N, nShapePerCTA,
+                                          nSizePerThread, rewriter, loc,
+                                          getTypeConverter(), bTensorTy);
 
     SmallVector<Value> ret = cc;
     bool isCRow = order[0] == 1;
