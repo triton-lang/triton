@@ -16,7 +16,7 @@ import tempfile
 import warnings
 from collections import namedtuple
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 import setuptools
 import torch
@@ -87,6 +87,10 @@ def mangle_fn(name, arg_tys, constants):
     mangled_constants = mangled_constants.replace("'", '_sq_')
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
+
+
+def _is_triton_tensor(o: Any) -> bool:
+    return isinstance(o, triton.language.tensor)
 
 
 def _is_constexpr(o: Any) -> bool:
@@ -183,9 +187,6 @@ class CodeGenerator(ast.NodeVisitor):
         '''
         self.lscope[name] = value
         self.local_defs[name] = value
-
-    def is_triton_tensor(self, value):
-        return isinstance(value, triton.language.tensor)
 
     #
     # AST visitor
@@ -378,30 +379,27 @@ class CodeGenerator(ast.NodeVisitor):
         args = [self.visit(x) for x in node.elts]
         return tuple(args)
 
+    def _apply_binary_method(self, method_name, lhs, rhs):
+        # TODO: raise something meaningful if getattr fails below, esp for reverse method
+        if _is_triton_tensor(lhs):
+            return getattr(lhs, method_name)(rhs, _builder=self.builder)
+        if _is_triton_tensor(rhs):
+            reverse_method_name = re.sub(r"__(.*)__", r"__r\1__", method_name)
+            return getattr(rhs, reverse_method_name)(lhs, _builder=self.builder)
+        return getattr(lhs, method_name)(rhs)
+
     def visit_BinOp(self, node):
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
-        fn = {
-            ast.Add: '__add__',
-            ast.Sub: '__sub__',
-            ast.Mult: '__mul__',
-            ast.Div: '__truediv__',
-            ast.FloorDiv: '__floordiv__',
-            ast.Mod: '__mod__',
-            ast.Pow: '__pow__',
-            ast.LShift: '__lshift__',
-            ast.RShift: '__rshift__',
-            ast.BitAnd: '__and__',
-            ast.BitOr: '__or__',
-            ast.BitXor: '__xor__',
-        }[type(node.op)]
-        if self.is_triton_tensor(lhs):
-            return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_tensor(rhs):
-            fn = fn[:2] + 'r' + fn[2:]
-            return getattr(rhs, fn)(lhs, _builder=self.builder)
-        else:
-            return getattr(lhs, fn)(rhs)
+        method_name = self._method_name_for_bin_op.get(type(node.op))
+        if method_name is None:
+            raise UnsupportedLanguageConstruct(None, node, "AST binary operator '{}' is not (currently) implemented.".format(node.op.__name__))
+        return self._apply_binary_method(method_name, lhs, rhs)
+    _method_name_for_bin_op: Dict[Type[ast.operator], str] = {
+        ast.Add: '__add__', ast.Sub: '__sub__', ast.Mult: '__mul__', ast.Div: '__truediv__',
+        ast.FloorDiv: '__floordiv__', ast.Mod: '__mod__', ast.Pow: '__pow__',
+        ast.LShift: '__lshift__', ast.RShift: '__rshift__', ast.BitAnd: '__and__', ast.BitOr: '__or__', ast.BitXor: '__xor__',
+    }
 
     def visit_then_else_blocks(self, node, liveins, then_block, else_block):
         # then block
@@ -553,33 +551,23 @@ class CodeGenerator(ast.NodeVisitor):
             return triton.language.constexpr(lhs is rhs)
         if type(node.ops[0]) == ast.IsNot:
             return triton.language.constexpr(lhs is not rhs)
-        fn = {
-            ast.Eq: '__eq__',
-            ast.NotEq: '__ne__',
-            ast.Lt: '__lt__',
-            ast.LtE: '__le__',
-            ast.Gt: '__gt__',
-            ast.GtE: '__ge__',
-        }[type(node.ops[0])]
-        if self.is_triton_tensor(lhs):
-            return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_tensor(rhs):
-            fn = fn[:2] + 'r' + fn[2:]
-            return getattr(rhs, fn)(lhs, _builder=self.builder)
-        else:
-            return getattr(lhs, fn)(rhs)
+        method_name = self._method_name_for_comp_op.get(type(node.ops[0]))
+        if method_name is None:
+            raise UnsupportedLanguageConstruct(None, node, "AST comparison operator '{}' is not (currently) implemented.".format(node.ops[0].__name__))
+        return self._apply_binary_method(method_name, lhs, rhs)
+    _method_name_for_comp_op: Dict[Type[ast.cmpop], str] = {
+        ast.Eq: '__eq__', ast.NotEq: '__ne__', ast.Lt: '__lt__', ast.LtE: '__le__', ast.Gt: '__gt__', ast.GtE: '__ge__'
+    }
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
-        fn = {
-            ast.USub: '__neg__',
-            ast.UAdd: '__pos__',
-            ast.Not: '__not__',
-            ast.Invert: '__invert__',
-        }[type(node.op)]
-        if self.is_triton_tensor(op):
+        fn = self._method_name_for_unary_op.get(type(node.op))
+        if fn is None:
+            raise UnsupportedLanguageConstruct(None, node, "AST unary operator '{}' is not (currently) implemented.".format(node.op.__name__))
+        if _is_triton_tensor(op):
             return getattr(op, fn)(_builder=self.builder)
         return getattr(op, fn)()
+    _method_name_for_unary_op: Dict[Type[ast.unaryop], str] = {ast.USub: '__neg__', ast.UAdd: '__pos__', ast.Not: '__not__', ast.Invert: '__invert__'}
 
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
@@ -601,8 +589,8 @@ class CodeGenerator(ast.NodeVisitor):
             for name in loop_defs:
                 if name in liveins:
                     # We should not def new constexpr
-                    assert self.is_triton_tensor(loop_defs[name])
-                    assert self.is_triton_tensor(liveins[name])
+                    assert _is_triton_tensor(loop_defs[name])
+                    assert _is_triton_tensor(liveins[name])
                     assert loop_defs[name].type == liveins[name].type
                     # these are loop-carried values
                     names.append(name)
@@ -660,7 +648,7 @@ class CodeGenerator(ast.NodeVisitor):
         assert node.ctx.__class__.__name__ == "Load"
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        if self.is_triton_tensor(lhs):
+        if _is_triton_tensor(lhs):
             return lhs.__getitem__(slices, _builder=self.builder)
         return lhs[slices]
 
@@ -736,8 +724,8 @@ class CodeGenerator(ast.NodeVisitor):
             names = []
             for name in self.local_defs:
                 if name in liveins:
-                    assert self.is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
-                    assert self.is_triton_tensor(liveins[name])
+                    assert _is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
+                    assert _is_triton_tensor(liveins[name])
                     assert self.local_defs[name].type == liveins[name].type,\
                         f'Loop-carried variable {name} has initial type {liveins[name].type} '\
                         f'but is re-assigned to {self.local_defs[name].type} in loop! '\
@@ -856,7 +844,7 @@ class CodeGenerator(ast.NodeVisitor):
                 for i in range(call_op.get_num_results()):
                     results.append(triton.language.tensor(call_op.get_result(i), callee_ret_type[i]))
                 return tuple(results)
-        if (hasattr(fn, '__self__') and self.is_triton_tensor(fn.__self__)) or impl.is_builtin(fn):
+        if (hasattr(fn, '__self__') and _is_triton_tensor(fn.__self__)) or impl.is_builtin(fn):
             return fn(*args, _builder=self.builder, **kws)
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
@@ -866,22 +854,15 @@ class CodeGenerator(ast.NodeVisitor):
         return triton.language.constexpr(node.value)
 
     def visit_BoolOp(self, node: ast.BoolOp):
-        assert len(node.values) == 2
+        if len(node.values) != 2:
+            raise UnsupportedLanguageConstruct(None, node, "chained boolean operators (A or B or C) are not supported; use parentheses to split the chain.")
         lhs = self.visit(node.values[0])
         rhs = self.visit(node.values[1])
-
-        fn = {
-            ast.And: 'logical_and',
-            ast.Or: 'logical_or',
-        }[type(node.op)]
-
-        if self.is_triton_tensor(lhs):
-            return getattr(lhs, fn)(rhs, _builder=self.builder)
-        elif self.is_triton_tensor(rhs):
-            fn = fn[:2] + 'r' + fn[2:]
-            return getattr(rhs, fn)(lhs, _builder=self.builder)
-        else:
-            return getattr(lhs, fn)(rhs)
+        method_name = self._method_name_for_bool_op.get(type(node.op))
+        if method_name is None:
+            raise UnsupportedLanguageConstruct(None, node, "AST boolean operator '{}' is not (currently) implemented.".format(node.op.__name__))
+        return self._apply_binary_method(method_name, lhs, rhs)
+    _method_name_for_bool_op: Dict[Type[ast.boolop], str] = {ast.And: 'logical_and', ast.Or: 'logical_or'}
 
     if sys.version_info < (3, 8):
         def visit_NameConstant(self, node):
