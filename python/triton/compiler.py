@@ -150,10 +150,10 @@ class CodeGenerator(ast.NodeVisitor):
                 self.global_uses[name] = value
             return value
 
-        lookup_order = local_lookup, self.gscope.get, self.builtin_namespace.get
         absent_marker = object()
 
         def name_lookup(name: str) -> Any:
+            lookup_order = local_lookup, self.gscope.get, self.builtin_namespace.get
             absent = absent_marker
             for lookup_function in lookup_order:
                 value = lookup_function(name, absent)
@@ -201,7 +201,11 @@ class CodeGenerator(ast.NodeVisitor):
         elif isinstance(node, ast.Call):
             fn = self.visit(node.func)
             if isinstance(fn, triton.JITFunction):
-                return self.contains_return_op(fn.parse())
+                old_gscope = self.gscope
+                self.gscope = sys.modules[fn.fn.__module__].__dict__
+                ret = self.contains_return_op(fn.parse())
+                self.gscope = old_gscope
+                return ret
             return False
         elif isinstance(node, ast.If):
             pred = lambda s: self.contains_return_op(s)
