@@ -520,17 +520,16 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_if_scf(cond, node)
             else:
                 self.visit_if_top_level(cond, node)
-        elif _is_constexpr(cond):
+        else:
+            cond = _unwrap_if_constexpr(cond)
             try:
-                cond = bool(cond.value)
+                cond = bool(cond)
             except (TypeError, ValueError):
-                raise UnsupportedLanguageConstruct(None, node, "the boolean value of constexpr of type {} cannot be determined".format(type(cond.value)))
+                raise CompilationError(None, node, "the boolean value of an object of type {} cannot be determined".format(type(cond.value)))
             if cond:
                 self.visit_compound_statement(node.body)
             else:
                 self.visit_compound_statement(node.orelse)
-        else:
-            raise UnsupportedLanguageConstruct(None, node, "conditionals are supported only for `tensor` and `constexpr` values.")
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
