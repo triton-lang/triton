@@ -97,6 +97,9 @@ def _unwrap_if_constexpr(o: Any):
     return o.value if isinstance(o, triton.language.constexpr) else o
 
 
+_condition_types = {bool, int}  # Python types accepted for conditionals inside kernels
+
+
 class enter_sub_region:
     def __init__(self, generator: CodeGenerator):
         self.generator = generator
@@ -522,10 +525,10 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_if_top_level(cond, node)
         else:
             cond = _unwrap_if_constexpr(cond)
-            try:
-                cond = bool(cond)
-            except (TypeError, ValueError):
-                raise CompilationError(None, node, "the boolean value of an object of type {} cannot be determined".format(type(cond.value)))
+            if type(cond) not in _condition_types:  # not isinstance - we insist the real thing, no subclasses and no ducks
+                raise UnsupportedLanguageConstruct(
+                    None, node, "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
+                        ', '.join(_.__name__ for _ in _condition_types), type(cond).__name__))
             if cond:
                 self.visit_compound_statement(node.body)
             else:
