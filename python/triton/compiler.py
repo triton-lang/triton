@@ -1420,7 +1420,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 
 def default_cache_dir():
-    return os.path.join(os.environ["HOME"], ".triton", "cache")
+    return os.path.join(Path.home(), ".triton", "cache")
 
 
 class CacheManager:
