@@ -673,8 +673,8 @@ def cast(input: tl.tensor,
     dst_sca_ty = dst_ty.scalar
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
-    if (src_sca_ty.is_customized_floating() and dst_sca_ty.is_floating()) or \
-       (src_sca_ty.is_floating() and dst_sca_ty.is_customized_floating()):
+    if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
+       (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()):
         return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder)),
                          dst_ty)
 
@@ -1188,14 +1188,14 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
     # FIXME(Keren): not portable, should be fixed
-    from . import libdevice
-    return libdevice.mulhi(x, y, _builder=builder)
+    from . import math
+    return math.mulhi(x, y, _builder=builder)
 
 
 def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     # FIXME(Keren): not portable, should be fixed
-    from . import libdevice
-    return libdevice.floor(x, _builder=builder)
+    from . import math
+    return math.floor(x, _builder=builder)
 
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:

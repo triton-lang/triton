@@ -137,11 +137,11 @@ private:
         multiDimOffset[1] = add(
             multiDimOffset[1], i32_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
       } else if (mmaLayout.isVolta()) {
-        auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
+        auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
         auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
-            threadId, rewriter, mmaLayout.getWarpsPerCTA(), shape, isARow,
-            isBRow, isAVec4, isBVec4);
+            threadId, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
+            isARow, isBRow, isAVec4, isBVec4);
         return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
       } else {
         llvm_unreachable("Unexpected MMALayout version");
@@ -234,9 +234,9 @@ private:
     }
   }
 
-  // The MMAV1's result is quite different from the exising "Replica" structure,
-  // add a new simple but clear implementation for it to avoid modificating the
-  // logic of the exising one.
+  // The MMAV1's result is quite different from the existing "Replica"
+  // structure, add a new simple but clear implementation for it to avoid
+  // modifying the logic of the existing one.
   void processReplicaForMMAV1(Location loc, ConversionPatternRewriter &rewriter,
                               bool stNotRd, RankedTensorType type,
                               ArrayRef<unsigned> multiDimRepId, unsigned vec,
@@ -293,12 +293,9 @@ private:
       }
 
       if (needTrans) {
-        auto [isARow, isBRow, isAVec4, isBVec4, mmaId] =
-            mma.decodeVoltaLayoutStates();
-        DotOpMmaV1ConversionHelper helper(mma);
         // do transpose
-        int numM = helper.getElemsM(mma.getWarpsPerCTA()[0], shape[0], isARow,
-                                    isAVec4);
+        auto aEncoding = DotOperandEncodingAttr::get(mma.getContext(), 0, mma);
+        int numM = aEncoding.getMMAv1NumOuter(shape);
         int numN = accumSizePerThread / numM;
 
         for (int r = 0; r < numM; r++) {
@@ -638,8 +635,7 @@ private:
       }
     } else if (!isOuter && mmaLayout.isVolta() && isHMMA) { // tensor core v1
       DotOpMmaV1ConversionHelper helper(mmaLayout);
-      bool isMMAv1Row =
-          dotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+      bool isMMAv1Row = dotOperandLayout.getMMAv1IsRow();
       auto srcSharedLayout = src.getType()
                                  .cast<RankedTensorType>()
                                  .getEncoding()

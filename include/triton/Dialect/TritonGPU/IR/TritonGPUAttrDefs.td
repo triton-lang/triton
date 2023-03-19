@@ -374,44 +374,63 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   );
 
   let builders = [
-     // Specially for MMAV1(Volta)
+    // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
+                     "ArrayRef<int64_t>":$shapeC,
+                     "bool":$isARow,
+                     "bool":$isBRow,
+                     "bool":$isAVec4,
+                     "bool":$isBVec4,
                      "int":$id), [{
       assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
-      SmallVector<unsigned> wpt({static_cast<unsigned>(numWarps), 1});
-      int versionMinor = 0;
+      // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
+      int versionMinor = (isARow * (1<<0)) |\
+                         (isBRow * (1<<1)) |\
+                         (isAVec4 * (1<<2)) |\
+                         (isBVec4 * (1<<3));
 
-      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
-      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
-        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
 
+      // TODO: Share code with
+      // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
+      // rep,spw and fpw.
+      SmallVector<unsigned> wpt({1, 1});
+      SmallVector<unsigned> wpt_nm1;
+
+      SmallVector<int, 2> rep(2), spw(2);
+      std::array<int, 3> fpw{{2, 2, 1}};
+      int packSize0 = (isARow || isAVec4) ? 1 : 2;
+      rep[0] = 2 * packSize0;
+      spw[0] = fpw[0] * 4 * rep[0];
+
+      int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+      rep[1] = 2 * packSize1;
+      spw[1] = fpw[1] * 4 * rep[1];
+
+      do {
+        wpt_nm1 = wpt;
+        if (wpt[0] * wpt[1] < numWarps)
+          wpt[0] = std::clamp<int>(wpt[0] * 2, 1, shapeC[0] / spw[0]);
+        if (wpt[0] * wpt[1] < numWarps)
+          wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
+      } while (wpt_nm1 != wpt);
+      
       return $_get(context, versionMajor, versionMinor, wpt);
     }]>,
 
-    // Specially for MMAV1(Volta)
+
     AttrBuilder<(ins "int":$versionMajor,
-                     "ArrayRef<unsigned>":$warpsPerCTA,
+                     "int":$numWarps,
                      "ArrayRef<int64_t>":$shapeA,
                      "ArrayRef<int64_t>":$shapeB,
+                     "ArrayRef<int64_t>":$shapeC,
                      "bool":$isARow,
                      "bool":$isBRow,
                      "int":$id), [{
       assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
-      // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
-      // 3-bits to encode the MMA ID to make each unique
-      int versionMinor = (isARow * (1<<0)) |\
-                         (isBRow * (1<<1)) |\
-                         (isAVec4 * (1<<2)) |\
-                         (isBVec4 * (1<<3));
-
-      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
-      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
-        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
-
-      return $_get(context, versionMajor, versionMinor, warpsPerCTA);
+      return get(context, versionMajor, numWarps, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
     }]>
   ];
 
@@ -481,25 +500,21 @@ section 9.7.13.4.1 for more details.
   let parameters = (
     ins
     "unsigned":$opIdx,
-    "Attribute":$parent,
-    "Attribute":$isMMAv1Row
+    "Attribute":$parent
   );
 
   let builders = [
-    AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent), [{
-      Attribute isMMAv1Row;
-      if(parent.isa<MmaEncodingAttr>() &&
-         parent.cast<MmaEncodingAttr>().isVolta()){
-        isMMAv1Row = BoolAttr::get(context, true);
-      }
-      return $_get(context, opIdx, parent, isMMAv1Row);
-    }]>
-
   ];
 
   let hasCustomAssemblyFormat = 1;
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    bool getMMAv1IsRow() const;
+    bool getMMAv1IsVec4() const;
+    SmallVector<int> getMMAv1Rep() const;
+    SmallVector<int> getMMAv1ShapePerWarp() const;
+    int getMMAv1Vec() const;
+    int getMMAv1NumOuter(ArrayRef<int64_t> shape) const;
+  }];
 }
 
 

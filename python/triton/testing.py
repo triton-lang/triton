@@ -106,10 +106,8 @@ def allclose(x, y, atol=0, rtol=1e-2):
         return torch.sum(x ^ y) == 0
     if x.dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
         rtol = 0
-    diff = abs(x - y)
-    x_max = torch.max(x)
-    y_max = torch.max(y)
-    return torch.max(diff) <= atol + rtol * torch.max(x_max, y_max)
+        atol = 0
+    return torch.allclose(x, y, rtol=rtol, atol=atol)
 
 
 def nvsmi(attrs):
@@ -454,10 +452,12 @@ def get_max_simd_tflops(dtype: torch.dtype, backend=None, device=None):
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    num_subcores = _triton.runtime.num_sm(backend, device) * 4  # on recent GPUs
-    clock_rate = _triton.runtime.clock_rate(backend, device)  # in kHz
-    cc = _triton.runtime.cc(backend, device)
-    if cc < 80:
+
+    triton.compiler.init_cuda_utils()
+    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    clock_rate = triton.compiler.cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 8:
         if dtype == torch.float32:
             ops_per_sub_core = 32  # 2*16
         elif dtype == torch.float16:

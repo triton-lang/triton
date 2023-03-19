@@ -82,7 +82,7 @@ func.func @div() {
   %3 = arith.divui %1, %0 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64
   %4 = arith.constant dense<64> : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [16777216], constancy = [64], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>
   %5 = arith.divsi %0, %4 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %6 = arith.divsi %4, %0 : tensor<128xi32>
@@ -94,10 +94,11 @@ func.func @div() {
   %9 = arith.divui %0, %8 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [128], divisibility = [8192], constancy = [1], constant_value = <none>
   %10 = tt.make_range {end = 8320 : i32, start = 8192 : i32} : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [128], constancy = [64], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>
   %11 = arith.divsi %10, %4 : tensor<128xi32>
   return
 }
+
 
 // -----
 
@@ -179,11 +180,11 @@ func.func @logic() {
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64
   %1 = arith.constant dense<64> : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [16777216], constancy = [64], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>
   %2 = arith.divsi %0, %1 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [8], constancy = [128], constant_value = 8
   %3 = arith.constant dense<8> : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [134217728], constancy = [8], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [8], constant_value = <none>
   %4 = arith.divsi %0, %3 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %5 = arith.andi %0, %1 : tensor<128xi32>

@@ -8,7 +8,6 @@ add_mlir_dialect_library(TritonGPUTransforms
   RemoveLayoutConversions.cpp
   ReorderInstructions.cpp
   TritonGPUConversion.cpp
-  UpdateMmaForVolta.cpp
   Utility.cpp
 
   DEPENDS

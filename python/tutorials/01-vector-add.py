@@ -1,8 +1,10 @@
 """
 Vector Addition
-=================
-In this tutorial, you will write a simple vector addition using Triton and learn about:
+===============
 
+In this tutorial, you will write a simple vector addition using Triton.
+
+In doing so, you will learn about:
 - The basic programming model of Triton.
 - The `triton.jit` decorator, which is used to define Triton kernels.
 - The best practices for validating and benchmarking your custom ops against native reference implementations.
@@ -10,7 +12,7 @@ In this tutorial, you will write a simple vector addition using Triton and learn
 
 # %%
 # Compute Kernel
-# --------------------------
+# --------------
 
 import torch
 
@@ -92,9 +94,10 @@ print(
 
 # %%
 # Benchmark
-# -----------
+# ---------
+#
 # We can now benchmark our custom op on vectors of increasing sizes to get a sense of how it does relative to PyTorch.
-# To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of your custom ops.
+# To make things easier, Triton has a set of built-in utilities that allow us to concisely plot the performance of our custom ops.
 # for different problem sizes.
 
 

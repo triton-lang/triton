@@ -177,7 +177,8 @@ class JITFunction(KernelInterface[T]):
                 triton.language.uint16: 'u16',
                 triton.language.uint32: 'u32',
                 triton.language.uint64: 'u64',
-                triton.language.float8: 'fp8',
+                triton.language.float8e5: 'fp8e5',
+                triton.language.float8e4: 'fp8e4',
                 triton.language.float16: 'fp16',
                 triton.language.bfloat16: 'bf16',
                 triton.language.float32: 'fp32',
@@ -315,7 +316,9 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
         self.__annotations__ = fn.__annotations__
         # index of constexprs
-        self.constexprs = [self.arg_names.index(ann) for ann in self.__annotations__.keys()]
+        from triton.language.core import \
+            constexpr  # import here rather than at module level due to circular import tangle
+        self.constexprs = [index for index, ty in self.annotations.items() if isinstance(ty, type) and issubclass(ty, constexpr)]
         # launcher
         self.run = self._make_launcher()
         # re-use docs of wrapped function

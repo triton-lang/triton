@@ -15,7 +15,7 @@ class Autotuner(KernelInterface):
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
             'top_k': number of configs to bench
-            'prune_num_stages_by'(optional): a function used to prune num_stages. It take configs:List[Config] as its input, and returns pruned configs.
+            'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         '''
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2)]
@@ -165,10 +165,10 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE']
-    :note: When all the configurations are evaluated, the kernel will run multiple time.
+    :note: When all the configurations are evaluated, the kernel will run multiple times.
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
-           reset the value of the provided tensor to `zero` before running any configuration.
+           resets the value of the provided tensor to `zero` before running any configuration.
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
     :param key: a list of argument names whose change in value will trigger the evaluation of all provided configs.
@@ -176,7 +176,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     :param prune_configs_by: a dict of functions that are used to prune configs, fields:
         'perf_model': performance model used to predicate running time with different configs, returns running time
         'top_k': number of configs to bench
-        'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It take configs:List[Config] as its input, and returns pruned configs.
+        'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It takes configs:List[Config] as its input, and returns pruned configs.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
     """
@@ -209,9 +209,9 @@ def heuristics(values):
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
-    .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
+    :param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
-    .type values: dict[str, Callable[[list[Any]], Any]]
+    :type values: dict[str, Callable[[list[Any]], Any]]
     """
     def decorator(fn):
         return Heuristics(fn, fn.arg_names, values)

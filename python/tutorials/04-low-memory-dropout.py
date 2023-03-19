@@ -1,18 +1,20 @@
 """
 Low-Memory Dropout
-=================
+==================
 
 In this tutorial, you will write a memory-efficient implementation of dropout whose state
 will be composed of a single int32 seed. This differs from more traditional implementations of dropout,
-whose state is generally composed of a bit mask tensor of the same shape as the input. You will learn about:
+whose state is generally composed of a bit mask tensor of the same shape as the input.
 
+In doing so, you will learn about:
 - The limitations of naive implementations of Dropout with PyTorch
 - Parallel pseudo-random number generation in Triton
 """
 
 # %%
 # Baseline
-# -------------
+# --------
+#
 # The *dropout* operator was first introduced in [SRIVASTAVA2014]_ as a way to improve the performance
 # of deep neural networks in low-data regime (i.e. regularization).
 #
@@ -37,12 +39,12 @@ import triton.language as tl
 
 @triton.jit
 def _dropout(
-        x_ptr,  # pointer to the input
-        x_keep_ptr,  # pointer to a mask of 0s and 1s
-        output_ptr,  # pointer to the output
-        n_elements,  # number of elements in the `x` tensor
-        p,  # probability that an element of `x` is changed to zero
-        BLOCK_SIZE: tl.constexpr,
+    x_ptr,  # pointer to the input
+    x_keep_ptr,  # pointer to a mask of 0s and 1s
+    output_ptr,  # pointer to the output
+    n_elements,  # number of elements in the `x` tensor
+    p,  # probability that an element of `x` is changed to zero
+    BLOCK_SIZE: tl.constexpr,
 ):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
@@ -81,15 +83,16 @@ print(tabulate.tabulate([
 
 # %%
 # Seeded dropout
-# -------------
-# Above implementation of dropout works fine, but it can be a bit awkward to deal with. Firstly
+# --------------
+#
+# The above implementation of dropout works fine, but it can be a bit awkward to deal with. Firstly
 # we need to store the dropout mask for backpropagation. Secondly, dropout state management can get
 # very tricky when using recompute/checkpointing (e.g. see all the notes about `preserve_rng_state` in
 # https://pytorch.org/docs/1.9.0/checkpoint.html). In this tutorial we'll describe an alternative implementation
 # that (1) has a smaller memory footprint; (2) requires less data movement; and (3) simplifies the management
 # of persisting randomness across multiple invocations of the kernel.
 #
-# Pseudorandom number generation in Triton is simple! In this tutorial we will use the
+# Pseudo-random number generation in Triton is simple! In this tutorial we will use the
 # :code:`triton.language.rand` function which generates a block of uniformly distributed :code:`float32`
 # values in [0, 1), given a seed and a block of :code:`int32` offsets. But if you need it, Triton also provides
 # other :ref:`random number generation strategies <Random Number Generation>`.
@@ -102,12 +105,12 @@ print(tabulate.tabulate([
 
 @triton.jit
 def _seeded_dropout(
-        x_ptr,
-        output_ptr,
-        n_elements,
-        p,
-        seed,
-        BLOCK_SIZE: tl.constexpr,
+    x_ptr,
+    output_ptr,
+    n_elements,
+    p,
+    seed,
+    BLOCK_SIZE: tl.constexpr,
 ):
     # compute memory offsets of elements handled by this instance
     pid = tl.program_id(axis=0)
@@ -153,14 +156,15 @@ print(tabulate.tabulate([
 
 # %%
 # Exercises
-# -------------
+# ---------
+#
 # 1. Extend the kernel to operate over a matrix and use a vector of seeds - one per row.
 # 2. Add support for striding.
 # 3. (challenge) Implement a kernel for sparse Johnson-Lindenstrauss transform which generates the projection matrix one the fly each time using a seed.
 
 # %%
 # References
-# --------------
+# ----------
 #
 # .. [SALMON2011] John K. Salmon, Mark A. Moraes, Ron O. Dror, and David E. Shaw, "Parallel Random Numbers: As Easy as 1, 2, 3", 2011
 # .. [SRIVASTAVA2014] Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov, "Dropout: A Simple Way to Prevent Neural Networks from Overfitting", JMLR 2014
