@@ -5,7 +5,7 @@ from ..impl import (
     ir,
     builtin,
 )
-from . import mathlib
+from . import math
 from .core import (
     abs,
     arange,
@@ -141,7 +141,7 @@ __all__ = [
     "int64",
     "int8",
     "ir",
-    "mathlib",
+    "math",
     "load",
     "log",
     "max",
