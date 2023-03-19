@@ -150,10 +150,10 @@ class CodeGenerator(ast.NodeVisitor):
                 self.global_uses[name] = value
             return value
 
-        lookup_order = local_lookup, self.gscope.get, self.builtin_namespace.get
         absent_marker = object()
 
         def name_lookup(name: str) -> Any:
+            lookup_order = local_lookup, self.gscope.get, self.builtin_namespace.get
             absent = absent_marker
             for lookup_function in lookup_order:
                 value = lookup_function(name, absent)
@@ -201,7 +201,11 @@ class CodeGenerator(ast.NodeVisitor):
         elif isinstance(node, ast.Call):
             fn = self.visit(node.func)
             if isinstance(fn, triton.JITFunction):
-                return self.contains_return_op(fn.parse())
+                old_gscope = self.gscope
+                self.gscope = sys.modules[fn.fn.__module__].__dict__
+                ret = self.contains_return_op(fn.parse())
+                self.gscope = old_gscope
+                return ret
             return False
         elif isinstance(node, ast.If):
             pred = lambda s: self.contains_return_op(s)
@@ -337,11 +341,13 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
+        native_nontensor_types = (triton.language.dtype, )
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
-            if not isinstance(value, triton.language.tensor):
+            if not isinstance(value, triton.language.tensor) and \
+               not isinstance(value, native_nontensor_types):
                 value = triton.language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
 
@@ -695,14 +701,15 @@ class CodeGenerator(ast.NodeVisitor):
         iv_type = triton.language.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = triton.language.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
+        iv_is_signed = iv_type.int_signedness == triton.language.core.dtype.SIGNEDNESS.SIGNED
         # lb/ub/step might be constexpr, we need to cast them to tensor
         lb = lb.handle
         ub = ub.handle
         step = step.handle
         # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
-        lb = self.builder.create_to_index(lb)
-        ub = self.builder.create_to_index(ub)
-        step = self.builder.create_to_index(step)
+        lb = self.builder.create_int_cast(lb, iv_ir_type, iv_is_signed)
+        ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
+        step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
         # Create placeholder for the loop induction variable
         iv = self.builder.create_undef(iv_ir_type)
         self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
@@ -761,12 +768,9 @@ class CodeGenerator(ast.NodeVisitor):
 
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
-            iv = self.builder.create_index_to_si(for_op.get_induction_var())
-            iv = self.builder.create_int_cast(iv, iv_ir_type, True)
+            iv = for_op.get_induction_var()
             if negative_step:
-                ub_si = self.builder.create_index_to_si(ub)
-                ub_si = self.builder.create_int_cast(ub_si, iv_ir_type, True)
-                iv = self.builder.create_sub(ub_si, iv)
+                iv = self.builder.create_sub(ub, iv)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
             self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
 
@@ -1420,7 +1424,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 
 def default_cache_dir():
-    return os.path.join(os.environ["HOME"], ".triton", "cache")
+    return os.path.join(Path.home(), ".triton", "cache")
 
 
 class CacheManager:
