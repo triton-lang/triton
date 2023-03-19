@@ -150,10 +150,10 @@ class CodeGenerator(ast.NodeVisitor):
                 self.global_uses[name] = value
             return value
 
-        lookup_order = local_lookup, self.gscope.get, self.builtin_namespace.get
         absent_marker = object()
 
         def name_lookup(name: str) -> Any:
+            lookup_order = local_lookup, self.gscope.get, self.builtin_namespace.get
             absent = absent_marker
             for lookup_function in lookup_order:
                 value = lookup_function(name, absent)
@@ -201,7 +201,11 @@ class CodeGenerator(ast.NodeVisitor):
         elif isinstance(node, ast.Call):
             fn = self.visit(node.func)
             if isinstance(fn, triton.JITFunction):
-                return self.contains_return_op(fn.parse())
+                old_gscope = self.gscope
+                self.gscope = sys.modules[fn.fn.__module__].__dict__
+                ret = self.contains_return_op(fn.parse())
+                self.gscope = old_gscope
+                return ret
             return False
         elif isinstance(node, ast.If):
             pred = lambda s: self.contains_return_op(s)
@@ -337,11 +341,13 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
+        native_nontensor_types = (triton.language.dtype, )
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
-            if not isinstance(value, triton.language.tensor):
+            if not isinstance(value, triton.language.tensor) and \
+               not isinstance(value, native_nontensor_types):
                 value = triton.language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
 
@@ -1420,7 +1426,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 
 def default_cache_dir():
-    return os.path.join(os.environ["HOME"], ".triton", "cache")
+    return os.path.join(Path.home(), ".triton", "cache")
 
 
 class CacheManager:
