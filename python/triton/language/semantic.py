@@ -1188,14 +1188,14 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
     # FIXME(Keren): not portable, should be fixed
-    from . import libdevice
-    return libdevice.mulhi(x, y, _builder=builder)
+    from . import math
+    return math.mulhi(x, y, _builder=builder)
 
 
 def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     # FIXME(Keren): not portable, should be fixed
-    from . import libdevice
-    return libdevice.floor(x, _builder=builder)
+    from . import math
+    return math.floor(x, _builder=builder)
 
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:

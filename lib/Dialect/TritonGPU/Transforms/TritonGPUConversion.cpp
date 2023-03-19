@@ -14,11 +14,10 @@ using namespace mlir::triton::gpu;
 TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
                                                int numWarps)
     : context(context), numWarps(numWarps) {
-  // TODO: how does MLIR pick the right conversion?
   addConversion([](Type type) { return type; });
   addConversion([this](RankedTensorType tensorType) -> RankedTensorType {
     // types with encoding are already in the right format
-    // TODO: check for layout encodings specifically
+    // TODO: check for layout encodings more specifically
     if (tensorType.getEncoding())
       return tensorType;
     // pessimistic values for attributes:
@@ -41,16 +40,19 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // This will create newArg, and map(origArg, newArg)
   addArgumentMaterialization([&](OpBuilder &builder,
                                  RankedTensorType tensorType, ValueRange inputs,
-                                 Location loc) {
-    llvm_unreachable("Argument rematerialization not implemented");
+                                 Location loc) -> llvm::Optional<Value> {
+    llvm_unreachable("Argument rematerialization should not happen in Triton "
+                     "-> TritonGPU conversion");
     return std::nullopt;
   });
 
   // If the origValue still has live user(s), use this to
   // convert origValue to newValue
   addSourceMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
-                               ValueRange inputs, Location loc) {
-    llvm_unreachable("Source rematerialization not implemented");
+                               ValueRange inputs,
+                               Location loc) -> llvm::Optional<Value> {
+    llvm_unreachable("Source rematerialization should not happen in Triton -> "
+                     "TritonGPU Conversion");
     return std::nullopt;
   });
 
@@ -62,9 +64,6 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     auto cast =
         builder.create<triton::gpu::ConvertLayoutOp>(loc, tensorType, inputs);
     return Optional<Value>(cast.getResult());
-    // return Optional<Value>(cast.getResult(0));
-    // llvm_unreachable("Not implemented");
-    // return std::nullopt;
   });
 }
 
@@ -82,10 +81,16 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
                scf::ReduceReturnOp>();
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
-                             triton::TritonDialect, scf::SCFDialect>(
+                             func::FuncDialect, triton::TritonDialect,
+                             cf::ControlFlowDialect, scf::SCFDialect>(
       [&](Operation *op) {
-        if (typeConverter.isLegal(op))
+        bool hasLegalRegions = true;
+        for (auto &region : op->getRegions()) {
+          hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
+        }
+        if (hasLegalRegions && typeConverter.isLegal(op)) {
           return true;
+        }
         return false;
       });
 
