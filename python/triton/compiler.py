@@ -341,11 +341,13 @@ class CodeGenerator(ast.NodeVisitor):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
+        native_nontensor_types = (triton.language.dtype, )
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             if isinstance(value, triton.language.constexpr):
                 value = value.value
-            if not isinstance(value, triton.language.tensor):
+            if not isinstance(value, triton.language.tensor) and \
+               not isinstance(value, native_nontensor_types):
                 value = triton.language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
 
