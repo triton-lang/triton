@@ -1215,23 +1215,16 @@ def max_contiguous(input, values, _builder=None):
 
 @triton.jit
 def abs(x):
-    if x.dtype.is_fp16():
-        m = 0x7fff
-        y = x.to(triton.language.int16, bitcast=True) & m.to(triton.language.int16, bitcast=False)
-        z = y.to(triton.language.float16, bitcast=True)
-    elif x.dtype.is_bf16():
-        m = 0x7fff
-        y = x.to(triton.language.int16, bitcast=True) & m.to(triton.language.int16, bitcast=False)
-        z = y.to(triton.language.bfloat16, bitcast=True)
-    elif x.dtype.is_fp32():
-        y = x.to(triton.language.int32, bitcast=True) & 0x7fffffff
-        z = y.to(triton.language.float32, bitcast=True)
-    elif x.dtype.is_fp64():
-        y = x.to(triton.language.int64, bitcast=True) & 0x7fffffffffffffff
-        z = y.to(triton.language.float64, bitcast=True)
+    x_dtype = x.dtype
+    if x_dtype.is_floating():
+        num_bits: constexpr = x.dtype.primitive_bitwidth
+        int_dtype = dtype(f'int{num_bits}')
+        mask = 2 ** (num_bits - 1) - 1
+        ret = x.to(int_dtype, bitcast=True) & mask.to(int_dtype)
+        ret = ret.to(x_dtype, bitcast=True)
     else:
-        z = where(x >= 0, x, -x)
-    return z
+        ret = where(x >= 0, x, -x)
+    return ret
 
 
 @triton.jit
