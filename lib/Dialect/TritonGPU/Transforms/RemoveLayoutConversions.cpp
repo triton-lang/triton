@@ -595,7 +595,7 @@ public:
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<ConvertDotConvert>(context);
 
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (mlir::applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
 
