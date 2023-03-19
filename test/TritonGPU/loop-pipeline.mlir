@@ -224,7 +224,6 @@ func.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
   return %loop#1 : tensor<128x128xf32, #C>
 }
 
-
 // CHECK: func.func @lut_bmm
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async

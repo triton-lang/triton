@@ -77,7 +77,7 @@ class LoopPipeliner {
   /// Block arguments that loads depend on
   SetVector<BlockArgument> depArgs;
 
-  /// If we have a load that immedidately depends on a block argument in the
+  /// If we have a load that immediately depends on a block argument in the
   /// current iteration, it is an immediate dependency. Otherwise, it is a
   /// non-immediate dependency, which means the load depends on a block argument
   /// in the previous iterations.
