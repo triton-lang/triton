@@ -946,6 +946,12 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
                                                 view.getResult());
     return mlir::success();
   }
+  // cvt(cat) -> cat
+  if (auto cat = dyn_cast<triton::CatOp>(arg)) {
+    rewriter.replaceOpWithNewOp<triton::CatOp>(op, op->getResult(0).getType(),
+                                               cat.getOperands());
+    return mlir::success();
+  }
   // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
   auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
   if (alloc_tensor) {
