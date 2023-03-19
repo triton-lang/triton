@@ -7,7 +7,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "llvm/ADT/MapVector.h"
 
 //===----------------------------------------------------------------------===//
 //
@@ -78,15 +77,18 @@ class LoopPipeliner {
   /// Block arguments that loads depend on
   SetVector<BlockArgument> depArgs;
 
-  /// If we have a load that depends on a block argument in the current
-  /// iteration, it is an immediate dependency. Otherwise, it is a non-immediate
-  /// dependency, which means the load depends on a block argument in the
-  /// previous iterations.
+  /// If we have a load that immedidately depends on a block argument in the
+  /// current iteration, it is an immediate dependency. Otherwise, it is a
+  /// non-immediate dependency, which means the load depends on a block argument
+  /// in the previous iterations.
   /// For example:
   /// scf.for (%arg0, %arg1, %arg2) {
   ///   %0 = load %arg0  <--- immediate dep, this address is initialized at
-  ///   numStages-2 %1 = load %arg1 %2 = add %1, %arg2 %3 = load %2  <---
-  ///   non-immediate dep, %arg1 must be an update-to-date value
+  ///   numStages-2
+  ///   %1 = load %arg1
+  ///   %2 = add %1, %arg2
+  ///   %3 = load %2  <--- non-immediate dep, %arg1 must be an update-to-date
+  ///   value
   /// }
   SetVector<BlockArgument> immedidateDepArgs;
 
@@ -96,7 +98,7 @@ class LoopPipeliner {
   SetVector<Operation *> depOps;
 
   /// collect values that v depends on and are defined inside the loop
-  void collectDeps(Value v, int stages, llvm::MapVector<Value, int> &deps);
+  void collectDeps(Value v, int stages, SetVector<Value> &deps);
 
   void setValueMapping(Value origin, Value newValue, int stage);
 
@@ -143,8 +145,7 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
   return valueMapping[origin][stage];
 }
 
-void LoopPipeliner::collectDeps(Value v, int stages,
-                                llvm::MapVector<Value, int> &deps) {
+void LoopPipeliner::collectDeps(Value v, int stages, SetVector<Value> &deps) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return;
@@ -154,25 +155,18 @@ void LoopPipeliner::collectDeps(Value v, int stages,
   if (stages < 0)
     return;
 
-  // Record the minimum dependency stage to check if it is immediate or not
-  auto updateDeps = [&](Value v, int stages) {
-    if (!deps.insert({v, stages}).second) {
-      deps[v] = std::min(deps[v], stages);
-    }
-  };
-
   if (auto arg = v.dyn_cast<BlockArgument>()) {
     if (arg.getArgNumber() > 0) {
       // Skip the first arg (loop induction variable)
       // Otherwise the op idx is arg.getArgNumber()-1
-      updateDeps(v, stages);
+      deps.insert(v);
       collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stages - 1,
                   deps);
     }
   } else { // value
     // v might be in deps, but we still need to visit v.
     // This is because v might depend on value in previous iterations
-    updateDeps(v, stages);
+    deps.insert(v);
     for (Value op : v.getDefiningOp()->getOperands())
       collectDeps(op, stages, deps);
   }
@@ -228,9 +222,9 @@ LogicalResult LoopPipeliner::initialize() {
     return failure();
 
   // load => values that it depends on
-  DenseMap<Value, llvm::MapVector<Value, int>> loadDeps;
+  DenseMap<Value, SetVector<Value>> loadDeps;
   for (triton::LoadOp loadOp : validLoads) {
-    llvm::MapVector<Value, int> deps;
+    SetVector<Value> deps;
     for (Value op : loadOp->getOperands())
       collectDeps(op, numStages - 1, deps);
     loadDeps[loadOp] = deps;
@@ -243,7 +237,7 @@ LogicalResult LoopPipeliner::initialize() {
   for (triton::LoadOp loadOp : validLoads) {
     bool isCandidate = true;
     for (triton::LoadOp other : validLoads) {
-      if (loadDeps[loadOp].count(other) > 0) {
+      if (loadDeps[loadOp].contains(other)) {
         isCandidate = false;
         break;
       }
@@ -300,13 +294,14 @@ LogicalResult LoopPipeliner::initialize() {
     // Update depArgs & depOps
     for (Value loadOp : loads) {
       auto &deps = loadDeps[loadOp];
-      for (auto &[dep, stage] : deps) {
+      for (auto &dep : deps) {
         if (auto arg = dep.dyn_cast<BlockArgument>()) {
           depArgs.insert(arg);
-          if (stage == numStages - 1)
+          if (deps.front().isa<BlockArgument>()) {
             immedidateDepArgs.insert(arg);
-          else
+          } else {
             nonImmedidateDepArgs.insert(arg);
+          }
         } else
           depOps.insert(dep.getDefiningOp());
       }
@@ -525,10 +520,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   size_t depArgsBeginIdx = newLoopArgs.size();
   for (BlockArgument depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    if (nonImmedidateDepArgs.contains(depArg)) {
-      newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
-    } else
+    if (immedidateDepArgs.contains(depArg)) {
       newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
+    } else
+      newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
   }
 
   size_t nextIVIdx = newLoopArgs.size();
