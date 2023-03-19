@@ -92,7 +92,7 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
       llvm::cl::value_desc("architecture"), llvm::cl::init("90a"));
 
   static llvm::cl::opt<std::string> GCNTriple(
-      "amdgcn", llvm::cl::desc("AMDGCN triple. e.g. '-amd-amdhsa'"),
+      "amdgcn", llvm::cl::desc("AMDGCN triple vendor and platfom. e.g. '-amd-amdhsa'"),
       llvm::cl::value_desc("target triple"), llvm::cl::init("-amd-amdhsa"));
 
   static llvm::cl::opt<std::string> GCNFeatures(
@@ -131,10 +131,11 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
     llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
                                                    ptxVersion.getValue());
   else if (targetKind == "hsaco") {
+    const std::string arch = "gfx" + GCNArch.getValue();
+    const std::string triple = "amdgcn" + GCNTriple.getValue();
+    const std::string features = GCNFeatures.getValue();
     auto [module, hsaco] =
-        ::triton::translateLLVMIRToHSACO(*llvmir, GCNArch.getValue(),
-                                                  GCNTriple.getValue(),
-                                                  GCNFeatures.getValue());
+        ::triton::translateLLVMIRToHSACO(*llvmir, arch, triple, features);
     llvm::outs() << hsaco;
   } else {
     llvm::errs() << "Error: Unknown target specified: " << targetKind << "\n";
