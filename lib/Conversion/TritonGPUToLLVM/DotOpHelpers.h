@@ -333,7 +333,7 @@ private:
 };
 
 // This class helps to adapt the existing DotOpConversion to the latest
-// DotOpOperand layout design. It decouples the exising implementation to two
+// DotOpOperand layout design. It decouples the existing implementation to two
 // parts:
 // 1. loading the specific operand matrix(for $a, $b, $c) from smem
 // 2. passing the loaded value and perform the mma codegen

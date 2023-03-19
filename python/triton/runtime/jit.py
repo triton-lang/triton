@@ -318,7 +318,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         # index of constexprs
         from triton.language.core import \
             constexpr  # import here rather than at module level due to circular import tangle
-        self.constexprs = [index for index, ty in self.annotations.items() if issubclass(ty, constexpr)]
+        self.constexprs = [index for index, ty in self.annotations.items() if isinstance(ty, type) and issubclass(ty, constexpr)]
         # launcher
         self.run = self._make_launcher()
         # re-use docs of wrapped function
