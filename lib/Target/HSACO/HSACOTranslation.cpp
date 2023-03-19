@@ -67,6 +67,10 @@ initialize_module(llvm::Module *module, const std::string &triple,
   std::string error;
   auto target =
       llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
+  if (target == nullptr) {
+    std::cout << "LookupTarget fail: " << error << std::endl;
+    return nullptr;
+  }
   llvm::TargetOptions opt;
   opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
   opt.UnsafeFPMath = false;
@@ -89,6 +93,10 @@ std::string generate_amdgcn_assembly(llvm::Module *module,
                                      const std::string &proc,
                                      const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
+
+  if (machine == nullptr)
+    return "";
+
   llvm::SmallVector<char, 0> buffer;
   llvm::legacy::PassManager pass;
   llvm::raw_svector_ostream stream(buffer);
@@ -110,6 +118,9 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
                            const std::string &proc,
                            const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
+
+  if (machine == nullptr)
+    return "";
 
   std::string kernel_name = "/tmp/" + std::to_string(New64());
 
