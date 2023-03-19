@@ -136,16 +136,16 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
   }
 
   if (!funcs.empty()) {
-    static const std::string libdevice = "libdevice";
+    static const std::string mathlib = "mathlib";
     // first search for environmental path
-    std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
+    std::string env_path = ::triton::tools::getenv("TRITON_MATHLIB_PATH");
     if (!env_path.empty()) {
-      externLibs.try_emplace(libdevice, env_path);
+      externLibs.try_emplace(mathlib, env_path);
       return externLibs;
     }
     namespace fs = std::filesystem;
-    // Search for libdevice relative to its library path if used from Python
-    // Then native code is in `triton/_C/libtriton.so` and libdevice in
+    // Search for mathlib relative to its library path if used from Python
+    // Then native code is in `triton/_C/libtriton.so` and mathlib in
     // `triton/third_party/cuda/lib/libdevice.10.bc`
     static const auto this_library_path = [] {
       Dl_info fileinfo;
@@ -158,13 +158,13 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
         this_library_path.parent_path().parent_path() / "third_party" / "cuda" /
         "lib" / "libdevice.10.bc";
     if (fs::exists(runtime_path)) {
-      externLibs.try_emplace(libdevice, runtime_path.string());
+      externLibs.try_emplace(mathlib, runtime_path.string());
     } else {
       // When using the Math Dialect, it is possible that some ops (e.g., log)
-      // are lowered to a function call. In this case, we need to link libdevice
+      // are lowered to a function call. In this case, we need to link mathlib
       // using its default path:
       // [triton root dir]/python/triton/language/libdevice.10.bc
-      // TODO(Keren): handle external linkage other than libdevice?
+      // TODO(Keren): handle external linkage other than mathlib?
       static const auto this_file_path = std::filesystem::path(__FILE__);
       static const auto compiletime_path = this_file_path.parent_path()
                                                .parent_path()
@@ -178,16 +178,16 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
                                 compiletime_path.string();
         llvm::report_fatal_error(error_msg.c_str());
       }
-      externLibs.try_emplace(libdevice, compiletime_path.string());
+      externLibs.try_emplace(mathlib, compiletime_path.string());
     }
   }
 
   return externLibs;
 }
 
-static void linkLibdevice(llvm::Module &module) {
+static void linkMathlib(llvm::Module &module) {
   // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
-  // this will enable fast math path in libdevice
+  // this will enable fast math path in mathlib
   // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
   // sqrt.approx.ftz.f32
   auto &ctx = module.getContext();
@@ -221,8 +221,8 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
     return true;
   }
 
-  if (name == "libdevice") {
-    linkLibdevice(module);
+  if (name == "mathlib") {
+    linkMathlib(module);
   } else {
     assert(false && "unknown extern lib: ");
   }
@@ -261,7 +261,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   }
 
   auto optPipeline = mlir::makeOptimizingTransformer(
-      /*optLevel=*/0, /*sizeLevel=*/0,
+      /*optLevel=*/3, /*sizeLevel=*/0,
       /*targetMachine=*/nullptr);
 
   if (auto err = optPipeline(llvmModule.get())) {

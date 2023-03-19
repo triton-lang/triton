@@ -152,9 +152,9 @@ class Libdevice(ExternLibrary):
     def __init__(self, path) -> None:
         '''
         Constructor for Libdevice.
-        :param path: path of the libdevice library
+        :param path: path of the mathlib library
         '''
-        super().__init__("libdevice", path)
+        super().__init__("mathlib", path)
         self._symbol_groups = {}
 
     @staticmethod
@@ -286,11 +286,11 @@ class Libdevice(ExternLibrary):
         # @extern.extern
         # def <op_name>(<args>, _builder=None):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
-        #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
+        #   return extern.dispatch("mathlib", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core, extern\n"
         import_str += "import os\n"
         header_str = "LOCAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"..\", \"third_party\", \"cuda\", \"lib\", \"libdevice.10.bc\")\n"
-        header_str += "LIBDEVICE_PATH = os.getenv(\"TRITON_LIBDEVICE_PATH\", LOCAL_PATH)\n"
+        header_str += "MATHLIB_PATH = os.getenv(\"TRITON_MATHLIB_PATH\", LOCAL_PATH)\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@extern.extern\n"
@@ -299,7 +299,7 @@ class Libdevice(ExternLibrary):
                 func_name_str += f"{arg_name}, "
             func_name_str += "_builder=None):\n"
 
-            return_str = f"\treturn extern.elementwise(\"{self._name}\", LIBDEVICE_PATH, ["
+            return_str = f"\treturn extern.elementwise(\"{self._name}\", MATHLIB_PATH, ["
             for arg_name in symbols[0].arg_names:
                 return_str += f"{arg_name}, "
             return_str += "], \n"
@@ -347,7 +347,7 @@ class LLVMDisassembler:
         return self._path
 
 
-extern_libs = ["libdevice"]
+extern_libs = ["mathlib"]
 
 
 def build(
@@ -363,7 +363,7 @@ def build(
       :param lib_name: name of the library
       :param output_dir: path to the output directory
     '''
-    if lib_name == "libdevice":
+    if lib_name == "mathlib":
         extern_lib = Libdevice(lib_path)
     else:
         raise Exception(f"Unknown extern library: {lib_name}")
