@@ -1201,6 +1201,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if capability[0] == 7:
         if (M, N, K, num_warps) == (128, 256, 32, 8):
             pytest.skip("shared memory out of resource")
+        if out_dtype == 'float16':
+            #TODO: support out_dtype=float16 for tl.dot on V100
+            pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
 
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
@@ -1478,7 +1481,7 @@ def test_masked_load_shared_memory(dtype, device='cuda'):
         w = tl.load(in2_ptr + in2_offsets, mask=in2_offsets < in2_numel)
 
         # Without a dot product the memory doesn't get promoted to shared.
-        o = tl.dot(x, w)
+        o = tl.dot(x, w, out_dtype=tl.float32)
 
         # Store output
         output_offsets = M_offsets[:, None] * out_stride + N_offsets[None, :]
