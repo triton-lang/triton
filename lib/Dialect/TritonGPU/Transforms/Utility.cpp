@@ -253,7 +253,7 @@ void rematerializeConversionChain(
       newOperand->moveAfter(currOperation);
     else {
       Block *block = currOperand.cast<BlockArgument>().getOwner();
-      newOperand->moveAfter(block, block->begin());
+      newOperand->moveBefore(block, block->begin());
     }
     mapping.map(origOperand, newOperand);
   }
