@@ -103,7 +103,7 @@ public:
     for (auto &use : convert.getOperand().getUses()) {
       auto owner = use.getOwner();
       if (llvm::isa_and_nonnull<triton::ReduceOp>(owner)) {
-        reduce = llvm::cast<triton::ReduceOp>(owner));
+        reduce = llvm::cast<triton::ReduceOp>(owner);
         break;
       }
     }
