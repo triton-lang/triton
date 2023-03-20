@@ -140,7 +140,6 @@ public:
     addLegalDialect<LLVM::LLVMDialect>();
     if (isROCM()) {
       addLegalDialect<ROCDL::ROCDLDialect>();
-      addLegalDialect<mlir::scf::SCFDialect>();
     } else {
       addLegalDialect<NVVM::NVVMDialect>();
     }
