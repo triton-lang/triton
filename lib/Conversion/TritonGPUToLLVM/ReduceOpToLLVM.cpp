@@ -443,7 +443,7 @@ private:
 
     // We could avoid this barrier in some of the layouts, however this is not
     // the general case.
-    // TODO: optimize the barrier incase the layouts are accepted.
+    // TODO: optimize the barrier in case the layouts are accepted.
     barrier();
 
     // set output values

@@ -1,11 +1,11 @@
 triton.language
-================
+===============
 
 .. currentmodule:: triton.language
 
 
 Programming Model
--------------------
+-----------------
 
 .. autosummary::
     :toctree: generated
@@ -16,7 +16,7 @@ Programming Model
 
 
 Creation Ops
--------------
+------------
 
 .. autosummary::
     :toctree: generated
@@ -27,7 +27,7 @@ Creation Ops
 
 
 Shape Manipulation Ops
------------------------
+----------------------
 
 .. autosummary::
     :toctree: generated
@@ -40,7 +40,7 @@ Shape Manipulation Ops
 
 
 Linear Algebra Ops
--------------------
+------------------
 
 .. autosummary::
     :toctree: generated
@@ -48,8 +48,9 @@ Linear Algebra Ops
 
     dot
 
+
 Memory Ops
---------------------
+----------
 
 .. autosummary::
     :toctree: generated
@@ -62,7 +63,7 @@ Memory Ops
 
 
 Indexing Ops
---------------
+------------
 
 .. autosummary::
     :toctree: generated
@@ -72,7 +73,7 @@ Indexing Ops
 
 
 Math Ops
-----------
+--------
 
 .. autosummary::
     :toctree: generated
@@ -88,7 +89,7 @@ Math Ops
 
 
 Reduction Ops
----------------
+-------------
 
 .. autosummary::
     :toctree: generated
@@ -98,8 +99,9 @@ Reduction Ops
     min
     sum
 
+
 Atomic Ops
----------------
+----------
 
 .. autosummary::
     :toctree: generated
@@ -112,7 +114,7 @@ Atomic Ops
 
 
 Comparison ops
----------------
+--------------
 
 .. autosummary::
     :toctree: generated
@@ -124,7 +126,7 @@ Comparison ops
 .. _Random Number Generation:
 
 Random Number Generation
--------------------------
+------------------------
 
 .. autosummary::
     :toctree: generated
@@ -135,8 +137,9 @@ Random Number Generation
     rand
     randn
 
+
 Compiler Hint Ops
--------------------
+-----------------
 
 .. autosummary::
     :toctree: generated

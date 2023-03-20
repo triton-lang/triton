@@ -1363,7 +1363,7 @@ int DotOpFMAConversionHelper::getNumElemsPerThread(
   auto shapePerCTA = getShapePerCTA(blockedLayout);
   auto sizePerThread = getSizePerThread(blockedLayout);
 
-  // TODO[Superjomn]: we assume the k aixs is fixed for $a and $b here, fix it
+  // TODO[Superjomn]: we assume the k axis is fixed for $a and $b here, fix it
   // if not.
   int K = dotOpLayout.getOpIdx() == 0 ? shape[1] : shape[0];
   int otherDim = dotOpLayout.getOpIdx() == 1 ? shape[1] : shape[0];

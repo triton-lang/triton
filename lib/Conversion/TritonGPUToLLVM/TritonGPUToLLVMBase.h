@@ -299,7 +299,7 @@ public:
       Value idxRow = idx[outOrder[1]]; // discontiguous dimension
       Value strideCol = srcStrides[outOrder[0]];
       Value strideRow = srcStrides[outOrder[1]];
-      // extract dynamic/static offset for immediate offseting
+      // extract dynamic/static offset for immediate offsetting
       unsigned immedateOffCol = 0;
       if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
         if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
@@ -311,7 +311,7 @@ public:
           idxCol = cacheCol[key];
           immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
         }
-      // extract dynamic/static offset for immediate offseting
+      // extract dynamic/static offset for immediate offsetting
       unsigned immedateOffRow = 0;
       if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp()))
         if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
@@ -363,7 +363,7 @@ public:
     auto srcDistributedLayout = srcTy.getEncoding();
     if (auto mmaLayout = srcDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
       assert((!mmaLayout.isVolta()) &&
-             "ConvertLayout MMAv1->Shared is not suppported yet");
+             "ConvertLayout MMAv1->Shared is not supported yet");
     }
     auto dstSharedLayout =
         dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
@@ -622,7 +622,7 @@ private:
 
     SmallVector<Value> multiDimBase(rank);
     for (unsigned k = 0; k < rank; ++k) {
-      // Wrap around multiDimWarpId/multiDimThreadId incase
+      // Wrap around multiDimWarpId/multiDimThreadId in case
       // shape[k] > shapePerCTA[k]
       auto maxWarps =
           ceil<unsigned>(shape[k], sizePerThread[k] * threadsPerWarp[k]);

@@ -21,7 +21,7 @@ def test_sin_no_mask(num_warps, block_size, iter_size):
             offset = pid * block_size + tl.arange(0, iter_size)
             x_ptrs = x_ptr + offset
             x = tl.load(x_ptrs)
-            y = tl.libdevice.sin(x)
+            y = tl.math.sin(x)
             y_ptrs = y_ptr + offset
             tl.store(y_ptrs, y)
 
@@ -58,7 +58,7 @@ def test_fmin_no_mask(num_warps, block_size, iter_size):
 
             x = tl.load(x_ptrs)
             y = tl.load(y_ptrs)
-            z = tl.libdevice.min(x, y)
+            z = tl.math.min(x, y)
             z_ptrs = z_ptr + offset
             tl.store(z_ptrs, z)
 
@@ -102,7 +102,7 @@ def test_fmad_rn_no_mask(num_warps, block_size, iter_size):
                 y = tl.load(y_ptrs)
                 z = tl.load(z_ptrs)
 
-                w = tl.libdevice.fma(x, y, z)
+                w = tl.math.fma(x, y, z)
                 w_ptrs = w_ptr + offset
                 tl.store(w_ptrs, w)
 
@@ -129,7 +129,7 @@ def test_fmad_rn_no_mask(num_warps, block_size, iter_size):
                 y = tl.load(y_ptrs)
                 z = tl.load(z_ptrs)
 
-                w = tl.libdevice.fma_rn(x, y, z)
+                w = tl.math.fma_rn(x, y, z)
                 w_ptrs = w_ptr + offset
                 tl.store(w_ptrs, w)
 
@@ -152,9 +152,9 @@ def test_fmad_rn_no_mask(num_warps, block_size, iter_size):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
-                         [('int32', 'libdevice.ffs', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
-                          ('int32', 'libdevice.ffs', '')])
-def test_libdevice(dtype_str, expr, lib_path):
+                         [('int32', 'math.ffs', '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'),
+                          ('int32', 'math.ffs', '')])
+def test_math(dtype_str, expr, lib_path):
     src = f"""
 def kernel(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
@@ -193,7 +193,7 @@ def kernel(X, Y, BLOCK: tl.constexpr):
         x = torch.randint(2**31 - 1, shape, dtype=torch_type[dtype_str], device="cuda")
     else:
         x = torch.randn(shape, dtype=torch_type[dtype_str], device="cuda")
-    if expr == 'libdevice.ffs':
+    if expr == 'math.ffs':
         y_ref = torch.zeros(shape, dtype=x.dtype, device="cuda")
         for i in range(shape[0]):
             y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()

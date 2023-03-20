@@ -238,9 +238,9 @@ private:
     }
   }
 
-  // The MMAV1's result is quite different from the exising "Replica" structure,
-  // add a new simple but clear implementation for it to avoid modificating the
-  // logic of the exising one.
+  // The MMAV1's result is quite different from the existing "Replica"
+  // structure, add a new simple but clear implementation for it to avoid
+  // modifying the logic of the existing one.
   void processReplicaForMMAV1(Location loc, ConversionPatternRewriter &rewriter,
                               bool stNotRd, RankedTensorType type,
                               ArrayRef<unsigned> multiDimRepId, unsigned vec,

@@ -1,10 +1,10 @@
-==============
+============
 Installation
-==============
+============
 
----------------------
+--------------------
 Binary Distributions
----------------------
+--------------------
 
 You can install the latest stable release of Triton from pip:
 
@@ -21,13 +21,13 @@ And the latest nightly release:
       pip install -U --pre triton
 
 
---------------
+-----------
 From Source
---------------
+-----------
 
-+++++++++++++++
+++++++++++++++
 Python Package
-+++++++++++++++
+++++++++++++++
 
 You can install the Python package from source by running the following commands:
 
@@ -35,7 +35,7 @@ You can install the Python package from source by running the following commands
 
       git clone https://github.com/openai/triton.git;
       cd triton/python;
-      pip install cmake; # build time dependency
+      pip install cmake; # build-time dependency
       pip install -e .
 
 Note that, if llvm-11 is not present on your system, the setup.py script will download the official LLVM11 static libraries link against that.
@@ -51,5 +51,5 @@ and the benchmarks
 
 .. code-block:: bash
       
-      cd bench/
+      cd bench
       python -m run --with-plots --result-dir /tmp/triton-bench
