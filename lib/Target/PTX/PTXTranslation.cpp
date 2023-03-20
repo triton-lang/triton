@@ -1,6 +1,5 @@
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
-#include <optional>
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -12,13 +11,19 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 
+#include <mutex>
+#include <optional>
+
 namespace triton {
 
 static void initLLVM() {
-  LLVMInitializeNVPTXTargetInfo();
-  LLVMInitializeNVPTXTarget();
-  LLVMInitializeNVPTXTargetMC();
-  LLVMInitializeNVPTXAsmPrinter();
+  static std::once_flag init_flag;
+  std::call_once(init_flag, []() {
+    LLVMInitializeNVPTXTargetInfo();
+    LLVMInitializeNVPTXTarget();
+    LLVMInitializeNVPTXTargetMC();
+    LLVMInitializeNVPTXAsmPrinter();
+  });
 }
 
 static bool findAndReplace(std::string &str, const std::string &begin,
