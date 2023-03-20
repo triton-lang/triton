@@ -357,7 +357,7 @@ class CodeGenerator(ast.NodeVisitor):
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             value = _unwrap_if_constexpr(value)
-            if not isinstance(value, triton.language.tensor) and \
+            if not _is_triton_tensor(value) and \
                not isinstance(value, native_nontensor_types):
                 value = triton.language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
@@ -521,7 +521,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_If(self, node):
         cond = self.visit(node.test)
-        if isinstance(cond, triton.language.tensor):
+        if _is_triton_tensor(cond):
             cond = cond.to(triton.language.int1, _builder=self.builder)
             if self.scf_stack or not self.contains_return_op(node):
                 self.visit_if_scf(cond, node)
@@ -815,7 +815,7 @@ class CodeGenerator(ast.NodeVisitor):
             from inspect import getcallargs
             args = getcallargs(fn.fn, *args, **kws)
             args = [args[name] for name in fn.arg_names]
-            args = [arg if isinstance(arg, triton.language.tensor)
+            args = [arg if _is_triton_tensor(arg)
                     else triton.language.constexpr(arg) for arg in args]
             # generate function def
             attributes = dict()
@@ -880,7 +880,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
-        if isinstance(lhs, triton.language.tensor):
+        if _is_triton_tensor(lhs):
             if node.attr == "T":
                 return triton.language.semantic.trans(lhs, builder=self.builder)
         return getattr(lhs, node.attr)
