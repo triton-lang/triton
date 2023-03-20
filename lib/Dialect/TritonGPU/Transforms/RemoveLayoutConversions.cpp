@@ -327,8 +327,7 @@ public:
         return failure();
       }
       // don't rematerialize non-element-wise
-      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
-          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
           !isa<triton::StoreOp>(op)) {
         return failure();
