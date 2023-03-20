@@ -1213,7 +1213,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         if (M, N, K, num_warps) == (128, 256, 32, 8):
             pytest.skip("shared memory out of resource")
         if out_dtype == 'float16':
-            #TODO: support out_dtype=float16 for tl.dot on V100
+            # TODO: support out_dtype=float16 for tl.dot on V100
             pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
 
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
