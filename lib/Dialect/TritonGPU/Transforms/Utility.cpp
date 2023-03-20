@@ -179,6 +179,8 @@ int simulateBackwardRematerialization(
       if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
               triton::MakeRangeOp, triton::SplatOp>(*opArgI))
         continue;
+      if (isa<triton::ViewOp, triton::CatOp>(opArgI))
+        continue;
 
       // We add one expensive conversion for the current operand
       numCvts += 1;
