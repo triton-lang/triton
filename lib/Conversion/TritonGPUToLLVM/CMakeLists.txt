@@ -1,5 +1,4 @@
 add_mlir_conversion_library(TritonGPUToLLVM
-    ArithToIndexPass.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
