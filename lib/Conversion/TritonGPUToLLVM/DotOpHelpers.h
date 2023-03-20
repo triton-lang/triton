@@ -116,6 +116,7 @@ struct DotOpMmaV2ConversionHelper {
     FP32_FP16_FP16_FP32 = 0, // default
     FP32_BF16_BF16_FP32,
     FP32_TF32_TF32_FP32,
+    FP16_FP16_FP16_FP16,
     // integer tensor core instr
     INT32_INT1_INT1_INT32, // Not implemented
     INT32_INT4_INT4_INT32, // Not implemented
@@ -155,6 +156,8 @@ struct DotOpMmaV2ConversionHelper {
 
   Type getMmaRetType() const;
 
+  int getMmaRetSize() const;
+
   ArrayRef<int> getMmaInstrShape() const {
     assert(mmaType != TensorCoreType::NOT_APPLICABLE &&
            "Unknown mma type found.");
@@ -174,6 +177,9 @@ struct DotOpMmaV2ConversionHelper {
   }
 
   // Deduce the TensorCoreType from either $a or $b's type.
+  // TODO: both the input type ($a or $b) and output type ($c or $d) are
+  // needed to differentiate TensorCoreType::FP32_FP16_FP16_FP32 from
+  // TensorCoreType::FP16_FP16_FP16_FP16
   static TensorCoreType getTensorCoreTypeFromOperand(Type operandTy);
 
   int getVec() const {
@@ -202,6 +208,7 @@ private:
           {TensorCoreType::FP32_FP16_FP16_FP32, {16, 8, 16}},
           {TensorCoreType::FP32_BF16_BF16_FP32, {16, 8, 16}},
           {TensorCoreType::FP32_TF32_TF32_FP32, {16, 8, 8}},
+          {TensorCoreType::FP16_FP16_FP16_FP16, {16, 8, 16}},
 
           {TensorCoreType::INT32_INT1_INT1_INT32, {16, 8, 256}},
           {TensorCoreType::INT32_INT4_INT4_INT32, {16, 8, 64}},
@@ -217,6 +224,7 @@ private:
           {TensorCoreType::FP32_FP16_FP16_FP32, {8, 8, 8}},
           {TensorCoreType::FP32_BF16_BF16_FP32, {8, 8, 8}},
           {TensorCoreType::FP32_TF32_TF32_FP32, {8, 8, 4}},
+          {TensorCoreType::FP16_FP16_FP16_FP16, {8, 8, 8}},
 
           {TensorCoreType::INT32_INT1_INT1_INT32, {8, 8, 64}},
           {TensorCoreType::INT32_INT4_INT4_INT32, {8, 8, 32}},
@@ -234,6 +242,8 @@ private:
        "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"},
       {TensorCoreType::FP32_TF32_TF32_FP32,
        "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"},
+      {TensorCoreType::FP16_FP16_FP16_FP16,
+       "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16"},
 
       {TensorCoreType::INT32_INT1_INT1_INT32,
        "mma.sync.aligned.m16n8k256.row.col.s32.b1.b1.s32.xor.popc"},
@@ -248,6 +258,7 @@ private:
       {TensorCoreType::FP32_FP16_FP16_FP32, 8},
       {TensorCoreType::FP32_BF16_BF16_FP32, 8},
       {TensorCoreType::FP32_TF32_TF32_FP32, 4},
+      {TensorCoreType::FP16_FP16_FP16_FP16, 8},
 
       {TensorCoreType::INT32_INT1_INT1_INT32, 128},
       {TensorCoreType::INT32_INT4_INT4_INT32, 32},
@@ -360,6 +371,20 @@ struct MMA16816ConversionHelper {
         helper(mmaLayout), rewriter(rewriter), typeConverter(typeConverter),
         loc(loc), ctx(mmaLayout.getContext()) {
     helper.deduceMmaType(dotOperand);
+
+    Value _32 = i32_val(32);
+    lane = urem(thread, _32);
+    warp = udiv(thread, _32);
+  }
+
+  MMA16816ConversionHelper(DotOp op, MmaEncodingAttr mmaLayout, Value thread,
+                           ConversionPatternRewriter &rewriter,
+                           TritonGPUToLLVMTypeConverter *typeConverter,
+                           Location loc)
+      : mmaLayout(mmaLayout), wpt(mmaLayout.getWarpsPerCTA()), thread(thread),
+        helper(mmaLayout), rewriter(rewriter), typeConverter(typeConverter),
+        loc(loc), ctx(mmaLayout.getContext()) {
+    helper.deduceMmaType(op);
 
     Value _32 = i32_val(32);
     lane = urem(thread, _32);

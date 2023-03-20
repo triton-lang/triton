@@ -33,8 +33,13 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                     .getEncoding()
                                     .dyn_cast<MmaEncodingAttr>();
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
-      if (mmaLayout.isVolta())
+      if (mmaLayout.isVolta()) {
+        if (D.getType().cast<RankedTensorType>().getElementType().isF16()) {
+          llvm_unreachable(
+              "out_dtype=float16 for dot is not implemented on V100 yet");
+        }
         return convertMMA884(op, adaptor, rewriter);
+      }
       if (mmaLayout.isAmpere())
         return convertMMA16816(op, adaptor, rewriter);
 
@@ -67,7 +72,7 @@ private:
     Value B = op.getB();
     Value C = op.getC();
 
-    MMA16816ConversionHelper mmaHelper(A.getType(), mmaLayout,
+    MMA16816ConversionHelper mmaHelper(op, mmaLayout,
                                        getThreadId(rewriter, loc), rewriter,
                                        getTypeConverter(), loc);
 
