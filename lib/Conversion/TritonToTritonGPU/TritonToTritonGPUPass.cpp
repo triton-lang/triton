@@ -686,9 +686,12 @@ public:
   LogicalResult
   matchAndRewrite(cf::BranchOp op, cf::BranchOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<cf::BranchOp>(
-                      op, op.getSuccessor(), adaptor.getOperands()),
-                  adaptor.getAttributes());
+    auto converter = getTypeConverter();
+    auto newOp = rewriter.replaceOpWithNewOp<cf::BranchOp>(
+        op, op.getSuccessor(), adaptor.getOperands());
+    if (failed(rewriter.convertRegionTypes(newOp.getSuccessor()->getParent(),
+                                           *converter)))
+      return failure();
     return success();
   }
 };
@@ -713,6 +716,27 @@ public:
     if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(),
                                            *converter)))
       return failure();
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class FuncOpPattern : public OpConversionPattern<func::FuncOp> {
+public:
+  using OpConversionPattern<func::FuncOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(func::FuncOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto converter = getTypeConverter();
+    auto newOp = rewriter.replaceOpWithNewOp<func::FuncOp>(
+        op, op.getName(), op.getFunctionType());
+    addNamedAttrs(newOp, adaptor.getAttributes());
+    rewriter.inlineRegionBefore(op.getBody(), newOp.getBody(),
+                                newOp.getBody().end());
+    if (failed(rewriter.convertRegionTypes(&newOp.getBody(), *converter)))
+      return failure();
+
     return success();
   }
 };
@@ -720,7 +744,8 @@ public:
 void populateCFPatterns(TritonGPUTypeConverter &typeConverter,
                         RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<CFBranchPattern, CFCondBranchPattern>(typeConverter, context);
+  patterns.add<FuncOpPattern, CFCondBranchPattern, CFBranchPattern>(
+      typeConverter, context);
 }
 //
 
