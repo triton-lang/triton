@@ -231,6 +231,7 @@ void rematerializeConversionChain(
     sortedValues.push_back(op->getResult(0));
 
   for (Value currOperand : sortedValues) {
+    Value origOperand = currOperand;
     // unpack information
     Attribute targetLayout = toConvert.lookup(currOperand);
     // rematerialize the operand if necessary
@@ -254,7 +255,7 @@ void rematerializeConversionChain(
       Block *block = currOperand.cast<BlockArgument>().getOwner();
       newOperand->moveAfter(block, block->begin());
     }
-    mapping.map(currOperand, newOperand);
+    mapping.map(origOperand, newOperand);
   }
 }
 
