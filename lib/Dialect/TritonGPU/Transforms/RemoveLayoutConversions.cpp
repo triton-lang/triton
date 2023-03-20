@@ -555,8 +555,19 @@ public:
       return mlir::failure();
 
     // TODO: int tensor cores
-    auto _0f = rewriter.create<arith::ConstantFloatOp>(
-        op->getLoc(), APFloat(0.0f), dstTy.getElementType().cast<FloatType>());
+    auto out_dtype = dstTy.getElementType().cast<FloatType>();
+    APFloat value(0.0f);
+    if (out_dtype.isBF16())
+      value = APFloat(APFloat::IEEEhalf(), APInt(16, 0));
+    else if (out_dtype.isF16())
+      value = APFloat(APFloat::IEEEhalf(), APInt(16, 0));
+    else if (out_dtype.isF32())
+      value = APFloat(0.0f);
+    else
+      llvm_unreachable("unsupported data type");
+
+    auto _0f =
+        rewriter.create<arith::ConstantFloatOp>(op->getLoc(), value, out_dtype);
     auto _0 = rewriter.create<triton::SplatOp>(
         op->getLoc(), dotOp.getResult().getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
@@ -595,7 +606,7 @@ public:
     patterns.add<DecomposeDotOperand>(context);
     patterns.add<ConvertDotConvert>(context);
 
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (mlir::applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
 

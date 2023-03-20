@@ -862,7 +862,7 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, allow_tf32=True, _builder=None):
+def dot(input, other, allow_tf32=True, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -874,7 +874,8 @@ def dot(input, other, allow_tf32=True, _builder=None):
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
-    return semantic.dot(input, other, allow_tf32, _builder)
+    out_dtype = _constexpr_to_value(out_dtype)
+    return semantic.dot(input, other, allow_tf32, out_dtype, _builder)
 
 
 # -----------------------
@@ -1215,7 +1216,16 @@ def max_contiguous(input, values, _builder=None):
 
 @triton.jit
 def abs(x):
-    return where(x >= 0, x, -x)
+    x_dtype = x.dtype
+    if x_dtype.is_floating():
+        num_bits: constexpr = x.dtype.primitive_bitwidth
+        int_dtype = dtype(f'int{num_bits}')
+        mask = 2 ** (num_bits - 1) - 1
+        ret = x.to(int_dtype, bitcast=True) & mask.to(int_dtype)
+        ret = ret.to(x_dtype, bitcast=True)
+    else:
+        ret = where(x >= 0, x, -x)
+    return ret
 
 
 @triton.jit

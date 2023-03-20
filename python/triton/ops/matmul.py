@@ -64,9 +64,9 @@ def _kernel(A, B, C, M, N, K,
             stride_am, stride_ak,
             stride_bk, stride_bn,
             stride_cm, stride_cn,
+            dot_out_dtype: tl.constexpr,
             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
             GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
-            ACC_TYPE: tl.constexpr
             ):
     # matrix multiplication
     pid = tl.program_id(0)
@@ -88,7 +88,7 @@ def _kernel(A, B, C, M, N, K,
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
     B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=ACC_TYPE)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=dot_out_dtype)
     for k in range(0, tl.cdiv(K, BLOCK_K * SPLIT_K)):
         if EVEN_K:
             a = tl.load(A)
@@ -97,7 +97,7 @@ def _kernel(A, B, C, M, N, K,
             k_remaining = K - k * (BLOCK_K * SPLIT_K)
             a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.)
             b = tl.load(B, mask=rk[:, None] < k_remaining, other=0.)
-        acc += tl.dot(a, b)
+        acc += tl.dot(a, b, out_dtype=dot_out_dtype)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk
     acc = acc.to(C.dtype.element_ty)
@@ -119,7 +119,7 @@ class _matmul(torch.autograd.Function):
     _locks = {}
 
     @staticmethod
-    def _call(a, b):
+    def _call(a, b, dot_out_dtype):
         device = a.device
         # handle non-contiguous inputs if necessary
         if a.stride(0) > 1 and a.stride(1) > 1:
@@ -132,20 +132,32 @@ class _matmul(torch.autograd.Function):
         _, N = b.shape
         # allocates output
         c = torch.empty((M, N), device=device, dtype=a.dtype)
-        # accumulator types
-        ACC_TYPE = tl.float32 if a.dtype in [torch.float16, torch.bfloat16, torch.float32] else tl.int32
+        if dot_out_dtype is None:
+            if a.dtype in [torch.float16, torch.float32, torch.bfloat16]:
+                dot_out_dtype = tl.float32
+            else:
+                dot_out_dtype = tl.int32
+        else:
+            assert isinstance(dot_out_dtype, torch.dtype), "dot_out_dtype must be a torch.dtype"
+            if dot_out_dtype == torch.float16:
+                dot_out_dtype = tl.float16
+            elif dot_out_dtype in [torch.float32, torch.bfloat16]:
+                dot_out_dtype = tl.float32
+            else:
+                dot_out_dtype = tl.int32
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
         _kernel[grid](a, b, c, M, N, K,
                       a.stride(0), a.stride(1),
                       b.stride(0), b.stride(1),
                       c.stride(0), c.stride(1),
-                      GROUP_M=8, ACC_TYPE=ACC_TYPE)
+                      dot_out_dtype=dot_out_dtype,
+                      GROUP_M=8)
         return c
 
     @staticmethod
-    def forward(ctx, a, b):
-        return _matmul._call(a, b)
+    def forward(ctx, a, b, dot_out_dtype=None):
+        return _matmul._call(a, b, dot_out_dtype=dot_out_dtype)
 
 
 matmul = _matmul.apply

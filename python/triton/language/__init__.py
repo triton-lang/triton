@@ -5,7 +5,7 @@ from ..impl import (
     ir,
     builtin,
 )
-from . import libdevice
+from . import math
 from .core import (
     abs,
     arange,
@@ -141,7 +141,7 @@ __all__ = [
     "int64",
     "int8",
     "ir",
-    "libdevice",
+    "math",
     "load",
     "log",
     "max",
