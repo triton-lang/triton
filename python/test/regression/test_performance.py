@@ -162,7 +162,7 @@ def test_elementwise(N):
 flash_attention_data = {
     "a100": {
         (4, 48, 4096, 64, 'forward', 'float16'): 0.37,
-        (4, 48, 4096, 64, 'backward', 'float16'): 0.26,
+        (4, 48, 4096, 64, 'backward', 'float16'): 0.25,
     }
 }
 
