@@ -31,10 +31,14 @@ jobs:
           python3 -m cibuildwheel python --output-dir wheelhouse
 
       - name: Append build number
+        shell: bash
         run: |
+          set -ex
           mkdir -p wheelhouse-1
+          find wheelhouse -type f
           for i in $(find wheelhouse -type f); do
-            python3 -mwheel unpack $i
+            echo "Patching $i"
+            python3 -mwheel unpack "$i"
             python3 -mwheel pack triton-2.0.0 --build-number 1 --dest-dir wheelhouse-1
             rm -rf triton-2.0.0
           done
