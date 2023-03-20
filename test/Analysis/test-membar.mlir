@@ -79,7 +79,11 @@ func.func @scratch() {
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
   %1 = triton_gpu.convert_layout %0 : (tensor<32x16xf16, #A_SHARED>) -> tensor<32x16xf16, #AL>
-  %2 = tt.reduce %1 {redOp = 1 : i32, axis = 0 : i32} : tensor<32x16xf16, #AL> -> tensor<16xf16, #sliceAd0>
+  %2 = "tt.reduce" (%1) ({
+  ^bb0(%arg1: f16, %arg2: f16):
+    %add = arith.addf %arg1, %arg2 : f16
+    tt.reduce.return %add : f16
+  }) {axis = 0 : i32} : (tensor<32x16xf16, #AL>) -> tensor<16xf16, #sliceAd0>
   return
 }
 
@@ -417,7 +421,7 @@ func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>
   %b_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   %c_shared_init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   // CHECK: gpu.barrier
-  %c_blocked = triton_gpu.convert_layout %c_shared_init : (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL> 
+  %c_blocked = triton_gpu.convert_layout %c_shared_init : (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL>
 
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
     %c_shared_next_next = scf.if %i1 -> tensor<128x32xf16, #A_SHARED> {
@@ -429,13 +433,13 @@ func.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>
       %c_shared_ = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (tensor<128x32xf16, #A_SHARED>) {
         // CHECK: gpu.barrier
         // CHECK-NEXT: triton_gpu.convert_layout
-        %c_blocked_next = triton_gpu.convert_layout %c_shared_next : (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL> 
+        %c_blocked_next = triton_gpu.convert_layout %c_shared_next : (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL>
         scf.yield %c_shared : tensor<128x32xf16, #A_SHARED>
       }
       scf.yield %c_shared_ : tensor<128x32xf16, #A_SHARED>
     }
     // CHECK-NOT: gpu.barrier
-    %b_blocked_next = triton_gpu.convert_layout %b_shared: (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL> 
+    %b_blocked_next = triton_gpu.convert_layout %b_shared: (tensor<128x32xf16, #A_SHARED>) -> tensor<128x32xf16, #AL>
     scf.yield %a_shared, %b_shared, %c_shared_next_next : tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>
   }
   return
