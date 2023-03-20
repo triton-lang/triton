@@ -1864,6 +1864,7 @@ def compile(fn, **kwargs):
     debug = kwargs.get("debug", False)
     # build compilation stages
     if torch.version.hip is not None:
+        _triton.set_rocm()
         if extern_libs is None:
             extern_libs = get_amdgcn_bitcode_paths()
         else:

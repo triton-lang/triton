@@ -29,31 +29,8 @@
 #include <memory>
 #include <string>
 
-inline std::map<std::string, bool> cache{};
-inline bool isROCM() {
-  // only need to run function once after that return cached value
-  if (cache.find("isROCM") != cache.end()) {
-    return cache["isROCM"];
-  }
-
-  // run command
-  std::string cmd = "apt-cache show rocm-libs | grep 'Package:'";
-  std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"),
-                                                pclose);
-  if (!pipe) {
-    std::cout << ("cmd failed!") << std::endl;
-  }
-
-  // get output
-  std::string result;
-  std::array<char, 128> buffer;
-  while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-    result += buffer.data();
-  }
-
-  // check ROCM that is found
-  cache["isROCM"] = result.find("rocm") != std::string::npos;
-  return cache["isROCM"];
-}
+inline bool _isROCM = false;
+inline void setROCM() { _isROCM = true; }
+inline bool isROCM() { return _isROCM; }
 
 #endif
