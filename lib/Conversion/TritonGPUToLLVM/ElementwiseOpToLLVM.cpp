@@ -51,17 +51,21 @@ struct FpToFpOpConversion
   convertFp8E4M3x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm = "{                                      \n"
-                   ".reg .b32 a<2>, b<2>;                  \n"
-                   "prmt.b32 a0, 0, $2, 0x5040;            \n"
-                   "prmt.b32 a1, 0, $2, 0x7060;            \n"
-                   "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-                   "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-                   "shr.b32  b0, b0, 1;                    \n"
-                   "shr.b32  b1, b1, 1;                    \n"
-                   "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
-                   "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n"
-                   "}";
+    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
+        "{                                      \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+        "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
+        "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
+        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
+        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "shr.b32  b0, b0, 1;                    \n" // b0 >>= 1
+        "shr.b32  b1, b1, 1;                    \n" // shift into fp16 position
+        "add.u32  b0, b0, 0x20002000;           \n" // b0.exp += 2**4-2**3
+                                                    // exponent compensate = 8
+        "add.u32  b1, b1, 0x20002000;           \n" // b1 += 8<<10 | 8<<10<<16
+        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+        "}";
     return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   }
 
@@ -69,6 +73,7 @@ struct FpToFpOpConversion
   convertFp8E5M2x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
+    // exponent bias of Fp8E5M2 and Fp16 are the same
     auto *ptxAsm = "{                           \n"
                    "prmt.b32 $0, 0, $2, 0x5140; \n\t"
                    "prmt.b32 $1, 0, $2, 0x7362; \n\t"
@@ -193,18 +198,23 @@ struct FpToFpOpConversion
   convertFp16x4ToFp8E4M3x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm = "{                                      \n"
-                   ".reg .b32 a<2>, b<2>;                  \n"
-                   "shl.b32 a0, $1, 1;                     \n"
-                   "shl.b32 a1, $2, 1;                     \n"
-                   "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-                   "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-                   "add.u32 a0, a0, 0x00800080;            \n"
-                   "add.u32 a1, a1, 0x00800080;            \n"
-                   "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
-                   "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
-                   "prmt.b32 $0, b0, b1, 0x7531;           \n"
-                   "}";
+    auto *ptxAsm = // WARN: subnormal Fp8s are not handled
+        "{                                      \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // see Fp8E4M3x4ToFp16x4
+        "sub.u32 a0, $1, 0x20002000;            \n" // a0 = input0 - 0x20002000
+                                                    // (compensate offset)
+        "sub.u32 a1, $2, 0x20002000;            \n" // a1 = input1 - 0x20002000
+                                                    // (8 << 10 | 8 << 10 << 16)
+        "shl.b32 a0, a0, 1;                     \n" // a0 <<= 1
+        "shl.b32 a1, a1, 1;                     \n" // shift into fp8e4 position
+        "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n" // a0 &= 0x7fff7fff
+        "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "add.u32 a0, a0, 0x00800080;            \n" // a0 += 0x00800080
+        "add.u32 a1, a1, 0x00800080;            \n" // (round to nearest)
+        "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n" // b0 = a0|(0x80008000&in0)
+        "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
+        "prmt.b32 $0, b0, b1, 0x7531;           \n" // output = b1b0
+        "}";
     return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   }
 
