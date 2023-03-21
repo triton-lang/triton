@@ -1,5 +1,4 @@
 #include "TypeConverter.h"
-#include "DotOpHelpers.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -7,9 +6,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::DotOpFMAConversionHelper;
-using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getElemsPerThread;
@@ -82,25 +78,47 @@ SmallVector<Value> TritonGPUToLLVMTypeConverter::unpackLLElements(
   return results;
 }
 
-llvm::Optional<Type>
-TritonGPUToLLVMTypeConverter::convertTritonTensorType(RankedTensorType type) {
+Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
+    RankedTensorType type) {
+  auto ctx = type.getContext();
+  Attribute layout = type.getEncoding();
+  Type elemTy = convertType(type.getElementType());
+  auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
+  if (!dotOpLayout)
+    return elemTy;
+  auto mmaParent = dotOpLayout.getParent().dyn_cast<MmaEncodingAttr>();
+  if (!mmaParent)
+    return elemTy;
+  if (mmaParent.isAmpere()) {
+    int bitwidth = elemTy.getIntOrFloatBitWidth();
+    // sub-word integer types need to be packed for perf reasons
+    if (elemTy.isa<IntegerType>() && bitwidth < 32)
+      return IntegerType::get(ctx, 32);
+    // TODO: unify everything to use packed integer-types
+    // otherwise, vector types are ok
+    const llvm::DenseMap<int, Type> elemTyMap = {
+        {32, vec_ty(elemTy, 1)},
+        {16, vec_ty(elemTy, 2)},
+        {8, vec_ty(elemTy, 4)},
+    };
+    return elemTyMap.lookup(bitwidth);
+  } else {
+    assert(mmaParent.isVolta());
+    return vec_ty(elemTy, 2);
+  }
+}
+
+Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
+    RankedTensorType type) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
   SmallVector<int64_t> shape(type.getShape().begin(), type.getShape().end());
+  Type eltType = getElementTypeForStruct(type);
 
-  if (layout &&
-      (layout.isa<BlockedEncodingAttr>() || layout.isa<SliceEncodingAttr>() ||
-       layout.isa<MmaEncodingAttr>())) {
-    unsigned numElementsPerThread = getElemsPerThread(type);
-    SmallVector<Type, 4> types(numElementsPerThread,
-                               convertType(type.getElementType()));
-    return LLVM::LLVMStructType::getLiteral(ctx, types);
-  } else if (auto shared_layout =
-                 layout.dyn_cast_or_null<SharedEncodingAttr>()) {
+  if (auto shared_layout = layout.dyn_cast<SharedEncodingAttr>()) {
     SmallVector<Type, 4> types;
     // base ptr
-    auto ptrType =
-        LLVM::LLVMPointerType::get(convertType(type.getElementType()), 3);
+    auto ptrType = LLVM::LLVMPointerType::get(eltType, 3);
     types.push_back(ptrType);
     // shape dims
     auto rank = type.getRank();
@@ -109,55 +127,9 @@ TritonGPUToLLVMTypeConverter::convertTritonTensorType(RankedTensorType type) {
       types.push_back(IntegerType::get(ctx, 32));
     }
     return LLVM::LLVMStructType::getLiteral(ctx, types);
-  } else if (auto dotOpLayout =
-                 layout.dyn_cast_or_null<DotOperandEncodingAttr>()) {
-    if (dotOpLayout.getParent()
-            .isa<BlockedEncodingAttr>()) { // for parent is blocked layout
-      int numElemsPerThread =
-          DotOpFMAConversionHelper::getNumElemsPerThread(shape, dotOpLayout);
-
-      return LLVM::LLVMStructType::getLiteral(
-          ctx, SmallVector<Type>(numElemsPerThread, type::f32Ty(ctx)));
-    } else { // for parent is MMA layout
-      auto mmaLayout = dotOpLayout.getParent().cast<MmaEncodingAttr>();
-      auto wpt = mmaLayout.getWarpsPerCTA();
-      Type elemTy = convertType(type.getElementType());
-      if (mmaLayout.isAmpere()) {
-        const llvm::DenseMap<int, Type> targetTyMap = {
-            {32, vec_ty(elemTy, 1)},
-            {16, vec_ty(elemTy, 2)},
-            {8, vec_ty(elemTy, 4)},
-        };
-        Type targetTy;
-        if (targetTyMap.count(elemTy.getIntOrFloatBitWidth())) {
-          targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
-          // <2xi16>/<4xi8> => i32
-          // We are doing this because NVPTX inserts extra integer instrs to
-          // pack & unpack vectors of sub-word integers
-          // Note: this needs to be synced with
-          //       DotOpMmaV2ConversionHelper::loadX4
-          if (elemTy.isa<IntegerType>() &&
-              (elemTy.getIntOrFloatBitWidth() == 8 ||
-               elemTy.getIntOrFloatBitWidth() == 16))
-            targetTy = IntegerType::get(ctx, 32);
-        } else {
-          assert(false && "Unsupported element type");
-        }
-        auto elems = getElemsPerThread(type);
-        return struct_ty(SmallVector<Type>(elems, targetTy));
-      }
-
-      if (mmaLayout.isVolta()) {
-        int elems = getElemsPerThread(type);
-        Type x2Ty = vec_ty(elemTy, 2);
-        return struct_ty(SmallVector<Type>(elems, x2Ty));
-      }
-    }
-
-    llvm::errs() << "Unexpected dot operand layout detected in "
-                    "TritonToLLVMTypeConverter";
-    return std::nullopt;
   }
 
-  return std::nullopt;
+  unsigned numElementsPerThread = getElemsPerThread(type);
+  SmallVector<Type, 4> types(numElementsPerThread, eltType);
+  return LLVM::LLVMStructType::getLiteral(ctx, types);
 }

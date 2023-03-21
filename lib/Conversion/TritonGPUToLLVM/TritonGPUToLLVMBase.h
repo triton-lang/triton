@@ -9,7 +9,6 @@
 
 #include "TypeConverter.h"
 //
-#include "DotOpHelpers.h"
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -701,7 +700,7 @@ private:
     auto shape = type.getShape();
 
     auto wpt = mmaLayout.getWarpsPerCTA();
-    auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
+    static constexpr std::array<int, 3> fpw{{2, 2, 1}};
     auto [isARow, isBRow, isAVec4, isBVec4, _] =
         mmaLayout.decodeVoltaLayoutStates();
 
@@ -787,7 +786,7 @@ private:
     auto bRep = bEncoding.getMMAv1Rep();
 
     auto wpt = mmaLayout.getWarpsPerCTA();
-    auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
+    static constexpr std::array<int, 3> fpw{{2, 2, 1}};
     SmallVector<int, 2> rep({aRep[0], bRep[1]});
     SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
     SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});
