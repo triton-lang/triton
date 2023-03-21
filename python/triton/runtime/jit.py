@@ -8,7 +8,8 @@ import os
 import subprocess
 import textwrap
 from collections import defaultdict, namedtuple
-from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
+from typing import (Callable, Generic, Iterable, Iterator, Optional, TypeVar, Union,
+                    cast, overload)
 
 import triton
 
@@ -93,30 +94,36 @@ class DependenciesFinder(ast.NodeVisitor):
 
 @functools.lru_cache()
 def version_key():
-    import pkgutil
-    contents = []
-    # frontend
-    with open(__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
-    # compiler
-    compiler_path = os.path.join(*triton.__path__, 'compiler')
-    for lib in pkgutil.iter_modules([compiler_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
-    # backend
-    with open(triton._C.libtriton.__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
-    # language
-    language_path = os.path.join(*triton.__path__, 'language')
-    for lib in pkgutil.iter_modules([language_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
-    # ptxas version
-    try:
-        ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
-    except Exception:
-        ptxas_version = ''
-    return '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
+
+    def subpackage_files(package_name: str):
+        import pkgutil
+        modules = pkgutil.iter_modules([os.path.join(*triton.__path__, package_name)])
+        return [lib.module_finder.find_spec(lib.name).origin for lib in modules]
+
+    hashed_file_paths = [
+        __file__, triton._C.libtriton.__file__,
+        *subpackage_files('compiler'),
+        *subpackage_files('language'),
+    ]
+
+    def fetch_ptxas_version() -> str:
+        try:
+            return subprocess.check_output(["ptxas", "--version"])
+        except subprocess.CalledProcessError:  # not `Exception`; other exceptions are unexpected and should be allowed to propagate
+            return ''
+
+    def hashed_chunks() -> Iterator[Union[str, bytes]]:
+        """Yields data to be hashed in a certain order"""
+        for path in hashed_file_paths:
+            with open(path, "rb") as f:
+                _ = f.read()
+            yield _
+        yield fetch_ptxas_version()
+
+    hash_object = hashlib.new('md5')
+    for data in hashed_chunks():
+        hash_object.update(data)
+    return '-'.join((triton.__version__, hash_object.hexdigest()))
 
 
 class KernelInterface(Generic[T]):
