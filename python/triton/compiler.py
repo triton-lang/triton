@@ -768,6 +768,7 @@ class CodeGenerator(ast.NodeVisitor):
             iv = for_op.get_induction_var()
             if negative_step:
                 iv = self.builder.create_sub(ub, iv)
+                iv = self.builder.create_add(iv, lb)
             self.lscope[node.target.id].handle.replace_all_uses_with(iv)
             self.set_value(node.target.id, triton.language.core.tensor(iv, iv_type))
 
