@@ -170,9 +170,9 @@ private:
       } else if (mmaLayout.isVolta()) {
         auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
-        auto coords =
-            getMNCoords(threadId, rewriter, mmaLayout.getWarpsPerCTA(),
-                        mmaLayout, shape, isARow, isBRow, isAVec4, isBVec4);
+        auto coords = SharedToDotOperandMMAv1::getMNCoords(
+            threadId, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
+            isARow, isBRow, isAVec4, isBVec4);
         return coords[elemId];
       } else {
         llvm_unreachable("Unexpected MMALayout version");
@@ -550,13 +550,9 @@ private:
       auto dotOpLayout =
           dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
       auto thread = getThreadId(rewriter, loc);
-      if (dotOpLayout.getOpIdx() == 0) { // $a
-        res = loadAFMA(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                       getTypeConverter(), rewriter);
-      } else { // $b
-        res = loadBFMA(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                       getTypeConverter(), rewriter);
-      }
+      res = SharedToDotOperandFMA::convertLayout(
+          dotOpLayout.getOpIdx(), src, adaptor.getSrc(), blockedLayout, thread,
+          loc, getTypeConverter(), rewriter);
     } else {
       assert(false && "Unsupported dot operand layout found");
     }
@@ -652,20 +648,11 @@ private:
     Value res;
 
     if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2
-      // MMA16816ConversionHelper mmaHelper(src.getType(), mmaLayout,
-      //                                    getThreadId(rewriter, loc),
-      //                                    rewriter, getTypeConverter(),
-      //                                    op.getTritonGPUToLLVMLoc());
 
-      if (dotOperandLayout.getOpIdx() == 0) {
-        // operand $a
-        res = loadAv2(rewriter, loc, src, dotOperandLayout, smemObj,
-                      getTypeConverter(), tid_val());
-      } else if (dotOperandLayout.getOpIdx() == 1) {
-        // operand $b
-        res = loadBv2(rewriter, loc, src, dotOperandLayout, smemObj,
-                      getTypeConverter(), tid_val());
-      }
+      SharedToDotOperandMMAv2::convertLayout(
+          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
+          smemObj, getTypeConverter(), tid_val());
+
     } else if (!isOuter && mmaLayout.isVolta() && isHMMA) { // tensor core v1
       bool isMMAv1Row = dotOperandLayout.getMMAv1IsRow();
       auto srcSharedLayout = src.getType()
@@ -680,13 +667,9 @@ private:
         return Value();
       }
 
-      if (dotOperandLayout.getOpIdx() == 0) { // operand $a
-        res = loadA(src, smemObj, getThreadId(rewriter, loc), loc,
-                    getTypeConverter(), rewriter, dst.getType());
-      } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
-        res = loadB(src, smemObj, getThreadId(rewriter, loc), loc,
-                    getTypeConverter(), rewriter, dst.getType());
-      }
+      SharedToDotOperandMMAv1::convertLayout(
+          dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
+          loc, getTypeConverter(), rewriter, dst.getType());
     } else {
       assert(false && "Unsupported mma layout found");
     }

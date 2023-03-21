@@ -1,6 +1,17 @@
+#include "ConvertLayoutOpToLLVM.h"
 #include "Utility.h"
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::getStridesFromShapeAndOrder;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getContigPerThread;
+using ::mlir::triton::gpu::getElemsPerThread;
+using ::mlir::triton::gpu::getOrder;
+using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::getSizePerThread;
+using ::mlir::triton::gpu::isaDistributedLayout;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Data loader for mma.16816 instruction.
 class MMA16816SmemLoader {
@@ -474,7 +485,7 @@ Type getMatType(Type argType) {
 }
 
 Value composeValuesToDotOperandLayoutStruct(
-    const ValueTableV2 &vals, int n0, int n1,
+    const ValueTable &vals, int n0, int n1,
     TritonGPUToLLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter) {
   std::vector<Value> elems;
@@ -500,7 +511,7 @@ std::function<void(int, int)>
 getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
                 MmaEncodingAttr mmaLayout, int wpt, uint32_t kOrder,
                 SmallVector<int> instrShape, SmallVector<int> matShape,
-                Value warpId, Value lane, ValueTableV2 &vals, bool isA,
+                Value warpId, Value lane, ValueTable &vals, bool isA,
                 TritonGPUToLLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
@@ -558,10 +569,9 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
   return load;
 }
 
-Value loadAv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
-              DotOperandEncodingAttr aEncoding,
-              const SharedMemoryObject &smemObj,
-              TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
+Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
+            DotOperandEncodingAttr aEncoding, const SharedMemoryObject &smemObj,
+            TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
   int bitwidth = aTensorTy.getElementTypeBitWidth();
   auto mmaLayout = aEncoding.getParent().cast<MmaEncodingAttr>();
@@ -569,7 +579,7 @@ Value loadAv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
                              aTensorTy.getShape().end());
 
-  ValueTableV2 ha;
+  ValueTable ha;
   std::function<void(int, int)> loadFn;
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
@@ -609,11 +619,10 @@ Value loadAv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
                                                typeConverter, loc, rewriter);
 }
 
-Value loadBv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
-              DotOperandEncodingAttr bEncoding,
-              const SharedMemoryObject &smemObj,
-              TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
-  ValueTableV2 hb;
+Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
+            DotOperandEncodingAttr bEncoding, const SharedMemoryObject &smemObj,
+            TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
+  ValueTable hb;
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   int bitwidth = tensorTy.getElementTypeBitWidth();
   auto mmaLayout = bEncoding.getParent().cast<MmaEncodingAttr>();
@@ -658,3 +667,19 @@ Value loadBv2(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
       hb, std::max(numRepN / 2, 1), numRepK, typeConverter, loc, rewriter);
   return result;
 }
+
+namespace SharedToDotOperandMMAv2 {
+Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
+                    Location loc, Value tensor, DotOperandEncodingAttr encoding,
+                    const SharedMemoryObject &smemObj,
+                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
+  if (opIdx == 0)
+    return loadA(rewriter, loc, tensor, encoding, smemObj, typeConverter,
+                 thread);
+  else {
+    assert(opIdx == 1);
+    return loadB(rewriter, loc, tensor, encoding, smemObj, typeConverter,
+                 thread);
+  }
+}
+} // namespace SharedToDotOperandMMAv2

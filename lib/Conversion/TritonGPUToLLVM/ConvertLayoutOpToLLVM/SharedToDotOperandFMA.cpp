@@ -1,6 +1,17 @@
+#include "ConvertLayoutOpToLLVM.h"
 #include "Utility.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::getStridesFromShapeAndOrder;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getContigPerThread;
+using ::mlir::triton::gpu::getElemsPerThread;
+using ::mlir::triton::gpu::getOrder;
+using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::getSizePerThread;
+using ::mlir::triton::gpu::isaDistributedLayout;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 
 SmallVector<Value>
 getThreadIds(Value threadId, ArrayRef<unsigned int> shapePerCTA,
@@ -57,11 +68,13 @@ Value getStructFromValueTable(ArrayRef<Value> vals,
   return typeConverter->packLLElements(loc, elems, rewriter, structTy);
 }
 
-ValueTableFMA getValueTableFromStruct(
-    Value val, int K, int n0, int shapePerCTA, int sizePerThread,
-    ConversionPatternRewriter &rewriter, Location loc,
-    TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
-  ValueTableFMA res;
+ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
+                                   int sizePerThread,
+                                   ConversionPatternRewriter &rewriter,
+                                   Location loc,
+                                   TritonGPUToLLVMTypeConverter *typeConverter,
+                                   Type type) {
+  ValueTable res;
   auto elems = typeConverter->unpackLLElements(loc, val, rewriter, type);
   int index = 0;
   for (unsigned k = 0; k < K; ++k) {
@@ -200,3 +213,15 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
 
   return getStructFromValueTable(vbs, rewriter, loc, typeConverter, elemTy);
 }
+
+namespace SharedToDotOperandFMA {
+Value convertLayout(int opIdx, Value val, Value llVal,
+                    BlockedEncodingAttr dLayout, Value thread, Location loc,
+                    TritonGPUToLLVMTypeConverter *typeConverter,
+                    ConversionPatternRewriter &rewriter) {
+  if (opIdx == 0)
+    return loadAFMA(val, llVal, dLayout, thread, loc, typeConverter, rewriter);
+  else
+    return loadBFMA(val, llVal, dLayout, thread, loc, typeConverter, rewriter);
+}
+} // namespace SharedToDotOperandFMA
