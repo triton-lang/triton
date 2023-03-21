@@ -649,7 +649,7 @@ private:
 
     if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2
 
-      SharedToDotOperandMMAv2::convertLayout(
+      res = SharedToDotOperandMMAv2::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
           smemObj, getTypeConverter(), tid_val());
 
@@ -667,7 +667,7 @@ private:
         return Value();
       }
 
-      SharedToDotOperandMMAv1::convertLayout(
+      res = SharedToDotOperandMMAv1::convertLayout(
           dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
           loc, getTypeConverter(), rewriter, dst.getType());
     } else {
