@@ -20,7 +20,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 #define GEN_PASS_CLASSES
-#include "triton/Conversion/Passes.h.inc"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 
 namespace {
 class TritonArithToIndexConversionTarget : public mlir::ConversionTarget {

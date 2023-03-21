@@ -4,9 +4,6 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -19,7 +16,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 #define GEN_PASS_CLASSES
-#include "triton/Conversion/Passes.h.inc"
+#include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
 
 namespace {
 
