@@ -1404,7 +1404,7 @@ def generate_launcher(constants, signature):
       if (launch_exit_hook != Py_None) {{
         PyObject_CallObject(launch_exit_hook, args);
       }}
-      if(PyErr_Occurred()) {{
+      if (PyErr_Occurred()) {{
         return NULL;
       }}
       // return None
