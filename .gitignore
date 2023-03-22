@@ -18,6 +18,3 @@ __pycache__
 # JetBrains project files
 .idea
 cmake-build-*
-
-log_*
-scripts*
