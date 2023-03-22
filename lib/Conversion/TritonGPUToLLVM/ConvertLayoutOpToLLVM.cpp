@@ -1,12 +1,8 @@
 #include "ConvertLayoutOpToLLVM.h"
-#include "DotOpHelpers.h"
 #include "Utility.h"
 
-using ::mlir::LLVM::DotOpFMAConversionHelper;
-using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getElemsPerThread;
@@ -15,6 +11,41 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
+
+// Forward declarations
+
+namespace SharedToDotOperandMMAv1 {
+using CoordTy = SmallVector<Value>;
+using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
+
+SmallVector<CoordTy> getMNCoords(Value thread,
+                                 ConversionPatternRewriter &rewriter,
+                                 ArrayRef<unsigned int> wpt,
+                                 const MmaEncodingAttr &mmaLayout,
+                                 ArrayRef<int64_t> shape, bool isARow,
+                                 bool isBRow, bool isAVec4, bool isBVec4);
+
+Value convertLayout(int opIdx, Value tensor, const SharedMemoryObject &smemObj,
+                    Value thread, Location loc,
+                    TritonGPUToLLVMTypeConverter *typeConverter,
+                    ConversionPatternRewriter &rewriter, Type resultTy);
+
+} // namespace SharedToDotOperandMMAv1
+
+namespace SharedToDotOperandMMAv2 {
+Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
+                    Location loc, Value tensor,
+                    DotOperandEncodingAttr bEncoding,
+                    const SharedMemoryObject &smemObj,
+                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
+}
+
+namespace SharedToDotOperandFMA {
+Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
+                    Value thread, Location loc,
+                    TritonGPUToLLVMTypeConverter *typeConverter,
+                    ConversionPatternRewriter &rewriter);
+}
 
 struct ConvertLayoutOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
@@ -139,10 +170,10 @@ private:
       } else if (mmaLayout.isVolta()) {
         auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
-        auto coords = DotOpMmaV1ConversionHelper::getMNCoords(
+        auto coords = SharedToDotOperandMMAv1::getMNCoords(
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
             isARow, isBRow, isAVec4, isBVec4);
-        return DotOpMmaV1ConversionHelper::getCoord(elemId, coords);
+        return coords[elemId];
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
@@ -518,15 +549,10 @@ private:
                        .dyn_cast_or_null<BlockedEncodingAttr>()) {
       auto dotOpLayout =
           dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-      DotOpFMAConversionHelper helper(blockedLayout);
       auto thread = getThreadId(rewriter, loc);
-      if (dotOpLayout.getOpIdx() == 0) { // $a
-        res = helper.loadA(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           getTypeConverter(), rewriter);
-      } else { // $b
-        res = helper.loadB(src, adaptor.getSrc(), blockedLayout, thread, loc,
-                           getTypeConverter(), rewriter);
-      }
+      res = SharedToDotOperandFMA::convertLayout(
+          dotOpLayout.getOpIdx(), src, adaptor.getSrc(), blockedLayout, thread,
+          loc, getTypeConverter(), rewriter);
     } else {
       assert(false && "Unsupported dot operand layout found");
     }
@@ -622,19 +648,12 @@ private:
     Value res;
 
     if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2
-      MMA16816ConversionHelper mmaHelper(src.getType(), mmaLayout,
-                                         getThreadId(rewriter, loc), rewriter,
-                                         getTypeConverter(), op.getLoc());
 
-      if (dotOperandLayout.getOpIdx() == 0) {
-        // operand $a
-        res = mmaHelper.loadA(src, smemObj);
-      } else if (dotOperandLayout.getOpIdx() == 1) {
-        // operand $b
-        res = mmaHelper.loadB(src, smemObj);
-      }
+      res = SharedToDotOperandMMAv2::convertLayout(
+          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
+          smemObj, getTypeConverter(), tid_val());
+
     } else if (!isOuter && mmaLayout.isVolta() && isHMMA) { // tensor core v1
-      DotOpMmaV1ConversionHelper helper(mmaLayout);
       bool isMMAv1Row = dotOperandLayout.getMMAv1IsRow();
       auto srcSharedLayout = src.getType()
                                  .cast<RankedTensorType>()
@@ -648,23 +667,15 @@ private:
         return Value();
       }
 
-      if (dotOperandLayout.getOpIdx() == 0) { // operand $a
-        // TODO[Superjomn]: transA is not available here.
-        bool transA = false;
-        res = helper.loadA(src, smemObj, getThreadId(rewriter, loc), loc,
-                           getTypeConverter(), rewriter, dst.getType());
-      } else if (dotOperandLayout.getOpIdx() == 1) { // operand $b
-        // TODO[Superjomn]: transB is not available here.
-        bool transB = false;
-        res = helper.loadB(src, smemObj, getThreadId(rewriter, loc), loc,
-                           getTypeConverter(), rewriter, dst.getType());
-      }
+      res = SharedToDotOperandMMAv1::convertLayout(
+          dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
+          loc, getTypeConverter(), rewriter, dst.getType());
     } else {
       assert(false && "Unsupported mma layout found");
     }
     return res;
   }
-};
+}; // namespace triton::gpu::ConvertLayoutOp>
 
 void populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,

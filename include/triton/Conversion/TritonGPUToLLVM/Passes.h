@@ -2,7 +2,6 @@
 #define TRITONGPU_CONVERSION_PASSES_H
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/ArithToIndexPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
 namespace mlir {

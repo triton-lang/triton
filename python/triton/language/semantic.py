@@ -1051,6 +1051,7 @@ def atomic_xchg(ptr: tl.tensor,
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         allow_tf32: bool,
+        out_dtype: tl.dtype,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     assert lhs.dtype == rhs.dtype, "lhs and rhs must have the same dtype!"
@@ -1062,9 +1063,13 @@ def dot(lhs: tl.tensor,
     if lhs.type.scalar.is_int():
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
-    else:
+    elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
         _0 = builder.get_fp32(0)
         ret_scalar_ty = tl.float32
+    else:
+        _0 = builder.get_fp16(0) if out_dtype.is_fp16() else builder.get_fp32(0)
+        ret_scalar_ty = out_dtype
+
     M = lhs.type.shape[0]
     N = rhs.type.shape[1]
     _0 = builder.create_splat(_0, [M, N])
@@ -1188,14 +1193,14 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
     # FIXME(Keren): not portable, should be fixed
-    from . import libdevice
-    return libdevice.mulhi(x, y, _builder=builder)
+    from . import math
+    return math.mulhi(x, y, _builder=builder)
 
 
 def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     # FIXME(Keren): not portable, should be fixed
-    from . import libdevice
-    return libdevice.floor(x, _builder=builder)
+    from . import math
+    return math.floor(x, _builder=builder)
 
 
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:

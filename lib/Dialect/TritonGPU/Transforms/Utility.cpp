@@ -179,6 +179,8 @@ int simulateBackwardRematerialization(
       if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
               triton::MakeRangeOp, triton::SplatOp>(*opArgI))
         continue;
+      if (isa<triton::ViewOp, triton::CatOp>(opArgI))
+        continue;
 
       // We add one expensive conversion for the current operand
       numCvts += 1;
@@ -229,6 +231,7 @@ void rematerializeConversionChain(
     sortedValues.push_back(op->getResult(0));
 
   for (Value currOperand : sortedValues) {
+    Value origOperand = currOperand;
     // unpack information
     Attribute targetLayout = toConvert.lookup(currOperand);
     // rematerialize the operand if necessary
@@ -250,9 +253,9 @@ void rematerializeConversionChain(
       newOperand->moveAfter(currOperation);
     else {
       Block *block = currOperand.cast<BlockArgument>().getOwner();
-      newOperand->moveAfter(block, block->begin());
+      newOperand->moveBefore(block, block->begin());
     }
-    mapping.map(currOperand, newOperand);
+    mapping.map(origOperand, newOperand);
   }
 }
 
