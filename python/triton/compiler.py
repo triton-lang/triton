@@ -1356,7 +1356,7 @@ def generate_launcher(constants, signature):
         return ptr_info;
       }}
       PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-      if(ptr){{
+      if (ptr) {{
         PyObject *empty_tuple = PyTuple_New(0);
         PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
         Py_DECREF(empty_tuple);
