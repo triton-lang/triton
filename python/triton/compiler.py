@@ -2383,7 +2383,7 @@ class HIPUtils(object):
 
         static struct PyModuleDef ModuleDef = {
           PyModuleDef_HEAD_INIT,
-          \"hip_utils\",
+          "hip_utils",
           NULL, //documentation
           -1, //size
           ModuleMethods
