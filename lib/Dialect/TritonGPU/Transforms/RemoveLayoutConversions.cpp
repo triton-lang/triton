@@ -100,7 +100,7 @@ public:
       return mlir::failure();
     auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
     triton::ReduceOp reduce;
-    for (auto &use : convert.getOperand().getUses()) {
+    for (auto &use : convert.getResult().getUses()) {
       auto owner = use.getOwner();
       if (llvm::isa_and_nonnull<triton::ReduceOp>(owner)) {
         reduce = llvm::cast<triton::ReduceOp>(owner);
