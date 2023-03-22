@@ -76,10 +76,12 @@ jobs:
       - name: Install Triton
         run: |
           cd python
+          pip install cmake==3.24
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
 
       - name: Run lit tests
         run: |
+          pip install lit
           cd python
           LIT_TEST_DIR="build/$(ls build)/test"
           if [ ! -d "$LIT_TEST_DIR" ]; then
