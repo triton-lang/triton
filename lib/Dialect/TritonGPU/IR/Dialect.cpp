@@ -411,6 +411,24 @@ unsigned SharedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   return 0;
 }
 
+SmallVector<int64_t>
+DotOperandEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
+                                    int bitwidth) const {
+  auto mmaParent = getParent().cast<MmaEncodingAttr>();
+  SmallVector<int> shapePerWarp = {16, 8, 4 * 64 / bitwidth};
+  auto warpsPerCTA = getParent().cast<MmaEncodingAttr>().getWarpsPerCTA();
+  assert(mmaParent.isAmpere());
+  if (getOpIdx() == 0)
+    return {std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0])),
+            shape[1] / shapePerWarp[2]};
+  else {
+    assert(getOpIdx() == 1);
+    return {
+        shape[0] / shapePerWarp[2],
+        std::max<int64_t>(1, shape[1] / (shapePerWarp[1] * warpsPerCTA[1]))};
+  }
+}
+
 unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                                    Type eltTy) const {
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
@@ -418,23 +436,11 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
     // A100
     if (mmaParent.isAmpere()) {
-      int bitwidth = eltTy.getIntOrFloatBitWidth();
-      int shapePerWarpM = 16;
-      int shapePerWarpN = 8;
-      int shapePerWarpK = 4 * 64 / bitwidth;
-      int shapePerCTAM = shapePerWarpM * warpsPerCTAM;
-      int shapePerCTAN = shapePerWarpN * warpsPerCTAN;
-
-      if (getOpIdx() == 0) {
-        int repM = std::max<int>(1, shape[0] / shapePerCTAM);
-        int repK = std::max<int>(1, shape[1] / shapePerWarpK);
-        return 4 * repM * repK;
-      }
-      if (getOpIdx() == 1) {
-        int repN = std::max<int>(1, shape[1] / shapePerCTAN);
-        int repK = std::max<int>(1, shape[0] / shapePerWarpK);
-        return 4 * std::max(repN / 2, 1) * repK;
-      }
+      auto rep = getMMAv2Rep(shape, eltTy.getIntOrFloatBitWidth());
+      if (getOpIdx() == 0)
+        return 4 * rep[0] * rep[1];
+      if (getOpIdx() == 1)
+        return 4 * rep[0] * std::max<int>(rep[1] / 2, 1);
     }
     // V100
     if (mmaParent.isVolta()) {
@@ -497,7 +503,31 @@ unsigned DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       }
     }
   }
-  llvm_unreachable("unknown mma version");
+  if (auto blockedLayout = getParent().dyn_cast<BlockedEncodingAttr>()) {
+    auto shapePerCTA = getShapePerCTA(blockedLayout);
+    auto order = blockedLayout.getOrder();
+    auto sizePerThread = getSizePerThread(blockedLayout);
+
+    int K = getOpIdx() == 0 ? shape[1] : shape[0];
+    int otherDim = getOpIdx() == 1 ? shape[1] : shape[0];
+
+    bool isM = getOpIdx() == 0;
+
+    int mSizePerThread =
+        order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+    int nSizePerThread =
+        order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
+    int sizePerThreadMN = isM ? mSizePerThread : nSizePerThread;
+
+    int mShapePerCTA =
+        order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+    int nShapePerCTA =
+        order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
+    int shapePerCTAMN = isM ? mShapePerCTA : nShapePerCTA;
+
+    return K * std::max<int>(otherDim / shapePerCTAMN, 1) * sizePerThreadMN;
+  }
+  llvm_unreachable("unknown dot operand parent layout");
   return 0;
 }
 

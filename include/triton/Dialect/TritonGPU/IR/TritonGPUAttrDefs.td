@@ -514,6 +514,10 @@ section 9.7.13.4.1 for more details.
     SmallVector<int> getMMAv1ShapePerWarp() const;
     int getMMAv1Vec() const;
     int getMMAv1NumOuter(ArrayRef<int64_t> shape) const;
+    //
+    SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
+                                     int bitwidth) const;
+
   }];
 }
 
