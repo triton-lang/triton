@@ -1377,10 +1377,10 @@ def generate_launcher(constants, signature):
         }}
 
         ptr_info.dev_ptr = (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
-        
+
         if (!ptr_info.dev_ptr)
           return ptr_info;
-        
+
         uint64_t dev_ptr;
         hipError_t status = hipPointerGetAttribute(&dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
         if (status == hipErrorInvalidValue) {{
@@ -1398,7 +1398,7 @@ def generate_launcher(constants, signature):
     }}
 
     static PyObject* launch(PyObject* self, PyObject* args) {{
-    
+
       int gridX, gridY, gridZ;
       uint64_t _stream;
       uint64_t _function;
@@ -1426,7 +1426,7 @@ def generate_launcher(constants, signature):
       if (PyErr_Occurred()) {{
         return NULL;
       }}
-      
+
       // return None
       Py_INCREF(Py_None);
       return Py_None;
