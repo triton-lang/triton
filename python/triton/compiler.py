@@ -2391,7 +2391,7 @@ class HIPUtils(object):
 
         PyMODINIT_FUNC PyInit_hip_utils(void) {
           PyObject *m = PyModule_Create(&ModuleDef);
-          if(m == NULL) {
+          if (m == NULL) {
             return NULL;
           }
           PyModule_AddFunctions(m, ModuleMethods);
