@@ -33,6 +33,7 @@
 #include <iostream>
 #include <memory>
 #include <random>
+#include <filesystem>
 
 namespace {
 
@@ -111,7 +112,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
                            const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
 
-  std::string kernel_name = "/tmp/" + std::to_string(New64());
+  std::string kernel_name = std::filesystem::temp_directory_path().string() + std::to_string(New64());
 
   // create dump files
   std::error_code ec;
