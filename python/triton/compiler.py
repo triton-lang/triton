@@ -2369,7 +2369,7 @@ class HIPUtils(object):
             // get allocated registers and spilled registers from the function
             int n_regs = 0;
             int n_spills = 0;
-            if(PyErr_Occurred()) {
+            if (PyErr_Occurred()) {
               return NULL;
             }
             return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs, n_spills);
