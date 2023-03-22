@@ -1,14 +1,9 @@
 #include "ViewOpToLLVM.h"
-#include "DotOpHelpers.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::DotOpFMAConversionHelper;
-using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
-using ::mlir::LLVM::DotOpMmaV2ConversionHelper;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::getElemsPerThread;
 
 struct SplatOpConversion

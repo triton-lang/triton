@@ -84,41 +84,46 @@ public:
   }
 };
 
+// It's beneficial to move the conversion
+// to after the reduce if necessary since it will be
+// done on a rank-reduced tensor hence cheaper
 class SimplifyReduceCvt : public mlir::RewritePattern {
 public:
   explicit SimplifyReduceCvt(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::ReduceOp::getOperationName(), 2, context) {
-  }
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             2, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto reduce = cast<triton::ReduceOp>(*op);
-    auto reduceArg = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-        reduce.getOperand().getDefiningOp());
-    if (!reduceArg)
+    if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
+      return mlir::failure();
+    auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
+    triton::ReduceOp reduce;
+    for (auto &use : convert.getResult().getUses()) {
+      auto owner = use.getOwner();
+      if (llvm::isa_and_nonnull<triton::ReduceOp>(owner)) {
+        reduce = llvm::cast<triton::ReduceOp>(owner);
+        break;
+      }
+    }
+    if (!reduce)
       return mlir::failure();
     // this may generate unsupported conversions in the LLVM codegen
-    if (reduceArg.getOperand()
+    if (convert.getOperand()
             .getType()
             .cast<RankedTensorType>()
             .getEncoding()
             .isa<triton::gpu::MmaEncodingAttr>())
       return mlir::failure();
     auto newReduce = rewriter.create<triton::ReduceOp>(
-        op->getLoc(), reduce.getRedOp(), reduceArg.getOperand(),
+        op->getLoc(), reduce.getRedOp(), convert.getOperand(),
         reduce.getAxis());
-    if (isa_and_nonnull<triton::gpu::ConvertLayoutOp>(
-            *reduceArg.getOperand().getDefiningOp()))
-      return mlir::failure();
     Value newRet = newReduce.getResult();
-    // it's still beneficial to move the conversion
-    // to after the reduce if necessary since it will be
-    // done on a rank-reduced tensor hence cheaper
     if (newRet.getType() != reduce.getResult().getType())
       newRet = rewriter.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), reduce.getResult().getType(), newRet);
-    rewriter.replaceOp(op, newRet);
+    rewriter.replaceAllUsesWith(reduce, newRet);
 
     return success();
   }
@@ -327,8 +332,7 @@ public:
         return failure();
       }
       // don't rematerialize non-element-wise
-      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
-          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
           !isa<triton::StoreOp>(op)) {
         return failure();
@@ -363,7 +367,7 @@ class RematerializeBackward : public mlir::RewritePattern {
 public:
   explicit RematerializeBackward(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             2, context) {}
+                             3, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *cvt,

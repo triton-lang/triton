@@ -1,0 +1,43 @@
+repos:
+  - repo: local
+    hooks:
+      - id: isort
+        name: isort
+        entry: isort
+        args: ["./python"]
+        language: python
+        types: [python]
+        additional_dependencies:
+          - isort==5.10.1
+
+      - id: autopep8
+        name: autopep8
+        entry: autopep8
+        args: ["-a", "-r", "-i", "./python"]
+        language: python
+        types: [python]
+        additional_dependencies:
+          - autopep8==1.6.0
+
+      - id: clang-format
+        name: clang-format
+        entry: python -m clang_format
+        args:
+          [
+            "-regex",
+            ".*\\.(cpp|hpp|h|cc)",
+            "-not",
+            "-path",
+            "./python/triton/*",
+            "-not",
+            "-path",
+            "./python/build/*",
+            "-not",
+            "-path",
+            "./include/triton/external/*",
+            "-i",
+          ]
+        language: python
+        types: [c, c++]
+        additional_dependencies:
+          - clang-format==14.0.6
