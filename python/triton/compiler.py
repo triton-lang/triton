@@ -2329,7 +2329,7 @@ class HIPUtils(object):
             Py_ssize_t data_size;
             int shared;
             int device;
-            if(!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared, &device)) {
+            if (!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared, &device)) {
                 return NULL;
             }
 
