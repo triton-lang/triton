@@ -251,7 +251,7 @@ setup(
         "build": [
             "cmake>=3.20",
             "lit",
-        ]
+        ],
         "tests": [
             "autopep8",
             "flake8",
