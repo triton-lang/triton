@@ -2309,7 +2309,7 @@ class HIPUtils(object):
 
         static PyObject* getDeviceProperties(PyObject* self, PyObject* args){
             int device_id;
-            if(!PyArg_ParseTuple(args, "i", &device_id))
+            if (!PyArg_ParseTuple(args, "i", &device_id))
                 return NULL;
 
             hipDeviceProp_t props;
