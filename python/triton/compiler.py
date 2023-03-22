@@ -1367,7 +1367,7 @@ def generate_launcher(constants, signature):
           return ptr_info;
         }}
         ptr_info.dev_ptr = (hipDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
-        if(!ptr_info.dev_ptr)
+        if (!ptr_info.dev_ptr)
           return ptr_info;
         uint64_t dev_ptr;
         hipError_t status = hipPointerGetAttribute(&dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
