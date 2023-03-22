@@ -2305,7 +2305,7 @@ class HIPUtils(object):
           }}
         }}
 
-        #define HIP_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if(PyErr_Occurred()) return NULL; }
+        #define HIP_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if (PyErr_Occurred()) return NULL; }
 
         static PyObject* getDeviceProperties(PyObject* self, PyObject* args){
             int device_id;
