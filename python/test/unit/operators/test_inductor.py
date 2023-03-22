@@ -49,10 +49,7 @@ def test_normalization_with_remat():
     buf16 = torch.rand(8, 1, 64, device="cuda")
     arg114_1 = torch.rand(64, device="cuda")
     arg115_1 = torch.rand(64, device="cuda")
-
     arg8_1 = torch.rand(64, device="cuda")
-
     arg9_1 = torch.rand(64, device="cuda")
     triton_[(512,)](buf14, buf16, arg114_1, arg115_1, arg8_1, arg9_1, 512, 4096, 1, 2048)
-
     triton.testing.allclose(buf16.mean(), buf14.mean().item(), atol=1e-7, rtol=0)
