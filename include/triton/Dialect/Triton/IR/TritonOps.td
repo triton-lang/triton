@@ -107,51 +107,70 @@ def TT_AddPtrOp : TT_Op<"addptr",
     let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result) `,` type($offset)";
 }
 
+def TT_AdvanceOp : TT_Op<"advance",
+                         [Pure,
+                          TypesMatchWith<"result type matches ptr type",
+                                         "result", "ptr", "$_self">]> {
+    let summary = "Advance a tile pointer by offsets";
+
+    let arguments = (ins TT_Ptr:$ptr, Variadic<I32>:$offsets);
+
+    let results = (outs TT_Ptr:$result);
+
+    let assemblyFormat = "$ptr `,` `[` $offsets `]` attr-dict `:` type($result)";
+}
 
 //
 // Load/Store Ops
 //
+// TODO(Chenggang): may add traits to check the legality
 def TT_LoadOp : TT_Op<"load",
-                      [SameOperandsAndResultShape,
-                       SameOperandsAndResultEncoding,
-                       AttrSizedOperandSegments,
+                      [AttrSizedOperandSegments,
                        MemoryEffects<[MemRead]>,
-                       TypesMatchWith<"infer ptr type from result type",
-                                      "result", "ptr", "getPointerTypeSameShape($_self)">,
                        TypesMatchWith<"infer mask type from result type or none",
                                       "result", "mask", "getI1SameShape($_self)",
                                       "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
                        TypesMatchWith<"infer other type from result type or none",
                                       "result", "other", "$_self",
                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
-    let summary = "load";
+    let summary = "Load from a tensor of pointers or from a tile-based pointer";
 
     let arguments = (ins TT_PtrLike:$ptr, Optional<TT_BoolLike>:$mask, Optional<TT_Type>:$other,
-                         TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                         BoolAttr:$isVolatile);
+                         OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck, OptionalAttr<TT_PaddingOptionAttr>:$padding,
+                         TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
 
     let results = (outs TT_Type:$result);
 
     let builders = [
+        // A tensor of pointers or a pointer to a scalar
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A tile pointer with boundary check and padding
+        OpBuilder<(ins "Value":$ptr, "Optional<ArrayRef<int32_t>>":$boundaryCheck,
+                       "Optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A tensor of pointers or a pointer to a scalar with `mask`
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A tensor of pointers or a pointer to a scalar with `mask` and `other`
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A utility function to build the operation with all attributes
+        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "Optional<ArrayRef<int32_t>>":$boundaryCheck,
+                       "Optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 
+    // Format: `tt.load operands attrs : optional(type(ptr)) -> type(result)`
+    // We need an extra `optional(type(ptr))` for inferring the tile pointer type with back compatibility
     let hasCustomAssemblyFormat = 1;
+
     let hasCanonicalizer = 1;
 }
 
+// TODO(Chenggang): may add traits to check the legality
 def TT_StoreOp : TT_Op<"store",
-                       [SameOperandsShape,
-                        SameOperandsEncoding,
-                        MemoryEffects<[MemWrite]>,
-                        TypesMatchWith<"infer ptr type from value type",
-                                       "value", "ptr",
-                                       "getPointerTypeSameShape($_self)">,
+                       [MemoryEffects<[MemWrite]>,
                         TypesMatchWith<"infer mask type from value type",
                                        "value", "mask", "getI1SameShape($_self)",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
@@ -167,6 +186,7 @@ def TT_StoreOp : TT_Op<"store",
     ];
 
     let hasCustomAssemblyFormat = 1;
+
     let hasCanonicalizer = 1;
 }
 
@@ -436,6 +456,47 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
   }];
   let arguments = (ins TT_Tensor:$condition, StrAttr:$message, StrAttr:$file, StrAttr:$func, I32Attr:$line);
   let assemblyFormat = "$condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)";
+}
+
+//
+// Make a Tile Pointer
+//
+def TT_MakeTilePtrOp : TT_Op<"make_tile_ptr",
+                             [Pure,
+                              SameVariadicOperandSize,
+                              TypesMatchWith<"infer pointer type from the result type",
+                                             "result", "base",
+                                             "getPointerType(getElementTypeOfTilePointerType($_self))">]> {
+  let summary = "Make a tile pointer type with meta information of the parent tensor and the tile";
+
+  let description = [{
+      `tt.make_tile_ptr` takes both meta information of the parent tensor and the tile and returns a pointer to a tile,
+      e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
+  }];
+
+  let arguments = (ins
+    TT_Ptr:$base,
+    Variadic<I64>:$shape,
+    Variadic<I64>:$strides,
+    Variadic<I32>:$offsets,
+    DenseI32ArrayAttr:$order
+  );
+
+  let results = (outs TT_Ptr:$result);
+
+  // Add additional `[]` to increase readability and split variadic lists
+  let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` `,` `[` $offsets `]` attr-dict `:` type($result)";
+
+  let builders = [
+    OpBuilder<(ins
+        "Value":$base,
+        "ValueRange":$shape,
+        "ValueRange":$strides,
+        "ValueRange":$offsets,
+        "ArrayRef<int64_t>":$tile_shape,
+        "ArrayRef<int32_t>":$order
+    )>
+  ];
 }
 
 #endif // Triton_OPS

@@ -46,4 +46,10 @@ unsigned getPointeeBitWidth(RankedTensorType tensorTy) {
   return pointeeType.getIntOrFloatBitWidth();
 }
 
+bool isTilePointerType(Type type) {
+  if (auto ptrType = type.dyn_cast<PointerType>())
+    return ptrType.getPointeeType().isa<RankedTensorType>();
+  return false;
+}
+
 } // namespace mlir

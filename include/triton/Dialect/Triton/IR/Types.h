@@ -12,6 +12,8 @@ namespace mlir {
 
 unsigned getPointeeBitWidth(RankedTensorType tensorTy);
 
+bool isTilePointerType(Type type);
+
 }
 
 #endif // TRITON_IR_TYPES_H_

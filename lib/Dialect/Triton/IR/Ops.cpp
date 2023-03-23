@@ -36,49 +36,82 @@ static Type getPointerTypeSameShape(Type type) {
   }
 }
 
+static Type getPointerType(Type type) { return PointerType::get(type, 1); }
+
+static Type getElementTypeOfTilePointerType(Type type) {
+  if (auto ptrType = type.dyn_cast<PointerType>())
+    if (auto tensorType = ptrType.getPointeeType().dyn_cast<RankedTensorType>())
+      return tensorType.getElementType();
+  return {};
+}
+
 // Parser & printer for assembly forms
 ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
+  // Parse operands
   SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
-  Type resultTypes[1];
   SMLoc allOperandLoc = parser.getCurrentLocation();
   if (parser.parseOperandList(allOperands) ||
-      parser.parseOptionalAttrDict(result.attributes) || parser.parseColon() ||
-      parser.parseCustomTypeWithFallback(resultTypes[0]))
+      parser.parseOptionalAttrDict(result.attributes) || parser.parseColon())
     return failure();
 
-  result.addTypes(resultTypes);
-
+  // Operand types
   SmallVector<Type> operandTypes;
-  operandTypes.push_back(getPointerTypeSameShape(resultTypes[0])); // ptr
+
+  // Parse `optional(type(ptr)) -> type(result)`
+  Type ptrType, resultType;
+  if (parser.parseType(resultType))
+    return failure();
+  if (parser.parseOptionalArrow().succeeded()) {
+    ptrType = resultType;
+    if (parser.parseType(resultType))
+      return failure();
+    operandTypes.push_back(ptrType);
+    result.addTypes(resultType);
+  } else {
+    operandTypes.push_back(getPointerTypeSameShape(resultType));
+    result.addTypes(resultType);
+  }
+
+  // Determine `mask` and `other`
   int hasMask = 0, hasOther = 0;
   if (allOperands.size() >= 2) {
-    operandTypes.push_back(getI1SameShape(resultTypes[0])); // mask
+    operandTypes.push_back(getI1SameShape(resultType));
     hasMask = 1;
   }
   if (allOperands.size() >= 3) {
-    operandTypes.push_back(resultTypes[0]); // other
+    operandTypes.push_back(resultType);
     hasOther = 1;
   }
 
   if (parser.resolveOperands(allOperands, operandTypes, allOperandLoc,
                              result.operands))
     return failure();
-  // Deduce operand_segment_sizes from the number of the operands.
-  auto operand_segment_sizesAttrName =
+
+  // Deduce `operand_segment_sizes` from the number of the operands
+  auto operandSegmentSizesAttrName =
       LoadOp::getOperandSegmentSizesAttrName(result.name);
   result.addAttribute(
-      operand_segment_sizesAttrName,
+      operandSegmentSizesAttrName,
       parser.getBuilder().getDenseI32ArrayAttr({1, hasMask, hasOther}));
+
   return success();
 }
 
 void LoadOp::print(OpAsmPrinter &printer) {
   printer << " ";
   printer << getOperation()->getOperands();
-  // "operand_segment_sizes" can be deduced, so we don't print it.
+
+  // `operand_segment_sizes` can be deduced, so we don't print it.
   printer.printOptionalAttrDict(getOperation()->getAttrs(),
                                 {getOperandSegmentSizesAttrName()});
+
+  // `type(ptr) -> type(result)`
   printer << " : ";
+  // `type(ptr)` is optional during parsing, we only print for tile-based cases
+  if (isTilePointerType(getPtr().getType())) {
+    printer.printStrippedAttrOrType(getPtr().getType());
+    printer << " -> ";
+  }
   printer.printStrippedAttrOrType(getResult().getType());
 }
 
@@ -128,8 +161,7 @@ void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                     ::mlir::Value ptr, ::mlir::Value value,
                     ::mlir::triton::CacheModifier cache,
                     ::mlir::triton::EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, mlir::Value(), cache,
-                        evict);
+  return StoreOp::build(builder, state, ptr, value, {}, cache, evict);
 }
 
 //-- LoadOp --
@@ -146,15 +178,24 @@ static Type getLoadOpResultType(::mlir::OpBuilder &builder, Type ptrType) {
 void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                    ::mlir::Value ptr, ::mlir::triton::CacheModifier cache,
                    ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mlir::Value(), mlir::Value(), cache, evict,
-                isVolatile);
+  LoadOp::build(builder, state, ptr, {}, {}, {}, {}, cache, evict, isVolatile);
+}
+
+void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
+                   ::mlir::Value ptr,
+                   std::optional<ArrayRef<int32_t>> boundaryCheck,
+                   std::optional<::mlir::triton::PaddingOption> padding,
+                   ::mlir::triton::CacheModifier cache,
+                   ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
+  LoadOp::build(builder, state, ptr, {}, {}, boundaryCheck, padding, cache,
+                evict, isVolatile);
 }
 
 void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                    ::mlir::Value ptr, ::mlir::Value mask,
                    ::mlir::triton::CacheModifier cache,
                    ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, mlir::Value(), cache, evict,
+  LoadOp::build(builder, state, ptr, mask, {}, {}, {}, cache, evict,
                 isVolatile);
 }
 
@@ -162,8 +203,17 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                    ::mlir::Value ptr, ::mlir::Value mask, ::mlir::Value other,
                    ::mlir::triton::CacheModifier cache,
                    ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
-  Type resultType = getLoadOpResultType(builder, ptr.getType());
+  LoadOp::build(builder, state, ptr, mask, other, {}, {}, cache, evict,
+                isVolatile);
+}
 
+void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
+                   ::mlir::Value ptr, ::mlir::Value mask, ::mlir::Value other,
+                   std::optional<ArrayRef<int32_t>> boundaryCheck,
+                   std::optional<::mlir::triton::PaddingOption> padding,
+                   ::mlir::triton::CacheModifier cache,
+                   ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
+  // Operands
   state.addOperands(ptr);
   if (mask) {
     state.addOperands(mask);
@@ -171,9 +221,20 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
       state.addOperands(other);
     }
   }
+
+  // Attributes
   state.addAttribute(
       getOperandSegmentSizesAttrName(state.name),
       builder.getDenseI32ArrayAttr({1, (mask ? 1 : 0), (other ? 1 : 0)}));
+  if (boundaryCheck.has_value()) {
+    state.addAttribute(getBoundaryCheckAttrName(state.name),
+                       builder.getDenseI32ArrayAttr(boundaryCheck.value()));
+  }
+  if (padding.has_value()) {
+    state.addAttribute(getPaddingAttrName(state.name),
+                       ::mlir::triton::PaddingOptionAttr::get(
+                           builder.getContext(), padding.value()));
+  }
   state.addAttribute(
       getCacheAttrName(state.name),
       ::mlir::triton::CacheModifierAttr::get(builder.getContext(), cache));
@@ -182,6 +243,9 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
       ::mlir::triton::EvictionPolicyAttr::get(builder.getContext(), evict));
   state.addAttribute(getIsVolatileAttrName(state.name),
                      builder.getBoolAttr(isVolatile));
+
+  // Result type
+  Type resultType = getLoadOpResultType(builder, ptr.getType());
   state.addTypes({resultType});
 }
 

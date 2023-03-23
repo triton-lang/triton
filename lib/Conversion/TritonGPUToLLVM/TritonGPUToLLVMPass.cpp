@@ -372,6 +372,8 @@ private:
       auto loadOp = builder.create<triton::LoadOp>(
           insertSliceAsyncOp.getLoc(), tmpTy, insertSliceAsyncOp.getSrc(),
           insertSliceAsyncOp.getMask(), insertSliceAsyncOp.getOther(),
+          // TODO(Chenggang): confirm `boundaryCheck` and `padding`
+          /*boundaryCheck=*/nullptr, /*padding=*/nullptr,
           insertSliceAsyncOp.getCache(), insertSliceAsyncOp.getEvict(),
           insertSliceAsyncOp.getIsVolatile());
 

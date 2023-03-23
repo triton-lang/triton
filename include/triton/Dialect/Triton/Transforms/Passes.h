@@ -8,6 +8,8 @@ namespace triton {
 
 std::unique_ptr<Pass> createCombineOpsPass();
 
+std::unique_ptr<Pass> createRewriteTiledLoadStorePass();
+
 } // namespace triton
 
 #define GEN_PASS_REGISTRATION
