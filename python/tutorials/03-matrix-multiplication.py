@@ -1,10 +1,10 @@
 """
 Matrix Multiplication
-=====================
+======================
 In this tutorial, you will write a 25-lines high-performance FP16 matrix multiplication
 kernel that achieves performance on par with cuBLAS.
+You will specifically learn about:
 
-In doing so, you will learn about:
 - Block-level matrix multiplications
 - Multi-dimensional pointer arithmetic
 - Program re-ordering for improved L2 cache hit rate
@@ -13,8 +13,7 @@ In doing so, you will learn about:
 
 # %%
 # Motivations
-# -----------
-#
+# -------------
 # Matrix multiplications are a key building block of most modern high-performance computing systems.
 # They are notoriously hard to optimize, hence their implementation is generally done by
 # hardware vendors themselves as part of so-called "kernel libraries" (e.g., cuBLAS).
@@ -43,16 +42,15 @@ In doing so, you will learn about:
 
 # %%
 # Compute Kernel
-# --------------
+# ----------------
 #
 # The above algorithm is, actually, fairly straightforward to implement in Triton.
 # The main difficulty comes from the computation of the memory locations at which blocks
 # of :code:`A` and :code:`B` must be read in the inner loop. For that, we need
-# multi-dimensional pointer arithmetic.
+# multi-dimensional pointer arithmetics.
 #
-#
-# Pointer Arithmetic
-# ~~~~~~~~~~~~~~~~~~
+# Pointer Arithmetics
+# ~~~~~~~~~~~~~~~~~~~~
 #
 # For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given b
 # y :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
@@ -83,7 +81,7 @@ In doing so, you will learn about:
 #
 #
 # L2 Cache Optimizations
-# ~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~
 #
 # As mentioned above, each program instance computes a :code:`[BLOCK_SIZE_M, BLOCK_SIZE_N]`
 # block of :code:`C`.
@@ -139,7 +137,8 @@ In doing so, you will learn about:
 
 # %%
 # Final Result
-# ------------
+# -------------
+#
 
 import torch
 
@@ -157,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -177,6 +176,7 @@ def matmul_kernel(
     BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     ACTIVATION: tl.constexpr,
+    IS_INT8: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -202,7 +202,7 @@ def matmul_kernel(
     # and accumulate
     # a_ptrs is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_n] pointers
-    # see above `Pointer Arithmetic` section for details
+    # see above `Pointer Arithmetics` section for details
     offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = tl.arange(0, BLOCK_SIZE_K)
@@ -222,6 +222,10 @@ def matmul_kernel(
         # error or (worse!) incorrect results.
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
+        if IS_INT8:
+          a = a.to(tl.float8e5, bitcast=True).to(tl.float16)
+          b = b.to(tl.float8e5, bitcast=True).to(tl.float16)
+        # b = b * 2
         # We accumulate along the K dimension
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block
@@ -229,8 +233,6 @@ def matmul_kernel(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # you can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
-    if ACTIVATION:
-        accumulator = ACTIVATION(accumulator)
     c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
@@ -256,41 +258,79 @@ def leaky_relu(x):
 def matmul(a, b, activation=None):
     # checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
-    assert a.is_contiguous(), "matrix A must be contiguous"
-    assert b.is_contiguous(), "matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
     assert (
         K % 32 == 0
     ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
     # allocates output
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    c = torch.empty((M, N), device=a.device, dtype=torch.float16)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    matmul_kernel[grid](
+    h = matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
         ACTIVATION=activation,
+        IS_INT8=b.dtype == torch.int8,
     )
+    print(h.asm["ptx"])
     return c
 
 
+def f8_to_f16(x):
+    
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        y = x.to(tl.float8e5)
+        tl.store(Y + offs, y, mask=mask)
+    
+    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
+    kernel[grid](ret, triton.reinterpret(x, tl.float8e5),ret.numel(), BLOCK_SIZE=1024)
+    return ret
+
+def f16_to_f8(x):
+    
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        y = x.to(tl.float8e5)
+        tl.store(Y + offs, y, mask=mask)
+    
+    ret = torch.empty(x.shape, dtype=torch.int8, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
+    kernel[grid](triton.reinterpret(ret, tl.float8e5), x, x.numel(), BLOCK_SIZE=1024)
+    return ret
 # %%
 # Unit Test
-# ---------
+# -----------
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+# a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+a = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
+b = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
+# b[1:, :] = 0
+# b[:, 1:] = 0
+b = b.T
+# b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+
 triton_output = matmul(a, b, activation=None)
-torch_output = torch.matmul(a, b)
+torch_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
+# torch_output = torch.matmul(a, f8_to_f16(b))
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
 if triton.testing.allclose(triton_output, torch_output):
@@ -300,11 +340,10 @@ else:
 
 # %%
 # Benchmark
-# ---------
+# --------------
 #
 # Square Matrix Performance
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~
-#
 # We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
 
@@ -337,4 +376,4 @@ def benchmark(M, N, K, provider):
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+# benchmark.run(show_plots=True, print_data=True)
