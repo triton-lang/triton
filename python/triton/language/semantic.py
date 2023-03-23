@@ -807,6 +807,19 @@ def str_to_padding_option(padding_option):
     return padding
 
 
+def canonicalize_boundary_check(boundary_check, tile_shape):
+    if boundary_check:
+        if not hasattr(boundary_check, "__iter__"):
+            boundary_check = [boundary_check]
+        boundary_check = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in boundary_check]
+        for dim in boundary_check:
+            assert isinstance(dim, int) and 0 <= dim < len(tile_shape)
+        assert len(boundary_check) > 0
+        assert len(boundary_check) == len(set(boundary_check)), "Duplicate dimension in `boundary_check`"
+        return sorted(boundary_check)
+    return None
+
+
 def load(ptr: tl.tensor,
          mask: Optional[tl.tensor],
          other: Optional[tl.tensor],
@@ -834,18 +847,8 @@ def load(ptr: tl.tensor,
         # `dst_ty` is de-referenced type of the pointer type
         dst_ty = ptr.type.element_ty
 
-        # Check `boundary_check`
-        if boundary_check:
-            if not hasattr(boundary_check, "__iter__"):
-                boundary_check = [boundary_check]
-            boundary_check = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in boundary_check]
-            for dim in boundary_check:
-                assert isinstance(dim, int) and 0 <= dim < len(ptr.type.element_ty.shape)
-            assert len(boundary_check) > 0
-            assert len(boundary_check) == len(set(boundary_check)), "Duplicate dimension in `boundary_check`"
-            boundary_check = sorted(boundary_check)
-        else:
-            boundary_check = None
+        # Check `boundary_check` argument
+        boundary_check = canonicalize_boundary_check(boundary_check, dst_ty.get_block_shapes())
 
         # Build IR for tiled load
         return tl.tensor(builder.create_tiled_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile),
@@ -855,15 +858,15 @@ def load(ptr: tl.tensor,
         if not ptr.type.scalar.is_ptr():
             raise ValueError("Pointer argument of load instruction is " + ptr.type.__repr__())
 
-        # Check `mask`, `other` and `padding` arguments
+        # Check `mask`, `other`, `boundary_check`, and `padding` arguments
         if not mask and other:
             raise ValueError("`other` cannot be provided without `mask`")
         if padding_option or boundary_check:
             raise ValueError("`padding_option` or `boundary_check` argument is not supported for loading a tensor of"
-                             "pointer or loading a scalar. Because the compile does not know the boundary; "
-                             "please use tiled mode load instead")
+                             "pointers or loading a scalar. Because the compiler does not know the boundary; please "
+                             "use tiled mode load instead")
 
-        # For a pointer of scalr, check the type of `mask` and `other`
+        # For a pointer of scalar, check the type of `mask` and `other`
         if not ptr.type.is_block():
             if mask and mask.type.is_block():
                 raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
@@ -910,37 +913,78 @@ def load(ptr: tl.tensor,
 def store(ptr: tl.tensor,
           val: tl.tensor,
           mask: Optional[tl.tensor],
+          boundary_check,
           cache_modifier: str,
           eviction_policy: str,
           builder: ir.builder) -> tl.tensor:
-    if not ptr.type.scalar.is_ptr():
-        raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
-    if not ptr.type.is_block():
-        if val.type.is_block():
-            raise ValueError("Value argument cannot be block type if pointer argument is not a block")
-        if mask and mask.type.is_block():
-            raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
-    if ptr.type.is_block():
-        val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
-    if mask and ptr.type.is_block():
-        mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
-    ptr_ty = ptr.type.scalar
-    elt_ty = ptr_ty.element_ty
-    # treat bool* as tl.int8*
-    if elt_ty == tl.int1:
-        elt_ty = tl.int8
-        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
-        ptr = cast(ptr, ptr_ty, builder)
-    # attributes
+    # Cache and eviction options
     cache = str_to_cache_modifier(cache_modifier)
     eviction = str_to_eviction_policy(eviction_policy)
-    # cast to target data-type
-    val = cast(val, elt_ty, builder)
-    if not mask:
-        return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
-    if not mask.type.scalar.is_bool():
-        raise ValueError("Mask must have boolean scalar type")
-    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction), tl.void)
+
+    if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
+        # Store a tile pointer: `pointer_type<block_type<>>`
+        # Tile pointer can not have the `mask` argument
+        if mask:
+            raise ValueError("`mask` and `other` arguments cannot be specified for loading tile pointer")
+
+        # Check same shape
+        tile_shape = ptr.type.element_ty.get_block_shapes()
+        if not val.type.is_block():
+            val = broadcast_impl_shape(val, tile_shape, builder)
+        assert val.type.is_block(), "Value argument must be block type or a scalar"
+        assert tile_shape == val.type.get_block_shapes(), "Tile shape and value shape mismatch"
+
+        # TODO(Chenggang): support `tl.int1` casting for tiled store
+        elt_ty = ptr.type.element_ty.element_ty
+        assert elt_ty != tl.int1, "`tl.int1` is currently not supported for tiled store"
+
+        # Check `boundary_check` argument
+        boundary_check = canonicalize_boundary_check(boundary_check, tile_shape)
+
+        # Build IR for tiled store
+        return tl.tensor(builder.create_tiled_store(ptr.handle, val.handle, boundary_check, cache, eviction), tl.void)
+    else:
+        # Store by a tensor of pointers or a pointer of scalar
+        if not ptr.type.scalar.is_ptr():
+            raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+
+        # Check `boundary_check` argument
+        if boundary_check:
+            raise ValueError("`boundary_check` argument is not supported for storing a tensor of pointers or storing a "
+                             "scalar. Because the compiler does not know the boundary; please use tiled mode load "
+                             "instead")
+
+        # For a pointer of scalar, check the type of `val` and `mask`
+        if not ptr.type.is_block():
+            if val.type.is_block():
+                raise ValueError("Value argument cannot be block type if pointer argument is not a block")
+            if mask and mask.type.is_block():
+                raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
+
+        # Make `mask` and `val` into the same shape as `ptr`
+        if ptr.type.is_block():
+            val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
+            if mask:
+                mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
+
+        ptr_ty = ptr.type.scalar
+        elt_ty = ptr_ty.element_ty
+
+        # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
+        if elt_ty == tl.int1:
+            elt_ty = tl.int8
+            ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
+            ptr = cast(ptr, ptr_ty, builder)
+
+        # Cast to target data type
+        val = cast(val, elt_ty, builder)
+
+        # Build IR for non-tiled store
+        if not mask:
+            return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
+        if not mask.type.scalar.is_bool():
+            raise ValueError("Mask must have boolean scalar type")
+        return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction), tl.void)
 
 #########
 # atomic
