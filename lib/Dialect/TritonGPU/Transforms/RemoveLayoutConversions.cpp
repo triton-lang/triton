@@ -84,36 +84,48 @@ public:
   }
 };
 
+// It's beneficial to move the conversion
+// to after the reduce if necessary since it will be
+// done on a rank-reduced tensor hence cheaper
 class SimplifyReduceCvt : public mlir::RewritePattern {
 public:
   explicit SimplifyReduceCvt(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::ReduceOp::getOperationName(), 2, context) {
-  }
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             2, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto reduce = cast<triton::ReduceOp>(*op);
+    if (!llvm::isa<triton::gpu::ConvertLayoutOp>(op))
+      return mlir::failure();
+    auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
+    triton::ReduceOp reduce;
+    for (auto &use : convert.getResult().getUses()) {
+      auto owner = llvm::dyn_cast<triton::ReduceOp>(use.getOwner());
+      if (!owner) {
+        continue;
+      }
+
+      // TODO: This always takes layout from the first argument which
+      // is fine for argmin/argmax but may not be optimal generally
+      if (convert.getResult() != owner.getOperands()[0]) {
+        continue;
+      }
+      reduce = owner;
+      break;
+    }
+    if (!reduce)
+      return mlir::failure();
+
+
     SmallVector<Value> newOperands = reduce.getOperands();
 
-    // TODO: This always takes layout from the first argument which
-    // is fine for argmin/argmax but may not be optimal generally
-    auto firstArgConversionOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-        reduce.getOperands()[0].getDefiningOp());
-    if (!firstArgConversionOp) {
-      return failure();
-    }
-    newOperands[0] = firstArgConversionOp.getOperand();
+    newOperands[0] = convert.getOperand();
     auto newEncoding =
         newOperands[0].getType().cast<RankedTensorType>().getEncoding();
 
     if (!newEncoding.isa<triton::gpu::BlockedEncodingAttr>()) {
       // ReduceOpToLLVM requires block encoding
-      return failure();
-    }
-
-    if (isa_and_nonnull<triton::gpu::ConvertLayoutOp>(
-            *newOperands[0].getDefiningOp())) {
       return failure();
     }
 
@@ -142,7 +154,7 @@ public:
         newRet[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
             op->getLoc(), oldTypes[i], newRet[i]);
     }
-    rewriter.replaceOp(op, newRet);
+    rewriter.replaceAllUsesWith(reduce.getResult(), newRet);
 
     return success();
   }
@@ -351,8 +363,7 @@ public:
         return failure();
       }
       // don't rematerialize non-element-wise
-      if (!isa<triton::ViewOp, triton::CatOp>(op) &&
-          !op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
           !isa<triton::StoreOp>(op)) {
         return failure();
@@ -387,7 +398,7 @@ class RematerializeBackward : public mlir::RewritePattern {
 public:
   explicit RematerializeBackward(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             2, context) {}
+                             3, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *cvt,
