@@ -22,17 +22,21 @@ def get_cuda_stream(idx):
         import torch
         return torch.cuda.current_stream(idx).cuda_stream
 
+
 def get_current_device():
     import torch
     return torch.cuda.current_device()
+
 
 def set_current_device(idx):
     import torch
     torch.cuda.set_device(idx)
 
+
 def get_device_capability(idx):
     import torch
     return torch.cuda.get_device_capability(idx)
+
 
 T = TypeVar('T')
 
@@ -294,7 +298,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,
                  "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of,
                  "cache": self.cache, "triton": triton,
-                 "get_current_device": get_current_device, 
+                 "get_current_device": get_current_device,
                  "set_current_device": set_current_device}
         exec(src, scope)
         return scope[self.fn.__name__]
