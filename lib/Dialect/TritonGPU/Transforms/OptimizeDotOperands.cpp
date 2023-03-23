@@ -98,10 +98,9 @@ public:
     //
     if (!argOp)
       return failure();
-    llvm::outs() << *op << "\n";
-    // // we only handle loads since the goal of this pass is to
-    // if (!isa<triton::LoadOp>(argOp))
-    //   return failure();
+    //
+    if (!isa<triton::LoadOp>(argOp))
+      return failure();
     SetVector<Operation *> processed;
     SetVector<Attribute> layout;
     llvm::MapVector<Value, Attribute> toConvert;
@@ -153,7 +152,7 @@ public:
       signalPassFailure();
     if (fixupLoops(m).failed())
       signalPassFailure();
-    }
+  }
 };
 
 std::unique_ptr<Pass> mlir::createTritonGPUOptimizeDotOperandsPass() {
