@@ -38,24 +38,23 @@ pip install -U --pre triton
 ```
 git clone https://github.com/openai/triton.git;
 cd triton/python;
-pip install cmake; # build time dependency
+pip install cmake; # build-time dependency
 pip install -e .
 ```
 
 # Changelog
 
 Version 2.0 is out! New features include:
-- Many, many bugfixes
+- Many, many bug fixes
 - Performance improvements
 - Backend rewritten to use MLIR
 - Support for kernels that contain back-to-back matmuls (e.g., flash attention)
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features. Feel free to open GitHub issues about your contribution ideas, and we will review them. A contributor's guide containing general guidelines is coming soon!
+Community contributions are more than welcome, whether it be to fix bugs or to add new features. For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
 If you’re interested in joining our team and working on Triton & GPU kernels, [we’re hiring](https://openai.com/jobs/#acceleration)!
-
 
 # Compatibility
 

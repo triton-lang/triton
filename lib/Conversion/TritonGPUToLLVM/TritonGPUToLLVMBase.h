@@ -9,7 +9,6 @@
 
 #include "TypeConverter.h"
 //
-#include "DotOpHelpers.h"
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -299,7 +298,7 @@ public:
       Value idxRow = idx[outOrder[1]]; // discontiguous dimension
       Value strideCol = srcStrides[outOrder[0]];
       Value strideRow = srcStrides[outOrder[1]];
-      // extract dynamic/static offset for immediate offseting
+      // extract dynamic/static offset for immediate offsetting
       unsigned immedateOffCol = 0;
       if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
         if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
@@ -311,7 +310,7 @@ public:
           idxCol = cacheCol[key];
           immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
         }
-      // extract dynamic/static offset for immediate offseting
+      // extract dynamic/static offset for immediate offsetting
       unsigned immedateOffRow = 0;
       if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp()))
         if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
@@ -363,7 +362,7 @@ public:
     auto srcDistributedLayout = srcTy.getEncoding();
     if (auto mmaLayout = srcDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
       assert((!mmaLayout.isVolta()) &&
-             "ConvertLayout MMAv1->Shared is not suppported yet");
+             "ConvertLayout MMAv1->Shared is not supported yet");
     }
     auto dstSharedLayout =
         dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
@@ -618,7 +617,7 @@ private:
 
     SmallVector<Value> multiDimBase(rank);
     for (unsigned k = 0; k < rank; ++k) {
-      // Wrap around multiDimWarpId/multiDimThreadId incase
+      // Wrap around multiDimWarpId/multiDimThreadId in case
       // shape[k] > shapePerCTA[k]
       auto maxWarps =
           ceil<unsigned>(shape[k], sizePerThread[k] * threadsPerWarp[k]);
@@ -701,7 +700,7 @@ private:
     auto shape = type.getShape();
 
     auto wpt = mmaLayout.getWarpsPerCTA();
-    auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
+    static constexpr std::array<int, 3> fpw{{2, 2, 1}};
     auto [isARow, isBRow, isAVec4, isBVec4, _] =
         mmaLayout.decodeVoltaLayoutStates();
 
@@ -787,7 +786,7 @@ private:
     auto bRep = bEncoding.getMMAv1Rep();
 
     auto wpt = mmaLayout.getWarpsPerCTA();
-    auto fpw = LLVM::DotOpMmaV1ConversionHelper::fpw;
+    static constexpr std::array<int, 3> fpw{{2, 2, 1}};
     SmallVector<int, 2> rep({aRep[0], bRep[1]});
     SmallVector<int, 2> spw({aSpw[0], bSpw[1]});
     SmallVector<unsigned, 2> shapePerCTA({spw[0] * wpt[0], spw[1] * wpt[1]});

@@ -291,12 +291,11 @@ bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
-  auto constOperand = getSrc().getDefiningOp<arith::ConstantOp>();
-  if (!constOperand)
+  auto value = adaptor.getSrc();
+  if (!value)
     return {};
   auto shapedType = getType().cast<ShapedType>();
-  auto ret = SplatElementsAttr::get(
-      shapedType, ArrayRef<Attribute>(constOperand.getValue()));
+  auto ret = SplatElementsAttr::get(shapedType, ArrayRef<Attribute>(value));
   return ret;
 }
 
@@ -329,24 +328,100 @@ mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
   return mlir::success();
 }
 
-//-- BroadcastOp --
-OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
-  auto constOperand = getSrc().getDefiningOp<arith::ConstantOp>();
-  if (!constOperand)
+LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
+                                         PatternRewriter &rewriter) {
+  auto definingOp = op.getOperand().getDefiningOp();
+  if (!definingOp) {
+    return mlir::failure();
+  }
+  // expand_dims(splat) -> splat
+  if (auto splat = dyn_cast<triton::SplatOp>(definingOp)) {
+    rewriter.replaceOpWithNewOp<triton::SplatOp>(op, op.getType(),
+                                                 splat.getOperand());
+    return mlir::success();
+  }
+  return mlir::failure();
+}
+
+template <typename ViewLikeOp>
+static OpFoldResult foldViewLikeOp(ViewLikeOp op, Attribute value) {
+  if (!value)
     return {};
 
-  auto shapedType = getType().cast<ShapedType>();
-  auto value = constOperand.getValue();
+  auto shapedType = op.getType().template cast<mlir::ShapedType>();
   if (auto denseElemsAttr = value.dyn_cast<DenseElementsAttr>()) {
-    if (!denseElemsAttr.isSplat())
-      return {};
-    return SplatElementsAttr::get(shapedType,
-                                  denseElemsAttr.getSplatValue<Attribute>());
-  } else if (value.getType().isIntOrIndexOrFloat()) {
-    return SplatElementsAttr::get(shapedType, value);
-  } else {
-    return {};
+    if (denseElemsAttr.isSplat()) {
+      return denseElemsAttr.resizeSplat(shapedType);
+    } else {
+      return denseElemsAttr.reshape(shapedType);
+    }
   }
+  return {};
+}
+
+OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
+  return foldViewLikeOp(*this, adaptor.getSrc());
+}
+
+//-- ViewOp --
+template <typename OpType>
+LogicalResult canonicalizeViewOrBroadcast(OpType op,
+                                          PatternRewriter &rewriter) {
+  auto definingOp = op.getOperand().getDefiningOp();
+  if (!definingOp) {
+    return mlir::failure();
+  }
+
+  // view(view) -> view
+  if (auto parent_view = dyn_cast<OpType>(definingOp)) {
+    rewriter.replaceOpWithNewOp<OpType>(op, op.getType(),
+                                        parent_view.getOperand());
+    return mlir::success();
+  }
+
+  // view(splat) -> splat
+  if (auto splat = dyn_cast<triton::SplatOp>(definingOp)) {
+    rewriter.replaceOpWithNewOp<triton::SplatOp>(op, op.getType(),
+                                                 splat.getOperand());
+    return mlir::success();
+  }
+
+  return mlir::failure();
+}
+LogicalResult ViewOp::canonicalize(ViewOp op, PatternRewriter &rewriter) {
+  return canonicalizeViewOrBroadcast(op, rewriter);
+}
+
+OpFoldResult ViewOp::fold(FoldAdaptor adaptor) {
+  if (getType() == getOperand().getType()) {
+    // no-op
+    return getOperand();
+  }
+
+  return foldViewLikeOp(*this, adaptor.getSrc());
+}
+
+//-- BroadcastOp --
+LogicalResult BroadcastOp::canonicalize(BroadcastOp op,
+                                        PatternRewriter &rewriter) {
+  return canonicalizeViewOrBroadcast(op, rewriter);
+}
+
+OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
+  if (getType() == getOperand().getType()) {
+    // no-op
+    return getOperand();
+  }
+
+  auto value = adaptor.getSrc();
+  if (!value)
+    return {};
+
+  if (auto denseElemsAttr = value.dyn_cast<SplatElementsAttr>()) {
+    auto shapedType = getType().cast<ShapedType>();
+    return denseElemsAttr.resizeSplat(shapedType);
+  }
+  return {};
 }
 
 } // namespace triton

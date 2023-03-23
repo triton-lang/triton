@@ -165,7 +165,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE']
-    :note: When all the configurations are evaluated, the kernel will run multiple time.
+    :note: When all the configurations are evaluated, the kernel will run multiple times.
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
            resets the value of the provided tensor to `zero` before running any configuration.
@@ -209,9 +209,9 @@ def heuristics(values):
         @triton.jit
         def kernel(x_ptr, x_size, **META):
             BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
-    .param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
+    :param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
-    .type values: dict[str, Callable[[list[Any]], Any]]
+    :type values: dict[str, Callable[[list[Any]], Any]]
     """
     def decorator(fn):
         return Heuristics(fn, fn.arg_names, values)

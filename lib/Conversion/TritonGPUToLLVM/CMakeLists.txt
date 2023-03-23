@@ -1,6 +1,11 @@
 add_mlir_conversion_library(TritonGPUToLLVM
-    ArithToIndexPass.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
     ConvertLayoutOpToLLVM.cpp
+    DotOpToLLVM/FMA.cpp
+    DotOpToLLVM/MMAv1.cpp
+    DotOpToLLVM/MMAv2.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
@@ -11,7 +16,6 @@ add_mlir_conversion_library(TritonGPUToLLVM
     Utility.cpp
     TypeConverter.cpp
     ViewOpToLLVM.cpp
-    DotOpHelpers.cpp
 
     ADDITIONAL_HEADER_DIRS
     ${PROJECT_SOURCE_DIR}/include/triton/Conversion/TritonGPUToLLVM

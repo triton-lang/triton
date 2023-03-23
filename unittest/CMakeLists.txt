@@ -1,4 +1,3 @@
-
 include (${CMAKE_CURRENT_SOURCE_DIR}/googletest.cmake)
 
 include(GoogleTest)
