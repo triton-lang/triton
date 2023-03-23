@@ -112,15 +112,14 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
                            const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
 
+  // create dir for binary and hsaco
   std::error_code ec;
   std::string kernel_name = std::to_string(New64());
-  std::string kernel_dir =
-      std::filesystem::temp_directory_path().string() + kernel_name;
   llvm::SmallString<256> kernel_dir_unique;
-  ec = llvm::sys::fs::createUniqueDirectory(kernel_dir, kernel_dir_unique);
+  ec = llvm::sys::fs::createUniqueDirectory(std::filesystem::temp_directory_path().string(), kernel_dir_unique);
   if (ec) {
-    std::cerr << kernel_dir << " was not created. error code: " << ec
-              << std::endl;
+    std::cerr << "Directory for " << kernel_name
+              << " was not created. error code: " << ec << std::endl;
   }
 
   // Save GCN ISA binary.
