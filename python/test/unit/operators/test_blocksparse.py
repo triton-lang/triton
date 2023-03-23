@@ -10,6 +10,7 @@ def sparsify_tensor(x, mask, block):
         ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
     return ret
 
+
 def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None, dtype=torch.float32):
     if data is None:
         data = torch.randn(shape, dtype=torch.float32, requires_grad=True, device=device)
@@ -21,6 +22,7 @@ def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None,
     ref_ret = ref_ret.detach().requires_grad_()
     tri_ret = ref_ret.clone().detach().requires_grad_()
     return ref_ret, tri_ret
+
 
 def mask_tensor(x, mask, block, value=0):
     ret = x.clone()
