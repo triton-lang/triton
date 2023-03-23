@@ -3,9 +3,10 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
+
+import triton
 import triton._C.libtriton.triton as _triton
 from .compiler import OutOfResources
-import triton
 
 
 def catch_oor(kernel, pytest_handle=None):

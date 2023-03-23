@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 def cdiv(x, y):
     return (x + y - 1) // y
 
