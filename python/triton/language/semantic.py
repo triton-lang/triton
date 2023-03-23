@@ -1310,33 +1310,32 @@ def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: 
     return tl.tensor(builder.create_assert(cond.handle, msg, file_name, func_name, lineno), tl.void)
 
 
+def convert_elem_to_ir_value(builder, elem, require_i64):
+    if isinstance(elem, tl.constexpr):
+        return builder.get_int64(elem.value) if require_i64 else builder.get_int32(elem.value)
+    elif isinstance(elem, tl.tensor):
+        assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
+        assert elem.dtype.is_int(), "Expected an integer scalar type in shape/strides/offsets"
+        if elem.dtype != tl.int64 and require_i64:
+            return builder.create_int_cast(elem.handle, builder.get_int64_ty(), elem.dtype.is_int_signed())
+        elif elem.dtype != tl.int32:
+            return builder.create_int_cast(elem.handle, builder.get_int32_ty(), elem.dtype.is_int_signed())
+        return elem.handle
+    assert False, f"Unsupported element type in shape/strides/offsets: {type(elem)}"
+
+
+def convert_to_ir_values(builder, list_like, require_i64=True):
+    if hasattr(list_like, "__iter__"):
+        return [convert_elem_to_ir_value(builder, elem, require_i64) for elem in list_like]
+    return [convert_elem_to_ir_value(builder, list_like, require_i64)]
+
+
 def make_tile_ptr(base: tl.tensor, shape, strides, offsets, tile_shape, order, builder: ir.builder) -> tl.tensor:
-    # TODO(Chenggang): current shape/strides/offsets are all `int32_t`, but we should support `int64_t`
-    def convert_elem_to_ir_value(elem, b_i64):
-        if isinstance(elem, tl.constexpr):
-            if b_i64:
-                return builder.get_int64(elem.value)
-            else:
-                return builder.get_int32(elem.value)
-        elif isinstance(elem, tl.tensor):
-            assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
-            assert elem.dtype.is_int(), "Expected an integer scalar type in shape/strides/offsets"
-            if elem.dtype != tl.int64 and b_i64:
-                return builder.create_int_cast(elem.handle, builder.get_int64_ty(), elem.dtype.is_int_signed())
-            elif elem.dtype != tl.int32:
-                return builder.create_int_cast(elem.handle, builder.get_int32_ty(), elem.dtype.is_int_signed())
-            return elem.handle
-        assert False, f"Unsupported element type in shape/strides/offsets: {type(elem)}"
-
-    def convert_to_ir_values(list_like, b_i64=True):
-        if hasattr(list_like, "__iter__"):
-            return [convert_elem_to_ir_value(elem, b_i64) for elem in list_like]
-        return [convert_elem_to_ir_value(list_like, b_i64)]
-
     # Convert dynamic arguments to IR values
-    shape = convert_to_ir_values(shape)
-    strides = convert_to_ir_values(strides)
-    offsets = convert_to_ir_values(offsets, False)
+    # NOTES(Chenggang): current shape/strides are `int64_t`, while `offsets` are `int32_t`
+    shape = convert_to_ir_values(builder, shape)
+    strides = convert_to_ir_values(builder, strides)
+    offsets = convert_to_ir_values(builder, offsets, require_i64=False)
 
     # Check whether `tile_shape` is static
     if not hasattr(tile_shape, "__iter__"):
@@ -1345,9 +1344,11 @@ def make_tile_ptr(base: tl.tensor, shape, strides, offsets, tile_shape, order, b
     assert all([isinstance(elem, int) and -2**63 <= elem < 2**63 for elem in tile_shape]), \
         "Expected a list of constant integers (int64_t range) in tile_shape"
 
+    # Check `order`
     if not hasattr(order, "__iter__"):
         order = [order]
     order = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in order]
+    assert sorted(order) == list(range(len(order))), "Expected a permutation of [0, 1, ..., len(order)-1] in order"
 
     # Must have same length
     assert all([len(tile_shape) == len(list_like) for list_like in [shape, strides, offsets, order]]), \
@@ -1361,27 +1362,8 @@ def make_tile_ptr(base: tl.tensor, shape, strides, offsets, tile_shape, order, b
 
 
 def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
-    def convert_elem_to_ir_value(elem):
-        if isinstance(elem, tl.constexpr):
-            return builder.get_int32(elem.value)
-        elif isinstance(elem, tl.tensor):
-            assert elem.numel.value == 1, "Expected a scalar in offsets"
-            assert elem.dtype.is_int(), "Expected an integer scalar type in offsets"
-            if elem.dtype != tl.int32:
-                return builder.create_int_cast(elem.handle, builder.get_int32_ty(), elem.dtype.is_int_signed())
-            return elem.handle
-        assert False, f"Unsupported element type in offsets: {type(elem)}"
+    # Convert dynamic offsets to IR values
+    offsets = convert_to_ir_values(builder, offsets, require_i64=False)
 
-    def convert_to_ir_values(list_like):
-        if hasattr(list_like, "__iter__"):
-            return [convert_elem_to_ir_value(elem) for elem in list_like]
-        return [convert_elem_to_ir_value(list_like)]
-
-    # Convert dynamic arguments to IR values
-    offsets = convert_to_ir_values(offsets)
-
-    tile_shape = base.dtype.element_ty.shape
-    base_type = base.dtype.element_ty.element_ty
-
-    handle = builder.create_advance(base.handle, offsets)
-    return tl.tensor(handle, tl.pointer_type(tl.block_type(base_type, tile_shape)))
+    # Advanced tile pointer type is the same as before
+    return tl.tensor(builder.create_advance(base.handle, offsets), base.type)
