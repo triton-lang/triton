@@ -817,7 +817,7 @@ def canonicalize_boundary_check(boundary_check, tile_shape):
         assert len(boundary_check) > 0
         assert len(boundary_check) == len(set(boundary_check)), "Duplicate dimension in `boundary_check`"
         return sorted(boundary_check)
-    return None
+    return tuple()
 
 
 def load(ptr: tl.tensor,

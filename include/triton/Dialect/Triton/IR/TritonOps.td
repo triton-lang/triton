@@ -146,13 +146,13 @@ def TT_LoadOp : TT_Op<"load",
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
         // A tile pointer with boundary check and padding
-        OpBuilder<(ins "Value":$ptr, "Optional<ArrayRef<int32_t>>":$boundaryCheck,
+        OpBuilder<(ins "Value":$ptr, "ArrayRef<int32_t>":$boundaryCheck,
                        "Optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A tensor of pointers or a pointer to a scalar with `mask`
+        // A tensor of pointers or a pointer to a scalar with mask
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A tensor of pointers or a pointer to a scalar with `mask` and `other`
+        // A tensor of pointers or a pointer to a scalar with mask and other
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
         // A utility function to build the operation with all attributes
@@ -174,17 +174,26 @@ def TT_StoreOp : TT_Op<"store",
                         TypesMatchWith<"infer mask type from value type",
                                        "value", "mask", "getI1SameShape($_self)",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
-    let summary = "store";
+    let summary = "Store by a tensor of pointers or by a tile-based pointer";
 
     let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
-                     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-                     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
+                         OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
+                         DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+                         DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
 
     let builders = [
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache,
+        // A tensor of pointers or a pointer to a scalar
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>,
+        // A tensor of pointers or a pointer to a scalar with mask
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict)>,
+        // A tile pointer with boundary check
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "ArrayRef<int32_t>":$boundaryCheck, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict)>
     ];
 
+    // Format: `tt.store operands attrs : optional(type(ptr)), type(val)
+    // We need an extra `optional(type(ptr))` for inferring the tile pointer type with back compatibility
     let hasCustomAssemblyFormat = 1;
 
     let hasCanonicalizer = 1;

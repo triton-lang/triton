@@ -6,6 +6,31 @@ import triton.language as tl
 
 
 @triton.jit
+def tile_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    a_tile_ptr = tl.make_tile_ptr(base=a_ptr, shape=(N, ), strides=(1, ), offsets=(pid * BLOCK_SIZE, ),
+                                  tile_shape=(BLOCK_SIZE, ), order=(0, ))
+    b_tile_ptr = tl.make_tile_ptr(base=b_ptr, shape=(N, ), strides=(1, ), offsets=(pid * BLOCK_SIZE, ),
+                                  tile_shape=(BLOCK_SIZE, ), order=(0, ))
+    a = tl.load(a_tile_ptr, boundary_check=(0, ), padding_option="zero")
+    tl.store(b_tile_ptr, a, boundary_check=(0, ))
+
+
+@pytest.mark.parametrize('n', [64, 128, 256, 512, 1024])
+def test_tile_copy(n):
+    capability = torch.cuda.get_device_capability()
+    if capability[0] >= 9:
+        pytest.skip('Hopper support is working in progress')
+
+    a = torch.randn((n, ), device='cuda', dtype=torch.float16)
+    b = torch.zeros((n, ), device='cuda', dtype=torch.float16)
+
+    grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)
+    tile_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64)
+    assert torch.all(a == b)
+
+
+@triton.jit
 def matmul_no_scf_with_advance_kernel(
         a_ptr, b_ptr, c_ptr,
         M, N, K,

@@ -116,19 +116,36 @@ void LoadOp::print(OpAsmPrinter &printer) {
 }
 
 ParseResult StoreOp::parse(OpAsmParser &parser, OperationState &result) {
+  // Parse operands
   SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
-  Type valueType;
   SMLoc allOperandLoc = parser.getCurrentLocation();
   if (parser.parseOperandList(allOperands) ||
-      parser.parseOptionalAttrDict(result.attributes) || parser.parseColon() ||
-      parser.parseCustomTypeWithFallback(valueType))
+      parser.parseOptionalAttrDict(result.attributes) || parser.parseColon())
     return failure();
 
+  // Operand types
   SmallVector<Type> operandTypes;
-  operandTypes.push_back(getPointerTypeSameShape(valueType)); // ptr
-  operandTypes.push_back(valueType);                          // value
+
+  // Parse `optional(type(ptr)), type(val)`
+  // Pointer type
+  Type ptrType, valType;
+  if (parser.parseType(valType))
+    return failure();
+  if (parser.parseOptionalComma().succeeded()) {
+    ptrType = valType;
+    if (parser.parseType(valType))
+      return failure();
+    operandTypes.push_back(ptrType);
+  } else {
+    operandTypes.push_back(getPointerTypeSameShape(valType));
+  }
+
+  // Value type
+  operandTypes.push_back(valType);
+
+  // Determine `mask`
   if (allOperands.size() >= 3)
-    operandTypes.push_back(getI1SameShape(valueType)); // mask
+    operandTypes.push_back(getI1SameShape(valType));
 
   if (parser.resolveOperands(allOperands, operandTypes, allOperandLoc,
                              result.operands))
@@ -140,7 +157,14 @@ void StoreOp::print(OpAsmPrinter &printer) {
   printer << " ";
   printer << getOperation()->getOperands();
   printer.printOptionalAttrDict(getOperation()->getAttrs(), /*elidedAttrs=*/{});
+
+  // `type(ptr), type(value)`
   printer << " : ";
+  // `type(ptr)` is optional during parsing, we only print for tile-based cases
+  if (isTilePointerType(getPtr().getType())) {
+    printer.printStrippedAttrOrType(getPtr().getType());
+    printer << ", ";
+  }
   printer.printStrippedAttrOrType(getValue().getType());
 }
 
@@ -156,14 +180,6 @@ void StoreOp::print(OpAsmPrinter &printer) {
 namespace mlir {
 namespace triton {
 
-//-- StoreOp --
-void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
-                    ::mlir::Value ptr, ::mlir::Value value,
-                    ::mlir::triton::CacheModifier cache,
-                    ::mlir::triton::EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, {}, cache, evict);
-}
-
 //-- LoadOp --
 static Type getLoadOpResultType(::mlir::OpBuilder &builder, Type ptrType) {
   auto ptrTensorType = ptrType.dyn_cast<RankedTensorType>();
@@ -178,33 +194,33 @@ static Type getLoadOpResultType(::mlir::OpBuilder &builder, Type ptrType) {
 void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                    ::mlir::Value ptr, ::mlir::triton::CacheModifier cache,
                    ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, {}, {}, {}, {}, cache, evict, isVolatile);
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
+                /*boundaryCheck=*/{}, /*padding=*/{}, cache, evict, isVolatile);
 }
 
 void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
-                   ::mlir::Value ptr,
-                   std::optional<ArrayRef<int32_t>> boundaryCheck,
+                   ::mlir::Value ptr, ArrayRef<int32_t> boundaryCheck,
                    std::optional<::mlir::triton::PaddingOption> padding,
                    ::mlir::triton::CacheModifier cache,
                    ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, {}, {}, boundaryCheck, padding, cache,
-                evict, isVolatile);
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, boundaryCheck,
+                padding, cache, evict, isVolatile);
 }
 
 void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                    ::mlir::Value ptr, ::mlir::Value mask,
                    ::mlir::triton::CacheModifier cache,
                    ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, {}, {}, {}, cache, evict,
-                isVolatile);
+  LoadOp::build(builder, state, ptr, mask, /*other=*/{}, /*boundaryCheck=*/{},
+                /*padding=*/{}, cache, evict, isVolatile);
 }
 
 void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
                    ::mlir::Value ptr, ::mlir::Value mask, ::mlir::Value other,
                    ::mlir::triton::CacheModifier cache,
                    ::mlir::triton::EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, other, {}, {}, cache, evict,
-                isVolatile);
+  LoadOp::build(builder, state, ptr, mask, other, /*boundaryCheck=*/{},
+                /*padding=*/{}, cache, evict, isVolatile);
 }
 
 void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
@@ -247,6 +263,33 @@ void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
   // Result type
   Type resultType = getLoadOpResultType(builder, ptr.getType());
   state.addTypes({resultType});
+}
+
+//-- StoreOp --
+void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
+                    ::mlir::Value ptr, ::mlir::Value value,
+                    ::mlir::triton::CacheModifier cache,
+                    ::mlir::triton::EvictionPolicy evict) {
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                        /*boundaryCheck=*/{}, cache, evict);
+}
+
+void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
+                    ::mlir::Value ptr, ::mlir::Value value, ::mlir::Value mask,
+                    ::mlir::triton::CacheModifier cache,
+                    ::mlir::triton::EvictionPolicy evict) {
+  return StoreOp::build(builder, state, ptr, value, mask, /*boundaryCheck=*/{},
+                        cache, evict);
+}
+
+void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
+                    ::mlir::Value ptr, ::mlir::Value value,
+                    ArrayRef<int32_t> boundaryCheck,
+                    ::mlir::triton::CacheModifier cache,
+                    ::mlir::triton::EvictionPolicy evict) {
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                        builder.getDenseI32ArrayAttr(boundaryCheck), cache,
+                        evict);
 }
 
 //-- TransOp --

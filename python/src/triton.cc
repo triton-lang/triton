@@ -1129,7 +1129,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_tiled_load",
            [](mlir::OpBuilder &self, mlir::Value &ptr,
-              std::optional<std::vector<int32_t>> boundaryCheck,
+              std::vector<int32_t> &boundaryCheck,
               std::optional<mlir::triton::PaddingOption> paddingOption,
               mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy,
@@ -1138,6 +1138,15 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::LoadOp>(
                  loc, ptr, boundaryCheck, paddingOption, cacheModifier,
                  evictionPolicy, isVolatile);
+           })
+      .def("create_tiled_store",
+           [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &val,
+              std::vector<int32_t> &boundaryCheck,
+              mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy) -> void {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::triton::StoreOp>(loc, ptr, val, boundaryCheck,
+                                                cacheModifier, evictionPolicy);
            })
       .def("create_masked_load",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &mask,

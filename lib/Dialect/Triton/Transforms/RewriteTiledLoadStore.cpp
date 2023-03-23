@@ -266,7 +266,7 @@ public:
       boundaryCheck = loadOp.getBoundaryCheck();
     } else if (auto storeOp = dyn_cast<triton::StoreOp>(op)) {
       assert(!storeOp.getMask());
-      llvm_unreachable("working in progress");
+      boundaryCheck = storeOp.getBoundaryCheck();
     }
 
     // Generate new `ptr`, `mask` and `other`
@@ -403,7 +403,7 @@ public:
     } else if (isa<triton::LoadOp>(op) || isa<triton::StoreOp>(op)) {
       return rewriteLoadStoreOp(builder, op, eraser);
     } else if (auto storeOp = dyn_cast<triton::StoreOp>(op)) {
-      llvm_unreachable("Working in progress");
+      return rewriteLoadStoreOp(builder, op, eraser);
     } else if (op->getDialect()->getNamespace() == "scf" ||
                op->getDialect()->getNamespace() == "cf") {
       if (!needRewrite(op))

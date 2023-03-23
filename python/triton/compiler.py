@@ -1081,6 +1081,7 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
 
 def inline_triton_ir(mod):
     pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
     pm.add_inliner_pass()
     pm.run(mod)
     return mod
@@ -1102,7 +1103,7 @@ def ttir_compute_capability_rewrite(mod, compute_capability):
     if compute_capability // 10 < 9:
         # For hardware without TMA support, we must rewrite all tile-based loads into normal loads
         pm = _triton.ir.pass_manager(mod.context)
-        pm.add_inliner_pass()
+        pm.enable_debug()
         pm.add_rewrite_tiled_load_store_pass()
         pm.run(mod)
     return mod
@@ -1117,6 +1118,7 @@ def ast_to_ttir(fn, signature, specialization, constants, compute_capability, de
 
 def ttir_to_ttgir(mod, num_warps):
     pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.run(mod)
     return mod
