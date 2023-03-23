@@ -961,6 +961,45 @@ struct ExpOpConversionApprox
   }
 };
 
+struct AbsIOpConversion
+  : ElementwiseOpConversionBase<mlir::math::AbsIOp, AbsIOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::math::AbsIOp, AbsIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::math::AbsIOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    auto boolFalse = rewriter.getBoolAttr(false);
+    auto constFalse = rewriter.create<LLVM::ConstantOp>(loc, boolFalse);
+    return rewriter.create<LLVM::AbsOp>(
+        loc, elemTy, operands[0], /*is_int_min_poison=*/constFalse);
+  }
+};
+
+struct AbsFOpConversion
+  : ElementwiseOpConversionBase<mlir::math::AbsFOp, AbsFOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::math::AbsFOp, AbsFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::math::AbsFOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type llElemTy,
+                     ValueRange operands, Location loc) const {
+    auto ttElemTy = getElementTypeOrSelf(op.getType());
+    auto bf16 = rewriter.getBF16Type();
+    if (ttElemTy == bf16) {
+      Value tmp = bitcast(operands[0], bf16);
+      tmp = rewriter.create<LLVM::FAbsOp>(loc, bf16, tmp);
+      return bitcast(tmp, llElemTy);
+    }
+
+    return rewriter.create<LLVM::FAbsOp>(loc, llElemTy, operands[0]);
+  }
+};
+
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
@@ -1006,6 +1045,8 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
+  patterns.add<AbsIOpConversion>(typeConverter, benefit);
+  patterns.add<AbsFOpConversion>(typeConverter, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
 

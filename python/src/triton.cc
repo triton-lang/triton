@@ -1309,6 +1309,16 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::math::SqrtOp>(loc, val);
            })
+      .def("create_fabs",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::AbsFOp>(loc, val);
+           })
+      .def("create_iabs",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::AbsIOp>(loc, val);
+           })
       .def("create_reduce",
            [](mlir::OpBuilder &self, mlir::Value &operand,
               mlir::triton::RedOp redOp, int axis) -> mlir::Value {
