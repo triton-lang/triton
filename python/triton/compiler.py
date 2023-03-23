@@ -4,6 +4,7 @@ import ast
 import contextlib
 import functools
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -17,7 +18,6 @@ import warnings
 from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
-import inspect
 
 import setuptools
 import torch

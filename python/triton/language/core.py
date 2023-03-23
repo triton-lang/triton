@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from enum import Enum
 from typing import Callable, List, TypeVar
-from contextlib import contextmanager
 
 import triton
 from . import builtin, semantic
@@ -1144,7 +1144,8 @@ def reduction(input, axis, combine_fn, _builder=None, _generator=None):
 
     """
     if isinstance(input, tensor):
-        return reduction((input,), axis, combine_fn, _builder=_builder, _generator=_generator)[0]
+        return reduction((input,), axis, combine_fn,
+                         _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1154,7 +1155,8 @@ def reduction(input, axis, combine_fn, _builder=None, _generator=None):
         with _insertion_guard(_builder):
             param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
             block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
+            args = [tensor(block.arg(i), ty)
+                    for i, ty in enumerate(prototype.param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]

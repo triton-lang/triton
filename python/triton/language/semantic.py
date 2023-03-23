@@ -1103,6 +1103,7 @@ def where(condition: tl.tensor,
 #                               Reduction
 # ===----------------------------------------------------------------------===
 
+
 def reduction(
     inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
 ) -> Tuple[tl.tensor, ...]:
