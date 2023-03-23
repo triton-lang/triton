@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import torch
-
-
 def cdiv(x, y):
     return (x + y - 1) // y
 
@@ -26,7 +23,9 @@ class MockTensor:
     """
     @staticmethod
     def wrap_dtype(arg):
-        if isinstance(arg, torch.dtype):
+        arg_module = arg.__module__
+        arg_class = arg.__class__.__name__
+        if arg_module == "torch" and arg_class == "dtype":
             return MockTensor(arg)
         return arg
 
@@ -60,7 +59,7 @@ def reinterpret(tensor, dtype):
         else:
             # Reinterpreting a wrapped tensor to a different type.
             return TensorWrapper(tensor.base, dtype)
-    elif isinstance(tensor, torch.Tensor):
+    elif hasattr(tensor, "data_ptr"):
         # A new wrapper is needed around an unwrapped tensor.
         return TensorWrapper(tensor, dtype)
     else:

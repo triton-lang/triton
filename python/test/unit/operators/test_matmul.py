@@ -95,4 +95,4 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     # run test
     th_c = torch.matmul(a, b)
     tt_c = triton.testing.catch_oor(lambda: triton.ops.matmul(a, b), pytest)
-    triton.testing.assert_almost_equal(th_c, tt_c)
+    torch.testing.assert_allclose(th_c, tt_c, atol=1e-2, rtol=0)
