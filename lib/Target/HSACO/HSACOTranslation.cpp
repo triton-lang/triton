@@ -30,10 +30,10 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <random>
-#include <filesystem>
 
 namespace {
 
@@ -112,18 +112,27 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
                            const std::string &features) {
   auto machine = initialize_module(module, triple, proc, features);
 
-  std::string kernel_name = std::filesystem::temp_directory_path().string() + std::to_string(New64());
-
-  // create dump files
   std::error_code ec;
+  std::string kernel_name = std::to_string(New64());
+  std::string kernel_dir =
+      std::filesystem::temp_directory_path().string() + kernel_name;
+  llvm::SmallString<256> kernel_dir_unique;
+  ec = llvm::sys::fs::createUniqueDirectory(kernel_dir, kernel_dir_unique);
+  if (ec) {
+    std::cerr << kernel_dir << " was not created. error code: " << ec
+              << std::endl;
+  }
+
   // Save GCN ISA binary.
-  std::string isabin_path = kernel_name + std::string(".o");
+  std::string kernel_binary = kernel_name + std::string(".o");
+  std::string isabin_path = (kernel_dir_unique + kernel_binary).str();
   std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
       new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
   if (ec) {
-    std::cout << isabin_path << " was not created. error code: " << ec
+    std::cerr << kernel_binary << " was not created. error code: " << ec
               << std::endl;
   }
+
   // emit
   llvm::legacy::PassManager pass;
   machine->addPassesToEmitFile(pass, *isabin_fs, nullptr,
@@ -131,8 +140,8 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
   pass.run(*module);
 
   // generate HASCO file
-  std::string hsaco_path = kernel_name + std::string(".hsaco");
-
+  std::string hsaco_path =
+      (kernel_dir_unique + (kernel_name + std::string(".hsaco"))).str();
   std::string error_message;
   std::string lld_path = "/opt/rocm/llvm/bin/ld.lld";
   int lld_result = llvm::sys::ExecuteAndWait(
