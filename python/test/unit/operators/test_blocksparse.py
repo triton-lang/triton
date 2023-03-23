@@ -2,6 +2,7 @@ import pytest
 import torch
 
 import triton
+import triton.ops
 
 
 def sparsify_tensor(x, mask, block):

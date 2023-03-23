@@ -2,6 +2,7 @@ import pytest
 import torch
 
 import triton
+import triton.ops
 
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
