@@ -1079,10 +1079,16 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
     return ret, generator
 
 
+def inline_triton_ir(mod):
+    pm = _triton.ir.pass_manager(mod.context)
+    pm.add_inliner_pass()
+    pm.run(mod)
+    return mod
+
+
 def optimize_triton_ir(mod):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_inliner_pass()
     pm.add_triton_combine_pass()
     pm.add_canonicalizer_pass()
     pm.add_cse_pass()
@@ -1092,8 +1098,20 @@ def optimize_triton_ir(mod):
     return mod
 
 
-def ast_to_ttir(fn, signature, specialization, constants, debug=False):
+def ttir_compute_capability_rewrite(mod, compute_capability):
+    if compute_capability // 10 < 9:
+        # For hardware without TMA support, we must rewrite all tile-based loads into normal loads
+        pm = _triton.ir.pass_manager(mod.context)
+        pm.add_inliner_pass()
+        pm.add_rewrite_tiled_load_store_pass()
+        pm.run(mod)
+    return mod
+
+
+def ast_to_ttir(fn, signature, specialization, constants, compute_capability, debug=False):
     mod, _ = build_triton_ir(fn, signature, specialization, constants, debug)
+    mod = inline_triton_ir(mod)
+    mod = ttir_compute_capability_rewrite(mod, compute_capability)
     return optimize_triton_ir(mod)
 
 
@@ -1686,7 +1704,7 @@ def compile(fn, **kwargs):
     stages = {
         "ast": (lambda path: fn, None),
         "ttir": (lambda path: parse_mlir_module(path, context),
-                 lambda src: ast_to_ttir(src, signature, configs[0], constants, debug)),
+                 lambda src: ast_to_ttir(src, signature, configs[0], constants, capability, debug)),
         "ttgir": (lambda path: parse_mlir_module(path, context),
                   lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
         "llir": (lambda path: Path(path).read_text(),

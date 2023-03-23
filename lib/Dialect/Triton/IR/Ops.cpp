@@ -488,5 +488,25 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+//-- MakeTilePtrOp --
+void MakeTilePtrOp::build(::mlir::OpBuilder &builder,
+                          ::mlir::OperationState &state, ::mlir::Value base,
+                          ::mlir::ValueRange shape, ::mlir::ValueRange strides,
+                          ::mlir::ValueRange offsets,
+                          ArrayRef<int64_t> tileShape,
+                          ArrayRef<int32_t> order) {
+  // Get pointer type from `base`
+  auto pointerType = base.getType().cast<PointerType>();
+  assert(pointerType != nullptr);
+
+  // Build type `tt.ptr<tensor<tileShape, base.pointeeType>>`
+  auto pointeeType = pointerType.getPointeeType();
+  auto tensorType = RankedTensorType::get(tileShape, pointeeType);
+  auto result = PointerType::get(tensorType, 1);
+
+  return build(builder, state, result, base, shape, strides, offsets,
+               builder.getDenseI32ArrayAttr(order));
+}
+
 } // namespace triton
 } // namespace mlir
