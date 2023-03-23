@@ -211,6 +211,7 @@ class CMakeBuild(build_ext):
 
 download_and_copy_ptxas()
 
+
 setup(
     name="triton",
     version="2.1.0",
@@ -218,12 +219,17 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
-    packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/impl", "triton/ops", "triton/runtime", "triton/ops/blocksparse"],
+    packages=[
+        "triton",
+        "triton/_C",
+        "triton/language",
+        "triton/tools",
+        "triton/impl",
+        "triton/ops",
+        "triton/runtime",
+        "triton/ops/blocksparse"],
     install_requires=[
-        "cmake>=3.20",
         "filelock",
-        "torch",
-        "lit",
     ],
     package_data={"triton": ["third_party/**/*"]},
     include_package_data=True,
@@ -242,6 +248,10 @@ setup(
     ],
     test_suite="tests",
     extras_require={
+        "build": [
+            "cmake>=3.20",
+            "lit",
+        ],
         "tests": [
             "autopep8",
             "flake8",
@@ -249,6 +259,7 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
+            "torch",
         ],
         "tutorials": [
             "matplotlib",
