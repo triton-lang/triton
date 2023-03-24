@@ -1136,13 +1136,11 @@ def ttgir_to_llir(mod, extern_libs, compute_capability):
     return _triton.translate_triton_gpu_to_llvmir(mod, compute_capability)
 
 
-def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> Tuple[str, int]:
+def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> str:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
-    :return:
-        - PTX code
-        - shared memory allocation size
+    :return: PTX code
     '''
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
