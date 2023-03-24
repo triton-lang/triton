@@ -123,10 +123,14 @@ def TT_AdvanceOp : TT_Op<"advance",
 //
 // Load/Store Ops
 //
-// TODO(Chenggang): may add traits to check the legality
 def TT_LoadOp : TT_Op<"load",
-                      [AttrSizedOperandSegments,
+                      [SameLoadStoreOperandsAndResultShape,
+                       SameLoadStoreOperandsAndResultEncoding,
+                       AttrSizedOperandSegments,
                        MemoryEffects<[MemRead]>,
+                       TypesMatchWith<"infer ptr type from result type",
+                                      "result", "ptr", "$_self",
+                                      "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
                        TypesMatchWith<"infer mask type from result type or none",
                                       "result", "mask", "getI1SameShape($_self)",
                                       "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
@@ -170,7 +174,12 @@ def TT_LoadOp : TT_Op<"load",
 
 // TODO(Chenggang): may add traits to check the legality
 def TT_StoreOp : TT_Op<"store",
-                       [MemoryEffects<[MemWrite]>,
+                       [SameLoadStoreOperandsShape,
+                        SameLoadStoreOperandsEncoding,
+                        MemoryEffects<[MemWrite]>,
+                        TypesMatchWith<"infer ptr type from value type",
+                                       "value", "ptr", "$_self",
+                                       "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
                         TypesMatchWith<"infer mask type from value type",
                                        "value", "mask", "getI1SameShape($_self)",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
