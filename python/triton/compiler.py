@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 import setuptools
-import torch
 from filelock import FileLock
 
+import torch
 import triton
 import triton._C.libtriton.triton as _triton
 from . import impl
@@ -1872,8 +1872,8 @@ def _get_jsonable_constants(constants):
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
-        device = torch.cuda.current_device()
-        capability = torch.cuda.get_device_capability(device)
+        device = triton.runtime.jit.get_current_device()
+        capability = triton.runtime.jit.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
     # we get the kernel, i.e. the first function generated in the module
     # if fn is not a JITFunction, then it
@@ -2092,7 +2092,7 @@ class CompiledKernel:
     def _init_handles(self):
         if self.cu_module is not None:
             return
-        device = torch.cuda.current_device()
+        device = triton.runtime.jit.get_current_device()
         if torch.version.hip is not None:
             global hip_utils
             init_hip_utils()
@@ -2107,9 +2107,9 @@ class CompiledKernel:
             if self.shared > max_shared:
                 raise OutOfResources(self.shared, max_shared, "shared memory")
             mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
-            self.n_spills = n_spills
-            self.n_regs = n_regs
-        # print(self.shared, n_regs, n_spills)
+        
+        self.n_spills = n_spills
+        self.n_regs = n_regs
         self.cu_module = mod
         self.cu_function = func
 
@@ -2123,7 +2123,7 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             if stream is None:
-                stream = torch.cuda.current_stream().cuda_stream
+                stream = triton.runtime.jit.get_cuda_stream()
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
