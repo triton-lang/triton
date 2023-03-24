@@ -10,15 +10,34 @@ import textwrap
 from collections import defaultdict, namedtuple
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
 
-import torch
-
 import triton
 from triton.utils import MockTensor
 
-try:
-    from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
-except ImportError:
-    get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
+
+def get_cuda_stream(idx=None):
+    if idx is None:
+        idx = get_current_device()
+    try:
+        from torch._C import _cuda_getCurrentRawStream
+        return _cuda_getCurrentRawStream(idx)
+    except ImportError:
+        import torch
+        return torch.cuda.current_stream(idx).cuda_stream
+
+
+def get_current_device():
+    import torch
+    return torch.cuda.current_device()
+
+
+def set_current_device(idx):
+    import torch
+    torch.cuda.set_device(idx)
+
+
+def get_device_capability(idx):
+    import torch
+    return torch.cuda.get_device_capability(idx)
 
 
 T = TypeVar('T')
@@ -160,34 +179,31 @@ class JITFunction(KernelInterface[T]):
 
     @staticmethod
     def _type_of(key):
-        if isinstance(key, (torch.dtype, triton.language.dtype)):
-            ty = {
-                torch.bool: 'i1',
-                torch.float16: 'fp16',
-                torch.bfloat16: 'bf16',
-                torch.float32: 'fp32',
-                torch.float64: 'fp64',
-                torch.uint8: 'u8',
-                torch.int8: 'i8',
-                torch.int16: 'i16',
-                torch.int32: 'i32',
-                torch.int64: 'i64',
-
-                triton.language.uint8: 'u8',
-                triton.language.uint16: 'u16',
-                triton.language.uint32: 'u32',
-                triton.language.uint64: 'u64',
-                triton.language.float8e5: 'fp8e5',
-                triton.language.float8e4: 'fp8e4',
-                triton.language.float16: 'fp16',
-                triton.language.bfloat16: 'bf16',
-                triton.language.float32: 'fp32',
-            }[key]
-            return f'*{ty}'
+        # None are nullptr -- implicitly converted to *i8
         if key is None:
             return '*i8'
-        assert isinstance(key, str)
-        return key
+        dtype_str = str(key).split(".")[-1]
+        tys = {
+            "bool": "i1",
+            "float8e5": "fp8e5",
+            "float8e4": "fp8e4",
+            "float16": "fp16",
+            "bfloat16": "bf16",
+            "float32": "fp32",
+            "float64": "fp64",
+            "int8": "i8",
+            "int16": "i16",
+            "int32": "i32",
+            "int64": "i64",
+            "uint8": "u8",
+            "uint16": "u16",
+            "uint32": "u32",
+            "uint64": "u64",
+        }
+        # reinterpret can create triton type
+        for v in list(tys.values()):
+            tys[v] = v
+        return key if isinstance(key, str) else f"*{tys[dtype_str]}"
 
     def _make_signature(self, sig_key):
         signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
@@ -252,8 +268,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
-    device = torch.cuda.current_device()
-    torch.cuda.set_device(device)
+    device = get_current_device()
+    set_current_device(device)
     if stream is None and not warmup:
       stream = get_cuda_stream(device)
     try:
@@ -286,7 +302,9 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 """
         scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,
                  "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of,
-                 "cache": self.cache, "triton": triton, "torch": torch}
+                 "cache": self.cache, "triton": triton,
+                 "get_current_device": get_current_device,
+                 "set_current_device": set_current_device}
         exec(src, scope)
         return scope[self.fn.__name__]
 
@@ -397,8 +415,9 @@ def jit(
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
-    :note: When a jit'd function is called, :code:`torch.tensor` arguments are
-        implicitly converted to pointers using the :code:`.data_ptr()` method.
+    :note: When a jit'd function is called, arguments are
+        implicitly converted to pointers if they have a :code:`.data_ptr()` method
+        and a `.dtype` attribute.
 
     :note: This function will be compiled and run on the GPU. It will only have access to:
 
@@ -449,8 +468,8 @@ def reinterpret(tensor, dtype):
         else:
             # Reinterpreting a wrapped tensor to a different type.
             return TensorWrapper(tensor.base, dtype)
-    elif isinstance(tensor, torch.Tensor):
+    elif hasattr(tensor, "data_ptr"):
         # A new wrapper is needed around an unwrapped tensor.
         return TensorWrapper(tensor, dtype)
     else:
-        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')
+        raise TypeError(f'Cannot reinterpret a {type(tensor)}. Does not contain `data_ptr` method.')

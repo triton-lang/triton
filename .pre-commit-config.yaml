@@ -13,7 +13,7 @@ repos:
       - id: autopep8
         name: autopep8
         entry: autopep8
-        args: ["-a", "-r", "-i", "./python"]
+        args: ["-a", "-r", "-i", "./python/"]
         language: python
         types: [python]
         additional_dependencies:
