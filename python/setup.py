@@ -201,9 +201,8 @@ class CMakeBuild(build_ext):
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
         else:
-            import multiprocessing
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ['-j' + str(2 * multiprocessing.cpu_count())]
+            build_args += ['-j' + str(2 * os.cpu_count())]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
@@ -246,6 +245,11 @@ setup(
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
     ],
     test_suite="tests",
     extras_require={
