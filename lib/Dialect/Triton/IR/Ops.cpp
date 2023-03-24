@@ -38,7 +38,7 @@ static Type getPointerTypeSameShape(Type type) {
 
 static Type getPointerType(Type type) { return PointerType::get(type, 1); }
 
-static Type getElementTypeOfTilePointerType(Type type) {
+static Type getElementTypeOfTensorPointerType(Type type) {
   if (auto ptrType = type.dyn_cast<PointerType>())
     if (auto tensorType = ptrType.getPointeeType().dyn_cast<RankedTensorType>())
       return tensorType.getElementType();
@@ -107,8 +107,8 @@ void LoadOp::print(OpAsmPrinter &printer) {
 
   // `type(ptr) -> type(result)`
   printer << " : ";
-  // `type(ptr)` is optional during parsing, we only print for tile-based cases
-  if (isTilePointerType(getPtr().getType())) {
+  // `type(ptr)` is optional during parsing, we only print for tensor pointers
+  if (isTensorPointerType(getPtr().getType())) {
     printer.printStrippedAttrOrType(getPtr().getType());
     printer << " -> ";
   }
@@ -160,8 +160,8 @@ void StoreOp::print(OpAsmPrinter &printer) {
 
   // `type(ptr), type(value)`
   printer << " : ";
-  // `type(ptr)` is optional during parsing, we only print for tile-based cases
-  if (isTilePointerType(getPtr().getType())) {
+  // `type(ptr)` is optional during parsing, we only print for tensor pointers
+  if (isTensorPointerType(getPtr().getType())) {
     printer.printStrippedAttrOrType(getPtr().getType());
     printer << ", ";
   }
@@ -531,20 +531,20 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
-//-- MakeTilePtrOp --
-void MakeTilePtrOp::build(::mlir::OpBuilder &builder,
-                          ::mlir::OperationState &state, ::mlir::Value base,
-                          ::mlir::ValueRange shape, ::mlir::ValueRange strides,
-                          ::mlir::ValueRange offsets,
-                          ArrayRef<int64_t> tileShape,
-                          ArrayRef<int32_t> order) {
+//-- MakeTensorPtrOp --
+void MakeTensorPtrOp::build(::mlir::OpBuilder &builder,
+                            ::mlir::OperationState &state, ::mlir::Value base,
+                            ::mlir::ValueRange shape, ::mlir::ValueRange strides,
+                            ::mlir::ValueRange offsets,
+                            ArrayRef<int64_t> tensorShape,
+                            ArrayRef<int32_t> order) {
   // Get pointer type from `base`
   auto pointerType = base.getType().cast<PointerType>();
   assert(pointerType != nullptr);
 
-  // Build type `tt.ptr<tensor<tileShape, base.pointeeType>>`
+  // Build type `tt.ptr<tensor<tensorShape, base.pointeeType>>`
   auto pointeeType = pointerType.getPointeeType();
-  auto tensorType = RankedTensorType::get(tileShape, pointeeType);
+  auto tensorType = RankedTensorType::get(tensorShape, pointeeType);
   auto result = PointerType::get(tensorType, 1);
 
   return build(builder, state, result, base, shape, strides, offsets,

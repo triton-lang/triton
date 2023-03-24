@@ -26,11 +26,11 @@ int constexpr maxTensorNumElements = 1048576;
 LogicalResult verifyTensorSize(Operation *op);
 
 LogicalResult verifySameOperandsEncoding(Operation *op,
-                                         bool allowTilePointerType = false);
+                                         bool allowTensorPointerType = false);
 
 LogicalResult
 verifySameOperandsAndResultEncoding(Operation *op,
-                                    bool allowTilePointerType = false);
+                                    bool allowTensorPointerType = false);
 
 LogicalResult verifySameLoadStoreOperandsShape(Operation *op);
 
@@ -89,7 +89,7 @@ class SameLoadStoreOperandsEncoding
     : public TraitBase<ConcreteType, SameLoadStoreOperandsEncoding> {
 public:
   static LogicalResult verifyTrait(Operation *op) {
-    return impl::verifySameOperandsEncoding(op, /*allowTilePointerType=*/true);
+    return impl::verifySameOperandsEncoding(op, /*allowTensorPointerType=*/true);
   }
 };
 
@@ -99,7 +99,7 @@ class SameLoadStoreOperandsAndResultEncoding
 public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifySameOperandsAndResultEncoding(
-        op, /*allowTilePointerType=*/true);
+        op, /*allowTensorPointerType=*/true);
   }
 };
 

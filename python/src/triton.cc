@@ -1127,7 +1127,7 @@ void init_triton_ir(py::module &&m) {
              self.create<mlir::triton::StoreOp>(loc, ptrs, value, cacheModifier,
                                                 evictionPolicy);
            })
-      .def("create_tiled_load",
+      .def("create_tensor_pointer_load",
            [](mlir::OpBuilder &self, mlir::Value &ptr,
               std::vector<int32_t> &boundaryCheck,
               std::optional<mlir::triton::PaddingOption> paddingOption,
@@ -1139,7 +1139,7 @@ void init_triton_ir(py::module &&m) {
                  loc, ptr, boundaryCheck, paddingOption, cacheModifier,
                  evictionPolicy, isVolatile);
            })
-      .def("create_tiled_store",
+      .def("create_tensor_pointer_store",
            [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &val,
               std::vector<int32_t> &boundaryCheck,
               mlir::triton::CacheModifier cacheModifier,
@@ -1408,24 +1408,25 @@ void init_triton_ir(py::module &&m) {
         auto loc = self.getUnknownLoc();
         self.create<mlir::gpu::BarrierOp>(loc);
       })
-      // Make a tile pointer
-      .def(
-          "create_make_tile_ptr",
-          [](mlir::OpBuilder &self, mlir::Value &base,
-             std::vector<mlir::Value> &shape, std::vector<mlir::Value> &strides,
-             std::vector<mlir::Value> &offsets, std::vector<int64_t> &tileShape,
-             std::vector<int32_t> &order) -> mlir::Value {
-            auto loc = self.getUnknownLoc();
-            return self.create<mlir::triton::MakeTilePtrOp>(
-                loc, base, shape, strides, offsets, tileShape, order);
+      // Make a block pointer (tensor pointer in Triton IR)
+      .def("create_make_block_ptr",
+           [](mlir::OpBuilder &self, mlir::Value &base,
+              std::vector<mlir::Value> &shape,
+              std::vector<mlir::Value> &strides,
+              std::vector<mlir::Value> &offsets,
+              std::vector<int64_t> &tensorShape,
+              std::vector<int32_t> &order) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::MakeTensorPtrOp>(
+                 loc, base, shape, strides, offsets, tensorShape, order);
           })
-      // Advance a tile pointer
+      // Advance a block pointer
       .def("create_advance",
-           [](mlir::OpBuilder &self, mlir::Value &tilePtr,
+           [](mlir::OpBuilder &self, mlir::Value &ptr,
               std::vector<mlir::Value> &offsets) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::AdvanceOp>(loc, tilePtr.getType(),
-                                                         tilePtr, offsets);
+             return self.create<mlir::triton::AdvanceOp>(loc, ptr.getType(),
+                                                         ptr, offsets);
            });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
@@ -1481,9 +1482,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createCombineOpsPass());
            })
-      .def("add_rewrite_tiled_load_store_pass",
+      .def("add_rewrite_tensor_pointer_pass",
            [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(mlir::triton::createRewriteTiledLoadStorePass(
+             self.addPass(mlir::triton::createRewriteTensorPointerPass(
                  computeCapability));
            })
       .def("add_convert_triton_to_tritongpu_pass",

@@ -807,13 +807,13 @@ def str_to_padding_option(padding_option):
     return padding
 
 
-def canonicalize_boundary_check(boundary_check, tile_shape):
+def canonicalize_boundary_check(boundary_check, block_shape):
     if boundary_check:
         if not hasattr(boundary_check, "__iter__"):
             boundary_check = [boundary_check]
         boundary_check = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in boundary_check]
         for dim in boundary_check:
-            assert isinstance(dim, int) and 0 <= dim < len(tile_shape)
+            assert isinstance(dim, int) and 0 <= dim < len(block_shape)
         assert len(boundary_check) > 0
         assert len(boundary_check) == len(set(boundary_check)), "Duplicate dimension in `boundary_check`"
         return sorted(boundary_check)
@@ -835,14 +835,14 @@ def load(ptr: tl.tensor,
     padding = str_to_padding_option(padding_option)
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
-        # Load a tile pointer: `pointer_type<block_type<>>`
-        # Tile pointer can not have `mask` and `other` arguments
+        # Load a block pointer: `pointer_type<block_type<>>`
+        # Block pointer can not have `mask` and `other` arguments
         if mask or other:
-            raise ValueError("`mask` and `other` arguments cannot be specified for loading tile pointer")
+            raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
 
-        # TODO(Chenggang): support `tl.int1` casting for tiled load
+        # TODO(Chenggang): support `tl.int1` casting with block pointers
         elt_ty = ptr.type.element_ty.element_ty
-        assert elt_ty != tl.int1, "`tl.int1` is currently not supported for tiled load"
+        assert elt_ty != tl.int1, "`tl.int1` is currently not supported with block pointers"
 
         # `dst_ty` is de-referenced type of the pointer type
         dst_ty = ptr.type.element_ty
@@ -850,9 +850,9 @@ def load(ptr: tl.tensor,
         # Check `boundary_check` argument
         boundary_check = canonicalize_boundary_check(boundary_check, dst_ty.get_block_shapes())
 
-        # Build IR for tiled load
-        return tl.tensor(builder.create_tiled_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile),
-                         dst_ty)
+        # Build IR for loading tensor pointers
+        return tl.tensor(builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction,
+                                                            is_volatile), dst_ty)
     else:
         # Load by a tensor of pointers or a pointer of scalar
         if not ptr.type.scalar.is_ptr():
@@ -864,7 +864,7 @@ def load(ptr: tl.tensor,
         if padding_option or boundary_check:
             raise ValueError("`padding_option` or `boundary_check` argument is not supported for loading a tensor of"
                              "pointers or loading a scalar. Because the compiler does not know the boundary; please "
-                             "use tiled mode load instead")
+                             "use block pointers (defined by `make_block_ptr`) instead")
 
         # For a pointer of scalar, check the type of `mask` and `other`
         if not ptr.type.is_block():
@@ -902,7 +902,7 @@ def load(ptr: tl.tensor,
             # Load by de-referencing the pointer of scalar
             dst_ty = elt_ty
 
-        # Build IR for non-tiled load
+        # Build IR for normal loads
         if not mask:
             return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
         else:
@@ -922,27 +922,28 @@ def store(ptr: tl.tensor,
     eviction = str_to_eviction_policy(eviction_policy)
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
-        # Store a tile pointer: `pointer_type<block_type<>>`
-        # Tile pointer can not have the `mask` argument
+        # Store by a block pointer: `pointer_type<block_type<>>`
+        # Block pointers can not have the `mask` argument
         if mask:
-            raise ValueError("`mask` and `other` arguments cannot be specified for loading tile pointer")
+            raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
 
         # Check same shape
-        tile_shape = ptr.type.element_ty.get_block_shapes()
+        block_shape = ptr.type.element_ty.get_block_shapes()
         if not val.type.is_block():
-            val = broadcast_impl_shape(val, tile_shape, builder)
+            val = broadcast_impl_shape(val, block_shape, builder)
         assert val.type.is_block(), "Value argument must be block type or a scalar"
-        assert tile_shape == val.type.get_block_shapes(), "Tile shape and value shape mismatch"
+        assert block_shape == val.type.get_block_shapes(), "Block shape and value shape mismatch"
 
-        # TODO(Chenggang): support `tl.int1` casting for tiled store
+        # TODO(Chenggang): support `tl.int1` casting with block pointers
         elt_ty = ptr.type.element_ty.element_ty
-        assert elt_ty != tl.int1, "`tl.int1` is currently not supported for tiled store"
+        assert elt_ty != tl.int1, "`tl.int1` is currently not supported with block pointers"
 
         # Check `boundary_check` argument
-        boundary_check = canonicalize_boundary_check(boundary_check, tile_shape)
+        boundary_check = canonicalize_boundary_check(boundary_check, block_shape)
 
-        # Build IR for tiled store
-        return tl.tensor(builder.create_tiled_store(ptr.handle, val.handle, boundary_check, cache, eviction), tl.void)
+        # Build IR for stores with block pointers
+        return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
+                         tl.void)
     else:
         # Store by a tensor of pointers or a pointer of scalar
         if not ptr.type.scalar.is_ptr():
@@ -951,8 +952,8 @@ def store(ptr: tl.tensor,
         # Check `boundary_check` argument
         if boundary_check:
             raise ValueError("`boundary_check` argument is not supported for storing a tensor of pointers or storing a "
-                             "scalar. Because the compiler does not know the boundary; please use tiled mode load "
-                             "instead")
+                             "scalar. Because the compiler does not know the boundary; please use block pointers "
+                             "(defined by `make_block_ptr`) instead")
 
         # For a pointer of scalar, check the type of `val` and `mask`
         if not ptr.type.is_block():
@@ -979,7 +980,7 @@ def store(ptr: tl.tensor,
         # Cast to target data type
         val = cast(val, elt_ty, builder)
 
-        # Build IR for non-tiled store
+        # Build IR for normal store
         if not mask:
             return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
         if not mask.type.scalar.is_bool():
@@ -1374,19 +1375,19 @@ def convert_to_ir_values(builder, list_like, require_i64=True):
     return [convert_elem_to_ir_value(builder, list_like, require_i64)]
 
 
-def make_tile_ptr(base: tl.tensor, shape, strides, offsets, tile_shape, order, builder: ir.builder) -> tl.tensor:
+def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order, builder: ir.builder) -> tl.tensor:
     # Convert dynamic arguments to IR values
     # NOTES(Chenggang): current shape/strides are `int64_t`, while `offsets` are `int32_t`
     shape = convert_to_ir_values(builder, shape)
     strides = convert_to_ir_values(builder, strides)
     offsets = convert_to_ir_values(builder, offsets, require_i64=False)
 
-    # Check whether `tile_shape` is static
-    if not hasattr(tile_shape, "__iter__"):
-        tile_shape = [tile_shape]
-    tile_shape = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in tile_shape]
-    assert all([isinstance(elem, int) and -2**63 <= elem < 2**63 for elem in tile_shape]), \
-        "Expected a list of constant integers (int64_t range) in tile_shape"
+    # Check whether `block_shape` is static
+    if not hasattr(block_shape, "__iter__"):
+        block_shape = [block_shape]
+    block_shape = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in block_shape]
+    assert all([isinstance(elem, int) and -2**63 <= elem < 2**63 for elem in block_shape]), \
+        "Expected a list of constant integers (int64_t range) in `block_shape`"
 
     # Check `order`
     if not hasattr(order, "__iter__"):
@@ -1395,19 +1396,19 @@ def make_tile_ptr(base: tl.tensor, shape, strides, offsets, tile_shape, order, b
     assert sorted(order) == list(range(len(order))), "Expected a permutation of [0, 1, ..., len(order)-1] in order"
 
     # Must have same length
-    assert all([len(tile_shape) == len(list_like) for list_like in [shape, strides, offsets, order]]), \
-        "Expected shape/strides/offsets/tile_shape to have the same length"
+    assert all([len(block_shape) == len(list_like) for list_like in [shape, strides, offsets, order]]), \
+        "Expected shape/strides/offsets/block_shape to have the same length"
 
     # Build value, the type is:
     #   `pointer_type<blocked<shape, element_type>>` in Python
     #   `tt.ptr<tensor<shape, element_type>>` in MLIR
-    handle = builder.create_make_tile_ptr(base.handle, shape, strides, offsets, tile_shape, order)
-    return tl.tensor(handle, tl.pointer_type(tl.block_type(base.type.element_ty, tile_shape)))
+    handle = builder.create_make_block_ptr(base.handle, shape, strides, offsets, block_shape, order)
+    return tl.tensor(handle, tl.pointer_type(tl.block_type(base.type.element_ty, block_shape)))
 
 
 def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
     # Convert dynamic offsets to IR values
     offsets = convert_to_ir_values(builder, offsets, require_i64=False)
 
-    # Advanced tile pointer type is the same as before
+    # Advanced block pointer type is the same as before
     return tl.tensor(builder.create_advance(base.handle, offsets), base.type)

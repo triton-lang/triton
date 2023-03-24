@@ -11,14 +11,15 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
-/// An additional struct to record the meta information of tiled operations
+/// An additional struct to record the meta information of operations
+/// with tensor pointers
 struct RewritedInfo {
 private:
   Value base;
   SmallVector<Value> shape;
   SmallVector<Value> strides;
   SmallVector<Value> offsets;
-  ArrayRef<int64_t> tileShape;
+  ArrayRef<int64_t> tensorShape;
 
   // A cache to avoid generating the same offset with range
   DenseMap<unsigned, Value> cachedOffsetWithRange;
@@ -31,11 +32,11 @@ public:
   RewritedInfo(Value base, const SmallVector<Value> &shape,
                const SmallVector<Value> &strides,
                const SmallVector<Value> &offsets,
-               const ArrayRef<int64_t> &tileShape)
+               const ArrayRef<int64_t> &tensorShape)
       : base(base), shape(shape), strides(strides), offsets(offsets),
-        tileShape(tileShape) {
+        tensorShape(tensorShape) {
     assert(shape.size() == strides.size() && shape.size() == offsets.size() &&
-           shape.size() == tileShape.size());
+           shape.size() == tensorShape.size());
   }
 
   unsigned int length() const { return shape.size(); }
@@ -60,21 +61,21 @@ public:
       return cachedOffsetWithRange[i];
 
     auto indexI32RowType =
-        RankedTensorType::get({tileShape[i]}, builder.getI32Type());
+        RankedTensorType::get({tensorShape[i]}, builder.getI32Type());
     Value splatOffset =
         builder.create<triton::SplatOp>(loc, indexI32RowType, offsets[i]);
     Value range = builder.create<triton::MakeRangeOp>(loc, indexI32RowType, 0,
-                                                      tileShape[i]);
+                                                      tensorShape[i]);
     Value expandedResult =
         builder.create<arith::AddIOp>(loc, splatOffset, range);
-    for (int j = 0; j < tileShape.size(); ++j) {
+    for (int j = 0; j < tensorShape.size(); ++j) {
       if (j == i)
         continue;
       expandedResult =
           builder.create<triton::ExpandDimsOp>(loc, expandedResult, j);
     }
 
-    // `expandedShape` should be like {1, 1, ..., tileShape[i], 1}
+    // `expandedShape` should be like {1, 1, ..., tensorShape[i], 1}
     auto expandedShape =
         expandedResult.getType().cast<RankedTensorType>().getShape();
     auto expandedI64Type =
@@ -87,16 +88,16 @@ public:
   }
 
   Value generatePtr(OpBuilder &builder, const Location &loc) {
-    assert(tileShape.size() == offsets.size() &&
-           tileShape.size() == strides.size());
+    assert(tensorShape.size() == offsets.size() &&
+           tensorShape.size() == strides.size());
     auto indexTensorType =
-        RankedTensorType::get(tileShape, builder.getI64Type());
+        RankedTensorType::get(tensorShape, builder.getI64Type());
     auto ptrType = base.getType().cast<triton::PointerType>();
-    auto ptrTensorType = RankedTensorType::get(tileShape, ptrType);
+    auto ptrTensorType = RankedTensorType::get(tensorShape, ptrType);
 
     // Generate offsets per dimension
     Value ptr = builder.create<triton::SplatOp>(loc, ptrTensorType, base);
-    for (unsigned i = 0; i < tileShape.size(); ++i) {
+    for (unsigned i = 0; i < tensorShape.size(); ++i) {
       auto offsetWithRange = getExpandedI64OffsetWithRange(builder, loc, i);
 
       // We must splat strides into the expanded shape not a row for retaining
@@ -122,7 +123,7 @@ public:
       return {};
 
     // Generate mask per dimension
-    auto maskTensorType = RankedTensorType::get(tileShape, builder.getI1Type());
+    auto maskTensorType = RankedTensorType::get(tensorShape, builder.getI1Type());
     Value mask;
     for (auto i : boundaryCheck.value()) {
       auto offsetWithRange = getExpandedI64OffsetWithRange(builder, loc, i);
@@ -165,7 +166,7 @@ public:
     // Create element attribute
     auto elementType =
         base.getType().cast<triton::PointerType>().getPointeeType();
-    auto otherTensorType = RankedTensorType::get(tileShape, elementType);
+    auto otherTensorType = RankedTensorType::get(tensorShape, elementType);
     auto floatAttr = builder.getFloatAttr(elementType, 0);
     // TODO(Chenggang): add tests to check alignment later
     if (padding.value() == triton::PaddingOption::PAD_NAN) {
@@ -179,20 +180,20 @@ public:
   }
 };
 
-class RewriteTiledLoadStorePass
-    : public TritonRewriteTiledLoadStoreBase<RewriteTiledLoadStorePass> {
+class RewriteTensorPointerPass
+    : public TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
 private:
   int computeCapability;
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
 public:
-  explicit RewriteTiledLoadStorePass(int computeCapability)
+  explicit RewriteTensorPointerPass(int computeCapability)
       : computeCapability(computeCapability) {}
 
   static bool needRewrite(Operation *op) {
     return std::any_of(
         op->getOperands().begin(), op->getOperands().end(),
-        [](Value operand) { return isTilePointerType(operand.getType()); });
+        [](Value operand) { return isTensorPointerType(operand.getType()); });
   }
 
   static SmallVector<Value>
@@ -209,8 +210,9 @@ public:
     return newOperands;
   }
 
-  Operation *rewriteMakeTilePtrOp(OpBuilder &builder, triton::MakeTilePtrOp op,
-                                  std::stack<Operation *> &eraser) {
+  Operation *rewriteMakeTensorPtrOp(OpBuilder &builder,
+                                    triton::MakeTensorPtrOp op,
+                                    std::stack<Operation *> &eraser) {
     // Save info for later use
     auto ptrType = op.getResult().getType().cast<triton::PointerType>();
     auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
@@ -251,19 +253,19 @@ public:
                                 std::stack<Operation *> &eraser) {
     assert(isa<triton::LoadOp>(op) || isa<triton::StoreOp>(op));
 
-    // We only have to rewrite tiled load/stores
+    // We only have to rewrite load/stores with tensor pointers
     auto ptr = op->getOperand(0);
-    if (!isTilePointerType(ptr.getType()))
+    if (!isTensorPointerType(ptr.getType()))
       return nullptr;
 
     // Get info from previous results
     assert(rewritedInfo.count(ptr));
     auto info = rewritedInfo[ptr];
 
-    // Tiled load/store implicitly will check the bound while accessing memory,
-    // so we should set `mask` and `other` (according to the padding)
-    // Also note that tiled load do not have `mask` and `other` while building
-    // IR from Python AST
+    // Load/store with tensor pointers implicitly will check the bound while
+    // accessing memory, so we should set `mask` and `other` (according to the
+    // padding). Also note that load with tensor pointers do not have `mask` and
+    // `other` while building IR from Python AST
     std::optional<ArrayRef<int>> boundaryCheck;
     if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
       assert(!loadOp.getMask() && !loadOp.getOther());
@@ -304,10 +306,10 @@ public:
     SmallVector<Value> newIterOperands = op.getIterOperands();
     for (unsigned i = 0, oldI = 0, size = op.getNumIterOperands(); i < size;
          ++i, ++oldI) {
-      if (!isTilePointerType(newIterOperands[i].getType()))
+      if (!isTensorPointerType(newIterOperands[i].getType()))
         continue;
 
-      // Expand the tile pointer into offsets
+      // Expand the tensor pointer into offsets
       assert(rewritedInfo.count(newIterOperands[i]));
       auto info = rewritedInfo[newIterOperands[i]];
       newIterOperands =
@@ -321,14 +323,14 @@ public:
                                                op.getUpperBound(), op.getStep(),
                                                newIterOperands);
 
-    // Create value mapping. Note that for tile pointers, we use identity
+    // Create value mapping. Note that for tensor pointers, we use identity
     // mapping. It may refer to a value in the old loop, but we will rewrite it
-    // later.
+    // later
     IRMapping mapping;
     for (unsigned i = 0, oldI = 0; oldI < op.getNumIterOperands();
          ++i, ++oldI) {
       auto oldRegionIterArg = op.getRegionIterArg(oldI);
-      if (isTilePointerType(oldRegionIterArg.getType())) {
+      if (isTensorPointerType(oldRegionIterArg.getType())) {
         // Pass rewrited info inside
         assert(rewritedInfo.count(oldIterOperands[oldI]));
         auto info = rewritedInfo[oldIterOperands[oldI]];
@@ -355,7 +357,7 @@ public:
     assert(op.getNumResults() == op.getNumIterOperands());
     for (unsigned i = 0, oldI = 0; oldI < op.getNumResults(); ++i, ++oldI) {
       auto oldResult = op.getResult(oldI);
-      if (isTilePointerType(oldResult.getType())) {
+      if (isTensorPointerType(oldResult.getType())) {
         // Pack new offsets into rewrited info
         assert(rewritedInfo.count(oldIterOperands[oldI]));
         auto info = rewritedInfo[oldIterOperands[oldI]];
@@ -375,10 +377,10 @@ public:
 
   Operation *rewriteYieldOp(OpBuilder &builder, scf::YieldOp op,
                             std::stack<Operation *> &eraser) {
-    // Replace tile pointers with offsets
+    // Replace tensor pointers with offsets
     SmallVector<Value> newOperands = op->getOperands();
     for (unsigned i = 0, size = op.getNumOperands(); i < size; ++i) {
-      if (!isTilePointerType(newOperands[i].getType()))
+      if (!isTensorPointerType(newOperands[i].getType()))
         continue;
 
       assert(rewritedInfo.count(newOperands[i]));
@@ -396,12 +398,12 @@ public:
   Operation *rewriteOp(Operation *op, std::stack<Operation *> &eraser) {
     OpBuilder builder(op);
 
-    // Rewrite `make_tile_ptr` and `advance` and make a tensor of pointers
+    // Rewrite `make_tensor_ptr` and `advance` and make a tensor of pointers
     // Rewriting functions return the next operation to visit, if there is no
     // next one, simply return `nullptr`
     std::pair<Value, RewritedInfo> rewrited;
-    if (auto makeTilePtrOp = dyn_cast<triton::MakeTilePtrOp>(op)) {
-      return rewriteMakeTilePtrOp(builder, makeTilePtrOp, eraser);
+    if (auto makeTensorPtrOp = dyn_cast<triton::MakeTensorPtrOp>(op)) {
+      return rewriteMakeTensorPtrOp(builder, makeTensorPtrOp, eraser);
     } else if (auto advanceOp = dyn_cast<triton::AdvanceOp>(op)) {
       return rewriteAdvanceOp(builder, advanceOp, eraser);
     } else if (isa<triton::LoadOp>(op) || isa<triton::StoreOp>(op)) {
@@ -418,8 +420,8 @@ public:
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         return rewriteYieldOp(builder, yieldOp, eraser);
       } else {
-        llvm_unreachable("Currently we only support tile pointer usages inside"
-                         "a `scf::ForOp`, others such as `scf::IfOp`,"
+        llvm_unreachable("Currently we only support tensor pointer usages "
+                         "inside a `scf::ForOp`, others such as `scf::IfOp`,"
                          "`scf::WhileOp`, `cf::BranchOp` or `cf::CondBranchOp` "
                          "are not supported yet");
       }
@@ -461,8 +463,8 @@ public:
     // in this way, we also have to define `PackTuple` and `UnpackTuple`
     // operations and make a canonicalization pass to optimize, which is much
     // So here we recursively build the IR, to be specific, we have to rewrite
-    // `tt.make_tile_ptr`, `tt.advance`, `tt.load`, `tt.store`,
-    // `scf.for` (tile-based semantics may be in a loop fashion)
+    // `tt.make_tensor_ptr`, `tt.advance`, `tt.load`, `tt.store`,
+    // `scf.for` (tensor pointer usages may be in a loop fashion)
     std::stack<Operation *> eraser;
     visitOperation(getOperation(), eraser);
 
@@ -478,6 +480,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-triton::createRewriteTiledLoadStorePass(int computeCapability) {
-  return std::make_unique<RewriteTiledLoadStorePass>(computeCapability);
+triton::createRewriteTensorPointerPass(int computeCapability) {
+  return std::make_unique<RewriteTensorPointerPass>(computeCapability);
 }

@@ -6,18 +6,18 @@ import triton.language as tl
 
 
 @triton.jit
-def tile_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr):
+def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    a_tile_ptr = tl.make_tile_ptr(base=a_ptr, shape=(N, ), strides=(1, ), offsets=(pid * BLOCK_SIZE, ),
-                                  tile_shape=(BLOCK_SIZE, ), order=(0, ))
-    b_tile_ptr = tl.make_tile_ptr(base=b_ptr, shape=(N, ), strides=(1, ), offsets=(pid * BLOCK_SIZE, ),
-                                  tile_shape=(BLOCK_SIZE, ), order=(0, ))
-    a = tl.load(a_tile_ptr, boundary_check=(0, ), padding_option="zero")
-    tl.store(b_tile_ptr, a, boundary_check=(0, ))
+    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(N, ), strides=(1, ), offsets=(pid * BLOCK_SIZE, ),
+                                    block_shape=(BLOCK_SIZE, ), order=(0, ))
+    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(N, ), strides=(1, ), offsets=(pid * BLOCK_SIZE, ),
+                                    block_shape=(BLOCK_SIZE, ), order=(0, ))
+    a = tl.load(a_block_ptr, boundary_check=(0, ), padding_option="zero")
+    tl.store(b_block_ptr, a, boundary_check=(0, ))
 
 
 @pytest.mark.parametrize('n', [64, 128, 256, 512, 1024])
-def test_tile_copy(n):
+def test_block_copy(n):
     capability = torch.cuda.get_device_capability()
     if capability[0] >= 9:
         pytest.skip('Hopper support is working in progress')
@@ -26,7 +26,7 @@ def test_tile_copy(n):
     b = torch.zeros((n, ), device='cuda', dtype=torch.float16)
 
     grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)
-    tile_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64)
+    block_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64)
     assert torch.all(a == b)
 
 
@@ -41,17 +41,16 @@ def matmul_no_scf_with_advance_kernel(
 ):
     offs_m = tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
-    a_tile_ptr = tl.make_tile_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-                                  offsets=(0, 0), tile_shape=(BLOCK_M, BLOCK_K), order=(1, 0))
-    b_tile_ptr = tl.make_tile_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
-                                  offsets=(0, 0), tile_shape=(BLOCK_K, BLOCK_N), order=(1, 0))
-    a_tile_ptr = tl.advance(a_tile_ptr, (BLOCK_M, -BLOCK_K))
-    a_tile_ptr = tl.advance(a_tile_ptr, (-BLOCK_M, BLOCK_K))
-    a = tl.load(a_tile_ptr, boundary_check=(1, ), padding_option="zero")
-    b = tl.load(b_tile_ptr, boundary_check=(0, ), padding_option="zero")
+    a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+                                    offsets=(0, 0), block_shape=(BLOCK_M, BLOCK_K), order=(1, 0))
+    b_block_ptr = tl.make_block_ptr(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
+                                    offsets=(0, 0), block_shape=(BLOCK_K, BLOCK_N), order=(1, 0))
+    a_block_ptr = tl.advance(a_block_ptr, (BLOCK_M, -BLOCK_K))
+    a_block_ptr = tl.advance(a_block_ptr, (-BLOCK_M, BLOCK_K))
+    a = tl.load(a_block_ptr, boundary_check=(1, ), padding_option="zero")
+    b = tl.load(b_block_ptr, boundary_check=(0, ), padding_option="zero")
 
     c = tl.dot(a, b)
-    # TODO(Chenggang): support store
     c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
     tl.store(c_ptrs, c)
 
@@ -65,7 +64,7 @@ def matmul_no_scf_with_advance_kernel(
     ]
     for num_warps in [4, 8]
 ])
-def test_tile_ptr_matmul_no_scf(shape, num_warps):
+def test_block_ptr_matmul_no_scf(shape, num_warps):
     capability = torch.cuda.get_device_capability()
     if capability[0] >= 9:
         pytest.skip('Hopper support is working in progress')

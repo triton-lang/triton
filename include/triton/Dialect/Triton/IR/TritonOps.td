@@ -111,7 +111,7 @@ def TT_AdvanceOp : TT_Op<"advance",
                          [Pure,
                           TypesMatchWith<"result type matches ptr type",
                                          "result", "ptr", "$_self">]> {
-    let summary = "Advance a tile pointer by offsets";
+    let summary = "Advance a tensor pointer by offsets";
 
     let arguments = (ins TT_Ptr:$ptr, Variadic<I32>:$offsets);
 
@@ -137,7 +137,7 @@ def TT_LoadOp : TT_Op<"load",
                        TypesMatchWith<"infer other type from result type or none",
                                       "result", "other", "$_self",
                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
-    let summary = "Load from a tensor of pointers or from a tile-based pointer";
+    let summary = "Load from a tensor of pointers or from a tensor pointer";
 
     let arguments = (ins TT_PtrLike:$ptr, Optional<TT_BoolLike>:$mask, Optional<TT_Type>:$other,
                          OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck, OptionalAttr<TT_PaddingOptionAttr>:$padding,
@@ -149,7 +149,7 @@ def TT_LoadOp : TT_Op<"load",
         // A tensor of pointers or a pointer to a scalar
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A tile pointer with boundary check and padding
+        // A tensor pointer with boundary check and padding
         OpBuilder<(ins "Value":$ptr, "ArrayRef<int32_t>":$boundaryCheck,
                        "Optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
@@ -166,7 +166,7 @@ def TT_LoadOp : TT_Op<"load",
     ];
 
     // Format: `tt.load operands attrs : optional(type(ptr)) -> type(result)`
-    // We need an extra `optional(type(ptr))` for inferring the tile pointer type with back compatibility
+    // We need an extra `optional(type(ptr))` for inferring the tensor pointer type with back compatibility
     let hasCustomAssemblyFormat = 1;
 
     let hasCanonicalizer = 1;
@@ -183,7 +183,7 @@ def TT_StoreOp : TT_Op<"store",
                         TypesMatchWith<"infer mask type from value type",
                                        "value", "mask", "getI1SameShape($_self)",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
-    let summary = "Store by a tensor of pointers or by a tile-based pointer";
+    let summary = "Store by a tensor of pointers or by a tensor pointer";
 
     let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
                          OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
@@ -196,13 +196,13 @@ def TT_StoreOp : TT_Op<"store",
         // A tensor of pointers or a pointer to a scalar with mask
         OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict)>,
-        // A tile pointer with boundary check
+        // A tensor pointer with boundary check
         OpBuilder<(ins "Value":$ptr, "Value":$value, "ArrayRef<int32_t>":$boundaryCheck, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict)>
     ];
 
     // Format: `tt.store operands attrs : optional(type(ptr)), type(val)
-    // We need an extra `optional(type(ptr))` for inferring the tile pointer type with back compatibility
+    // We need an extra `optional(type(ptr))` for inferring the tensor pointer type with back compatibility
     let hasCustomAssemblyFormat = 1;
 
     let hasCanonicalizer = 1;
@@ -477,19 +477,19 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
 }
 
 //
-// Make a Tile Pointer
+// Make a Tensor Pointer
 //
-def TT_MakeTilePtrOp : TT_Op<"make_tile_ptr",
-                             [Pure,
-                              SameVariadicOperandSize,
-                              TypesMatchWith<"infer pointer type from the result type",
-                                             "result", "base",
-                                             "getPointerType(getElementTypeOfTilePointerType($_self))">]> {
-  let summary = "Make a tile pointer type with meta information of the parent tensor and the tile";
+def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
+                               [Pure,
+                                SameVariadicOperandSize,
+                                TypesMatchWith<"infer pointer type from the result type",
+                                               "result", "base",
+                                               "getPointerType(getElementTypeOfTensorPointerType($_self))">]> {
+  let summary = "Make a tensor pointer type with meta information of the parent tensor and the block specified";
 
   let description = [{
-      `tt.make_tile_ptr` takes both meta information of the parent tensor and the tile and returns a pointer to a tile,
-      e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
+      `tt.make_tensor_ptr` takes both meta information of the parent tensor and the block tensor, then it returns a
+      pointer to the block tensor, e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
   }];
 
   let arguments = (ins
@@ -511,7 +511,7 @@ def TT_MakeTilePtrOp : TT_Op<"make_tile_ptr",
         "ValueRange":$shape,
         "ValueRange":$strides,
         "ValueRange":$offsets,
-        "ArrayRef<int64_t>":$tile_shape,
+        "ArrayRef<int64_t>":$tensorShape,
         "ArrayRef<int32_t>":$order
     )>
   ];

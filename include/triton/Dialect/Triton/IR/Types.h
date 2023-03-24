@@ -12,7 +12,7 @@ namespace mlir {
 
 unsigned getPointeeBitWidth(RankedTensorType tensorTy);
 
-bool isTilePointerType(Type type);
+bool isTensorPointerType(Type type);
 
 } // namespace mlir
 

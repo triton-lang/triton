@@ -1100,10 +1100,10 @@ def optimize_triton_ir(mod):
 
 
 def ttir_compute_capability_rewrite(mod, compute_capability):
-    # For hardware without support, we must rewrite all tile-based load/store into legacy load/store
+    # For hardware without support, we must rewrite all load/store with block (tensor) pointers into legacy load/store
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_rewrite_tiled_load_store_pass(compute_capability)
+    pm.add_rewrite_tensor_pointer_pass(compute_capability)
     pm.run(mod)
     return mod
 

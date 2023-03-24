@@ -884,8 +884,8 @@ def dot(input, other, allow_tf32=True, out_dtype=float32, _builder=None):
 
 
 @builtin
-def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-         volatile=False, _builder=None):
+def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option="", cache_modifier="",
+         eviction_policy="", volatile=False, _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
         (1) `pointer` could be a single element pointer, then a scalar will be loaded
@@ -896,14 +896,14 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
             - `mask` and `other` are implicitly broadcast to `pointer.shape`
             - `other` is implicitly typecast to `pointer.dtype.element_ty`
             - `boundary_check` and `padding_option` must be empty
-        (3) `pointer` could be tile-based descriptor defined by `make_tile_ptr`, in which case:
+        (3) `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
             - `mask` and `other` must be None
             - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access
 
     :param pointer: Pointer to the data to be loaded
     :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
     :param mask: if `mask[idx]` is false, do not load the data at address `pointer[idx]`
-        (must be `None` while tile-based)
+        (must be `None` with block pointers)
     :type mask: Block of `triton.int1`, optional
     :param other: if `mask[idx]` is false, return `other[idx]`
     :type other: Block, optional
@@ -940,7 +940,7 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
         (2) `pointer` could be element-wise tensor of pointers, in which case:
             - `mask` is implicitly broadcast to `pointer.shape`
             - `boundary_check` must be empty
-        (3) or `pointer` could be tile-based descriptor defined by `make_tile_ptr`, in which case:
+        (3) or `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
             - `mask` must be None
             - `boundary_check` can be specified to control the behavior of out-of-bound access
     `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
@@ -1428,26 +1428,26 @@ def device_assert(cond, msg="", _builder=None):
 
 
 @builtin
-def make_tile_ptr(base: tensor, shape, strides, offsets, tile_shape, order, _builder=None):
+def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _builder=None):
     """
-    Returns a pointer to a tile in a tensor.
+    Returns a pointer to a block in a parent tensor
 
-    :param base: The base pointer to the parent tensor.
-    :param shape: The shape of the parent tensor.
-    :param strides: The strides of the parent tensor.
-    :param offsets: The offsets to the tile.
-    :param tile_shape: The shape of the tile.
-    :param order: The order of the original data format.
+    :param base: The base pointer to the parent tensor
+    :param shape: The shape of the parent tensor
+    :param strides: The strides of the parent tensor
+    :param offsets: The offsets to the block
+    :param block_shape: The shape of the block
+    :param order: The order of the original data format
     """
-    return semantic.make_tile_ptr(base, shape, strides, offsets, tile_shape, order, _builder)
+    return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
 
 
 @builtin
 def advance(base: tensor, offsets, _builder=None):
     """
-    Advance a tile pointer
+    Advance a block pointer
 
-    :param base: the tile pointer to advance
+    :param base: the block pointer to advance
     :param offsets: the offsets to advance, a tuple by dimension
     """
     return semantic.advance(base, offsets, _builder)

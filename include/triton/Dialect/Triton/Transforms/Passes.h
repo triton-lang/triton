@@ -9,7 +9,7 @@ namespace triton {
 std::unique_ptr<Pass> createCombineOpsPass();
 
 std::unique_ptr<Pass>
-createRewriteTiledLoadStorePass(int computeCapability = 80);
+createRewriteTensorPointerPass(int computeCapability = 80);
 
 } // namespace triton
 

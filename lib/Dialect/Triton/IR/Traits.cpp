@@ -5,14 +5,14 @@
 using namespace mlir;
 
 static LogicalResult verifySameEncoding(Type typeA, Type typeB,
-                                        bool allowTilePointerType) {
+                                        bool allowTensorPointerType) {
   auto getEncoding = [=](Type type) -> Attribute {
     auto rankedType = type.dyn_cast<RankedTensorType>();
-    if (allowTilePointerType) {
+    if (allowTensorPointerType) {
       if (auto ptrType = type.dyn_cast<triton::PointerType>())
         rankedType = ptrType.getPointeeType().dyn_cast<RankedTensorType>();
     } else {
-      assert(!isTilePointerType(type));
+      assert(!isTensorPointerType(type));
     }
     return rankedType ? rankedType.getEncoding() : Attribute();
   };
@@ -25,13 +25,13 @@ static LogicalResult verifySameEncoding(Type typeA, Type typeB,
 
 LogicalResult
 OpTrait::impl::verifySameOperandsEncoding(Operation *op,
-                                          bool allowTilePointerType) {
+                                          bool allowTensorPointerType) {
   if (failed(verifyAtLeastNOperands(op, 1)))
     return failure();
 
   auto type = op->getOperand(0).getType();
   for (auto opType : llvm::drop_begin(op->getOperandTypes(), 1))
-    if (failed(verifySameEncoding(opType, type, allowTilePointerType)))
+    if (failed(verifySameEncoding(opType, type, allowTensorPointerType)))
       return op->emitOpError() << "requires the same encoding for all operands";
 
   return success();
@@ -39,18 +39,18 @@ OpTrait::impl::verifySameOperandsEncoding(Operation *op,
 
 LogicalResult
 OpTrait::impl::verifySameOperandsAndResultEncoding(Operation *op,
-                                                   bool allowTilePointerType) {
+                                                   bool allowTensorPointerType) {
   if (failed(verifyAtLeastNOperands(op, 1)) ||
       failed(verifyAtLeastNResults(op, 1)))
     return failure();
 
   auto type = op->getOperand(0).getType();
   for (auto resultType : op->getResultTypes())
-    if (failed(verifySameEncoding(resultType, type, allowTilePointerType)))
+    if (failed(verifySameEncoding(resultType, type, allowTensorPointerType)))
       return op->emitOpError()
              << "requires the same encoding for all operands and results";
 
-  return verifySameOperandsEncoding(op, allowTilePointerType);
+  return verifySameOperandsEncoding(op, allowTensorPointerType);
 }
 
 LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
@@ -125,7 +125,7 @@ OpTrait::impl::verifySameLoadStoreOperandsAndResultShape(Operation *op) {
 
 bool OpTrait::impl::verifyLoadStorePointerAndValueType(Type valueType,
                                                        Type ptrType) {
-  if (isTilePointerType(ptrType)) {
+  if (isTensorPointerType(ptrType)) {
     return ptrType.cast<triton::PointerType>().getPointeeType() == valueType;
   } else if (auto rankedType = ptrType.dyn_cast<RankedTensorType>()) {
     if (auto elementPtrType =
