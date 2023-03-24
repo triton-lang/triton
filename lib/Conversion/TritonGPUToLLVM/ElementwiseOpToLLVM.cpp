@@ -1012,7 +1012,7 @@ struct ExpOpConversionApprox
 };
 
 struct AbsIOpConversion
-  : ElementwiseOpConversionBase<mlir::math::AbsIOp, AbsIOpConversion> {
+    : ElementwiseOpConversionBase<mlir::math::AbsIOp, AbsIOpConversion> {
   using Base =
       ElementwiseOpConversionBase<mlir::math::AbsIOp, AbsIOpConversion>;
   using Base::Base;
@@ -1023,13 +1023,13 @@ struct AbsIOpConversion
                      ValueRange operands, Location loc) const {
     auto boolFalse = rewriter.getBoolAttr(false);
     auto constFalse = rewriter.create<LLVM::ConstantOp>(loc, boolFalse);
-    return rewriter.create<LLVM::AbsOp>(
-        loc, elemTy, operands[0], /*is_int_min_poison=*/constFalse);
+    return rewriter.create<LLVM::AbsOp>(loc, elemTy, operands[0],
+                                        /*is_int_min_poison=*/constFalse);
   }
 };
 
 struct AbsFOpConversion
-  : ElementwiseOpConversionBase<mlir::math::AbsFOp, AbsFOpConversion> {
+    : ElementwiseOpConversionBase<mlir::math::AbsFOp, AbsFOpConversion> {
   using Base =
       ElementwiseOpConversionBase<mlir::math::AbsFOp, AbsFOpConversion>;
   using Base::Base;
