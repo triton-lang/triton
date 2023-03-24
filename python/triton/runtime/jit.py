@@ -198,6 +198,9 @@ class JITFunction(KernelInterface[T]):
             "uint32": "u32",
             "uint64": "u64",
         }
+        # reinterpret can create triton type
+        for v in list(tys.values()):
+            tys[v] = v
         return key if isinstance(key, str) else f"*{tys[dtype_str]}"
 
     def _make_signature(self, sig_key):
