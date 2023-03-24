@@ -122,6 +122,7 @@ struct LoadOpConversion
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNbits;
+      const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
       // TODO(Superjomn) Add cache policy fields to StoreOp.
@@ -137,11 +138,18 @@ struct LoadOpConversion
       const std::string writeConstraint =
           (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
 
+      PTXInstr &init =
+          ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
+      PTXInstr::Operand *zero = ptxBuilder.newConstantOperand(0);
+
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         auto *opr = ptxBuilder.newOperand(writeConstraint); // =r operations
         dstsOpr->listAppend(opr);
+        // Initialize the destination register, otherwise the register will
+        // be undefined if the predicate is false.
+        init(opr, zero);
       }
 
       auto *addrOpr =
@@ -175,7 +183,6 @@ struct LoadOpConversion
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           // PTX doesn't support mov.u8, so we need to use mov.u16
-          auto movWidth = width < 16 ? 16 : width;
           PTXInstr &mov =
               ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
 
@@ -192,9 +199,12 @@ struct LoadOpConversion
           v = bitcast(v, IntegerType::get(getContext(), width));
 
           PTXInstr::Operand *opr{};
-          if (otherIsSplatConstInt)
+
+          if (otherIsSplatConstInt) {
+            for (size_t s = 0; s < 32; s += valueElemNbits)
+              splatVal |= splatVal << valueElemNbits;
             opr = ptxBuilder.newConstantOperand(splatVal);
-          else
+          } else
             opr = ptxBuilder.newOperand(v, readConstraint);
 
           mov(dstsOpr->listGet(ii), opr).predicateNot(pred, "b");
