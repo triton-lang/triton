@@ -154,12 +154,11 @@ class CMakeBuild(build_ext):
                 "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
             )
 
-        if platform.system() == "Windows":
-            cmake_version = packaging.version.parse(
-                re.search(r"version\s*([\d.]+)", out.decode()).group(1)
-            )
-            if cmake_version < packaging.version.parse("3.1.0"):
-                raise RuntimeError("CMake >= 3.1.0 is required on Windows")
+        cmake_version = packaging.version.parse(
+            re.search(r"version\s*(?P<version>[\d.]+)", out.decode()).group("version")
+        )
+        if cmake_version < packaging.version.parse("3.18.0"):
+            raise RuntimeError("CMake >= 3.18.0 is required")
 
         for ext in self.extensions:
             self.build_extension(ext)
