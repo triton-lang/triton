@@ -8,10 +8,10 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-from distutils.version import LooseVersion
 from pathlib import Path
 from typing import NamedTuple
 
+import packaging.version
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
@@ -155,8 +155,10 @@ class CMakeBuild(build_ext):
             )
 
         if platform.system() == "Windows":
-            cmake_version = LooseVersion(re.search(r"version\s*([\d.]+)", out.decode()).group(1))
-            if cmake_version < "3.1.0":
+            cmake_version = packaging.version.parse(
+                re.search(r"version\s*([\d.]+)", out.decode()).group(1)
+            )
+            if cmake_version < packaging.version.parse("3.1.0"):
                 raise RuntimeError("CMake >= 3.1.0 is required on Windows")
 
         for ext in self.extensions:
