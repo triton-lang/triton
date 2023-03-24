@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 import setuptools
+import torch
 from filelock import FileLock
 
 import triton
@@ -1136,7 +1137,7 @@ def ttgir_to_llir(mod, extern_libs, compute_capability):
     return _triton.translate_triton_gpu_to_llvmir(mod, compute_capability)
 
 
-def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> Tuple[str, int]:
+def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> str:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -1668,8 +1669,8 @@ def _get_jsonable_constants(constants):
 def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
     if capability is None:
-        device = triton.runtime.jit.get_current_device()
-        capability = triton.runtime.jit.get_device_capability(device)
+        device = torch.cuda.current_device()
+        capability = torch.cuda.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
     # we get the kernel, i.e. the first function generated in the module
     # if fn is not a JITFunction, then it
@@ -1804,7 +1805,7 @@ class CompiledKernel:
     def _init_handles(self):
         if self.cu_module is not None:
             return
-        device = triton.runtime.jit.get_current_device()
+        device = torch.cuda.current_device()
         global cuda_utils
         init_cuda_utils()
         max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
@@ -1826,7 +1827,7 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             if stream is None:
-                stream = triton.runtime.jit.get_cuda_stream()
+                stream = torch.cuda.current_stream().cuda_stream
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
