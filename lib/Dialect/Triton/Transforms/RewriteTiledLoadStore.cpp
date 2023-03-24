@@ -167,7 +167,7 @@ public:
         base.getType().cast<triton::PointerType>().getPointeeType();
     auto otherTensorType = RankedTensorType::get(tileShape, elementType);
     auto floatAttr = builder.getFloatAttr(elementType, 0);
-    // TODO(Chenggang): add tests to check alignment with TMA
+    // TODO(Chenggang): add tests to check alignment later
     if (padding.value() == triton::PaddingOption::PAD_NAN) {
       auto apNaN = llvm::APFloat::getNaN(floatAttr.getValue().getSemantics());
       floatAttr = builder.getFloatAttr(elementType, apNaN);
@@ -445,10 +445,13 @@ public:
 
   void runOnOperation() override {
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
-    // MLIR does not support one-multiple value mapping. If we convert the
-    // result of `tt.make_tile_ptr` into `tuple<base, strides, offsets>`,
-    // we have to define pack and unpack operations for this tuple type,
-    // which is much more effort.
+    // MLIR does not support one-multiple value mapping. For example, if we use
+    // `ConversionPatternRewriter`, we can not make a type converter, which
+    // converts `ptr<tensor>` into multiple types `ptr<>, int64, int64, ...`
+    // (containing the base/offsets/strides...). What we can do is to convert
+    // `ptr<tensor>` into a single type `Tuple<ptr<>, int64, int64, ...>`. But
+    // in this way, we also have to define `PackTuple` and `UnpackTuple`
+    // operations and make a canonicalization pass to optimize, which is much
     // So here we recursively build the IR, to be specific, we have to rewrite
     // `tt.make_tile_ptr`, `tt.advance`, `tt.load`, `tt.store`,
     // `scf.for` (tile-based semantics may be in a loop fashion)

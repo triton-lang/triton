@@ -87,7 +87,7 @@ ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
                              result.operands))
     return failure();
 
-  // Deduce `operand_segment_sizes` from the number of the operands
+  // Deduce `operandSegmentSizes` from the number of the operands
   auto operandSegmentSizesAttrName =
       LoadOp::getOperandSegmentSizesAttrName(result.name);
   result.addAttribute(
@@ -101,7 +101,7 @@ void LoadOp::print(OpAsmPrinter &printer) {
   printer << " ";
   printer << getOperation()->getOperands();
 
-  // `operand_segment_sizes` can be deduced, so we don't print it.
+  // `operandSegmentSizes` can be deduced, so we don't print it.
   printer.printOptionalAttrDict(getOperation()->getAttrs(),
                                 {getOperandSegmentSizesAttrName()});
 

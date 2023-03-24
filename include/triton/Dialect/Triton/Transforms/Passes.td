@@ -23,8 +23,8 @@ def TritonRewriteTiledLoadStore : Pass</*cli-arg*/"triton-rewrite-tiled-load-sto
   let summary = "Rewrite tiled load/stores into legacy load/stores";
   let description = [{
     This pass rewrites all load/store semantics initiated by a `tt.make_tile_ptr` and `tt.advance` into legacy
-    semantics for non-TMA supported architectures. After this pass, `tt.make_tile_ptr` and `tt.advance` will disappear,
-    and it generates logics to compute the pointer/mask/other for each load/store.
+    semantics. After this pass, `tt.make_tile_ptr` and `tt.advance` will disappear, and it generates logics to compute
+    the pointer/mask/other for each load/store.
   }];
 
   let constructor = "mlir::triton::createRewriteTiledLoadStorePass()";
