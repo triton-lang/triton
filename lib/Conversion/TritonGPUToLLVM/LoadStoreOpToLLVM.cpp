@@ -199,9 +199,12 @@ struct LoadOpConversion
           v = bitcast(v, IntegerType::get(getContext(), width));
 
           PTXInstr::Operand *opr{};
-          if (otherIsSplatConstInt)
+
+          if (otherIsSplatConstInt) {
+            for (size_t s = 0; s < 32; s += valueElemNbits)
+              splatVal |= splatVal << valueElemNbits;
             opr = ptxBuilder.newConstantOperand(splatVal);
-          else
+          } else
             opr = ptxBuilder.newOperand(v, readConstraint);
 
           mov(dstsOpr->listGet(ii), opr).predicateNot(pred, "b");

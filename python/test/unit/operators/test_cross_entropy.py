@@ -2,6 +2,7 @@ import pytest
 import torch
 
 import triton
+import triton.ops
 
 
 @pytest.mark.parametrize("M, N, dtype, mode",
@@ -24,7 +25,7 @@ def test_op(M, N, dtype, mode):
     tt_y = triton.ops.cross_entropy(x, idx)
     th_y = torch.nn.CrossEntropyLoss(reduction="none")(x, idx)
     if mode == 'forward':
-        triton.testing.assert_almost_equal(th_y, tt_y)
+        torch.testing.assert_allclose(th_y, tt_y)
     # backward pass
     elif mode == 'backward':
         dy = torch.randn_like(tt_y)
@@ -35,4 +36,4 @@ def test_op(M, N, dtype, mode):
         x.grad.zero_()
         th_y.backward(dy)
         th_dx = x.grad.clone()
-        triton.testing.assert_almost_equal(th_dx, tt_dx)
+        torch.testing.assert_allclose(th_dx, tt_dx)
