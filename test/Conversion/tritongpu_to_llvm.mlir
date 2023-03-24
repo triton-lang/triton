@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --convert-triton-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm | FileCheck %s
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<f16, 1>)
@@ -1136,11 +1136,13 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: test_index_cache_different_block
   func.func @test_index_cache_different_block(%arg0: tensor<128x32xf32, #blocked0>, %arg1: i1) {
     // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
     %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
-    scf.if %arg1 {
-      // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
-      %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
-    }
-    return
+    cf.cond_br %arg1, ^bb1, ^bb2
+    ^bb1:  // pred: ^bb0
+      %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked>) -> tensor<128x32xf32, #shared>
+      cf.br ^bb2
+    ^bb2:  // 2 preds: ^bb0, ^bb1
+      return
   }
 }
