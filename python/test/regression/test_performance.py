@@ -6,6 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
+import triton.ops
 from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
 
 DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
