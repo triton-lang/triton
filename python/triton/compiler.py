@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 import setuptools
-import torch
 from filelock import FileLock
 
 import triton
