@@ -1482,8 +1482,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createCombineOpsPass());
            })
       .def("add_rewrite_tiled_load_store_pass",
-           [](mlir::PassManager &self) {
-             self.addPass(mlir::triton::createRewriteTiledLoadStorePass());
+           [](mlir::PassManager &self, int computeCapability) {
+             self.addPass(mlir::triton::createRewriteTiledLoadStorePass(
+                 computeCapability));
            })
       .def("add_convert_triton_to_tritongpu_pass",
            [](mlir::PassManager &self, int numWarps) {

@@ -30,6 +30,12 @@ def TritonRewriteTiledLoadStore : Pass</*cli-arg*/"triton-rewrite-tiled-load-sto
   let constructor = "mlir::triton::createRewriteTiledLoadStorePass()";
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"80",
+           "device compute capability">
+  ];
 }
 
 #endif

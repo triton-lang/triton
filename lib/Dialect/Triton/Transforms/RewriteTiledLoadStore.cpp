@@ -182,9 +182,13 @@ public:
 class RewriteTiledLoadStorePass
     : public TritonRewriteTiledLoadStoreBase<RewriteTiledLoadStorePass> {
 private:
+  int computeCapability;
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
 public:
+  explicit RewriteTiledLoadStorePass(int computeCapability)
+      : computeCapability(computeCapability) {}
+
   static bool needRewrite(Operation *op) {
     return std::any_of(
         op->getOperands().begin(), op->getOperands().end(),
@@ -444,6 +448,10 @@ public:
   }
 
   void runOnOperation() override {
+    // Only rewrite if the hardware does not support
+    if (computeCapability >= 90)
+      return;
+
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
     // MLIR does not support one-multiple value mapping. For example, if we use
     // `ConversionPatternRewriter`, we can not make a type converter, which
@@ -469,6 +477,7 @@ public:
   }
 };
 
-std::unique_ptr<Pass> triton::createRewriteTiledLoadStorePass() {
-  return std::make_unique<RewriteTiledLoadStorePass>();
+std::unique_ptr<Pass>
+triton::createRewriteTiledLoadStorePass(int computeCapability) {
+  return std::make_unique<RewriteTiledLoadStorePass>(computeCapability);
 }

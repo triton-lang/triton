@@ -1100,12 +1100,11 @@ def optimize_triton_ir(mod):
 
 
 def ttir_compute_capability_rewrite(mod, compute_capability):
-    if compute_capability // 10 < 9:
-        # For hardware without support, we must rewrite all tile-based loads into normal loads
-        pm = _triton.ir.pass_manager(mod.context)
-        pm.enable_debug()
-        pm.add_rewrite_tiled_load_store_pass()
-        pm.run(mod)
+    # For hardware without support, we must rewrite all tile-based load/store into legacy load/store
+    pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
+    pm.add_rewrite_tiled_load_store_pass(compute_capability)
+    pm.run(mod)
     return mod
 
 
