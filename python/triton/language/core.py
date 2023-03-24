@@ -1106,6 +1106,7 @@ def sin(x, _builder=None):
 def sqrt(x, _builder=None):
     return semantic.sqrt(x, _builder)
 
+
 @builtin
 @_add_math_1arg_docstr("absolute value")
 def abs(x, _builder=None):

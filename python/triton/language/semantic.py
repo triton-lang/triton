@@ -1222,6 +1222,7 @@ def sin(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_sqrt(x.handle), x.type)
 
+
 def abs(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     dtype = x.dtype
     if dtype.is_floating():
