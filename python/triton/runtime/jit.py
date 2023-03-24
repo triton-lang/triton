@@ -14,10 +14,12 @@ import triton
 from triton.utils import MockTensor
 
 
-def get_cuda_stream(idx):
+def get_cuda_stream(idx = None):
+    if idx is None:
+        idx = get_current_device()
     try:
-        from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
-        return get_cuda_stream(idx)
+        from torch._C import _cuda_getCurrentRawStream
+        return _cuda_getCurrentRawStream(idx)
     except ImportError:
         import torch
         return torch.cuda.current_stream(idx).cuda_stream

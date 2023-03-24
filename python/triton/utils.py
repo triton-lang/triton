@@ -24,9 +24,8 @@ class MockTensor:
     """
     @staticmethod
     def wrap_dtype(arg):
-        arg_module = arg.__module__
-        arg_class = arg.__class__.__name__
-        if arg_module == "torch" and arg_class == "dtype":
+        if arg.__class__.__name__ == "dtype" and\
+           arg.__module__ == "torch":
             return MockTensor(arg)
         return arg
 

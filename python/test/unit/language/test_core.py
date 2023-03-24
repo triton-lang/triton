@@ -1511,7 +1511,7 @@ def test_masked_load(dtype_str, size, size_diff, device='cuda'):
     kernel[(1,)](input, output, input_size, output_size)
 
     reference_out = torch.cat((input, torch.ones((size_diff,), dtype=dtype, device=device)))
-    np.testing.assert_allclose(output.cpu(), reference_out.cpu())
+    torch.testing.assert_allclose(output, reference_out)
 
 # Testing masked loads with an intermate copy to shared memory run.
 
@@ -1562,7 +1562,7 @@ def test_masked_load_shared_memory(dtype, device='cuda'):
                         M=M, N=N, K=K)
 
     reference_out = torch.matmul(in1, in2)
-    np.testing.assert_allclose(out, reference_out)
+    torch.testing.assert_allclose(out, reference_out)
 
 
 @pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
