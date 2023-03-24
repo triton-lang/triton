@@ -116,7 +116,6 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
   }
   std::filesystem::path kernel_dir(unique_dir.data());
   std::string kernel_name = kernel_dir.stem();
-  
 
   // Save GCN ISA binary.
   std::filesystem::path isa_binary(kernel_name + ".o");
