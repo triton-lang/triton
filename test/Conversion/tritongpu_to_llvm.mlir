@@ -1140,7 +1140,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
     cf.cond_br %arg1, ^bb1, ^bb2
     ^bb1:  // pred: ^bb0
-      %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked>) -> tensor<128x32xf32, #shared>
+      %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
       cf.br ^bb2
     ^bb2:  // 2 preds: ^bb0, ^bb1
       return
