@@ -534,7 +534,8 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
 //-- MakeTensorPtrOp --
 void MakeTensorPtrOp::build(::mlir::OpBuilder &builder,
                             ::mlir::OperationState &state, ::mlir::Value base,
-                            ::mlir::ValueRange shape, ::mlir::ValueRange strides,
+                            ::mlir::ValueRange shape,
+                            ::mlir::ValueRange strides,
                             ::mlir::ValueRange offsets,
                             ArrayRef<int64_t> tensorShape,
                             ArrayRef<int32_t> order) {

@@ -89,7 +89,8 @@ class SameLoadStoreOperandsEncoding
     : public TraitBase<ConcreteType, SameLoadStoreOperandsEncoding> {
 public:
   static LogicalResult verifyTrait(Operation *op) {
-    return impl::verifySameOperandsEncoding(op, /*allowTensorPointerType=*/true);
+    return impl::verifySameOperandsEncoding(op,
+                                            /*allowTensorPointerType=*/true);
   }
 };
 

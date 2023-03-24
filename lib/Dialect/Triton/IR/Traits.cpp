@@ -1,5 +1,6 @@
-#include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/Triton/IR/Traits.h"
+
+#include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
 using namespace mlir;
@@ -37,9 +38,8 @@ OpTrait::impl::verifySameOperandsEncoding(Operation *op,
   return success();
 }
 
-LogicalResult
-OpTrait::impl::verifySameOperandsAndResultEncoding(Operation *op,
-                                                   bool allowTensorPointerType) {
+LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
+    Operation *op, bool allowTensorPointerType) {
   if (failed(verifyAtLeastNOperands(op, 1)) ||
       failed(verifyAtLeastNResults(op, 1)))
     return failure();
@@ -94,16 +94,14 @@ static ArrayRef<int64_t> getTypeShape(Type type) {
   return rankedType ? rankedType.getShape() : ArrayRef<int64_t>();
 }
 
-LogicalResult
-OpTrait::impl::verifySameLoadStoreOperandsShape(Operation *op) {
+LogicalResult OpTrait::impl::verifySameLoadStoreOperandsShape(Operation *op) {
   if (failed(verifyAtLeastNOperands(op, 1)))
     return failure();
 
   auto firstOperandShape = getTypeShape(op->getOperand(0).getType());
   for (auto type : llvm::drop_begin(op->getOperandTypes(), 1))
     if (failed(verifyCompatibleShape(getTypeShape(type), firstOperandShape)))
-      return op->emitOpError()
-             << "requires the same shape for all operands";
+      return op->emitOpError() << "requires the same shape for all operands";
 
   return success();
 }

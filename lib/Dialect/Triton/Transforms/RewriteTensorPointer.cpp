@@ -123,7 +123,8 @@ public:
       return {};
 
     // Generate mask per dimension
-    auto maskTensorType = RankedTensorType::get(tensorShape, builder.getI1Type());
+    auto maskTensorType =
+        RankedTensorType::get(tensorShape, builder.getI1Type());
     Value mask;
     for (auto i : boundaryCheck.value()) {
       auto offsetWithRange = getExpandedI64OffsetWithRange(builder, loc, i);
