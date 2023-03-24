@@ -532,6 +532,33 @@ def test_math_op(expr, device='cuda'):
 def test_abs(dtype_x, device='cuda'):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
+
+@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5])
+def test_abs_f8(in_dtype):
+
+    @triton.jit
+    def abs_kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        z = tl.abs(x)
+        tl.store(Z + off, z)
+
+    f8_tensor = torch.tensor(range(-128, 128), dtype=torch.int8, device='cuda')
+    # f32_to_f8 doesn't handle nan, so we make sure f8_tensor doesn't contain any nan
+    all_exp_ones = (f8_tensor & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
+    f8_tensor[all_exp_ones] = 0
+    f8 = triton.reinterpret(f8_tensor, in_dtype)
+    n_elements = f8_tensor.numel()
+    out_f8 = torch.empty_like(f8_tensor)
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    abs_kernel[(1,)](f8, triton.reinterpret(out_f8, in_dtype), n_elements)
+
+    f32_tensor = convert_float_to_float32(f8_tensor, in_dtype)
+    expect = f32_tensor.abs()
+    actual_f8 = convert_float_to_float32(out_f8, in_dtype)
+    torch.testing.assert_allclose(expect, actual_f8)
+
+
 # ----------------
 # test indexing
 # ----------------

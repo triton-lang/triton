@@ -1036,17 +1036,19 @@ struct AbsFOpConversion
   using Adaptor = typename Base::OpAdaptor;
 
   Value createDestOp(mlir::math::AbsFOp op, OpAdaptor adaptor,
-                     ConversionPatternRewriter &rewriter, Type llElemTy,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
-    auto ttElemTy = getElementTypeOrSelf(op.getType());
-    auto bf16 = rewriter.getBF16Type();
-    if (ttElemTy == bf16) {
-      Value tmp = bitcast(operands[0], bf16);
-      tmp = rewriter.create<LLVM::FAbsOp>(loc, bf16, tmp);
-      return bitcast(tmp, llElemTy);
+    if (llvm::isa<IntegerType>(elemTy)) {
+      // Mask out the sign bit
+      auto num_bits = getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
+      assert(num_bits <= 16);
+      auto mask = (1u << (num_bits - 1u)) - 1u;
+      auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
+      auto maskConst = rewriter.create<LLVM::ConstantOp>(loc, maskAttr);
+      return and_(operands[0], maskConst);
     }
 
-    return rewriter.create<LLVM::FAbsOp>(loc, llElemTy, operands[0]);
+    return rewriter.create<LLVM::FAbsOp>(loc, elemTy, operands[0]);
   }
 };
 
