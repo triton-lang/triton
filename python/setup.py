@@ -4,9 +4,9 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
-import sysconfig
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
