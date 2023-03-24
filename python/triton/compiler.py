@@ -1141,9 +1141,7 @@ def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> s
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
-    :return:
-        - PTX code
-        - shared memory allocation size
+    :return: PTX code
     '''
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
