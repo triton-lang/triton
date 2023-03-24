@@ -14,7 +14,7 @@ import triton
 from triton.utils import MockTensor
 
 
-def get_cuda_stream(idx = None):
+def get_cuda_stream(idx=None):
     if idx is None:
         idx = get_current_device()
     try:
