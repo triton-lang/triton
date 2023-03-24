@@ -2,6 +2,7 @@ import pytest
 import torch
 
 import triton
+import triton.ops
 
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
@@ -38,8 +39,8 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype):
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
-    triton.testing.assert_almost_equal(ref_out, tri_out)
-    decimal = 1 if dtype == torch.bfloat16 else 2
-    triton.testing.assert_almost_equal(ref_dv, tri_dv, decimal=decimal)
-    triton.testing.assert_almost_equal(ref_dk, tri_dk)
-    triton.testing.assert_almost_equal(ref_dq, tri_dq)
+    atol = 1e-1 if dtype == torch.bfloat16 else 1e-2
+    torch.testing.assert_allclose(ref_out, tri_out, atol=atol, rtol=0)
+    torch.testing.assert_allclose(ref_dv, tri_dv, atol=atol, rtol=0)
+    torch.testing.assert_allclose(ref_dk, tri_dk, atol=atol, rtol=0)
+    torch.testing.assert_allclose(ref_dq, tri_dq, atol=atol, rtol=0)

@@ -4,7 +4,8 @@ repos:
       - id: isort
         name: isort
         entry: isort
-        args: ["./python"]
+        files: "python/.*"
+        exclude: "python/build/.*"
         language: python
         types: [python]
         additional_dependencies:
@@ -13,7 +14,9 @@ repos:
       - id: autopep8
         name: autopep8
         entry: autopep8
-        args: ["-a", "-r", "-i", "./python"]
+        args: ["-a", "-r", "-i"]
+        files: "python/.*"
+        exclude: "python/build/.*"
         language: python
         types: [python]
         additional_dependencies:
