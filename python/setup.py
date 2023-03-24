@@ -1,4 +1,3 @@
-import distutils
 import os
 import platform
 import re
@@ -7,6 +6,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import sysconfig
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
@@ -178,7 +178,7 @@ class CMakeBuild(build_ext):
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         # python directories
-        python_include_dir = distutils.sysconfig.get_python_inc()
+        python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
             "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
