@@ -11,7 +11,6 @@ import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
-import packaging.version
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
@@ -153,6 +152,8 @@ class CMakeBuild(build_ext):
             raise RuntimeError(
                 "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
             )
+
+        import packaging.version
 
         cmake_version = packaging.version.parse(
             re.search(r"version\s*(?P<version>[\d.]+)", out.decode()).group("version")
