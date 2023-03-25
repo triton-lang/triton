@@ -19,11 +19,13 @@ def parse_output(file_path: str) -> dict:
             batch_size = row[2]
             speedup = float(row[3])
             latency = float(row[4])
-            entries[name] = BenchmarkOutput(dev, name, batch_size, speedup, latency)
+            entries[name] = BenchmarkOutput(
+                dev, name, batch_size, speedup, latency)
     return entries
 
 
-def compare(baseline: dict, new: dict, threshold: float, geomean_threshold: float) -> bool:
+def compare(baseline: dict, new: dict, threshold: float,
+            geomean_threshold: float) -> bool:
     baseline_geomean = 1.0
     new_geomean = 1.0
     for key in new:

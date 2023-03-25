@@ -140,7 +140,14 @@ def test_jit_warmup_cache() -> None:
         32,
     ]
     assert len(kernel_add.cache) == 0
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add.warmup(
+        torch.float32,
+        torch.float32,
+        torch.float32,
+        32,
+        grid=(
+            1,
+        ))
     assert len(kernel_add.cache) == 1
     kernel_add.warmup(*args, grid=(1,))
     assert len(kernel_add.cache) == 1
@@ -158,13 +165,34 @@ def test_jit_debug() -> None:
 
     device = torch.cuda.current_device()
     assert len(kernel_add.cache[device]) == 0
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add.warmup(
+        torch.float32,
+        torch.float32,
+        torch.float32,
+        32,
+        grid=(
+            1,
+        ))
     assert len(kernel_add.cache[device]) == 1
     kernel_add.debug = False
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add.warmup(
+        torch.float32,
+        torch.float32,
+        torch.float32,
+        32,
+        grid=(
+            1,
+        ))
     assert len(kernel_add.cache[device]) == 1
     kernel_add.debug = True
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    kernel_add.warmup(
+        torch.float32,
+        torch.float32,
+        torch.float32,
+        32,
+        grid=(
+            1,
+        ))
     assert len(kernel_add.cache[device]) == 2
 
 

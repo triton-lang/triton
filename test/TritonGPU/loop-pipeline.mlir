@@ -71,7 +71,7 @@ func.func @matmul_loop(%lb : index, %ub : index, %step : index,
 
   %a_off = arith.constant dense<4> : tensor<128x32xi32, #AL>
   %b_off = arith.constant dense<4> : tensor<32x128xi32, #BL>
-  
+
   %b_scale = arith.constant dense<4.> : tensor<32x128xf16, #B>
 
   %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
@@ -162,7 +162,7 @@ func.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
     scf.yield %loop2#2 : tensor<128x128xf32, #C>
   }
   return %loop1#0 : tensor<128x128xf32, #C>
-} 
+}
 
 
 // CHECK: func.func @matmul_loop_single_pipeline
@@ -241,47 +241,47 @@ func.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_0]]
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [2, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
-#mma = #triton_gpu.mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4]}> 
-func.func @lut_bmm(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg9: i32 {tt.divisibility = 16 : i32}, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32 {tt.divisibility = 16 : i32}, %arg12: i32 {tt.divisibility = 16 : i32}, %arg13: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg14: i32 {tt.divisibility = 16 : i32}, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}) { 
-  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma> 
+#mma = #triton_gpu.mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4]}>
+func.func @lut_bmm(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg9: i32 {tt.divisibility = 16 : i32}, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32 {tt.divisibility = 16 : i32}, %arg12: i32 {tt.divisibility = 16 : i32}, %arg13: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg14: i32 {tt.divisibility = 16 : i32}, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}) {
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
   %c4_i32 = arith.constant 4 : i32
   %c1 = arith.constant 1 : index
-  %c0 = arith.constant 0 : index 
+  %c0 = arith.constant 0 : index
   %c0_i64 = arith.constant 0 : i64
   %c1_i32 = arith.constant 1 : i32
   %0 = tt.get_program_id {axis = 2 : i32} : i32
   %1 = tt.get_program_id {axis = 0 : i32} : i32
-  %2 = tt.get_program_id {axis = 1 : i32} : i32 
-  %3 = tt.get_num_programs {axis = 0 : i32} : i32 
-  %4 = tt.get_num_programs {axis = 1 : i32} : i32 
+  %2 = tt.get_program_id {axis = 1 : i32} : i32
+  %3 = tt.get_num_programs {axis = 0 : i32} : i32
+  %4 = tt.get_num_programs {axis = 1 : i32} : i32
   %5 = arith.muli %1, %4 : i32
   %6 = arith.addi %5, %2 : i32
   %7 = arith.muli %4, %c4_i32 : i32
   %8 = arith.divsi %6, %7 : i32
-  %9 = arith.muli %8, %c4_i32 : i32 
-  %10 = arith.subi %3, %9 : i32 
-  %11 = arith.cmpi slt, %10, %c4_i32 : i32 
-  %12 = arith.select %11, %10, %c4_i32 : i32 
-  %13 = arith.remsi %6, %12 : i32 
-  %14 = arith.addi %9, %13 : i32 
-  %15 = arith.remsi %6, %7 : i32 
-  %16 = arith.divsi %15, %12 : i32 
-  %17 = arith.muli %arg5, %0 : i32 
+  %9 = arith.muli %8, %c4_i32 : i32
+  %10 = arith.subi %3, %9 : i32
+  %11 = arith.cmpi slt, %10, %c4_i32 : i32
+  %12 = arith.select %11, %10, %c4_i32 : i32
+  %13 = arith.remsi %6, %12 : i32
+  %14 = arith.addi %9, %13 : i32
+  %15 = arith.remsi %6, %7 : i32
+  %16 = arith.divsi %15, %12 : i32
+  %17 = arith.muli %arg5, %0 : i32
   %18 = tt.addptr %arg4, %17 : !tt.ptr<i64>, i32
   %19 = tt.addptr %18, %14 : !tt.ptr<i64>, i32
-  %20 = tt.load %19 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : i64 
+  %20 = tt.load %19 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : i64
   %21 = tt.addptr %19, %c1_i32 : !tt.ptr<i64>, i32
-  %22 = tt.load %21 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : i64 
-  %23 = arith.subi %22, %20 : i64 
-  %24 = arith.cmpi eq, %23, %c0_i64 : i64 
+  %22 = tt.load %21 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : i64
+  %23 = arith.subi %22, %20 : i64
+  %24 = arith.cmpi eq, %23, %c0_i64 : i64
   cf.cond_br %24, ^bb1, ^bb2
 ^bb1:  // pred: ^bb0
   return
 ^bb2:  // pred: ^bb0
-  %25 = arith.muli %arg1, %0 : i32 
+  %25 = arith.muli %arg1, %0 : i32
   %26 = tt.addptr %arg0, %25 : !tt.ptr<f16>, i32
   %27 = arith.extsi %arg2 : i32 to i64
-  %28 = arith.muli %27, %20 : i64 
+  %28 = arith.muli %27, %20 : i64
   %29 = tt.addptr %26, %28 : !tt.ptr<f16>, i64
   %30 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
   %31 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
@@ -303,9 +303,9 @@ func.func @lut_bmm(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 
   %47 = tt.broadcast %43 : (tensor<1x16xi32, #blocked>) -> tensor<16x16xi32, #blocked>
   %48 = tt.broadcast %45 : (tensor<1x16xi32, #blocked>) -> tensor<16x16xi32, #blocked>
   %49 = tt.addptr %46, %47 : tensor<16x16x!tt.ptr<f16>, #blocked>, tensor<16x16xi32, #blocked>
-  %50 = arith.muli %arg9, %0 : i32 
+  %50 = arith.muli %arg9, %0 : i32
   %51 = tt.addptr %arg8, %50 : !tt.ptr<f16>, i32
-  %52 = arith.muli %arg11, %16 : i32 
+  %52 = arith.muli %arg11, %16 : i32
   %53 = tt.addptr %51, %52 : !tt.ptr<f16>, i32
   %54 = tt.splat %53 : (!tt.ptr<f16>) -> tensor<16x1x!tt.ptr<f16>, #blocked1>
   %55 = tt.addptr %54, %34 : tensor<16x1x!tt.ptr<f16>, #blocked1>, tensor<16x1xi32, #blocked1>

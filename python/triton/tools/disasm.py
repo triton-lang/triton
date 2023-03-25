@@ -64,7 +64,8 @@ def extract(file_path, fun):
     if fun is None:
         sass_str = subprocess.check_output(["cuobjdump", "-sass", file_path])
     else:
-        sass_str = subprocess.check_output(["cuobjdump", "-fun", fun, "-sass", file_path])
+        sass_str = subprocess.check_output(
+            ["cuobjdump", "-fun", fun, "-sass", file_path])
     sass_lines = sass_str.splitlines()
     line_idx = 0
     while line_idx < len(sass_lines):

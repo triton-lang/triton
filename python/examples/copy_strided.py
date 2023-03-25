@@ -14,5 +14,10 @@ def kernel(X, stride_xm,
     tl.store(Zs, tl.load(Xs))
 
 
-ret = triton.compile(kernel, signature="*fp32,i32,*fp32,i32", constants={"BLOCK_M": 64, "BLOCK_N": 64})
+ret = triton.compile(
+    kernel,
+    signature="*fp32,i32,*fp32,i32",
+    constants={
+        "BLOCK_M": 64,
+        "BLOCK_N": 64})
 print(ret.asm["ttgir"])

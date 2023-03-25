@@ -3,7 +3,7 @@
 # remember where we started
 ROOT="$(pwd)"
 
-# torchinductor venv 
+# torchinductor venv
 whoami
 python3 -m venv /opt/torchinductor_venv
 # shellcheck source=/dev/null

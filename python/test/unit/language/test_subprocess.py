@@ -10,13 +10,26 @@ assert_path = os.path.join(dir_path, "assert_helper.py")
 
 # TODO: bfloat16 after LLVM-15
 func_types = ["device_assert", "assert", "static_assert"]
-torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
+torch_types = [
+    "int8",
+    "uint8",
+    "int16",
+    "int32",
+    "long",
+    "float16",
+    "float32",
+    "float64"]
 
 
 @pytest.mark.parametrize("func_type, data_type",
                          [("device_print", data_type) for data_type in torch_types] + [("print", "int32"), ("static_print", "int32")])
 def test_print(func_type: str, data_type: str):
-    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE, shell=False)
+    proc = subprocess.Popen([sys.executable,
+                             print_path,
+                             func_type,
+                             data_type],
+                            stdout=subprocess.PIPE,
+                            shell=False)
     outs, _ = proc.communicate()
     outs = outs.split()
     new_lines = set()
@@ -39,7 +52,12 @@ def test_print(func_type: str, data_type: str):
 @pytest.mark.parametrize("func_type", func_types)
 def test_assert(func_type: str):
     os.environ["TRITON_DEBUG"] = "1"
-    proc = subprocess.Popen([sys.executable, assert_path, func_type], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
+    proc = subprocess.Popen([sys.executable,
+                             assert_path,
+                             func_type],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            shell=False)
     _, errs = proc.communicate()
     errs = errs.splitlines()
     num_errs = 0
