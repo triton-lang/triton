@@ -88,7 +88,7 @@ jobs:
         run: |
           cd python
           pip3 install cmake==3.24
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
+          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -vvv -e '.[tests]'
 
       - name: Install Triton on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
@@ -96,7 +96,7 @@ jobs:
           cd python
           pip3 uninstall --yes torch torchvision torchaudio
           pip3 install --no-cache-dir --force-reinstall torch==1.13.1 --extra-index-url https://download.pytorch.org/whl/rocm5.2
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
+          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -vvv -e '.[tests]'
 
       - name: Run lit tests
         if: ${{ env.BACKEND != 'ROCM'}}
@@ -114,7 +114,7 @@ jobs:
         run: |
           cd python/test/unit/
           pytest
-      
+
       - name: Run python tests on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |

@@ -153,12 +153,9 @@ class CMakeBuild(build_ext):
                 "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
             )
 
-        import packaging.version
-
-        cmake_version = packaging.version.parse(
-            re.search(r"version\s*(?P<version>[\d.]+)", out.decode()).group("version")
-        )
-        if cmake_version < packaging.version.parse("3.18.0"):
+        match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
+        cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
+        if (cmake_major, cmake_minor) < (3, 18):
             raise RuntimeError("CMake >= 3.18.0 is required")
 
         for ext in self.extensions:
