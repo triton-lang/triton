@@ -6,21 +6,15 @@ import triton.ops
 
 
 def sparsify_tensor(x, mask, block):
-    ret = torch.empty((x.size(0), mask.sum(), block, block),
-                      dtype=x.dtype, device=x.device)
+    ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
     for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
         ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
     return ret
 
 
-def make_pair(shape, device="cuda", alpha=1e-2, beta=0.,
-              trans=False, data=None, dtype=torch.float32):
+def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None, dtype=torch.float32):
     if data is None:
-        data = torch.randn(
-            shape,
-            dtype=torch.float32,
-            requires_grad=True,
-            device=device)
+        data = torch.randn(shape, dtype=torch.float32, requires_grad=True, device=device)
     ref_ret = data
     ref_ret = ref_ret * alpha + beta
     ref_ret = ref_ret.half().to(dtype)
@@ -44,19 +38,14 @@ def mask_tensor(x, mask, block, value=0):
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 # TODO: float32 fails
 @pytest.mark.parametrize("DTYPE", [torch.float16])
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE,
-                Z=3, H=2, M=512, N=384, K=256):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
     seed = 0
     torch.manual_seed(seed)
     is_sdd = MODE == "sdd"
     is_dsd = MODE == "dsd"
     is_dds = MODE == "dds"
-
-    def do_sparsify(x):
-        return sparsify_tensor(x, layout, BLOCK)
-
-    def do_mask(x):
-        return mask_tensor(x, layout, BLOCK)
+    do_sparsify = lambda x: sparsify_tensor(x, layout, BLOCK)
+    do_mask = lambda x: mask_tensor(x, layout, BLOCK)
     # create inputs
     # create op
     a_shape = (Z, H, K, M) if TRANS_A else (Z, H, M, K)
@@ -92,13 +81,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE,
     b_tri = do_sparsify(b_tri) if is_dds else b_tri
     a_tri.retain_grad()
     b_tri.retain_grad()
-    op = triton.ops.blocksparse.matmul(
-        layout,
-        BLOCK,
-        MODE,
-        trans_a=TRANS_A,
-        trans_b=TRANS_B,
-        device="cuda")
+    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
     c_tri = triton.testing.catch_oor(lambda: op(a_tri, b_tri), pytest)
     triton.testing.catch_oor(lambda: c_tri.backward(dc_tri), pytest)
     da_tri = a_tri.grad
@@ -151,8 +134,7 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     a_tri = sparsify_tensor(a_tri, layout, BLOCK)
     a_tri.retain_grad()
     dout_tri = sparsify_tensor(dout_tri, layout, BLOCK)
-    op = triton.ops.blocksparse.softmax(
-        layout, BLOCK, device="cuda", is_dense=is_dense)
+    op = triton.ops.blocksparse.softmax(layout, BLOCK, device="cuda", is_dense=is_dense)
     out_tri = op(a_tri, scale=scale, is_causal=is_causal)
     out_tri.backward(dout_tri)
     da_tri = a_tri.grad
@@ -184,19 +166,12 @@ def test_attention_fwd_bwd(
 
     # Triton:
     n_blocks = n_ctx // block
-    layout = torch.tril(torch.ones(
-        [n_heads, n_blocks, n_blocks], dtype=torch.long))
+    layout = torch.tril(torch.ones([n_heads, n_blocks, n_blocks], dtype=torch.long))
     query, key, value = [x.clone() for x in qkvs]
     query.retain_grad()
     key.retain_grad()
     value.retain_grad()
-    attn_out = triton_attention(
-        layout,
-        block,
-        query=query,
-        key=key,
-        value=value,
-        scale=scale)
+    attn_out = triton_attention(layout, block, query=query, key=key, value=value, scale=scale)
     # ad hoc loss
     loss = (attn_out ** 2).mean()
     loss.backward()
@@ -235,12 +210,9 @@ def triton_attention(
     value: torch.Tensor,
     scale: float,
 ):
-    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(
-        layout, block, "sdd", trans_a=False, trans_b=True, device=value.device)
-    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(
-        layout, block, "dsd", trans_a=False, trans_b=False, device=value.device)
-    sparse_softmax = triton.ops.blocksparse.softmax(
-        layout, block, device=value.device)
+    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(layout, block, "sdd", trans_a=False, trans_b=True, device=value.device)
+    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(layout, block, "dsd", trans_a=False, trans_b=False, device=value.device)
+    sparse_softmax = triton.ops.blocksparse.softmax(layout, block, device=value.device)
 
     w = sparse_dot_sdd_nt(query, key)
     w = sparse_softmax(w, scale=scale, is_causal=True)
