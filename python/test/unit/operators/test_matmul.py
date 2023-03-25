@@ -66,8 +66,7 @@ import triton.ops
         ]
     ),
 )
-def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K,
-            NWARP, NSTAGE, M, N, K, AT, BT, DTYPE):
+def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, DTYPE):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
@@ -77,18 +76,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K,
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
-    kwargs = {
-        'BLOCK_M': BLOCK_M,
-        'BLOCK_N': BLOCK_N,
-        'BLOCK_K': BLOCK_K,
-        'SPLIT_K': SPLIT_K}
+    kwargs = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
     pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs['C'].zero_()
-    configs = [
-        triton.Config(
-            kwargs=kwargs,
-            num_warps=NWARP,
-            num_stages=NSTAGE,
-            pre_hook=pre_hook)]
+    configs = [triton.Config(kwargs=kwargs, num_warps=NWARP, num_stages=NSTAGE, pre_hook=pre_hook)]
     kernel = triton.ops._matmul.kernel
     kernel.configs = configs
     # kernel.run = kernel.run.run.run
@@ -98,10 +88,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K,
     N = BLOCK_N if N is None else N
     K = BLOCK_K * SPLIT_K if K is None else K
     # allocate/transpose inputs
-    DTYPE = {
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float32": torch.float32}[DTYPE]
+    DTYPE = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[DTYPE]
     a = .1 * torch.randn((K, M) if AT else (M, K), device="cuda", dtype=DTYPE)
     b = .1 * torch.randn((N, K) if BT else (K, N), device="cuda", dtype=DTYPE)
     a = a.t() if AT else a
