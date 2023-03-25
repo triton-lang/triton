@@ -30,6 +30,7 @@ llvm_update_compile_flags(triton-translate)
          TritonGPUTransforms
          TritonLLVMIR
          TritonPTX
+         TritonHSACO
          ${dialect_libs}
          ${conversion_libs}
          # tests
@@ -53,5 +54,6 @@ llvm_update_compile_flags(triton-translate)
          MLIRTransformUtils
          MLIRLLVMToLLVMIRTranslation
          MLIRNVVMToLLVMIRTranslation
+         MLIRROCDLToLLVMIRTranslation
          )
 mlir_check_all_link_libraries(triton-translate)
