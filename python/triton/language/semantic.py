@@ -1223,7 +1223,20 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_sqrt(x.handle), x.type)
 
 
+def abs(x: tl.tensor, builder: ir.builder) -> tl.tensor:
+    dtype = x.dtype
+    if dtype.is_floating():
+        return tl.tensor(builder.create_fabs(x.handle), x.type)
+    elif dtype.is_int_signed():
+        return tl.tensor(builder.create_iabs(x.handle), x.type)
+    elif dtype.is_int_unsigned():
+        return x  # no-op
+    else:
+        assert False, f"Unexpected dtype {dtype}"
+
+
 ##
+
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
     if len(x.shape) != len(values):
