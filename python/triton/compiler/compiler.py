@@ -25,7 +25,7 @@ import triton._C.libtriton.triton as _triton
 from ..runtime.cache import CacheManager
 from ..runtime.driver import get_cuda_utils, get_hip_utils
 from ..tools.disasm import extract
-from .code_generator import CodeGenerator
+from . import code_generator, errors
 
 
 def str_to_ty(name):
@@ -104,10 +104,13 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
 
     prototype = triton.language.function_type([], arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True, debug=debug)
+    generator = code_generator.CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,
+                                             function_name=function_name, attributes=new_attrs,
+                                             is_kernel=True, debug=debug)
+
     try:
         generator.visit(fn.parse())
-    except CompilationError as e:
+    except errors.CompilationError as e:
         if e.src is None:
             e.set_source_code(fn.src)
         raise
@@ -115,7 +118,7 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
         node = generator.last_node
         if node is None:
             raise
-        raise CompilationError(fn.src, node, repr(e)) from e
+        raise errors.CompilationError(fn.src, node, repr(e)) from e
     ret = generator.module
     # module takes ownership of the context
     ret.context = context
