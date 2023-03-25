@@ -39,7 +39,8 @@ In doing so, you will learn about:
 #          acc += dot(a, b)
 #        C[m : m+BLOCK_SIZE_M, n : n+BLOCK_SIZE_N] = acc;
 #
-# where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.
+# where each iteration of the doubly-nested for-loop is performed by a
+# dedicated Triton program instance.
 
 # %%
 # Compute Kernel
@@ -157,7 +158,12 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128,
+                       'BLOCK_SIZE_N': 256,
+                       'BLOCK_SIZE_K': 64,
+                       'GROUP_SIZE_M': 8},
+                      num_stages=3,
+                      num_warps=8),
     ],
     key=['M', 'N', 'K'],
 )
@@ -206,8 +212,10 @@ def matmul_kernel(
     offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = tl.arange(0, BLOCK_SIZE_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
+                      offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk +
+                      offs_bn[None, :] * stride_bn)
 
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix
@@ -237,12 +245,14 @@ def matmul_kernel(
     # Write back the block of the output matrix C
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_ptrs = c_ptr + stride_cm * \
+        offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
+# we can fuse `leaky_relu` by providing it as an `ACTIVATION`
+# meta-parameter in `_matmul`
 @triton.jit
 def leaky_relu(x):
     return tl.where(x >= 0, x, 0.01 * x)
@@ -250,7 +260,8 @@ def leaky_relu(x):
 
 # %%
 # We can now create a convenience wrapper function that only takes two input tensors
-# and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
+# and (1) checks any shape constraint; (2) allocates the output; (3)
+# launches the above kernel
 
 
 def matmul(a, b, activation=None):
@@ -266,8 +277,10 @@ def matmul(a, b, activation=None):
     # allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
-    grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+
+    def grid(META): return (
+        triton.cdiv(M, META['BLOCK_SIZE_M']) *
+        triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
     matmul_kernel[grid](
         a, b, c,
@@ -284,7 +297,8 @@ def matmul(a, b, activation=None):
 # Unit Test
 # ---------
 #
-# We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
+# We can test our custom matrix multiplication operation against a native
+# torch implementation (i.e., cuBLAS)
 
 torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
@@ -305,24 +319,30 @@ else:
 # Square Matrix Performance
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-# We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
+# We can now compare the performance of our kernel against that of cuBLAS.
+# Here we focus on square matrices, but feel free to arrange this script
+# as you wish to benchmark any other matrix shape.
 
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
+        # argument names to use as an x-axis for the plot
+        x_names=['M', 'N', 'K'],
         x_vals=[
             8192
         ],  # different possible values for `x_name`
-        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+        line_arg='provider',
+        # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
         line_vals=['cublas', 'triton'],
         # label name for the lines
         line_names=["cuBLAS", "Triton"],
         # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+        styles=[('green', '-'), ('green', '--'),
+                ('blue', '-'), ('blue', '--')],
         ylabel="TFLOPS",  # label name for the y-axis
-        plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
+        plot_name="matmul-performance",
+        # name for the plot. Used also as a file name for saving the plot.
         args={},
     )
 )
@@ -330,10 +350,13 @@ def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            lambda: torch.matmul(a, b), rep=100)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
-    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            lambda: matmul(a, b), rep=100)
+
+    def perf(ms): return 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
 

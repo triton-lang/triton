@@ -3,7 +3,8 @@ from __future__ import annotations  # remove after python 3.11
 from . import core, semantic
 
 
-def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple, _builder=None):
+def dispatch(func, lib_name: str, lib_path: str, args: list,
+             arg_type_symbol_dict: dict, ret_shape: tuple, _builder=None):
     '''
         Dispatch a function to a library
         :param func: the function to dispatch
@@ -42,10 +43,12 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         ret_type = arg_type_symbol_dict[arg_types][1]
         if ret_shape:
             ret_type = core.block_type(ret_type, ret_shape)
-        return core.tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder)), ret_type)
+        return core.tensor(func(lib_name, lib_path, symbol,
+                           arg_list, ret_type.to_ir(_builder)), ret_type)
 
 
-def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, _builder=None):
+def elementwise(lib_name: str, lib_path: str, args: list,
+                arg_type_symbol_dict: dict, _builder=None):
     '''
         Dispatch an elementwise function to a library
         :param lib_name: the name of the library
@@ -74,4 +77,5 @@ def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: 
                 dispatch_args[i], broadcast_arg, _builder)
         ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_external_elementwise")
-    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, _builder)
+    return dispatch(func, lib_name, lib_path, dispatch_args,
+                    arg_type_symbol_dict, ret_shape, _builder)
