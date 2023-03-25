@@ -9,8 +9,7 @@ def sparsify_tensor(x, mask, block):
     ret = torch.empty((x.size(0), mask.sum(), block, block),
                       dtype=x.dtype, device=x.device)
     for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
-        ret[:, idx, :, :] = x[:, h, i *
-                              block:(i + 1) * block, j * block:(j + 1) * block]
+        ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
     return ret
 
 
@@ -52,8 +51,12 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE,
     is_sdd = MODE == "sdd"
     is_dsd = MODE == "dsd"
     is_dds = MODE == "dds"
-    def do_sparsify(x): return sparsify_tensor(x, layout, BLOCK)
-    def do_mask(x): return mask_tensor(x, layout, BLOCK)
+
+    def do_sparsify(x):
+        return sparsify_tensor(x, layout, BLOCK)
+
+    def do_mask(x):
+        return mask_tensor(x, layout, BLOCK)
     # create inputs
     # create op
     a_shape = (Z, H, K, M) if TRANS_A else (Z, H, M, K)

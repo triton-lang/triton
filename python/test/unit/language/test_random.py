@@ -63,10 +63,7 @@ class CustomPhilox4x:
         low = a * b
         high = int(a) * int(b)
         high = np.array(
-            high >> (
-                np.dtype(
-                    self._dtype).itemsize *
-                8),
+            high >> (np.dtype(self._dtype).itemsize * 8),
             dtype=self._dtype)
         return low, high
 

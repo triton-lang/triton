@@ -147,16 +147,11 @@ def _bwd_kernel(
         offs_m = tl.arange(0, BLOCK_N)
         offs_k = tl.arange(0, BLOCK_DMODEL)
         # initialize pointers to value-like data
-        q_ptrs = Q + (offs_qm[:, None] * stride_qm +
-                      offs_k[None, :] * stride_qk)
-        k_ptrs = K + (offs_n[:, None] * stride_kn +
-                      offs_k[None, :] * stride_kk)
-        v_ptrs = V + (offs_n[:, None] * stride_qm +
-                      offs_k[None, :] * stride_qk)
-        do_ptrs = DO + (offs_qm[:, None] * stride_qm +
-                        offs_k[None, :] * stride_qk)
-        dq_ptrs = DQ + (offs_qm[:, None] * stride_qm +
-                        offs_k[None, :] * stride_qk)
+        q_ptrs = Q + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
+        k_ptrs = K + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
+        v_ptrs = V + (offs_n[:, None] * stride_qm + offs_k[None, :] * stride_qk)
+        do_ptrs = DO + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
+        dq_ptrs = DQ + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
         # pointer to row-wise quantities in value-like data
         D_ptrs = D + off_hz * N_CTX
         m_ptrs = M + off_hz * N_CTX
@@ -198,10 +193,8 @@ def _bwd_kernel(
             q_ptrs += BLOCK_M * stride_qm
             do_ptrs += BLOCK_M * stride_qm
         # write-back
-        dv_ptrs = DV + (offs_n[:, None] * stride_qm +
-                        offs_k[None, :] * stride_qk)
-        dk_ptrs = DK + (offs_n[:, None] * stride_kn +
-                        offs_k[None, :] * stride_kk)
+        dv_ptrs = DV + (offs_n[:, None] * stride_qm + offs_k[None, :] * stride_qk)
+        dk_ptrs = DK + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
         tl.store(dv_ptrs, dv)
         tl.store(dk_ptrs, dk)
 
@@ -221,15 +214,11 @@ class _attention(torch.autograd.Function):
         o = torch.empty_like(q)
         grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
         L = torch.empty(
-            (q.shape[0] *
-             q.shape[1],
-             q.shape[2]),
+            (q.shape[0] * q.shape[1], q.shape[2]),
             device=q.device,
             dtype=torch.float32)
         m = torch.empty(
-            (q.shape[0] *
-             q.shape[1],
-             q.shape[2]),
+            (q.shape[0] * q.shape[1], q.shape[2]),
             device=q.device,
             dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
@@ -374,27 +363,33 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD,
         v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype,
                         device="cuda", requires_grad=True)
         sm_scale = 1.3
-        def fn(): return attention(q, k, v, sm_scale)
+
+        def fn():
+            return attention(q, k, v, sm_scale)
         if mode == 'bwd':
             o = fn()
             do = torch.randn_like(o)
-            def fn(): return o.backward(do, retain_graph=True)
+
+            def fn():
+                return o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(
             fn, percentiles=None, warmup=warmup, rep=rep)
         return ms
     if provider == "flash":
         lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
-        cu_seqlens = torch.zeros(
-            (BATCH + 1,), device=device, dtype=torch.int32)
+        cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
         cu_seqlens[1:] = lengths.cumsum(0)
         qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD),
                           dtype=dtype, device=device, requires_grad=True)
 
-        def fn(): return flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)
+        def fn():
+            return flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)
         if mode == 'bwd':
             o = fn()
             do = torch.randn_like(o)
-            def fn(): return o.backward(do, retain_graph=True)
+
+            def fn():
+                return o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(
             fn, percentiles=None, warmup=warmup, rep=rep)
         return ms

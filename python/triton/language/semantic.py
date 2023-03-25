@@ -383,9 +383,7 @@ def minus(input: tl.tensor,
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr():
         raise ValueError(
-            "wrong type argument to unary minus (" +
-            input_sca_ty.__repr__() +
-            ")")
+            f"wrong type argument to unary minus ({input_sca_ty!r})")
     _0 = tl.tensor(
         builder.get_null_value(
             input_sca_ty.to_ir(builder)),
@@ -398,9 +396,7 @@ def invert(input: tl.tensor,
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr() or input_sca_ty.is_floating():
         raise ValueError(
-            "wrong type argument to unary invert (" +
-            input_sca_ty.__repr__() +
-            ")")
+            f"wrong type argument to unary invert ({input_sca_ty!r})")
     _1 = tl.tensor(
         builder.get_all_ones_value(
             input_sca_ty.to_ir(builder)),
@@ -892,8 +888,8 @@ def load(ptr: tl.tensor,
          builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError(
-            "Pointer argument of load instruction is " +
-            ptr.type.__repr__())
+            f"Pointer argument of load instruction is {ptr.type!r}"
+        )
     if not ptr.type.is_block():
         if mask and mask.type.is_block():
             raise ValueError(
@@ -953,8 +949,7 @@ def store(ptr: tl.tensor,
           builder: ir.builder) -> tl.tensor:
     if not ptr.type.scalar.is_ptr():
         raise ValueError(
-            "Pointer argument of store instruction is " +
-            ptr.type.__repr__())
+            f"Pointer argument of store instruction is {ptr.type!r}")
     if not ptr.type.is_block():
         if val.type.is_block():
             raise ValueError(
@@ -1010,18 +1005,14 @@ def atom_red_typechecking_impl(ptr: tl.tensor,
                                builder: ir.builder) -> Tuple[tl.tensor, tl.tensor, tl.tensor]:
     if not ptr.type.scalar.is_ptr():
         raise ValueError(
-            "Pointer argument of store instruction is " +
-            ptr.type.__repr__())
+            f"Pointer argument of store instruction is {ptr.type!r}")
 
     element_ty = ptr.type.scalar.element_ty
     if element_ty is tl.float16 and op != 'add':
-        raise ValueError("atomic_" + op + " does not support fp16")
+        raise ValueError(f"atomic_{op} does not support fp16")
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
         raise ValueError(
-            "atomic_" +
-            op +
-            " does not support " +
-            str(element_ty))
+            f"atomic_{op} does not support {element_ty}")
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(
