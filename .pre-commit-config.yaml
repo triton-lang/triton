@@ -21,7 +21,7 @@ repos:
       - id: isort
         stages: [commit, push, manual]
   - repo: https://github.com/pre-commit/mirrors-autopep8
-    rev: v2.0.2
+    rev: v1.6.0
     hooks:
       - id: autopep8
         args: ["-a", "-i"]
@@ -42,9 +42,10 @@ repos:
             ^docs/conf.py$
           )
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v15.0.7
+    rev: v14.0.6
     hooks:
       - id: clang-format
+        stages: [commit, push, manual]
         exclude: |
           (?x)(
             ^include/triton/external/|
