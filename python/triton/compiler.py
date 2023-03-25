@@ -15,18 +15,19 @@ import sysconfig
 import tempfile
 import warnings
 from collections import namedtuple
-from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 import setuptools
 import torch
-from filelock import FileLock
 
 import triton
 import triton._C.libtriton.triton as _triton
 from . import impl
 from .tools.disasm import extract
 
+from .runtime.driver import get_cuda_utils, get_hip_utils
+from .runtime.cache import CacheManager
+from pathlib import Path
 
 def static_vars(**kwargs):
     def decorate(func):
@@ -1608,44 +1609,6 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
     return src
 
 
-def default_cache_dir():
-    return os.path.join(Path.home(), ".triton", "cache")
-
-
-class CacheManager:
-
-    def __init__(self, key):
-        self.key = key
-        self.lock_path = None
-        # create cache directory if it doesn't exist
-        self.cache_dir = os.environ.get('TRITON_CACHE_DIR', default_cache_dir())
-        if self.cache_dir:
-            self.cache_dir = os.path.join(self.cache_dir, self.key)
-            self.lock_path = os.path.join(self.cache_dir, "lock")
-            os.makedirs(self.cache_dir, exist_ok=True)
-
-    def _make_path(self, filename):
-        return os.path.join(self.cache_dir, filename)
-
-    def has_file(self, filename):
-        if not self.cache_dir:
-            return False
-        return os.path.exists(self._make_path(filename))
-
-    def put(self, data, filename, binary=True):
-        if not self.cache_dir:
-            return
-        binary = isinstance(data, bytes)
-        if not binary:
-            data = str(data)
-        assert self.lock_path is not None
-        filepath = self._make_path(filename)
-        with FileLock(self.lock_path):
-            # use tempfile to be robust against program interruptions
-            mode = "wb" if binary else "w"
-            with open(filepath + ".tmp", mode) as f:
-                f.write(data)
-            os.rename(filepath + ".tmp", filepath)
 
 
 # Utilities for generating and compiling C wrappers
@@ -2113,15 +2076,13 @@ class CompiledKernel:
             return
         device = triton.runtime.jit.get_current_device()
         if torch.version.hip is not None:
-            global hip_utils
-            init_hip_utils()
+            hip_utils = get_hip_utils()
             max_shared = hip_utils.get_device_properties(device)["max_shared_mem"]
             if self.shared > max_shared:
                 raise OutOfResources(self.shared, max_shared, "shared memory")
             mod, func, n_regs, n_spills = hip_utils.load_binary(self.metadata["name"], self.asm["hsaco_path"], self.shared, device)
         else:
-            global cuda_utils
-            init_cuda_utils()
+            cuda_utils = get_cuda_utils()
             max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
             if self.shared > max_shared:
                 raise OutOfResources(self.shared, max_shared, "shared memory")
@@ -2159,304 +2120,3 @@ class CompiledKernel:
             os.remove(path)
         self.asm['sass'] = self.sass
         return self.sass
-
-
-class CudaUtils(object):
-
-    def __new__(cls):
-        if not hasattr(cls, 'instance'):
-            cls.instance = super(CudaUtils, cls).__new__(cls)
-        return cls.instance
-
-    @staticmethod
-    def _generate_src():
-        return """
-        #include <cuda.h>
-
-        #include \"cuda.h\"
-        #define PY_SSIZE_T_CLEAN
-        #include <Python.h>
-
-        static inline void gpuAssert(CUresult code, const char *file, int line)
-        {
-           if (code != CUDA_SUCCESS)
-           {
-              const char* prefix = "Triton Error [CUDA]: ";
-              const char* str;
-              cuGetErrorString(code, &str);
-              char err[1024] = {0};
-              strcat(err, prefix);
-              strcat(err, str);
-              PyErr_SetString(PyExc_RuntimeError, err);
-           }
-        }
-
-        #define CUDA_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if(PyErr_Occurred()) return NULL; }
-
-        static PyObject* getDeviceProperties(PyObject* self, PyObject* args){
-            int device_id;
-            if(!PyArg_ParseTuple(args, "i", &device_id))
-                return NULL;
-            // Get device handle
-            CUdevice device;
-            cuDeviceGet(&device, device_id);
-
-            // create a struct to hold device properties
-            int max_shared_mem;
-            int multiprocessor_count;
-            int sm_clock_rate;
-            int mem_clock_rate;
-            int mem_bus_width;
-            CUDA_CHECK(cuDeviceGetAttribute(&max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device));
-            CUDA_CHECK(cuDeviceGetAttribute(&multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
-            CUDA_CHECK(cuDeviceGetAttribute(&sm_clock_rate, CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device));
-            CUDA_CHECK(cuDeviceGetAttribute(&mem_clock_rate, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
-            CUDA_CHECK(cuDeviceGetAttribute(&mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
-
-
-            return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem", max_shared_mem,
-                                       "multiprocessor_count", multiprocessor_count,
-                                       "sm_clock_rate", sm_clock_rate,
-                                       "mem_clock_rate", mem_clock_rate,
-                                       "mem_bus_width", mem_bus_width);
-        }
-
-        static PyObject* loadBinary(PyObject* self, PyObject* args) {
-            const char* name;
-            const char* data;
-            Py_ssize_t data_size;
-            int shared;
-            int device;
-            if(!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared, &device)) {
-                return NULL;
-            }
-            CUfunction fun;
-            CUmodule mod;
-            int32_t n_regs = 0;
-            int32_t n_spills = 0;
-            // create driver handles
-            CUDA_CHECK(cuModuleLoadData(&mod, data));
-            CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
-            // get allocated registers and spilled registers from the function
-            CUDA_CHECK(cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
-            CUDA_CHECK(cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
-            n_spills /= 4;
-            // set dynamic shared memory if necessary
-            int shared_optin;
-            CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device));
-            if (shared > 49152 && shared_optin > 49152) {
-              CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
-              int shared_total, shared_static;
-              CUDA_CHECK(cuDeviceGetAttribute(&shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
-              CUDA_CHECK(cuFuncGetAttribute(&shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
-              CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin - shared_static));
-            }
-
-            if(PyErr_Occurred()) {
-              return NULL;
-            }
-            return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs, n_spills);
-        }
-
-        static PyMethodDef ModuleMethods[] = {
-          {"load_binary", loadBinary, METH_VARARGS, "Load provided cubin into CUDA driver"},
-          {"get_device_properties", getDeviceProperties, METH_VARARGS, "Get the properties for a given device"},
-          {NULL, NULL, 0, NULL} // sentinel
-        };
-
-        static struct PyModuleDef ModuleDef = {
-          PyModuleDef_HEAD_INIT,
-          \"cuda_utils\",
-          NULL, //documentation
-          -1, //size
-          ModuleMethods
-        };
-
-        PyMODINIT_FUNC PyInit_cuda_utils(void) {
-          PyObject *m = PyModule_Create(&ModuleDef);
-          if(m == NULL) {
-            return NULL;
-          }
-          PyModule_AddFunctions(m, ModuleMethods);
-          return m;
-        }
-        """
-
-    def __init__(self):
-        src = self._generate_src()
-        key = hashlib.md5(src.encode("utf-8")).hexdigest()
-        cache = CacheManager(key)
-        fname = "cuda_utils.so"
-        if not cache.has_file(fname):
-            with tempfile.TemporaryDirectory() as tmpdir:
-                src_path = os.path.join(tmpdir, "main.c")
-                with open(src_path, "w") as f:
-                    f.write(src)
-                so = _build("cuda_utils", src_path, tmpdir)
-                with open(so, "rb") as f:
-                    cache.put(f.read(), fname, binary=True)
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("cuda_utils", cache._make_path(fname))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
-
-
-def init_cuda_utils():
-    global cuda_utils
-    if cuda_utils is None:
-        cuda_utils = CudaUtils()
-
-
-cuda_utils = None
-
-
-def init_hip_utils():
-    global hip_utils
-    if hip_utils is None:
-        hip_utils = HIPUtils()
-
-
-hip_utils = None
-
-
-class HIPUtils(object):
-    def __new__(cls):
-        if not hasattr(cls, 'instance'):
-            cls.instance = super(HIPUtils, cls).__new__(cls)
-        return cls.instance
-
-    def _generate_src(self):
-        return """
-        #define __HIP_PLATFORM_AMD__
-        #include <hip/hip_runtime.h>
-        #define PY_SSIZE_T_CLEAN
-        #include <Python.h>
-        #include <stdio.h>
-        #include <stdlib.h>
-        static inline void gpuAssert(hipError_t code, const char *file, int line)
-        {{
-          if (code != HIP_SUCCESS)
-          {{
-             const char* prefix = "Triton Error [HIP]: ";
-             const char* str = hipGetErrorString(code);
-             char err[1024] = {0};
-             snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str );
-             PyErr_SetString(PyExc_RuntimeError, err);
-          }}
-        }}
-
-        #define HIP_CHECK(ans) { gpuAssert((ans), __FILE__, __LINE__); if (PyErr_Occurred()) return NULL; }
-
-        static PyObject* getDeviceProperties(PyObject* self, PyObject* args){
-            int device_id;
-            if (!PyArg_ParseTuple(args, "i", &device_id))
-                return NULL;
-
-            hipDeviceProp_t props;
-            HIP_CHECK(hipGetDeviceProperties(&props, device_id));
-
-            // create a struct to hold device properties
-            return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem", props.sharedMemPerBlock,
-                                       "multiprocessor_count", props.multiProcessorCount,
-                                       "sm_clock_rate", props.clockRate,
-                                       "mem_clock_rate", props.memoryClockRate,
-                                       "mem_bus_width", props.memoryBusWidth);
-        }
-
-        static PyObject* loadBinary(PyObject* self, PyObject* args) {
-            const char* name;
-            const char* data;
-            Py_ssize_t data_size;
-            int shared;
-            int device;
-            if (!PyArg_ParseTuple(args, "ss#ii", &name, &data, &data_size, &shared, &device)) {
-                return NULL;
-            }
-
-            // Open HSACO file
-            FILE* hsaco_file;
-            if ((hsaco_file = fopen(data, "rb")) == NULL) {
-                return NULL;
-            }
-
-            // Read HSCAO file into Buffer
-            fseek(hsaco_file, 0L, SEEK_END);
-            size_t hsaco_file_size = ftell(hsaco_file);
-            unsigned char* hsaco = (unsigned char*) malloc(hsaco_file_size * sizeof(unsigned char));
-            rewind(hsaco_file);
-            fread(hsaco, sizeof(unsigned char), hsaco_file_size, hsaco_file);
-            fclose(hsaco_file);
-
-            // set HIP options
-            hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes, hipJitOptionErrorLogBuffer,
-                                  hipJitOptionInfoLogBufferSizeBytes, hipJitOptionInfoLogBuffer,
-                                  hipJitOptionLogVerbose};
-            const unsigned int errbufsize = 8192;
-            const unsigned int logbufsize = 8192;
-            char _err[errbufsize];
-            char _log[logbufsize];
-            void *optval[] = {(void *)(uintptr_t)errbufsize,
-                              (void *)_err, (void *)(uintptr_t)logbufsize,
-                              (void *)_log, (void *)1};
-
-            // launch HIP Binary
-            hipModule_t mod;
-            hipFunction_t fun;
-            hipModuleLoadDataEx(&mod, hsaco, 5, opt, optval);
-            hipModuleGetFunction(&fun, mod, name);
-            free(hsaco);
-
-            // get allocated registers and spilled registers from the function
-            int n_regs = 0;
-            int n_spills = 0;
-            if (PyErr_Occurred()) {
-              return NULL;
-            }
-            return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs, n_spills);
-        }
-
-        static PyMethodDef ModuleMethods[] = {
-          {"load_binary", loadBinary, METH_VARARGS, "Load provided hsaco into HIP driver"},
-          {"get_device_properties", getDeviceProperties, METH_VARARGS, "Get the properties for a given device"},
-          {NULL, NULL, 0, NULL} // sentinel
-        };
-
-        static struct PyModuleDef ModuleDef = {
-          PyModuleDef_HEAD_INIT,
-          "hip_utils",
-          NULL, //documentation
-          -1, //size
-          ModuleMethods
-        };
-
-        PyMODINIT_FUNC PyInit_hip_utils(void) {
-          PyObject *m = PyModule_Create(&ModuleDef);
-          if (m == NULL) {
-            return NULL;
-          }
-          PyModule_AddFunctions(m, ModuleMethods);
-          return m;
-        }
-        """
-
-    def __init__(self):
-        src = self._generate_src()
-        key = hashlib.md5(src.encode("utf-8")).hexdigest()
-        cache = CacheManager(key)
-        fname = "hip_utils.so"
-        if not cache.has_file(fname):
-            with tempfile.TemporaryDirectory() as tmpdir:
-                src_path = os.path.join(tmpdir, "main.c")
-                with open(src_path, "w") as f:
-                    f.write(src)
-                so = _build("hip_utils", src_path, tmpdir)
-                with open(so, "rb") as f:
-                    cache.put(f.read(), fname, binary=True)
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("hip_utils", cache._make_path(fname))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties

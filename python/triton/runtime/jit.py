@@ -13,7 +13,6 @@ from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, 
 import torch
 
 import triton
-from triton.utils import MockTensor
 
 
 def get_cuda_stream(idx=None):
@@ -471,6 +470,29 @@ def jit(
     else:
         return decorator
 
+# -----------------------------------------------------------------------------
+# Utilities for mocking tensors
+# -----------------------------------------------------------------------------
+
+class MockTensor:
+    """
+    Can be used in place of real tensors when calling:
+        kernel.warmup(MockTensor(torch.float32), ...)
+    """
+    @staticmethod
+    def wrap_dtype(arg):
+        if arg.__class__.__name__ == "dtype" and\
+           arg.__module__ == "torch":
+            return MockTensor(arg)
+        return arg
+
+    def __init__(self, dtype):
+        self.dtype = dtype
+
+    @staticmethod
+    def data_ptr():
+        return 0  # optimistically assumes multiple of 16
+
 
 class TensorWrapper:
     def __init__(self, base, dtype):
@@ -498,4 +520,4 @@ def reinterpret(tensor, dtype):
         # A new wrapper is needed around an unwrapped tensor.
         return TensorWrapper(tensor, dtype)
     else:
-        raise TypeError(f'Cannot reinterpret a {type(tensor)}. Does not contain `data_ptr` method.')
+        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')
