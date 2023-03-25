@@ -100,8 +100,11 @@ def version_key():
     # frontend
     with open(__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
-    with open(triton.compiler.__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(*triton.__path__, 'compiler')
+    for lib in pkgutil.iter_modules([compiler_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
     # backend
     with open(triton._C.libtriton.__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
@@ -473,6 +476,7 @@ def jit(
 # -----------------------------------------------------------------------------
 # Utilities for mocking tensors
 # -----------------------------------------------------------------------------
+
 
 class MockTensor:
     """
