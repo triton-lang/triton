@@ -12,7 +12,8 @@ import triton.language as tl
 
 
 class PhiloxConfig:
-    def __init__(self, PHILOX_ROUND_A, PHILOX_ROUND_B, PHILOX_KEY_A, PHILOX_KEY_B, DTYPE):
+    def __init__(self, PHILOX_ROUND_A, PHILOX_ROUND_B,
+                 PHILOX_KEY_A, PHILOX_KEY_B, DTYPE):
         self.PHILOX_ROUND_A = np.array(PHILOX_ROUND_A, dtype=DTYPE)
         self.PHILOX_ROUND_B = np.array(PHILOX_ROUND_B, dtype=DTYPE)
         self.PHILOX_KEY_A = np.array(PHILOX_KEY_A, dtype=DTYPE)
@@ -61,12 +62,16 @@ class CustomPhilox4x:
     def _multiply_low_high(self, a, b):
         low = a * b
         high = int(a) * int(b)
-        high = np.array(high >> (np.dtype(self._dtype).itemsize * 8), dtype=self._dtype)
+        high = np.array(
+            high >> (np.dtype(self._dtype).itemsize * 8),
+            dtype=self._dtype)
         return low, high
 
     def _single_round(self, counter, key):
-        lo0, hi0 = self._multiply_low_high(self._config.PHILOX_ROUND_A, counter[0])
-        lo1, hi1 = self._multiply_low_high(self._config.PHILOX_ROUND_B, counter[2])
+        lo0, hi0 = self._multiply_low_high(
+            self._config.PHILOX_ROUND_A, counter[0])
+        lo1, hi1 = self._multiply_low_high(
+            self._config.PHILOX_ROUND_B, counter[2])
         ret0 = hi1 ^ counter[1] ^ key[0]
         ret1 = lo1
         ret2 = hi0 ^ counter[3] ^ key[1]
@@ -153,7 +158,9 @@ def test_rand(size, seed, device='cuda'):
     grid = (triton.cdiv(N, BLOCK),)
     kernel[grid](x, N, seed)
     assert all((x >= 0) & (x <= 1))
-    assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
+    assert scipy.stats.kstest(
+        x.tolist(), 'uniform', args=(
+            0, 1)).statistic < 0.01
 
 # test normal PRNG
 

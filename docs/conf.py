@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
 # Triton documentation build configuration file, created by
@@ -24,21 +23,27 @@
 # -- General configuration ------------------------------------------------
 
 
+import os
+import sys
+
+import sphinx_rtd_theme
+from sphinx_gallery.sorting import FileNameSortKey
 
 
 def process_sig(app, what, name, obj, options, signature, return_annotation):
     if signature and '_builder' in signature:
-        signature = signature.split('_builder')[0] + ")" 
+        signature = signature.split('_builder')[0] + ")"
     return (signature, return_annotation)
+
 
 def setup(app):
     """Customize function args retrieving to get args under decorator."""
-    import sphinx
     import os
+
+    import sphinx
 
     app.connect("autodoc-process-signature", process_sig)
     os.system("pip install -e ../python")
-
 
     def forward_jit_fn(func):
         old = func
@@ -51,7 +56,6 @@ def setup(app):
 
         return wrapped
 
-
     old_documenter = sphinx.ext.autosummary.get_documenter
 
     def documenter(app, obj, parent):
@@ -61,16 +65,24 @@ def setup(app):
         return old_documenter(app, obj, parent)
 
     sphinx.ext.autosummary.get_documenter = documenter
-    sphinx.util.inspect.unwrap_all = forward_jit_fn(sphinx.util.inspect.unwrap_all)
-    sphinx.util.inspect.signature = forward_jit_fn(sphinx.util.inspect.signature)
-    sphinx.util.inspect.object_description = forward_jit_fn(sphinx.util.inspect.object_description)
+    sphinx.util.inspect.unwrap_all = forward_jit_fn(
+        sphinx.util.inspect.unwrap_all)
+    sphinx.util.inspect.signature = forward_jit_fn(
+        sphinx.util.inspect.signature)
+    sphinx.util.inspect.object_description = forward_jit_fn(
+        sphinx.util.inspect.object_description)
 
 
 # Auto Doc
-import sys
-import os
+
 sys.path.insert(0, os.path.abspath('../python/'))
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.intersphinx', 'sphinx.ext.autosummary', 'sphinx.ext.coverage', 'sphinx.ext.napoleon', 'sphinx_multiversion']
+extensions = [
+    'sphinx.ext.autodoc',
+    'sphinx.ext.intersphinx',
+    'sphinx.ext.autosummary',
+    'sphinx.ext.coverage',
+    'sphinx.ext.napoleon',
+    'sphinx_multiversion']
 autosummary_generate = True
 
 # versioning config
@@ -83,7 +95,7 @@ smv_prefer_remote_refs = False
 
 # Sphinx gallery
 extensions += ['sphinx_gallery.gen_gallery']
-from sphinx_gallery.sorting import FileNameSortKey
+
 sphinx_gallery_conf = {
     'examples_dirs': '../python/tutorials/',
     'gallery_dirs': 'getting-started/tutorials',
@@ -149,7 +161,7 @@ todo_include_todos = False
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-import sphinx_rtd_theme
+
 html_theme = 'sphinx_rtd_theme'
 html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 
@@ -223,5 +235,6 @@ man_pages = [(master_doc, 'triton', 'Triton Documentation', [author], 1)]
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, 'Triton', 'Triton Documentation', author, 'Triton', 'One line description of project.', 'Miscellaneous'),
+    (master_doc, 'Triton', 'Triton Documentation', author,
+     'Triton', 'One line description of project.', 'Miscellaneous'),
 ]

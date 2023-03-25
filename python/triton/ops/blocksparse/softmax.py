@@ -44,8 +44,12 @@ def _blocksparse_softmax_fwd(
     if IS_DENSE:
         ns = tl.arange(0, ROW_SIZE)
     else:
-        off_lut = offset + 2 * tl.num_programs(0) * tl.num_programs(1) // BLOCK_SIZE
-        start_n = tl.load(LUT + off_lut + block_n, mask=block_n < size, other=0)
+        off_lut = offset + 2 * \
+            tl.num_programs(0) * tl.num_programs(1) // BLOCK_SIZE
+        start_n = tl.load(
+            LUT + off_lut + block_n,
+            mask=block_n < size,
+            other=0)
         ns = start_n * BLOCK_SIZE + lane_n
     # load X
     mask = block_n < size
@@ -106,7 +110,8 @@ def _blocksparse_softmax_bwd(
     if IS_DENSE:
         ns = tl.arange(0, ROW_SIZE)
     else:
-        off_lut = offset + 2 * tl.num_programs(0) * tl.num_programs(1) // BLOCK_SIZE
+        off_lut = offset + 2 * \
+            tl.num_programs(0) * tl.num_programs(1) // BLOCK_SIZE
         start_n = tl.load(LUT + off_lut + block_n, mask=mask, other=0)
         ns = start_n * BLOCK_SIZE + lane_n
     # load data
@@ -160,12 +165,14 @@ class _softmax(torch.autograd.Function):
         M = a.shape[0]
         grid = [spdims[0], spdims[1] * block, M]
         rel_shape = (1, 1, 1, 1) if rel_logits is None else rel_logits.shape
-        rel_strides = (1, 1, 1, 1) if rel_logits is None else rel_logits.stride()
+        rel_strides = (
+            1, 1, 1, 1) if rel_logits is None else rel_logits.stride()
         # enqueue kernel
         out = torch.empty_like(a)
         _blocksparse_softmax_fwd[grid](
             out, a, a.stride(0), lut,
-            rel_logits, rel_shape[-1], rel_strides[0], rel_strides[1],  # relative attn
+            # relative attn
+            rel_logits, rel_shape[-1], rel_strides[0], rel_strides[1],
             scale,
             is_causal,
             BLOCK_SIZE=block,
@@ -194,7 +201,10 @@ class _softmax(torch.autograd.Function):
         # relative logits gradients
         dr = None
         if ctx.needs_input_grad[3]:
-            dr = torch.zeros(ctx.rel_shape, dtype=ctx.rel_dtype, device=out.device)
+            dr = torch.zeros(
+                ctx.rel_shape,
+                dtype=ctx.rel_dtype,
+                device=out.device)
         # run kernel
         M = out.shape[0]
         grid = (ctx.spdims[0], ctx.spdims[1] * ctx.block, M)
@@ -226,7 +236,8 @@ class softmax:
         self.spdims = layout.shape
         self.layout = layout
         self.block = block
-        self.lut, self.maxlut = _softmax.make_lut(self.layout, self.block, device)
+        self.lut, self.maxlut = _softmax.make_lut(
+            self.layout, self.block, device)
         self.is_dense = is_dense
 
     def __call__(self, a, *, scale=1.0, rel_logits=None, is_causal=False):
