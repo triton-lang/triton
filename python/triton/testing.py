@@ -6,18 +6,6 @@ from contextlib import contextmanager
 
 import triton
 import triton._C.libtriton.triton as _triton
-from .compiler import OutOfResources
-
-
-def catch_oor(kernel, pytest_handle=None):
-    try:
-        res = kernel()
-    except OutOfResources as e:
-        if pytest_handle:
-            pytest_handle.skip(str(e))
-        return None
-    return res
-
 
 def nvsmi(attrs):
     attrs = ','.join(attrs)
