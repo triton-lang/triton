@@ -30,12 +30,14 @@ repos:
     rev: 6.0.0
     hooks:
       - id: flake8
+        # TODO: uncomment this to enable more flake8 plugins
         # additional_dependencies:
         #   - flake8-bugbear
         #   - flake8-comprehensions
         #   - flake8-docstrings
         #   - flake8-pyi
         #   - flake8-simplify
+        stages: [commit, push, manual]
         exclude: |
           (?x)(
             ^test/|
