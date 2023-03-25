@@ -72,16 +72,14 @@ class _cross_entropy(torch.autograd.Function):
     @classmethod
     def forward(cls, ctx, logits, indices):
         # make sure we can use triton
-        assert indices.dtype == torch.int64, "Indices are expected to be of type long."
+        assert (indices.dtype == torch.int64), "Indices are expected to be of type long."
         # make kernel
         device, dtype = logits.device, logits.dtype
         n_cols = logits.shape[-1]
         # run the kernel
         result = torch.empty_like(indices, dtype=dtype, device=device)
         neg_logprobs = torch.empty_like(logits, dtype=dtype, device=device)
-
-        def grid(opt):
-            return (logits.numel() // n_cols, )
+        grid = lambda opt: (logits.numel() // n_cols, )
         _forward[grid](logits, neg_logprobs, indices, result, n_cols)
         # save for backward
         ctx.save_for_backward(neg_logprobs, indices)
@@ -99,9 +97,7 @@ class _cross_entropy(torch.autograd.Function):
         # run the kernel
         # neg_logprobs will be modified in place to become our gradient:
         n_cols = neg_logprobs.shape[-1]
-
-        def grid(opt):
-            return (neg_logprobs.numel() // n_cols, )
+        grid = lambda opt: (neg_logprobs.numel() // n_cols, )
         _backward[grid](neg_logprobs, indices, dneg_logprobs, n_cols)
         return neg_logprobs, None
 

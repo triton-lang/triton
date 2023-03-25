@@ -49,8 +49,7 @@ class dtype:
 
     def __init__(self, name):
         self.name = name
-        assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + \
-            dtype.FP_TYPES + dtype.OTHER_TYPES, name
+        assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
             self.int_bitwidth = int(name.split('int')[-1])
@@ -261,8 +260,7 @@ class block_type(dtype):
         for s in self.shape:
             self.numel *= s
         if self.numel > TRITON_MAX_TENSOR_NUMEL:
-            raise ValueError(
-                f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
+            raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
 
         self.name = self.__str__()
 
@@ -295,8 +293,7 @@ class block_type(dtype):
 
 
 class function_type(dtype):
-    def __init__(self, ret_types: List[dtype],
-                 param_types: List[dtype]) -> None:
+    def __init__(self, ret_types: List[dtype], param_types: List[dtype]) -> None:
         self.ret_types = ret_types
         self.param_types = param_types
 
@@ -473,8 +470,7 @@ class tensor:
 
     def __str__(self) -> str:
         # ex. "float32[3,4]"
-        return str(self.dtype) + '[' + ','.join(str(s)
-                                                for s in self.shape) + ']'
+        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
 
     @builtin
     def __add__(self, other, _builder=None):
@@ -764,8 +760,7 @@ def _shape_check_impl(shape):
         if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
-            raise TypeError(
-                f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     return [_constexpr_to_value(x) for x in shape]
 
 
@@ -889,8 +884,7 @@ def dot(input, other, allow_tf32=True, out_dtype=float32, _builder=None):
 
 
 @builtin
-def load(pointer, mask=None, other=None, cache_modifier="",
-         eviction_policy="", volatile=False, _builder=None):
+def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None):
     """
     Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -915,13 +909,11 @@ def load(pointer, mask=None, other=None, cache_modifier="",
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
-    return semantic.load(pointer, mask, other, cache_modifier,
-                         eviction_policy, volatile, _builder)
+    return semantic.load(pointer, mask, other, cache_modifier, eviction_policy, volatile, _builder)
 
 
 @builtin
-def store(pointer, value, mask=None, cache_modifier="",
-          eviction_policy="", _builder=None):
+def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _builder=None):
     """
     Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
 
@@ -940,8 +932,7 @@ def store(pointer, value, mask=None, cache_modifier="",
         mask = _to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
-    return semantic.store(pointer, value, mask,
-                          cache_modifier, eviction_policy, _builder)
+    return semantic.store(pointer, value, mask, cache_modifier, eviction_policy, _builder)
 
 
 # -----------------------
@@ -1204,8 +1195,7 @@ def multiple_of(input, values, _builder=None):
         if not isinstance(d, constexpr):
             raise TypeError(f"values element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
-            raise TypeError(
-                f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
     return semantic.multiple_of(input, values)
 
@@ -1221,8 +1211,7 @@ def max_contiguous(input, values, _builder=None):
         if not isinstance(d, constexpr):
             raise TypeError(f"values element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
-            raise TypeError(
-                f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
     return semantic.max_contiguous(input, values)
 
@@ -1353,8 +1342,7 @@ def zeros_like(input):
 
 
 @builtin
-def static_print(*values, sep: str = " ", end: str = "\n",
-                 file=None, flush=False, _builder=None):
+def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
     pass
 
 
@@ -1397,8 +1385,7 @@ def device_assert(cond, msg="", _builder=None):
     # where the triton function is called but not where the
     # device_assert is called. Need to enhance this.
     lineno = frame.f_back.f_lineno
-    return semantic.device_assert(_to_tensor(
-        cond, _builder), msg, file_name, func_name, lineno, _builder)
+    return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
 
 # -----------------------
 # Iterators
@@ -1425,9 +1412,7 @@ class static_range:
             self.end = arg2
 
     def __iter__(self):
-        raise RuntimeError(
-            "static_range can only be used in @triton.jit'd functions")
+        raise RuntimeError("static_range can only be used in @triton.jit'd functions")
 
     def __next__(self):
-        raise RuntimeError(
-            "static_range can only be used in @triton.jit'd functions")
+        raise RuntimeError("static_range can only be used in @triton.jit'd functions")
