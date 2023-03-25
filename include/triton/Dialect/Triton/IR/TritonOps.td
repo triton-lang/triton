@@ -113,9 +113,9 @@ def TT_AdvanceOp : TT_Op<"advance",
                                          "result", "ptr", "$_self">]> {
     let summary = "Advance a tensor pointer by offsets";
 
-    let arguments = (ins TT_Ptr:$ptr, Variadic<I32>:$offsets);
+    let arguments = (ins TT_TensorPtr:$ptr, Variadic<I32>:$offsets);
 
-    let results = (outs TT_Ptr:$result);
+    let results = (outs TT_TensorPtr:$result);
 
     let assemblyFormat = "$ptr `,` `[` $offsets `]` attr-dict `:` type($result)";
 }
@@ -139,9 +139,10 @@ def TT_LoadOp : TT_Op<"load",
                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "Load from a tensor of pointers or from a tensor pointer";
 
-    let arguments = (ins TT_PtrLike:$ptr, Optional<TT_BoolLike>:$mask, Optional<TT_Type>:$other,
-                         OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck, OptionalAttr<TT_PaddingOptionAttr>:$padding,
-                         TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
+    let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, Optional<TT_BoolLike>:$mask,
+                         Optional<TT_Type>:$other, OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
+                         OptionalAttr<TT_PaddingOptionAttr>:$padding, TT_CacheModifierAttr:$cache,
+                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
 
     let results = (outs TT_Type:$result);
 
@@ -172,7 +173,6 @@ def TT_LoadOp : TT_Op<"load",
     let hasCanonicalizer = 1;
 }
 
-// TODO(Chenggang): may add traits to check the legality
 def TT_StoreOp : TT_Op<"store",
                        [SameLoadStoreOperandsShape,
                         SameLoadStoreOperandsEncoding,
@@ -185,7 +185,7 @@ def TT_StoreOp : TT_Op<"store",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
     let summary = "Store by a tensor of pointers or by a tensor pointer";
 
-    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
+    let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
                          OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
                          DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
                          DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
@@ -251,7 +251,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
         return $old
     }];
 
-    let arguments = (ins TT_Ptr:$ptr, TT_Type:$cmp, TT_Type:$val);
+    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$cmp, TT_Type:$val);
 
     let results = (outs TT_Type:$result);
 }
@@ -493,14 +493,14 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
   }];
 
   let arguments = (ins
-    TT_Ptr:$base,
+    TT_ScalarPtr:$base,
     Variadic<I64>:$shape,
     Variadic<I64>:$strides,
     Variadic<I32>:$offsets,
     DenseI32ArrayAttr:$order
   );
 
-  let results = (outs TT_Ptr:$result);
+  let results = (outs TT_TensorPtr:$result);
 
   // Add additional `[]` to increase readability and split variadic lists
   let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` `,` `[` $offsets `]` attr-dict `:` type($result)";

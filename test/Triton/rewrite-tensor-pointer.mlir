@@ -31,13 +31,13 @@ func.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}
   %18 = arith.extsi %arg3 : i32 to i64
   %19 = arith.extsi %arg5 : i32 to i64
   %20 = arith.extsi %arg6 : i32 to i64
-  // CHECK-NOT: tt.make_block_ptr
-  %21 = tt.make_block_ptr %arg0, [%18, %19], [%20, %c1_i64], [%16, %17] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
+  // CHECK-NOT: tt.make_tensor_ptr
+  %21 = tt.make_tensor_ptr %arg0, [%18, %19], [%20, %c1_i64], [%16, %17] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
   %22 = arith.muli %15, %c32_i32 : i32
   %23 = arith.extsi %arg4 : i32 to i64
   %24 = arith.extsi %arg7 : i32 to i64
-  // CHECK-NOT: tt.make_block_ptr
-  %25 = tt.make_block_ptr %arg1, [%19, %23], [%24, %c1_i64], [%17, %22] {order = array<i32: 1, 0>} : !tt.ptr<tensor<32x32xf16>>
+  // CHECK-NOT: tt.make_tensor_ptr
+  %25 = tt.make_tensor_ptr %arg1, [%19, %23], [%24, %c1_i64], [%17, %22] {order = array<i32: 1, 0>} : !tt.ptr<tensor<32x32xf16>>
   %26 = arith.addi %arg5, %c31_i32 : i32
   %27 = arith.divsi %26, %c32_i32 : i32
   %28 = arith.index_cast %27 : i32 to index
