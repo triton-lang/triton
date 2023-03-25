@@ -15,6 +15,7 @@ import sysconfig
 import tempfile
 import warnings
 from collections import namedtuple
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 import setuptools
@@ -23,11 +24,10 @@ import torch
 import triton
 import triton._C.libtriton.triton as _triton
 from . import impl
+from .runtime.cache import CacheManager
+from .runtime.driver import get_cuda_utils, get_hip_utils
 from .tools.disasm import extract
 
-from .runtime.driver import get_cuda_utils, get_hip_utils
-from .runtime.cache import CacheManager
-from pathlib import Path
 
 def static_vars(**kwargs):
     def decorate(func):
@@ -1588,8 +1588,6 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
     return src
 
 
-
-
 # Utilities for generating and compiling C wrappers
 
 
@@ -1847,7 +1845,17 @@ def compile(fn, **kwargs):
     extern_libs = kwargs.get("extern_libs", dict())
     debug = kwargs.get("debug", False)
     # build compilation stages
+    stages = {
+        "ast": (lambda path: fn, None),
+        "ttir": (lambda path: parse_mlir_module(path, context),
+                 lambda src: ast_to_ttir(src, signature, configs[0], constants)),
+        "ttgir": (lambda path: parse_mlir_module(path, context),
+                  lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
+        "llir": (lambda path: Path(path).read_text(),
+                 lambda src: ttgir_to_llir(src, extern_libs, capability)),
+    }
     if torch.version.hip is not None:
+        # TODO: I think this whole thing can be significantly simplified
         _triton.set_rocm()
         if extern_libs is None:
             extern_libs = get_amdgcn_bitcode_paths()
@@ -1862,33 +1870,15 @@ def compile(fn, **kwargs):
         gfx_arch = os.environ.get('MI_GPU_ARCH', gfx_arch_full_details[1])
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')
-        stages = {
-            "ast": (lambda path: fn, None),
-            "ttir": (lambda path: parse_mlir_module(path, context),
-                     lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-            "ttgir": (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
-            "llir": (lambda path: Path(path).read_text(),
-                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
-            "amdgcn": (lambda path: Path(path).read_text(),
-                       lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch,
-                                                            gfx_arch_full_details[0],
-                                                            gfx_arch_full_details[2])),
-        }
+        stages["amdgcn"] = (lambda path: Path(path).read_text(),
+                            lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch,
+                                                                 gfx_arch_full_details[0],
+                                                                 gfx_arch_full_details[2]))
     else:
-        stages = {
-            "ast": (lambda path: fn, None),
-            "ttir": (lambda path: parse_mlir_module(path, context),
-                     lambda src: ast_to_ttir(src, signature, configs[0], constants, debug)),
-            "ttgir": (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
-            "llir": (lambda path: Path(path).read_text(),
-                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
-            "ptx": (lambda path: Path(path).read_text(),
-                    lambda src: llir_to_ptx(src, capability)),
-            "cubin": (lambda path: Path(path).read_bytes(),
-                      lambda src: ptx_to_cubin(src, capability))
-        }
+        stages["ptx"] = (lambda path: Path(path).read_text(),
+                         lambda src: llir_to_ptx(src, capability))
+        stages["cubin"] = (lambda path: Path(path).read_bytes(),
+                           lambda src: ptx_to_cubin(src, capability))
 
     # find out the signature of the function
     if isinstance(fn, triton.runtime.JITFunction):
@@ -1985,36 +1975,34 @@ def compile(fn, **kwargs):
 
 @static_vars(discovered_gfx_arch_fulldetails=get_amdgpu_arch_fulldetails())
 def _get_amdgcn_bitcode_paths():
-    if torch.version.hip is not None:
-        gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
-                                               "ocml.bc",
-                                               "ockl.bc",
-                                               "oclc_finite_only_off.bc",
-                                               "oclc_daz_opt_off.bc",
-                                               "oclc_correctly_rounded_sqrt_on.bc",
-                                               "oclc_unsafe_math_off.bc",
-                                               "oclc_wavefrontsize64_on.bc"]
+    assert torch.version.hip is not None
+    gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
+                                           "ocml.bc",
+                                           "ockl.bc",
+                                           "oclc_finite_only_off.bc",
+                                           "oclc_daz_opt_off.bc",
+                                           "oclc_correctly_rounded_sqrt_on.bc",
+                                           "oclc_unsafe_math_off.bc",
+                                           "oclc_wavefrontsize64_on.bc"]
 
-        gfx_arch = _get_amdgcn_bitcode_paths.discovered_gfx_arch_fulldetails[1]
-        gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
+    gfx_arch = _get_amdgcn_bitcode_paths.discovered_gfx_arch_fulldetails[1]
+    gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
 
-        gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
-        bitcode_path_dir = os.path.join(Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/")
+    gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
+    bitcode_path_dir = os.path.join(Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/")
 
-        amdgcn_bitcode_paths = {}
-        i = 1
-        for bc_lib in gpu_arch_agnostic_bitcode_libraries:
-            bc_path = bitcode_path_dir + bc_lib
-            if os.path.exists(bc_path):
-                amdgcn_bitcode_paths['library_' + str(i)] = bc_path
-                i += 1
-        bc_gfx_path = bitcode_path_dir + gpu_arch_specific_bitcode_library
-        if os.path.exists(bc_gfx_path):
-            amdgcn_bitcode_paths['library_' + str(i)] = bc_gfx_path
+    amdgcn_bitcode_paths = {}
+    i = 1
+    for bc_lib in gpu_arch_agnostic_bitcode_libraries:
+        bc_path = bitcode_path_dir + bc_lib
+        if os.path.exists(bc_path):
+            amdgcn_bitcode_paths['library_' + str(i)] = bc_path
+            i += 1
+    bc_gfx_path = bitcode_path_dir + gpu_arch_specific_bitcode_library
+    if os.path.exists(bc_gfx_path):
+        amdgcn_bitcode_paths['library_' + str(i)] = bc_gfx_path
 
-        return amdgcn_bitcode_paths
-    else:
-        return {}
+    return amdgcn_bitcode_paths
 
 
 @static_vars(amdgcn_bitcode_paths=_get_amdgcn_bitcode_paths())
