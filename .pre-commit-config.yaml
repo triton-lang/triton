@@ -26,6 +26,21 @@ repos:
       - id: autopep8
         args: ["-a", "-i"]
         stages: [commit, push, manual]
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        # additional_dependencies:
+        #   - flake8-bugbear
+        #   - flake8-comprehensions
+        #   - flake8-docstrings
+        #   - flake8-pyi
+        #   - flake8-simplify
+        exclude: |
+          (?x)(
+            ^test/|
+            ^docs/conf.py$
+          )
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v15.0.7
     hooks:
