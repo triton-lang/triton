@@ -414,7 +414,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
         if (wpt[0] * wpt[1] < numWarps)
           wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
       } while (wpt_nm1 != wpt);
-      
+
       return $_get(context, versionMajor, versionMinor, wpt);
     }]>,
 

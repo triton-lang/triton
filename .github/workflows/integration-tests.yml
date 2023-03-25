@@ -114,7 +114,7 @@ jobs:
         run: |
           cd python/test/unit/
           pytest
-      
+
       - name: Run python tests on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |

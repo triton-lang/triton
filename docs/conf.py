@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
 # Triton documentation build configuration file, created by
@@ -28,7 +27,7 @@
 
 def process_sig(app, what, name, obj, options, signature, return_annotation):
     if signature and '_builder' in signature:
-        signature = signature.split('_builder')[0] + ")" 
+        signature = signature.split('_builder')[0] + ")"
     return (signature, return_annotation)
 
 def setup(app):
