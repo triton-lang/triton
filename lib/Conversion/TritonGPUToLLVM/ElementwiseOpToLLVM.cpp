@@ -1040,7 +1040,8 @@ struct AbsFOpConversion
                      ValueRange operands, Location loc) const {
     if (llvm::isa<IntegerType>(elemTy)) {
       // Mask out the sign bit
-      auto num_bits = getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
+      auto num_bits =
+          getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
       assert(num_bits <= 16);
       auto mask = (1u << (num_bits - 1u)) - 1u;
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
