@@ -537,15 +537,16 @@ void MakeTensorPtrOp::build(::mlir::OpBuilder &builder,
                             ::mlir::ValueRange shape,
                             ::mlir::ValueRange strides,
                             ::mlir::ValueRange offsets,
-                            ArrayRef<int64_t> tensorShape,
+                            ArrayRef<int32_t> tensorShape,
                             ArrayRef<int32_t> order) {
   // Get pointer type from `base`
   auto pointerType = base.getType().cast<PointerType>();
   assert(pointerType != nullptr);
 
   // Build type `tt.ptr<tensor<tensorShape, base.pointeeType>>`
-  auto pointeeType = pointerType.getPointeeType();
-  auto tensorType = RankedTensorType::get(tensorShape, pointeeType);
+  auto tensorType = RankedTensorType::get(
+      SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
+      pointerType.getPointeeType());
   auto result = PointerType::get(tensorType, 1);
 
   return build(builder, state, result, base, shape, strides, offsets,

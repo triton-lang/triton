@@ -511,7 +511,7 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
         "ValueRange":$shape,
         "ValueRange":$strides,
         "ValueRange":$offsets,
-        "ArrayRef<int64_t>":$tensorShape,
+        "ArrayRef<int32_t>":$tensorShape,
         "ArrayRef<int32_t>":$order
     )>
   ];

@@ -1377,7 +1377,7 @@ def convert_to_ir_values(builder, list_like, require_i64=True):
 
 def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order, builder: ir.builder) -> tl.tensor:
     # Convert dynamic arguments to IR values
-    # NOTES(Chenggang): current shape/strides are `int64_t`, while `offsets` are `int32_t`
+    # NOTES(Chenggang): current `shape/strides` are `int64_t`, while `offsets/block_shape` are `int32_t`
     shape = convert_to_ir_values(builder, shape)
     strides = convert_to_ir_values(builder, strides)
     offsets = convert_to_ir_values(builder, offsets, require_i64=False)
@@ -1386,14 +1386,14 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
     if not hasattr(block_shape, "__iter__"):
         block_shape = [block_shape]
     block_shape = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in block_shape]
-    assert all([isinstance(elem, int) and -2**63 <= elem < 2**63 for elem in block_shape]), \
-        "Expected a list of constant integers (int64_t range) in `block_shape`"
+    assert all([isinstance(elem, int) and -2**31 <= elem < 2**31 for elem in block_shape]), \
+        "Expected a list of constant integers (`int32_t` range) in `block_shape`"
 
     # Check `order`
     if not hasattr(order, "__iter__"):
         order = [order]
     order = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in order]
-    assert sorted(order) == list(range(len(order))), "Expected a permutation of [0, 1, ..., len(order)-1] in order"
+    assert sorted(order) == list(range(len(order))), "Expected a permutation of (0, 1, ..., len(order)-1) in order"
 
     # Must have same length
     assert all([len(block_shape) == len(list_like) for list_like in [shape, strides, offsets, order]]), \

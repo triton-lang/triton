@@ -1415,7 +1415,7 @@ void init_triton_ir(py::module &&m) {
               std::vector<mlir::Value> &shape,
               std::vector<mlir::Value> &strides,
               std::vector<mlir::Value> &offsets,
-              std::vector<int64_t> &tensorShape,
+              std::vector<int32_t> &tensorShape,
               std::vector<int32_t> &order) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::MakeTensorPtrOp>(
