@@ -492,6 +492,7 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
       pointer to the block tensor, e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
   }];
 
+  // TODO(Chenggang): unify the integer types. Currently we cannot do that due to hardware constraints.
   let arguments = (ins
     TT_Ptr:$base,
     Variadic<I64>:$shape,
