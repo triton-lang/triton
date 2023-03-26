@@ -16,7 +16,7 @@ import triton.language as tl
 
 @triton.heuristics(
     {
-        'EVEN_K': lambda nargs: nargs['K'] % nargs['TILE_K'] == 0,
+        "EVEN_K": lambda nargs: nargs["K"] % nargs["TILE_K"] == 0,
     }
 )
 @triton.jit
@@ -247,7 +247,7 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
 
     # compute output
     def grid(meta):
-        return [triton.cdiv(BS3, meta['TILE_N']), width, BS0]
+        return [triton.cdiv(BS3, meta["TILE_N"]), width, BS0]
 
     _dsd_kernel[grid](
         a, b, c,
@@ -377,7 +377,7 @@ def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
 
 
 class _matmul(torch.autograd.Function):
-    fn = {'sdd': sdd_matmul, 'dsd': dsd_matmul, 'dds': dds_matmul}
+    fn = {"sdd": sdd_matmul, "dsd": dsd_matmul, "dds": dds_matmul}
 
     @staticmethod
     def forward(
@@ -458,8 +458,8 @@ class _matmul(torch.autograd.Function):
 
 class matmul:
     def __init__(self, layout, block, mode, device, trans_a=False, trans_b=False, trans_c=False):
-        if mode not in ['sdd', 'dsd', 'dds']:
-            raise NotImplementedError('Supported modes are: sdd, dsd, dds')
+        if mode not in ["sdd", "dsd", "dds"]:
+            raise NotImplementedError("Supported modes are: sdd, dsd, dds")
         self.block = block
         self.mode = mode
         self.trans_a = trans_a
@@ -468,15 +468,15 @@ class matmul:
         self.layout = layout
         self.spdims = layout.shape
         step = min(block, 32)
-        if self.mode == 'sdd':
+        if self.mode == "sdd":
             self.c_lut, self.c_width = sdd_lut(layout, block, device)
             self.da_lut, self.da_width = dsd_lut(layout, block, step, True, device)
             self.db_lut, self.db_width = dsd_lut(layout, block, step, False, device)
-        if self.mode == 'dsd':
+        if self.mode == "dsd":
             self.c_lut, self.c_width = dsd_lut(layout, block, step, not self.trans_a, device)
             self.da_lut, self.da_width = sdd_lut(layout, block, device)
             self.db_lut, self.db_width = dsd_lut(layout, block, step, self.trans_a, device)
-        if self.mode == 'dds':
+        if self.mode == "dds":
             self.c_lut, self.c_width = dsd_lut(layout, block, step, self.trans_b, device)
             self.da_lut, self.da_width = dsd_lut(layout, block, step, not self.trans_b, device)
             self.db_lut, self.db_width = sdd_lut(layout, block, device)

@@ -65,7 +65,7 @@ def dropout(x, x_keep, p):
     n_elements = x.numel()
 
     def grid(meta):
-        return (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+        return (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
 
     _dropout[grid](x, x_keep, output, n_elements, p, BLOCK_SIZE=1024)
     return output
@@ -140,7 +140,7 @@ def seeded_dropout(x, p, seed):
     n_elements = x.numel()
 
     def grid(meta):
-        return (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+        return (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
 
     _seeded_dropout[grid](x, output, n_elements, p, seed, BLOCK_SIZE=1024)
     return output

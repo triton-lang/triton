@@ -160,16 +160,16 @@ import triton.language as tl
     configs=[
         triton.Config(
             {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 256,
-                'BLOCK_SIZE_K': 64,
-                'GROUP_SIZE_M': 8,
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 256,
+                "BLOCK_SIZE_K": 64,
+                "GROUP_SIZE_M": 8,
             },
             num_stages=3,
             num_warps=8,
         ),
     ],
-    key=['M', 'N', 'K'],
+    key=["M", "N", "K"],
 )
 @triton.jit
 def matmul_kernel(
@@ -278,7 +278,7 @@ def matmul(a, b, activation=None):
 
     # 1D launch kernel where each block gets its own program.
     def grid(META):
-        return (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
+        return (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),)
 
     matmul_kernel[grid](
         a, b, c,
@@ -298,8 +298,8 @@ def matmul(a, b, activation=None):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
+b = torch.randn((512, 512), device="cuda", dtype=torch.float16)
 triton_output = matmul(a, b, activation=None)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
@@ -321,26 +321,26 @@ else:
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
+        x_names=["M", "N", "K"],  # argument names to use as an x-axis for the plot
         x_vals=[8192],  # different possible values for `x_name`
-        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+        line_arg="provider",  # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['cublas', 'triton'],
+        line_vals=["cublas", "triton"],
         # label name for the lines
         line_names=["cuBLAS", "Triton"],
         # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+        styles=[("green", "-"), ("green", "--"), ("blue", "-"), ("blue", "--")],
         ylabel="TFLOPS",  # label name for the y-axis
         plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={},
     )
 )
 def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-    if provider == 'cublas':
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16)
+    b = torch.randn((K, N), device="cuda", dtype=torch.float16)
+    if provider == "cublas":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
-    if provider == 'triton':
+    if provider == "triton":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
 
     def perf(ms):

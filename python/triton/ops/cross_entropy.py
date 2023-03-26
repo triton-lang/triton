@@ -23,8 +23,8 @@ def num_warps(N):
     return 16
 
 
-@triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
-@triton.heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
+@triton.heuristics({"num_warps": lambda nargs: num_warps(nargs["N"])})
+@triton.heuristics({"BLOCK": lambda nargs: next_power_of_2(nargs["N"])})
 @triton.jit
 def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
@@ -35,7 +35,7 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     WRIT_PROBS = PROBS + row * N + cols
     READ_PROBS = PROBS + row * N + idx
     # write-back negative log-probs
-    logits = tl.load(LOGITS, mask=cols < N, other=-float('inf'))
+    logits = tl.load(LOGITS, mask=cols < N, other=-float("inf"))
     logits = logits.to(tl.float32)
     logits = logits - tl.max(logits, 0)
     probs = tl.log(tl.sum(tl.exp(logits), 0)) - logits
@@ -48,8 +48,8 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     tl.store(LOSS + row, probs)
 
 
-@triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
-@triton.heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
+@triton.heuristics({"num_warps": lambda nargs: num_warps(nargs["N"])})
+@triton.heuristics({"BLOCK": lambda nargs: next_power_of_2(nargs["N"])})
 @triton.jit
 def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
@@ -59,7 +59,7 @@ def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     PROBS = PROBS + row * N + cols
     # We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
     # and we have -log(p[k]) stored in PROBS, so this is easy
-    probs = -tl.load(PROBS, mask=cols < N, other=float('inf'))
+    probs = -tl.load(PROBS, mask=cols < N, other=float("inf"))
     probs = tl.exp(probs.to(tl.float32))
     delta = cols == idx
     # write result in-place in PROBS

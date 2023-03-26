@@ -8,7 +8,7 @@ from triton.testing import get_dram_gbps, get_max_simd_tflops, get_max_tensorcor
 
 
 def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
-    '''return compute throughput in TOPS'''
+    """return compute throughput in TOPS"""
     total_warps = num_ctas * min(num_warps, 4)
     triton.compiler.init_cuda_utils()
 
@@ -24,7 +24,7 @@ def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
 
 
 def get_simd_tflops(backend, device, num_ctas, num_warps, dtype):
-    '''return compute throughput in TOPS'''
+    """return compute throughput in TOPS"""
     total_warps = num_ctas * min(num_warps, 4)
     num_subcores = (
         triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
@@ -51,8 +51,8 @@ def estimate_matmul_time(
     debug=False,
     **kwargs
 ):  # fmt: skip
-    '''return estimated running time in ms
-    = max(compute, loading) + store'''
+    """return estimated running time in ms
+    = max(compute, loading) + store"""
     backend = _triton.runtime.backend.CUDA
     device = torch.cuda.current_device()
     dtype = A.dtype
@@ -106,9 +106,9 @@ def estimate_matmul_time(
     total_time_ms = max(compute_ms, load_ms) + store_ms
     if debug:
         print(
-            f'Total time: {total_time_ms}ms, compute time: {compute_ms}ms, '
-            f'loading time: {load_ms}ms, store time: {store_ms}ms, '
-            f'Activate CTAs: {active_cta_ratio*100}%'
+            f"Total time: {total_time_ms}ms, compute time: {compute_ms}ms, "
+            f"loading time: {load_ms}ms, store time: {store_ms}ms, "
+            f"Activate CTAs: {active_cta_ratio*100}%"
         )
     return total_time_ms
 
@@ -117,17 +117,17 @@ def early_config_prune(configs, named_args):
     device = torch.cuda.current_device()
     capability = torch.cuda.get_device_capability()
     # BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, num_warps, num_stages
-    dtsize = named_args['A'].element_size()
-    dtype = named_args['A'].dtype
+    dtsize = named_args["A"].element_size()
+    dtype = named_args["A"].dtype
 
     # 1. make sure we have enough smem
     pruned_configs = []
     for config in configs:
         kw = config.kwargs
         BLOCK_M, BLOCK_N, BLOCK_K, num_stages = (
-            kw['BLOCK_M'],
-            kw['BLOCK_N'],
-            kw['BLOCK_K'],
+            kw["BLOCK_M"],
+            kw["BLOCK_N"],
+            kw["BLOCK_K"],
             config.num_stages,
         )
 
@@ -143,17 +143,17 @@ def early_config_prune(configs, named_args):
 
     # Some dtypes do not allow atomic_add
     if dtype not in [torch.float16, torch.float32]:
-        configs = [config for config in configs if config.kwargs['SPLIT_K'] == 1]
+        configs = [config for config in configs if config.kwargs["SPLIT_K"] == 1]
 
     # group configs by (BLOCK_M,_N,_K, SPLIT_K, num_warps)
     configs_map = {}
     for config in configs:
         kw = config.kwargs
         BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, num_warps, num_stages = (
-            kw['BLOCK_M'],
-            kw['BLOCK_N'],
-            kw['BLOCK_K'],
-            kw['SPLIT_K'],
+            kw["BLOCK_M"],
+            kw["BLOCK_N"],
+            kw["BLOCK_K"],
+            kw["SPLIT_K"],
             config.num_warps,
             config.num_stages,
         )

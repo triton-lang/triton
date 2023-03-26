@@ -85,7 +85,7 @@ def softmax_kernel(
     col_offsets = tl.arange(0, BLOCK_SIZE)
     input_ptrs = row_start_ptr + col_offsets
     # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
-    row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float('inf'))
+    row = tl.load(input_ptrs, mask=col_offsets < n_cols, other=-float("inf"))
     # Subtract maximum for numerical stability
     row_minus_max = row - tl.max(row, axis=0)
     # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
@@ -140,7 +140,7 @@ def softmax(x):
 # This will allow us to verify that our padding mechanism works.
 
 torch.manual_seed(0)
-x = torch.randn(1823, 781, device='cuda')
+x = torch.randn(1823, 781, device="cuda")
 y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
 assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
@@ -158,32 +158,32 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=['N'],  # argument names to use as an x-axis for the plot
+        x_names=["N"],  # argument names to use as an x-axis for the plot
         x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
-        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
+        line_arg="provider",  # argument name whose value corresponds to a different line in the plot
         line_vals=[
-            'triton',
-            'torch-native',
-            'torch-jit',
+            "triton",
+            "torch-native",
+            "torch-jit",
         ],  # possible values for `line_arg``
         line_names=[
             "Triton",
             "Torch (native)",
             "Torch (jit)",
         ],  # label name for the lines
-        styles=[('blue', '-'), ('green', '-'), ('green', '--')],  # line styles
+        styles=[("blue", "-"), ("green", "-"), ("green", "--")],  # line styles
         ylabel="GB/s",  # label name for the y-axis
         plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
-        args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
+        args={"M": 4096},  # values for function arguments not in `x_names` and `y_name`
     )
 )
 def benchmark(M, N, provider):
-    x = torch.randn(M, N, device='cuda', dtype=torch.float32)
-    if provider == 'torch-native':
+    x = torch.randn(M, N, device="cuda", dtype=torch.float32)
+    if provider == "torch-native":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
-    if provider == 'triton':
+    if provider == "triton":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x))
-    if provider == 'torch-jit':
+    if provider == "torch-jit":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x))
 
     def gbps(ms):

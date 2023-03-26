@@ -70,9 +70,9 @@ def get_llvm_package_info():
     if system == "Darwin":
         system_suffix = "apple-darwin"
     elif system == "Linux":
-        vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+        vglibc = tuple(map(int, platform.libc_ver()[1].split(".")))
         vglibc = vglibc[0] * 100 + vglibc[1]
-        linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
+        linux_suffix = "ubuntu-18.04" if vglibc > 217 else "centos-7"
         system_suffix = f"linux-gnu-{linux_suffix}"
     else:
         return Package(
@@ -85,7 +85,7 @@ def get_llvm_package_info():
         )
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
+    name = f"llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}"
     version = "llvm-17.0.0-2538e550420f"
     url = (
         f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
@@ -117,7 +117,7 @@ def get_thirdparty_packages(triton_cache_path):
             except Exception:
                 pass
             os.makedirs(package_root_dir, exist_ok=True)
-            print(f'downloading and extracting {p.url} ...')
+            print(f"downloading and extracting {p.url} ...")
             ftpstream = urllib.request.urlopen(p.url)
             file = tarfile.open(fileobj=ftpstream, mode="r|*")
             file.extractall(path=package_root_dir)
@@ -142,7 +142,7 @@ def download_and_copy_ptxas():
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
     if not os.path.exists(dst_path):
-        print(f'downloading and extracting {url} ...')
+        print(f"downloading and extracting {url} ...")
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|*")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -164,7 +164,7 @@ class CMakeExtension(Extension):
 
 
 class CMakeBuild(build_ext):
-    user_options = build_ext.user_options + [('base-dir=', None, 'base directory of Triton')]
+    user_options = build_ext.user_options + [("base-dir=", None, "base directory of Triton")]
 
     def initialize_options(self):
         build_ext.initialize_options(self)
@@ -191,7 +191,7 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        lit_dir = shutil.which('lit')
+        lit_dir = shutil.which("lit")
         user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
         if not user_home:
             raise RuntimeError("Could not find user home directory")
@@ -230,7 +230,7 @@ class CMakeBuild(build_ext):
             import multiprocessing
 
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ['-j' + str(2 * multiprocessing.cpu_count())]
+            build_args += ["-j" + str(2 * multiprocessing.cpu_count())]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)

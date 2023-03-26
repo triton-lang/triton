@@ -54,19 +54,19 @@ def apply_src_change(target, old, new):
 
 def test_nochange():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, 'i + 1', 'i + 1')
+    updated = apply_src_change(kernel, "i + 1", "i + 1")
     assert baseline == updated
 
 
 def test_toplevel_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, 'i + 1', 'i + 2')
+    updated = apply_src_change(kernel, "i + 1", "i + 2")
     assert baseline != updated
 
 
 def test_nested1_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(function_1, 'i + 1', 'i + 2')
+    updated = apply_src_change(function_1, "i + 1", "i + 2")
     assert baseline != updated
 
 
@@ -85,13 +85,13 @@ def test_reuse():
 
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device="cuda")
     for i in range(10):
         kernel[(1,)](x, 1, BLOCK=1024)
     assert counter == 1
 
 
-@pytest.mark.parametrize('mode', ['enable', 'disable'])
+@pytest.mark.parametrize("mode", ["enable", "disable"])
 def test_specialize(mode):
     counter = 0
 
@@ -101,9 +101,9 @@ def test_specialize(mode):
 
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
-    function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 3, 'disable': 1}[mode]
+    x = torch.empty(1, dtype=torch.int32, device="cuda")
+    function = {"enable": kernel, "disable": kernel_nospec}[mode]
+    target = {"enable": 3, "disable": 1}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1,)](x, i, BLOCK=512)
     assert counter == target
@@ -114,7 +114,7 @@ def test_constexpr_not_callable() -> None:
     def kernel(X, c: tl.constexpr):
         tl.store(X, 2)
 
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device="cuda")
     error = False
     try:
         kernel[(1,)](x, c="str")

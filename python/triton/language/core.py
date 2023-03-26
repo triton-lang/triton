@@ -8,7 +8,7 @@ from . import builtin, semantic
 from triton._C.libtriton.triton import ir
 
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 TRITON_MAX_TENSOR_NUMEL = 131072
 
@@ -27,7 +27,7 @@ def _to_tensor(x, builder):
         elif 2**63 <= x < 2**64:
             return tensor(builder.get_int64(x), uint64)
         else:
-            raise RuntimeError(f'Nonrepresentable integer {x}.')
+            raise RuntimeError(f"Nonrepresentable integer {x}.")
     elif isinstance(x, float):
         return tensor(builder.get_fp32(x), float32)
     elif isinstance(x, constexpr):
@@ -38,11 +38,11 @@ def _to_tensor(x, builder):
 
 
 class dtype:
-    SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
-    UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
-    STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
-    OTHER_TYPES = ['void']
+    SINT_TYPES = ["int8", "int16", "int32", "int64"]
+    UINT_TYPES = ["int1", "uint8", "uint16", "uint32", "uint64"]
+    FP_TYPES = ["fp8e4", "fp8e5", "fp16", "bf16", "fp32", "fp64"]
+    STANDARD_FP_TYPES = ["fp16", "bf16", "fp32", "fp64"]
+    OTHER_TYPES = ["void"]
 
     class SIGNEDNESS(Enum):
         SIGNED = 0
@@ -55,77 +55,77 @@ class dtype:
         ), name
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
+            self.int_bitwidth = int(name.split("int")[-1])
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.UINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
+            self.int_bitwidth = int(name.split("int")[-1])
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
-            if name == 'fp8e4':
+            if name == "fp8e4":
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
-            elif name == 'fp8e5':
+            elif name == "fp8e5":
                 self.fp_mantissa_width = 2
                 self.primitive_bitwidth = 8
-            elif name == 'fp16':
+            elif name == "fp16":
                 self.fp_mantissa_width = 10
                 self.primitive_bitwidth = 16
-            elif name == 'bf16':
+            elif name == "bf16":
                 self.fp_mantissa_width = 7
                 self.primitive_bitwidth = 16
-            elif name == 'fp32':
+            elif name == "fp32":
                 self.fp_mantissa_width = 23
                 self.primitive_bitwidth = 32
-            elif name == 'fp64':
+            elif name == "fp64":
                 self.fp_mantissa_width = 53
                 self.primitive_bitwidth = 64
             else:
-                raise RuntimeError(f'Unsupported floating-point type {name}')
-        elif name == 'void':
+                raise RuntimeError(f"Unsupported floating-point type {name}")
+        elif name == "void":
             self.primitive_bitwidth = 0
 
     def is_fp8(self):
-        return 'fp8' in self.name
+        return "fp8" in self.name
 
     def is_fp16(self):
-        return self.name == 'fp16'
+        return self.name == "fp16"
 
     def is_bf16(self):
-        return self.name == 'bf16'
+        return self.name == "bf16"
 
     def is_fp32(self):
-        return self.name == 'fp32'
+        return self.name == "fp32"
 
     def is_fp64(self):
-        return self.name == 'fp64'
+        return self.name == "fp64"
 
     def is_int1(self):
-        return self.name == 'int1'
+        return self.name == "int1"
 
     def is_int8(self):
-        return self.name == 'int8'
+        return self.name == "int8"
 
     def is_int16(self):
-        return self.name == 'int16'
+        return self.name == "int16"
 
     def is_int32(self):
-        return self.name == 'int32'
+        return self.name == "int32"
 
     def is_int64(self):
-        return self.name == 'int64'
+        return self.name == "int64"
 
     def is_uint8(self):
-        return self.name == 'uint8'
+        return self.name == "uint8"
 
     def is_uint16(self):
-        return self.name == 'uint16'
+        return self.name == "uint16"
 
     def is_uint32(self):
-        return self.name == 'uint32'
+        return self.name == "uint32"
 
     def is_uint64(self):
-        return self.name == 'uint64'
+        return self.name == "uint64"
 
     def is_floating(self):
         return self.name in dtype.FP_TYPES
@@ -173,31 +173,31 @@ class dtype:
         return self
 
     def to_ir(self, builder: ir.builder) -> ir.type:
-        if self.name == 'void':
+        if self.name == "void":
             return builder.get_void_ty()
-        elif self.name == 'int1':
+        elif self.name == "int1":
             return builder.get_int1_ty()
-        elif self.name in ('int8', 'uint8'):
+        elif self.name in ("int8", "uint8"):
             return builder.get_int8_ty()
-        elif self.name in ('int16', 'uint16'):
+        elif self.name in ("int16", "uint16"):
             return builder.get_int16_ty()
-        elif self.name in ('int32', 'uint32'):
+        elif self.name in ("int32", "uint32"):
             return builder.get_int32_ty()
-        elif self.name in ('int64', 'uint64'):
+        elif self.name in ("int64", "uint64"):
             return builder.get_int64_ty()
-        elif self.name == 'fp8e5':
+        elif self.name == "fp8e5":
             return builder.get_fp8e5_ty()
-        elif self.name == 'fp8e4':
+        elif self.name == "fp8e4":
             return builder.get_fp8e4_ty()
-        elif self.name == 'fp16':
+        elif self.name == "fp16":
             return builder.get_half_ty()
-        elif self.name == 'bf16':
+        elif self.name == "bf16":
             return builder.get_bf16_ty()
-        elif self.name == 'fp32':
+        elif self.name == "fp32":
             return builder.get_float_ty()
-        elif self.name == 'fp64':
+        elif self.name == "fp64":
             return builder.get_double_ty()
-        raise ValueError(f'fail to convert {self} to ir type')
+        raise ValueError(f"fail to convert {self} to ir type")
 
     def __str__(self):
         return self.name
@@ -208,13 +208,13 @@ class dtype:
         return self.name
 
     def __repr__(self):
-        return f'triton.language.{self.name}'
+        return f"triton.language.{self.name}"
 
 
 class pointer_type(dtype):
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
-            raise TypeError('element_ty is a {type(element_ty).__name__}.')
+            raise TypeError("element_ty is a {type(element_ty).__name__}.")
         self.element_ty = element_ty
         self.address_space = address_space
 
@@ -224,7 +224,7 @@ class pointer_type(dtype):
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
-        return f'pointer<{self.element_ty}>'
+        return f"pointer<{self.element_ty}>"
 
     def __repr__(self):
         return self.__str__()
@@ -254,7 +254,7 @@ class block_type(dtype):
 
         # shape can be empty ([]) when an input is a 0D tensor.
         if not shape:
-            raise TypeError('0d block_type is forbidden')
+            raise TypeError("0d block_type is forbidden")
         if isinstance(shape[0], constexpr):
             shape = [s.value for s in shape]
 
@@ -274,7 +274,7 @@ class block_type(dtype):
         return builder.get_block_ty(self.element_ty.to_ir(builder), self.shape)
 
     def __str__(self):
-        return f'<{self.shape}, {self.element_ty}>'
+        return f"<{self.shape}, {self.element_ty}>"
 
     def __repr__(self):
         return self.__str__()
@@ -304,7 +304,7 @@ class function_type(dtype):
         self.param_types = param_types
 
     def __str__(self):
-        return f'fn ({self.param_types}) -> {self.ret_types}'
+        return f"fn ({self.param_types}) -> {self.ret_types}"
 
     def to_ir(self, builder: ir.builder):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
@@ -313,22 +313,22 @@ class function_type(dtype):
 
 
 # scalar types
-void = dtype('void')
-int1 = dtype('int1')
-int8 = dtype('int8')
-int16 = dtype('int16')
-int32 = dtype('int32')
-int64 = dtype('int64')
-uint8 = dtype('uint8')
-uint16 = dtype('uint16')
-uint32 = dtype('uint32')
-uint64 = dtype('uint64')
-float8e5 = dtype('fp8e5')
-float8e4 = dtype('fp8e4')
-float16 = dtype('fp16')
-bfloat16 = dtype('bf16')
-float32 = dtype('fp32')
-float64 = dtype('fp64')
+void = dtype("void")
+int1 = dtype("int1")
+int8 = dtype("int8")
+int16 = dtype("int16")
+int32 = dtype("int32")
+int64 = dtype("int64")
+uint8 = dtype("uint8")
+uint16 = dtype("uint16")
+uint32 = dtype("uint32")
+uint64 = dtype("uint64")
+float8e5 = dtype("fp8e5")
+float8e4 = dtype("fp8e4")
+float16 = dtype("fp16")
+bfloat16 = dtype("bf16")
+float32 = dtype("fp32")
+float64 = dtype("fp64")
 # pointer types
 pi32_t = pointer_type(int32)
 
@@ -476,7 +476,7 @@ class tensor:
 
     def __str__(self) -> str:
         # ex. "float32[3,4]"
-        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
+        return str(self.dtype) + "[" + ",".join(str(s) for s in self.shape) + "]"
 
     @builtin
     def __add__(self, other, _builder=None):

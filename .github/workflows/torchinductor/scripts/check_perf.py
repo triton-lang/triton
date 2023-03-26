@@ -4,7 +4,7 @@ from collections import namedtuple
 
 
 # Create a named tuple for the output of the benchmark
-BenchmarkOutput = namedtuple('BenchmarkOutput', ['dev', 'name', 'batch_size', 'speedup', 'latency'])
+BenchmarkOutput = namedtuple("BenchmarkOutput", ["dev", "name", "batch_size", "speedup", "latency"])
 
 
 def parse_output(file_path: str) -> dict:
@@ -53,10 +53,10 @@ def compare(baseline: dict, new: dict, threshold: float, geomean_threshold: floa
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--baseline', required=True)
-    parser.add_argument('--new', required=True)
-    parser.add_argument('--threshold', type=float, default=0.1)
-    parser.add_argument('--geomean-threshold', type=float, default=0.02)
+    parser.add_argument("--baseline", required=True)
+    parser.add_argument("--new", required=True)
+    parser.add_argument("--threshold", type=float, default=0.1)
+    parser.add_argument("--geomean-threshold", type=float, default=0.02)
     args = parser.parse_args()
     baseline = parse_output(args.baseline)
     new = parse_output(args.new)

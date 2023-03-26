@@ -238,8 +238,8 @@ class LayerNorm(torch.autograd.Function):
         # reshape input data into 2D tensor
         x_arg = x.reshape(-1, x.shape[-1])
         M, N = x_arg.shape
-        mean = torch.empty((M,), dtype=torch.float32, device='cuda')
-        rstd = torch.empty((M,), dtype=torch.float32, device='cuda')
+        mean = torch.empty((M,), dtype=torch.float32, device="cuda")
+        rstd = torch.empty((M,), dtype=torch.float32, device="cuda")
         # Less than 64KB per feature: enqueue fused kernel
         MAX_FUSED_SIZE = 65536 // x.element_size()
         BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(N))
@@ -273,7 +273,7 @@ class LayerNorm(torch.autograd.Function):
         if N <= 1024:
             GROUP_SIZE_M = 256
         # allocate output
-        locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device='cuda')
+        locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device="cuda")
         _dw = torch.empty((GROUP_SIZE_M, w.shape[0]), dtype=x.dtype, device=w.device)
         _db = torch.empty((GROUP_SIZE_M, w.shape[0]), dtype=x.dtype, device=w.device)
         dw = torch.empty((w.shape[0],), dtype=w.dtype, device=w.device)
@@ -292,7 +292,7 @@ class LayerNorm(torch.autograd.Function):
         )  # fmt: skip
 
         def grid(meta):
-            return [triton.cdiv(N, meta['BLOCK_SIZE_N'])]
+            return [triton.cdiv(N, meta["BLOCK_SIZE_N"])]
 
         # accumulate partial sums in separate kernel
         _layer_norm_bwd_dwdb[grid](
@@ -304,13 +304,13 @@ class LayerNorm(torch.autograd.Function):
 layer_norm = LayerNorm.apply
 
 
-def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
+def test_layer_norm(M, N, dtype, eps=1e-5, device="cuda"):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1],)
-    weight = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    bias = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
+    weight = torch.rand(w_shape, dtype=dtype, device="cuda", requires_grad=True)
+    bias = torch.rand(w_shape, dtype=dtype, device="cuda", requires_grad=True)
+    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device="cuda")
     dy = 0.1 * torch.randn_like(x)
     x.requires_grad_(True)
     # forward pass
@@ -332,52 +332,52 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=['N'],
+        x_names=["N"],
         x_vals=[512 * i for i in range(2, 32)],
-        line_arg='provider',
-        line_vals=['triton', 'torch'] + (['apex'] if HAS_APEX else []),
-        line_names=['Triton', 'Torch'] + (['Apex'] if HAS_APEX else []),
-        styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
-        ylabel='GB/s',
-        plot_name='layer-norm-backward',
-        args={'M': 4096, 'dtype': torch.float16, 'mode': 'backward'},
+        line_arg="provider",
+        line_vals=["triton", "torch"] + (["apex"] if HAS_APEX else []),
+        line_names=["Triton", "Torch"] + (["Apex"] if HAS_APEX else []),
+        styles=[("blue", "-"), ("green", "-"), ("orange", "-")],
+        ylabel="GB/s",
+        plot_name="layer-norm-backward",
+        args={"M": 4096, "dtype": torch.float16, "mode": "backward"},
     )
 )
-def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='cuda'):
+def bench_layer_norm(M, N, dtype, provider, mode="backward", eps=1e-5, device="cuda"):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1],)
-    weight = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    bias = torch.rand(w_shape, dtype=dtype, device='cuda', requires_grad=True)
-    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
+    weight = torch.rand(w_shape, dtype=dtype, device="cuda", requires_grad=True)
+    bias = torch.rand(w_shape, dtype=dtype, device="cuda", requires_grad=True)
+    x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device="cuda")
     dy = 0.1 * torch.randn_like(x)
     x.requires_grad_(True)
     # utility functions
-    if provider == 'triton':
+    if provider == "triton":
 
         def y_fwd():
             return layer_norm(x, w_shape, weight, bias, eps)
 
-    if provider == 'torch':
+    if provider == "torch":
 
         def y_fwd():
             return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)
 
-    if provider == 'apex':
+    if provider == "apex":
         apex_layer_norm = apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
 
         def y_fwd():
             return apex_layer_norm(x)
 
     # forward pass
-    if mode == 'forward':
+    if mode == "forward":
 
         def gbps(ms):
             return 2 * x.numel() * x.element_size() / ms * 1e-06
 
         ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, rep=500)
     # backward pass
-    if mode == 'backward':
+    if mode == "backward":
 
         def gbps(ms):
             return 3 * x.numel() * x.element_size() / ms * 1e-06
@@ -390,7 +390,7 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
 
 
 test_layer_norm(1151, 8192, torch.float16)
-bench_layer_norm.run(save_path='.', print_data=True)
+bench_layer_norm.run(save_path=".", print_data=True)
 
 # %%
 # References

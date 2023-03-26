@@ -272,7 +272,7 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
+@pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [(4, 48, 1024, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     q = (
@@ -331,23 +331,23 @@ BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
 configs = [
     triton.testing.Benchmark(
-        x_names=['N_CTX'],
+        x_names=["N_CTX"],
         x_vals=[2**i for i in range(10, 14)],
-        line_arg='provider',
-        line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
-        line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
-        styles=[('red', '-'), ('blue', '-')],
-        ylabel='ms',
-        plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
+        line_arg="provider",
+        line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
+        line_names=["Triton"] + (["Flash"] if HAS_FLASH else []),
+        styles=[("red", "-"), ("blue", "-")],
+        ylabel="ms",
+        plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}",
         args={
-            'H': N_HEADS,
-            'BATCH': BATCH,
-            'D_HEAD': D_HEAD,
-            'dtype': torch.float16,
-            'mode': mode,
+            "H": N_HEADS,
+            "BATCH": BATCH,
+            "D_HEAD": D_HEAD,
+            "dtype": torch.float16,
+            "mode": mode,
         },
     )
-    for mode in ['fwd', 'bwd']
+    for mode in ["fwd", "bwd"]
 ]
 
 
@@ -355,7 +355,7 @@ configs = [
 def bench_flash_attention(
     BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.float16, device="cuda"
 ):
-    assert mode in ['fwd', 'bwd']
+    assert mode in ["fwd", "bwd"]
     warmup = 25
     rep = 100
     if provider == "triton":
@@ -367,7 +367,7 @@ def bench_flash_attention(
         def fn():
             return attention(q, k, v, sm_scale)
 
-        if mode == 'bwd':
+        if mode == "bwd":
             o = fn()
             do = torch.randn_like(o)
 
@@ -390,7 +390,7 @@ def bench_flash_attention(
         def fn():
             return flash_attn_func(qkv, cu_seqlens, 0.0, N_CTX, causal=True)
 
-        if mode == 'bwd':
+        if mode == "bwd":
             o = fn()
             do = torch.randn_like(o)
 
@@ -402,4 +402,4 @@ def bench_flash_attention(
 
 
 # only works on post-Ampere GPUs right now
-bench_flash_attention.run(save_path='.', print_data=True)
+bench_flash_attention.run(save_path=".", print_data=True)

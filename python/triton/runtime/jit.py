@@ -45,7 +45,7 @@ def get_device_capability(idx):
     return torch.cuda.get_device_capability(idx)
 
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -81,7 +81,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if inspect.isbuiltin(func):
             return
-        if func.__module__ and func.__module__.startswith('triton.'):
+        if func.__module__ and func.__module__.startswith("triton."):
             return
         assert isinstance(func, JITFunction)
         if func.hash is None:
@@ -112,7 +112,7 @@ def version_key():
     with open(triton._C.libtriton.__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
     # language
-    language_path = os.path.join(*triton.__path__, 'language')
+    language_path = os.path.join(*triton.__path__, "language")
     for lib in pkgutil.iter_modules([language_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.md5(f.read()).hexdigest()]
@@ -120,8 +120,8 @@ def version_key():
     try:
         ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
     except Exception:
-        ptxas_version = ''
-    return '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
+        ptxas_version = ""
+    return "-".join(triton.__version__) + "-" + ptxas_version + "-" + "-".join(contents)
 
 
 class KernelInterface(Generic[T]):
@@ -155,11 +155,11 @@ class JITFunction(KernelInterface[T]):
             else:
                 return "i64"
         elif isinstance(arg, float):
-            return 'fp32'
+            return "fp32"
         elif arg is None:
             return None
         else:
-            raise TypeError(f'Unsupported type {type(arg)} for {arg}')
+            raise TypeError(f"Unsupported type {type(arg)} for {arg}")
 
     @staticmethod
     def _spec_of(arg):
@@ -198,7 +198,7 @@ class JITFunction(KernelInterface[T]):
     def _type_of(key):
         # None are nullptr -- implicitly converted to *i8
         if key is None:
-            return '*i8'
+            return "*i8"
         dtype_str = str(key).split(".")[-1]
         tys = {
             "bool": "i1",
@@ -245,7 +245,7 @@ class JITFunction(KernelInterface[T]):
             return False
         name = self.fn.__name__
         module = self.fn.__module__
-        arg_reprs = ', '.join([f'{name}: {ty}' for name, ty in zip(self.arg_names, key[1])])
+        arg_reprs = ", ".join([f"{name}: {ty}" for name, ty in zip(self.arg_names, key[1])])
         repr = f"{name}[num_warps={num_warps}, num_stages={num_stages}]({arg_reprs})"
         key = str(key)
 
@@ -276,14 +276,14 @@ class JITFunction(KernelInterface[T]):
 
     def _make_launcher(self):
         regular_args = [
-            f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs
+            f"{arg}" for i, arg in enumerate(self.arg_names) if i not in self.constexprs
         ]
-        constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
-        args = ', '.join(regular_args)
+        constexpr_args = [f"{arg}" for i, arg in enumerate(self.arg_names) if i in self.constexprs]
+        args = ", ".join(regular_args)
         # cache key for regular argument type
-        sig_keys = ', '.join([f'_key_of({arg})' for arg in regular_args])
+        sig_keys = ", ".join([f"_key_of({arg})" for arg in regular_args])
         # cache key for constexpr argument values
-        constexpr_keys = ', '.join(constexpr_args)
+        constexpr_keys = ", ".join(constexpr_args)
         # cache key for argument specialization
         specializations = []
         for i, arg in enumerate(regular_args):
@@ -291,11 +291,11 @@ class JITFunction(KernelInterface[T]):
                 continue
             specializations += [
                 f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
-                f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
-                f'else (False,)'
+                f"else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) "
+                f"else (False,)"
             ]
-        spec_keys = ', '.join(specializations)
-        grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
+        spec_keys = ", ".join(specializations)
+        grid_args = ",".join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
 def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
@@ -434,12 +434,12 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     def __setattr__(self, name, value):
         # - when kernel decorators change, cached kernel
         #   needs to be cleared
-        if name == 'kernel_decorators':
+        if name == "kernel_decorators":
             self.kernel = None
         super(JITFunction, self).__setattr__(name, value)
         # - when `.src` attribute is set, cache path needs
         #   to be reinitialized
-        if name == 'src':
+        if name == "src":
             self.hash = None
 
     def __repr__(self):
@@ -518,7 +518,7 @@ class TensorWrapper:
         return self.base.data_ptr()
 
     def __str__(self) -> str:
-        return f'TensorWrapper[{self.dtype}]({self.base})'
+        return f"TensorWrapper[{self.dtype}]({self.base})"
 
 
 def reinterpret(tensor, dtype):
@@ -533,4 +533,4 @@ def reinterpret(tensor, dtype):
         # A new wrapper is needed around an unwrapped tensor.
         return TensorWrapper(tensor, dtype)
     else:
-        raise TypeError(f'Cannot reinterpret a {type(tensor)}. Does not contain `data_ptr` method.')
+        raise TypeError(f"Cannot reinterpret a {type(tensor)}. Does not contain `data_ptr` method.")

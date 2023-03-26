@@ -84,12 +84,12 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
     kwargs = {
-        'BLOCK_M': BLOCK_M,
-        'BLOCK_N': BLOCK_N,
-        'BLOCK_K': BLOCK_K,
-        'SPLIT_K': SPLIT_K,
+        "BLOCK_M": BLOCK_M,
+        "BLOCK_N": BLOCK_N,
+        "BLOCK_K": BLOCK_K,
+        "SPLIT_K": SPLIT_K,
     }
-    pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs['C'].zero_()
+    pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs["C"].zero_()
     configs = [triton.Config(kwargs=kwargs, num_warps=NWARP, num_stages=NSTAGE, pre_hook=pre_hook)]
     kernel = triton.ops._matmul.kernel
     kernel.configs = configs

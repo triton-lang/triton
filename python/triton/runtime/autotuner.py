@@ -11,12 +11,12 @@ from .jit import KernelInterface
 
 class Autotuner(KernelInterface):
     def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
-        '''
+        """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
-        '''
+        """
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2)]
         else:
@@ -37,11 +37,11 @@ class Autotuner(KernelInterface):
         # prune configs
         if prune_configs_by:
             perf_model, top_k = (
-                prune_configs_by['perf_model'],
-                prune_configs_by['top_k'],
+                prune_configs_by["perf_model"],
+                prune_configs_by["top_k"],
             )
-            if 'early_config_prune' in prune_configs_by:
-                early_config_prune = prune_configs_by['early_config_prune']
+            if "early_config_prune" in prune_configs_by:
+                early_config_prune = prune_configs_by["early_config_prune"]
         else:
             perf_model, top_k, early_config_prune = None, None, None
         self.perf_model, self.configs_top_k = perf_model, top_k
@@ -74,7 +74,7 @@ class Autotuner(KernelInterface):
         try:
             return do_bench(kernel_call, percentiles=(0.5, 0.2, 0.8))
         except OutOfResources:
-            return (float('inf'), float('inf'), float('inf'))
+            return (float("inf"), float("inf"), float("inf"))
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -166,10 +166,10 @@ class Config:
     def __str__(self):
         res = []
         for k, v in self.kwargs.items():
-            res.append(f'{k}: {v}')
-        res.append(f'num_warps: {self.num_warps}')
-        res.append(f'num_stages: {self.num_stages}')
-        return ', '.join(res)
+            res.append(f"{k}: {v}")
+        res.append(f"num_warps: {self.num_warps}")
+        res.append(f"num_stages: {self.num_stages}")
+        return ", ".join(res)
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):

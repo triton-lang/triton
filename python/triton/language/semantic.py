@@ -743,7 +743,7 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
     if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
         return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
-    assert False, f'cannot cast {input} to {dst_ty}'
+    assert False, f"cannot cast {input} to {dst_ty}"
 
 
 # ===----------------------------------------------------------------------===//
@@ -906,7 +906,7 @@ def atom_red_typechecking_impl(
         raise ValueError(f"Pointer argument of store instruction is {ptr.type!r}")
 
     element_ty = ptr.type.scalar.element_ty
-    if element_ty is tl.float16 and op != 'add':
+    if element_ty is tl.float16 and op != "add":
         raise ValueError(f"atomic_{op} does not support fp16")
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
         raise ValueError(f"atomic_{op} does not support {element_ty}")
@@ -927,7 +927,7 @@ def atom_red_typechecking_impl(
 
 
 def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'max', builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "max", builder)
     sca_ty = val.type.scalar
     # direct call to atomic_max for integers
     if sca_ty.is_int():
@@ -970,7 +970,7 @@ def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.buil
 
 
 def atomic_min(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'min', builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "min", builder)
     sca_ty = val.type.scalar
     # direct call to atomic_min for integers
     if sca_ty.is_int():
@@ -1013,14 +1013,14 @@ def atomic_min(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.buil
 
 
 def atomic_add(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'add', builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "add", builder)
     sca_ty = val.type.scalar
     op = ir.ATOMIC_OP.FADD if sca_ty.is_floating() else ir.ATOMIC_OP.ADD
     return tl.tensor(builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle), val.type)
 
 
 def atomic_and(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'and', builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "and", builder)
     return tl.tensor(
         builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr.handle, val.handle, mask.handle),
         val.type,
@@ -1028,7 +1028,7 @@ def atomic_and(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.buil
 
 
 def atomic_or(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'or', builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "or", builder)
     return tl.tensor(
         builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr.handle, val.handle, mask.handle),
         val.type,
@@ -1036,7 +1036,7 @@ def atomic_or(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.build
 
 
 def atomic_xor(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'xor', builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "xor", builder)
     return tl.tensor(
         builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr.handle, val.handle, mask.handle),
         val.type,
@@ -1044,7 +1044,7 @@ def atomic_xor(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.buil
 
 
 def atomic_xchg(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, builder: ir.builder) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'xchg', builder)
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "xchg", builder)
     return tl.tensor(
         builder.create_atomic_rmw(ir.ATOMIC_OP.XCHG, ptr.handle, val.handle, mask.handle),
         val.type,

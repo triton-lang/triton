@@ -12,7 +12,7 @@ def dispatch(
     ret_shape: tuple,
     _builder=None,
 ):
-    '''
+    """
     Dispatch a function to a library
     :param func: the function to dispatch
     :param lib_name: the name of the library
@@ -22,15 +22,13 @@ def dispatch(
     :param ret_shape: the shape of the return value
     :param _builder: the builder
     :return: the return value of the function
-    '''
+    """
     if len(arg_type_symbol_dict) == 0:
         raise ValueError("arg_type_symbol_dict is empty")
 
     num_args = len(list(arg_type_symbol_dict.keys())[0])
     if len(args) != num_args:
-        raise ValueError(
-            f"length of input args does not match. Expect {len(args)}, got {num_args}"
-        )
+        raise ValueError(f"length of input args does not match. Expect {len(args)}, got {num_args}")
 
     arg_types = []
     arg_list = []
@@ -62,7 +60,7 @@ def dispatch(
 def elementwise(
     lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, _builder=None
 ):
-    '''
+    """
     Dispatch an elementwise function to a library
     :param lib_name: the name of the library
     :param lib_path: the path of the library
@@ -70,7 +68,7 @@ def elementwise(
     :param arg_type_symbol_dict: the type of the arguments
     :param _builder: the builder
     :return: the return value of the function
-    '''
+    """
     dispatch_args = args.copy()
     all_scalar = True
     ret_shape = None

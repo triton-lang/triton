@@ -32,7 +32,7 @@ def test_normalization_with_remat():
             tmp0 = tl.load(
                 in_out_ptr0 + (r2 + (4096 * x3)),
                 rmask & xmask,
-                eviction_policy='evict_last',
+                eviction_policy="evict_last",
                 other=0,
             )
             tmp2 = tmp0 - tmp1

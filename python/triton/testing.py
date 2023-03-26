@@ -20,10 +20,10 @@ def catch_oor(kernel, pytest_handle=None):
 
 
 def nvsmi(attrs):
-    attrs = ','.join(attrs)
-    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
+    attrs = ",".join(attrs)
+    cmd = ["nvidia-smi", "-i", "0", "--query-gpu=" + attrs, "--format=csv,noheader,nounits"]
     out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(',')
+    ret = out.decode(sys.stdout.encoding).split(",")
     ret = [int(x) for x in ret]
     return ret
 
@@ -77,9 +77,9 @@ def do_bench(
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
+        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device="cuda")
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
+        cache = torch.empty(int(256e6), dtype=torch.int8, device="cuda")
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -121,8 +121,8 @@ class Benchmark:
         line_names,
         plot_name,
         args,
-        xlabel='',
-        ylabel='',
+        xlabel="",
+        ylabel="",
         x_log=False,
         y_log=False,
         color=None,
@@ -181,8 +181,8 @@ class Mark:
         import pandas as pd
 
         y_mean = bench.line_names
-        y_min = [f'{x}-min' for x in bench.line_names]
-        y_max = [f'{x}-max' for x in bench.line_names]
+        y_min = [f"{x}-min" for x in bench.line_names]
+        y_max = [f"{x}-max" for x in bench.line_names]
         df = pd.DataFrame(columns=[bench.x_names[0]] + y_mean + y_min + y_max)
         for x in bench.x_vals:
             x_args = {x_name: x for x_name in bench.x_names}
@@ -202,7 +202,7 @@ class Mark:
             ax = plt.subplot()
             x = bench.x_names[0]
             for i, y in enumerate(bench.line_names):
-                y_min, y_max = df[y + '-min'], df[y + '-max']
+                y_min, y_max = df[y + "-min"], df[y + "-max"]
                 col = bench.styles[i][0] if bench.styles else None
                 sty = bench.styles[i][1] if bench.styles else None
                 ax.plot(df[x], df[y], label=y, color=col, ls=sty)
@@ -221,16 +221,16 @@ class Mark:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
         df = df[[bench.x_names[0]] + bench.line_names]
         if print_data:
-            print(bench.plot_name + ':')
+            print(bench.plot_name + ":")
             print(df)
         if save_path:
             df.to_csv(
                 os.path.join(save_path, f"{bench.plot_name}.csv"),
-                float_format='%.1f',
+                float_format="%.1f",
                 index=False,
             )
 
-    def run(self, show_plots=False, print_data=False, save_path=''):
+    def run(self, show_plots=False, print_data=False, save_path=""):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         if save_path:
@@ -239,7 +239,7 @@ class Mark:
         for bench in benchmarks:
             self._run(bench, save_path, show_plots, print_data)
             if save_path:
-                html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
+                html.write(f'<image src="{bench.plot_name}.png"/>\n')
         if save_path:
             html.write("</body></html>\n")
 
@@ -259,7 +259,7 @@ def perf_report(benchmarks):
 
 
 def get_dram_gbps(backend=None, device=None):
-    '''return DRAM bandwidth in GB/s'''
+    """return DRAM bandwidth in GB/s"""
     import torch
 
     if not backend:
@@ -327,9 +327,9 @@ def cuda_memcheck(**target_kwargs):
                     "PYTORCH_NO_CUDA_MEMORY_CACHING": "1",
                 }
                 assert (
-                    'request' in kwargs
+                    "request" in kwargs
                 ), "memcheck'ed test must have a (possibly unused) `request` fixture"
-                test_id = kwargs['request'].node.callspec.id
+                test_id = kwargs["request"].node.callspec.id
                 cmd = f"{path}::{test_fn.__name__}[{test_id}]"
                 out = subprocess.run(
                     ["cuda-memcheck", "pytest", "-vs", cmd],

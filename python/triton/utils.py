@@ -48,7 +48,7 @@ class TensorWrapper:
         return self.base.data_ptr()
 
     def __str__(self) -> str:
-        return f'TensorWrapper[{self.dtype}]({self.base})'
+        return f"TensorWrapper[{self.dtype}]({self.base})"
 
 
 def reinterpret(tensor, dtype):
@@ -63,4 +63,4 @@ def reinterpret(tensor, dtype):
         # A new wrapper is needed around an unwrapped tensor.
         return TensorWrapper(tensor, dtype)
     else:
-        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')
+        raise TypeError(f"Cannot reinterpret a {type(tensor)}.")
