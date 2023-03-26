@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import wraps
 from typing import TypeVar
 
+
 T = TypeVar("T")
 
 TRITON_BUILTIN = "__triton_builtin__"

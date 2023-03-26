@@ -9,6 +9,7 @@ import triton.language as tl
 import triton.ops
 from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
 
+
 DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
 
 #######################
@@ -70,14 +71,18 @@ matmul_data = {
         (1024, 64, 1024): {'float16': 0.0263, 'float32': 0.0458, 'int8': 0.017},
         (4096, 64, 4096): {'float16': 0.16, 'float32': 0.177, 'int8': 0.102},
         (8192, 64, 8192): {'float16': 0.25, 'float32': 0.230, 'int8': 0.177},
-    }
+    },
 }
 
 
-@pytest.mark.parametrize('M, N, K, dtype_str',
-                         [(M, N, K, dtype_str)
-                          for M, N, K in matmul_data[DEVICE_NAME].keys()
-                          for dtype_str in ['float16']])
+@pytest.mark.parametrize(
+    'M, N, K, dtype_str',
+    [
+        (M, N, K, dtype_str)
+        for M, N, K in matmul_data[DEVICE_NAME].keys()
+        for dtype_str in ['float16']
+    ],
+)
 def test_matmul(M, N, K, dtype_str):
     if dtype_str in ['float32', 'int8'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test float32 & int8 on a100')
@@ -93,10 +98,12 @@ def test_matmul(M, N, K, dtype_str):
     else:
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
+
     def fn():
         return triton.ops.matmul(a, b)
+
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=300)
-    cur_gpu_perf = 2. * M * N * K / ms * 1e-9
+    cur_gpu_perf = 2.0 * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     torch.testing.assert_allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
 
@@ -107,8 +114,7 @@ def test_matmul(M, N, K, dtype_str):
 
 
 @triton.jit
-def _add(x_ptr, y_ptr, output_ptr, n_elements,
-         BLOCK_SIZE: tl.constexpr):
+def _add(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -137,7 +143,7 @@ elementwise_data = {
         1024 * 4096: 0.580,
         1024 * 16384: 0.782,
         1024 * 65536: 0.850,
-    }
+    },
 }
 
 
@@ -146,17 +152,21 @@ def test_elementwise(N):
     torch.manual_seed(0)
     ref_gpu_util = elementwise_data[DEVICE_NAME][N]
     max_gpu_perf = get_dram_gbps()
-    z = torch.empty((N, ), dtype=torch.float16, device='cuda')
+    z = torch.empty((N,), dtype=torch.float16, device='cuda')
     x = torch.randn_like(z)
     y = torch.randn_like(z)
+
     def grid(args):
         return (triton.cdiv(N, args['BLOCK_SIZE']),)
+
     def fn():
         return _add[grid](x, y, z, N, BLOCK_SIZE=1024)
+
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=500)
-    cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
+    cur_gpu_perf = 3.0 * N * z.element_size() / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     torch.testing.assert_allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
+
 
 #######################
 # Flash-Attention
@@ -182,21 +192,37 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, mode, dtype_str):
     torch.manual_seed(20)
     dtype = {'float16': torch.float16, 'float32': torch.float32, 'int8': torch.int8}[dtype_str]
     # init data
-    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
-    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
+    q = (
+        torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda")
+        .normal_(mean=0.1, std=0.2)
+        .requires_grad_()
+    )
+    k = (
+        torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda")
+        .normal_(mean=0.4, std=0.2)
+        .requires_grad_()
+    )
+    v = (
+        torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda")
+        .normal_(mean=0.3, std=0.2)
+        .requires_grad_()
+    )
     sm_scale = 0.2
+
     # benchmark
     def fn():
         return triton.ops.attention(q, k, v, sm_scale)
+
     if is_backward:
         o = fn()
         do = torch.randn_like(o)
+
         def fn():
             return o.backward(do, retain_graph=True)
+
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=500)
     # compute flops
-    flops_per_matmul = 2. * Z * H * N_CTX * N_CTX * D_HEAD * 0.5
+    flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * D_HEAD * 0.5
     total_flops = 2 * flops_per_matmul
     if is_backward:
         total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)

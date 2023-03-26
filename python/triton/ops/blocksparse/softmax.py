@@ -24,7 +24,7 @@ def _blocksparse_softmax_fwd(
     ROW_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     IS_DENSE: tl.constexpr,
-):
+):  # fmt: skip
     h = tl.program_id(0)
     m = tl.program_id(1)
     z = tl.program_id(2)
@@ -83,7 +83,7 @@ def _blocksparse_softmax_bwd(
     ROW_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     IS_DENSE: tl.constexpr,
-):
+):  # fmt: skip
     h = tl.program_id(0)
     m = tl.program_id(1)
     z = tl.program_id(2)
@@ -115,7 +115,7 @@ def _blocksparse_softmax_bwd(
     dout = tl.load(DOuts + lane_n, mask=mask, other=0.0)
     dout = dout.to(tl.float32)
     # compute
-    a = tl.where((ns > m) & is_causal & (a == a), 0., a)
+    a = tl.where((ns > m) & is_causal & (a == a), 0.0, a)
     da = a * (dout - tl.sum(a * dout, 0))
     # apply relative attention
     if DR is not None:
@@ -150,10 +150,7 @@ class _softmax(torch.autograd.Function):
         return lut, int(total_sizes.max())
 
     @staticmethod
-    def forward(
-        ctx, a, scale, rel_logits, is_causal,
-        spdims, block, lut, maxlut, is_dense
-    ):
+    def forward(ctx, a, scale, rel_logits, is_causal, spdims, block, lut, maxlut, is_dense):
         if scale is not None and isinstance(scale, torch.Tensor):
             assert scale.device.type == "cpu"
             scale = scale.item()
@@ -165,14 +162,14 @@ class _softmax(torch.autograd.Function):
         out = torch.empty_like(a)
         _blocksparse_softmax_fwd[grid](
             out, a, a.stride(0), lut,
-            rel_logits, rel_shape[-1], rel_strides[0], rel_strides[1],  # relative attn
+            rel_logits, rel_shape[-1], rel_strides[0], rel_strides[1],  # relative attention
             scale,
             is_causal,
             BLOCK_SIZE=block,
             ROW_SIZE=triton.next_power_of_2(maxlut),
             IS_DENSE=is_dense,
-            num_warps=num_warps(maxlut)
-        )
+            num_warps=num_warps(maxlut),
+        )  # fmt: skip
         # save to context
         # ctx.mark_dirty(x)
         ctx.save_for_backward(out, lut)
@@ -210,15 +207,28 @@ class _softmax(torch.autograd.Function):
             BLOCK_SIZE=ctx.block,
             ROW_SIZE=triton.next_power_of_2(ctx.maxlut),
             IS_DENSE=ctx.is_dense,
-            num_warps=num_warps(ctx.maxlut)
+            num_warps=num_warps(ctx.maxlut),
+        )  # fmt: skip
+        return (
+            da,
+            None,
+            None,
+            dr,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
-        return (da, None, None, dr, None,
-                None, None, None, None, None,
-                None,
-                None, None, None,
-                None,
-                None, None, None
-                )
 
 
 class softmax:
@@ -235,5 +245,5 @@ class softmax:
         a = _softmax.apply(
             a, scale, rel_logits, is_causal,
             self.spdims, self.block, self.lut, self.maxlut, self.is_dense,
-        )
+        )  # fmt: skip
         return a

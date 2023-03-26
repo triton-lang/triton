@@ -33,6 +33,7 @@ def static_vars(**kwargs):
         for k in kwargs:
             setattr(func, k, kwargs[k])
         return func
+
     return decorate
 
 
@@ -102,7 +103,8 @@ def _is_triton_tensor(o: Any) -> bool:
 
 
 def _is_constexpr(o: Any) -> bool:
-    return isinstance(o, triton.language.constexpr)  # TODO: fetch triton.language.constexpr to a global after circular imports untangled, saving getattr
+    # TODO: fetch triton.language.constexpr to a global after circular imports untangled, saving getattr
+    return isinstance(o, triton.language.constexpr)
 
 
 def _unwrap_if_constexpr(o: Any):
@@ -132,8 +134,19 @@ class enter_sub_region:
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name,
-                 module=None, is_kernel=False, function_types: Optional[Dict] = None, debug=False):
+    def __init__(
+        self,
+        context,
+        prototype,
+        gscope,
+        attributes,
+        constants,
+        function_name,
+        module=None,
+        is_kernel=False,
+        function_types: Optional[Dict] = None,
+        debug=False,
+    ):
         self.builder = _triton.ir.builder(context)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
@@ -153,22 +166,34 @@ class CodeGenerator(ast.NodeVisitor):
         self.global_uses: Dict[str, triton.language.tensor] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
 
-    builtin_namespace: Dict[str, Any] = {_.__name__: _ for _ in (range, float, int, isinstance, getattr)}
+    builtin_namespace: Dict[str, Any] = {
+        _.__name__: _ for _ in (range, float, int, isinstance, getattr)
+    }
 
     def _define_name_lookup(self):
         # TODO: this needs to be moved to class scope when cyclic imports untangled and `triton.language` can be imported at module level
-        self.builtin_namespace.update((
-            ('print', triton.language.core.device_print),
-            ('min', triton.language.minimum),  # TODO: why `min`? if `min`, why not `max`? `sum`? `all`?
-        ))
+        self.builtin_namespace.update(
+            (
+                ('print', triton.language.core.device_print),
+                # TODO: why `min`? if `min`, why not `max`? `sum`? `all`?
+                (
+                    'min',
+                    triton.language.minimum,
+                ),
+            )
+        )
         # TODO: this needs to be moved to class scope when cyclic imports untangled and `triton.language` can be imported at module level
-        self.statically_implemented_functions.update((
-            (triton.language.core.static_assert, self.execute_static_assert),
-            (triton.language.core.static_print, self.execute_static_print),
-        ))
+        self.statically_implemented_functions.update(
+            (
+                (triton.language.core.static_assert, self.execute_static_assert),
+                (triton.language.core.static_print, self.execute_static_print),
+            )
+        )
 
         def local_lookup(name: str, absent):
-            value = self.lscope.get(name, absent)  # this needs to be re-fetched from `self` every time, because it gets switched occasionally
+            value = self.lscope.get(
+                name, absent
+            )  # this needs to be re-fetched from `self` every time, because it gets switched occasionally
             if value is not absent and name not in self.local_defs:
                 self.global_uses[name] = value
             return value
@@ -186,9 +211,10 @@ class CodeGenerator(ast.NodeVisitor):
 
         return name_lookup
 
-    def set_value(self, name: str,
-                  value: Union[triton.language.tensor, triton.language.constexpr]) -> None:
-        ''' This function:
+    def set_value(
+        self, name: str, value: Union[triton.language.tensor, triton.language.constexpr]
+    ) -> None:
+        '''This function:
           called by visit_Assign() & visit_FuncDef() to store left value (lvalue)
         1. record local defined name (FIXME: should consider control flow)
         2. store tensor in self.lvalue
@@ -226,8 +252,10 @@ class CodeGenerator(ast.NodeVisitor):
                 return ret
             return False
         elif isinstance(node, ast.If):
+
             def pred(s):
                 return self.contains_return_op(s)
+
             ret = any(pred(s) for s in node.body)
             if node.orelse:
                 ret = ret or any(pred(s) for s in node.orelse)
@@ -278,11 +306,18 @@ class CodeGenerator(ast.NodeVisitor):
             if annotation is None:
                 init_node = ast.Assign(targets=[st_target], value=default_value)
             else:
-                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation)
+                init_node = ast.AnnAssign(
+                    target=st_target, value=default_value, annotation=annotation
+                )
             self.visit(init_node)
         # initialize function
         visibility = "public" if self.is_kernel else "private"
-        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility)
+        fn = self.builder.get_or_insert_function(
+            self.module,
+            self.function_name,
+            self.prototype.to_ir(self.builder),
+            visibility,
+        )
         self.module.push_back(fn)
         entry = fn.add_entry_block()
         arg_values = []
@@ -297,7 +332,9 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 if i in self.attributes:
                     fn.set_arg_attr(idx, "tt.divisibility", self.attributes[i][1])
-                arg_values.append(triton.language.tensor(fn.args(idx), self.prototype.param_types[idx]))
+                arg_values.append(
+                    triton.language.tensor(fn.args(idx), self.prototype.param_types[idx])
+                )
                 idx += 1
 
         insert_pt = self.builder.get_insertion_block()
@@ -339,8 +376,7 @@ class CodeGenerator(ast.NodeVisitor):
         # constexpr
         if annotation == triton.language.constexpr:
             if target in self.lscope:
-                raise ValueError(f'{target} is already defined.'
-                                 f' constexpr cannot be reassigned.')
+                raise ValueError(f'{target} is already defined. constexpr cannot be reassigned.')
             if not _is_constexpr(value):
                 value = triton.language.constexpr(value)
             self.lscope[target] = value
@@ -353,19 +389,20 @@ class CodeGenerator(ast.NodeVisitor):
         for target in node.targets:
             _names += [self.visit(target)]
         if len(_names) > 1:
-            raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple assignment is not supported.")
+            raise UnsupportedLanguageConstruct(
+                None, node, "simultaneous multiple assignment is not supported."
+            )
         names = _names[0]
         values = self.visit(node.value)
         if not isinstance(names, tuple):
             names = [names]
         if not isinstance(values, tuple):
             values = [values]
-        native_nontensor_types = (triton.language.dtype, )
+        native_nontensor_types = (triton.language.dtype,)
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             value = _unwrap_if_constexpr(value)
-            if not _is_triton_tensor(value) and \
-               not isinstance(value, native_nontensor_types):
+            if not _is_triton_tensor(value) and not isinstance(value, native_nontensor_types):
                 value = triton.language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
 
@@ -406,12 +443,26 @@ class CodeGenerator(ast.NodeVisitor):
         rhs = self.visit(node.right)
         method_name = self._method_name_for_bin_op.get(type(node.op))
         if method_name is None:
-            raise UnsupportedLanguageConstruct(None, node, "AST binary operator '{}' is not (currently) implemented.".format(node.op.__name__))
+            raise UnsupportedLanguageConstruct(
+                None,
+                node,
+                f"AST binary operator '{node.op.__name__}' is not (currently) implemented.",
+            )
         return self._apply_binary_method(method_name, lhs, rhs)
+
     _method_name_for_bin_op: Dict[Type[ast.operator], str] = {
-        ast.Add: '__add__', ast.Sub: '__sub__', ast.Mult: '__mul__', ast.Div: '__truediv__',
-        ast.FloorDiv: '__floordiv__', ast.Mod: '__mod__', ast.Pow: '__pow__',
-        ast.LShift: '__lshift__', ast.RShift: '__rshift__', ast.BitAnd: '__and__', ast.BitOr: '__or__', ast.BitXor: '__xor__',
+        ast.Add: '__add__',
+        ast.Sub: '__sub__',
+        ast.Mult: '__mul__',
+        ast.Div: '__truediv__',
+        ast.FloorDiv: '__floordiv__',
+        ast.Mod: '__mod__',
+        ast.Pow: '__pow__',
+        ast.LShift: '__lshift__',
+        ast.RShift: '__rshift__',
+        ast.BitAnd: '__and__',
+        ast.BitOr: '__or__',
+        ast.BitXor: '__xor__',
     }
 
     def visit_then_else_blocks(self, node, liveins, then_block, else_block):
@@ -439,13 +490,20 @@ class CodeGenerator(ast.NodeVisitor):
             # check type
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
                 if name in defs:
-                    assert defs[name].type == liveins[name].type,\
-                        f'initial value for `{name}` is of type {liveins[name].type}, '\
+                    assert defs[name].type == liveins[name].type, (
+                        f'initial value for `{name}` is of type {liveins[name].type}, '
                         f'but the {block_name} block redefines it as {defs[name].type}'
+                    )
             if name in then_defs or name in else_defs:
                 names.append(name)
-                ret_types.append(then_defs[name].type if name in then_defs else else_defs[name].type)
-                ir_ret_types.append(then_defs[name].handle.get_type() if name in then_defs else else_defs[name].handle.get_type())
+                ret_types.append(
+                    then_defs[name].type if name in then_defs else else_defs[name].type
+                )
+                ir_ret_types.append(
+                    then_defs[name].handle.get_type()
+                    if name in then_defs
+                    else else_defs[name].handle.get_type()
+                )
             # variable defined in then but not in else
             if name in then_defs and name not in else_defs:
                 else_defs[name] = liveins[name]
@@ -459,14 +517,23 @@ class CodeGenerator(ast.NodeVisitor):
                 continue
             then_ty = then_defs[name].type
             else_ty = else_defs[name].type
-            assert then_ty == else_ty,\
-                f'mismatched type for {name} between then block ({then_ty}) '\
+            assert then_ty == else_ty, (
+                f'mismatched type for {name} between then block ({then_ty}) '
                 f'and else block ({else_ty})'
+            )
             names.append(name)
             ret_types.append(then_ty)
             ir_ret_types.append(then_defs[name].handle.get_type())
 
-        return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
+        return (
+            then_defs,
+            else_defs,
+            then_block,
+            else_block,
+            names,
+            ret_types,
+            ir_ret_types,
+        )
 
     def visit_if_top_level(self, cond, node):
         with enter_sub_region(self) as sr:
@@ -479,8 +546,15 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.set_insertion_point_to_end(ip_block)
             self.builder.create_cond_branch(cond.handle, then_block, else_block)
             # visit then and else blocks
-            then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types = \
-                self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            (
+                then_defs,
+                else_defs,
+                then_block,
+                else_block,
+                names,
+                ret_types,
+                ir_ret_types,
+            ) = self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
             if not then_block.has_terminator():
@@ -505,11 +579,20 @@ class CodeGenerator(ast.NodeVisitor):
             ip = self.builder.get_insertion_point()
             then_block = self.builder.create_block()
             else_block = self.builder.create_block() if node.orelse else None
-            then_defs, else_defs, then_block, else_block, names, ret_types, _ = \
-                self.visit_then_else_blocks(node, liveins, then_block, else_block)
+            (
+                then_defs,
+                else_defs,
+                then_block,
+                else_block,
+                names,
+                ret_types,
+                _,
+            ) = self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # create if op
             self.builder.restore_insertion_point(ip)
-            if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
+            if_op = self.builder.create_if_op(
+                [ty.to_ir(self.builder) for ty in ret_types], cond.handle, True
+            )
             then_block.merge_block_before(if_op.get_then_block())
             self.builder.set_insertion_point_to_end(if_op.get_then_block())
             if len(names) > 0:
@@ -536,10 +619,17 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_if_top_level(cond, node)
         else:
             cond = _unwrap_if_constexpr(cond)
-            if type(cond) not in _condition_types:  # not isinstance - we insist the real thing, no subclasses and no ducks
+            if (
+                type(cond) not in _condition_types
+            ):  # not isinstance - we insist the real thing, no subclasses and no ducks
                 raise UnsupportedLanguageConstruct(
-                    None, node, "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
-                        ', '.join(_.__name__ for _ in _condition_types), type(cond).__name__))
+                    None,
+                    node,
+                    "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
+                        ', '.join(_.__name__ for _ in _condition_types),
+                        type(cond).__name__,
+                    ),
+                )
             if cond:
                 self.visit_compound_statement(node.body)
             else:
@@ -557,7 +647,9 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Compare(self, node):
         if not (len(node.comparators) == 1 and len(node.ops) == 1):
-            raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple comparison is not supported")
+            raise UnsupportedLanguageConstruct(
+                None, node, "simultaneous multiple comparison is not supported"
+            )
         lhs = _unwrap_if_constexpr(self.visit(node.left))
         rhs = _unwrap_if_constexpr(self.visit(node.comparators[0]))
         if type(node.ops[0]) == ast.Is:
@@ -566,21 +658,41 @@ class CodeGenerator(ast.NodeVisitor):
             return triton.language.constexpr(lhs is not rhs)
         method_name = self._method_name_for_comp_op.get(type(node.ops[0]))
         if method_name is None:
-            raise UnsupportedLanguageConstruct(None, node, "AST comparison operator '{}' is not (currently) implemented.".format(node.ops[0].__name__))
+            raise UnsupportedLanguageConstruct(
+                None,
+                node,
+                f"AST comparison operator '{node.ops[0].__name__}' is not (currently) implemented.",
+            )
         return self._apply_binary_method(method_name, lhs, rhs)
+
     _method_name_for_comp_op: Dict[Type[ast.cmpop], str] = {
-        ast.Eq: '__eq__', ast.NotEq: '__ne__', ast.Lt: '__lt__', ast.LtE: '__le__', ast.Gt: '__gt__', ast.GtE: '__ge__'
+        ast.Eq: '__eq__',
+        ast.NotEq: '__ne__',
+        ast.Lt: '__lt__',
+        ast.LtE: '__le__',
+        ast.Gt: '__gt__',
+        ast.GtE: '__ge__',
     }
 
     def visit_UnaryOp(self, node):
         op = self.visit(node.operand)
         fn = self._method_name_for_unary_op.get(type(node.op))
         if fn is None:
-            raise UnsupportedLanguageConstruct(None, node, "AST unary operator '{}' is not (currently) implemented.".format(node.op.__name__))
+            raise UnsupportedLanguageConstruct(
+                None,
+                node,
+                "AST unary operator '{}' is not (currently) implemented.".format(node.op.__name__),
+            )
         if _is_triton_tensor(op):
             return getattr(op, fn)(_builder=self.builder)
         return getattr(op, fn)()
-    _method_name_for_unary_op: Dict[Type[ast.unaryop], str] = {ast.USub: '__neg__', ast.UAdd: '__pos__', ast.Not: '__not__', ast.Invert: '__invert__'}
+
+    _method_name_for_unary_op: Dict[Type[ast.unaryop], str] = {
+        ast.USub: '__neg__',
+        ast.UAdd: '__pos__',
+        ast.Not: '__not__',
+        ast.Invert: '__invert__',
+    }
 
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
@@ -611,11 +723,14 @@ class CodeGenerator(ast.NodeVisitor):
                     init_args.append(liveins[name])
 
             self.builder.set_insertion_point_to_end(insert_block)
-            while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
-                                                    [arg.handle for arg in init_args])
+            while_op = self.builder.create_while_op(
+                [ty.to_ir(self.builder) for ty in ret_types],
+                [arg.handle for arg in init_args],
+            )
             # merge the condition region
-            before_block = self.builder.create_block_with_parent(while_op.get_before(),
-                                                                 [ty.to_ir(self.builder) for ty in ret_types])
+            before_block = self.builder.create_block_with_parent(
+                while_op.get_before(), [ty.to_ir(self.builder) for ty in ret_types]
+            )
             self.builder.set_insertion_point_to_start(before_block)
             for i, name in enumerate(names):
                 self.lscope[name] = triton.language.core.tensor(before_block.arg(i), ret_types[i])
@@ -623,10 +738,13 @@ class CodeGenerator(ast.NodeVisitor):
             cond = self.visit(node.test)
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
-            self.builder.create_condition_op(cond.handle, [before_block.arg(i) for i in range(len(init_args))])
+            self.builder.create_condition_op(
+                cond.handle, [before_block.arg(i) for i in range(len(init_args))]
+            )
             # merge the loop body
-            after_block = self.builder.create_block_with_parent(while_op.get_after(),
-                                                                [ty.to_ir(self.builder) for ty in ret_types])
+            after_block = self.builder.create_block_with_parent(
+                while_op.get_after(), [ty.to_ir(self.builder) for ty in ret_types]
+            )
 
             # generate loop body
             self.builder.set_insertion_point_to_start(after_block)
@@ -673,9 +791,7 @@ class CodeGenerator(ast.NodeVisitor):
         iter_args = [self.visit(arg) for arg in node.iter.args]
         if IteratorClass == triton.language.static_range:
             iterator = IteratorClass(*iter_args)
-            static_range = range(iterator.start.value,
-                                 iterator.end.value,
-                                 iterator.step.value)
+            static_range = range(iterator.start.value, iterator.end.value, iterator.step.value)
             for i in static_range:
                 self.lscope[node.target.id] = triton.language.constexpr(i)
                 self.visit_compound_statement(node.body)
@@ -740,14 +856,17 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     assert _is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert _is_triton_tensor(liveins[name])
-                    assert self.local_defs[name].type == liveins[name].type,\
-                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
-                        f'but is re-assigned to {self.local_defs[name].type} in loop! '\
+                    assert self.local_defs[name].type == liveins[name].type, (
+                        f'Loop-carried variable {name} has initial type {liveins[name].type} '
+                        f'but is re-assigned to {self.local_defs[name].type} in loop! '
                         f'Please make sure that the type stays consistent.'
+                    )
 
                     names.append(name)
                     init_args.append(triton.language.core._to_tensor(liveins[name], self.builder))
-                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+                    yields.append(
+                        triton.language.core._to_tensor(self.local_defs[name], self.builder)
+                    )
 
             # create ForOp
             self.builder.restore_insertion_point(ip)
@@ -756,19 +875,26 @@ class CodeGenerator(ast.NodeVisitor):
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
             for i, name in enumerate(names):
-                self.set_value(name, triton.language.core.tensor(for_op.get_body(0).arg(i + 1), yields[i].type))
+                self.set_value(
+                    name,
+                    triton.language.core.tensor(for_op.get_body(0).arg(i + 1), yields[i].type),
+                )
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
             yields = []
             for name in self.local_defs:
                 if name in liveins:
-                    yields.append(triton.language.core._to_tensor(self.local_defs[name], self.builder))
+                    yields.append(
+                        triton.language.core._to_tensor(self.local_defs[name], self.builder)
+                    )
 
             # create YieldOp
             if len(yields) > 0:
                 self.builder.create_yield_op([y.handle for y in yields])
             for_op_region = for_op.get_body(0).get_parent()
-            assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
+            assert (
+                for_op_region.size() == 1
+            ), "We use SCF, so the loop body should only have one block"
 
             # update induction variable with actual value, and replace all uses
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
@@ -816,15 +942,17 @@ class CodeGenerator(ast.NodeVisitor):
 
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
-        if fn is triton.language.core.device_assert:   # TODO: this should not be so hardcoded
+        if fn is triton.language.core.device_assert:  # TODO: this should not be so hardcoded
             if not self.debug:
                 return
         if isinstance(fn, triton.runtime.JITFunction):
             from inspect import getcallargs
+
             args = getcallargs(fn.fn, *args, **kws)
             args = [args[name] for name in fn.arg_names]
-            args = [arg if _is_triton_tensor(arg)
-                    else triton.language.constexpr(arg) for arg in args]
+            args = [
+                arg if _is_triton_tensor(arg) else triton.language.constexpr(arg) for arg in args
+            ]
             # generate function def
             attributes = dict()
             constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
@@ -838,7 +966,17 @@ class CodeGenerator(ast.NodeVisitor):
             if not self.module.has_function(fn_name):
                 prototype = triton.language.function_type([], arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=self.debug)
+                generator = CodeGenerator(
+                    self.builder.context,
+                    prototype,
+                    gscope,
+                    attributes,
+                    constants,
+                    module=self.module,
+                    function_name=fn_name,
+                    function_types=self.function_ret_types,
+                    debug=self.debug,
+                )
                 generator.visit(fn.parse())
                 callee_ret_type = generator.last_ret_type
                 self.function_ret_types[fn_name] = callee_ret_type
@@ -854,7 +992,9 @@ class CodeGenerator(ast.NodeVisitor):
                 # should return a tuple of tl.tensor
                 results = []
                 for i in range(call_op.get_num_results()):
-                    results.append(triton.language.tensor(call_op.get_result(i), callee_ret_type[i]))
+                    results.append(
+                        triton.language.tensor(call_op.get_result(i), callee_ret_type[i])
+                    )
                 return tuple(results)
         if (hasattr(fn, '__self__') and _is_triton_tensor(fn.__self__)) or impl.is_builtin(fn):
             return fn(*args, _builder=self.builder, **kws)
@@ -867,16 +1007,30 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_BoolOp(self, node: ast.BoolOp):
         if len(node.values) != 2:
-            raise UnsupportedLanguageConstruct(None, node, "chained boolean operators (A or B or C) are not supported; use parentheses to split the chain.")
+            raise UnsupportedLanguageConstruct(
+                None,
+                node,
+                "chained boolean operators (A or B or C) are not supported; "
+                "use parentheses to split the chain.",
+            )
         lhs = self.visit(node.values[0])
         rhs = self.visit(node.values[1])
         method_name = self._method_name_for_bool_op.get(type(node.op))
         if method_name is None:
-            raise UnsupportedLanguageConstruct(None, node, "AST boolean operator '{}' is not (currently) implemented.".format(node.op.__name__))
+            raise UnsupportedLanguageConstruct(
+                None,
+                node,
+                f"AST boolean operator '{node.op.__name__}' is not (currently) implemented.",
+            )
         return self._apply_binary_method(method_name, lhs, rhs)
-    _method_name_for_bool_op: Dict[Type[ast.boolop], str] = {ast.And: 'logical_and', ast.Or: 'logical_or'}
+
+    _method_name_for_bool_op: Dict[Type[ast.boolop], str] = {
+        ast.And: 'logical_and',
+        ast.Or: 'logical_or',
+    }
 
     if sys.version_info < (3, 8):
+
         def visit_NameConstant(self, node):
             return triton.language.constexpr(node.value)
 
@@ -909,10 +1063,18 @@ class CodeGenerator(ast.NodeVisitor):
                 evaluated = self.visit(value.value)
                 if not _is_constexpr(evaluated):
                     raise UnsupportedLanguageConstruct(
-                        None, node, "Cannot evaluate f-string containing non-constexpr conversion values, found conversion of type " + str(type(evaluated)))
-                values[i] = ("{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}").format(evaluated.value)
+                        None,
+                        node,
+                        f"Cannot evaluate f-string containing non-constexpr conversion values, "
+                        f"found conversion of type {type(evaluated)}",
+                    )
+                values[i] = (
+                    "{}" if conversion_code < 0 else "{!" + chr(conversion_code) + "}"
+                ).format(evaluated.value)
             else:
-                raise AssertionError("encountered unexpected node of type {} in a JoinedStr node".format(type(value)))
+                raise AssertionError(
+                    f"encountered unexpected node of type {type(value)} in a JoinedStr node"
+                )
         return ''.join(values)
 
     def visit(self, node):
@@ -926,7 +1088,9 @@ class CodeGenerator(ast.NodeVisitor):
             return super().visit(node)
 
     def generic_visit(self, node):
-        raise UnsupportedLanguageConstruct(None, node, "unsupported AST node type: {}".format(type(node).__name__))
+        raise UnsupportedLanguageConstruct(
+            None, node, f"unsupported AST node type: {type(node).__name__}"
+        )
 
     # TODO: populate this here (rather than inside `_define_name_lookup`) once cyclic imports resolved
     statically_implemented_functions: Dict[object, Callable[[ast.Call], Any]] = {}
@@ -934,7 +1098,10 @@ class CodeGenerator(ast.NodeVisitor):
     def execute_static_print(self, node: ast.Call) -> None:
         # TODO: too simplistic? Perhaps do something else with non-constexpr
 
-        kws = {name: _unwrap_if_constexpr(value) for name, value in (self.visit(keyword) for keyword in node.keywords)}
+        kws = {
+            name: _unwrap_if_constexpr(value)
+            for name, value in (self.visit(keyword) for keyword in node.keywords)
+        }
         args = [_unwrap_if_constexpr(self.visit(arg)) for arg in node.args]
         print(*args, **kws)
 
@@ -945,7 +1112,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         passed = self.visit(node.args[0])
         if not isinstance(passed, bool):
-            raise NotImplementedError("Assertion condition could not be determined at compile-time. Make sure that it depends only on `constexpr` values")
+            raise NotImplementedError(
+                "Assertion condition could not be determined at compile-time. Make sure that it depends only on `constexpr` values"
+            )
         if not passed:
             if arg_count == 1:
                 message = ""
@@ -967,7 +1136,9 @@ class CompilationError(Exception):
         if self.src is None:
             source_excerpt = " <source unavailable>"
         else:
-            source_excerpt = self.src.split('\n')[:node.lineno][-self.source_line_count_max_in_message:]
+            source_excerpt = self.src.split('\n')[: node.lineno][
+                -self.source_line_count_max_in_message :
+            ]
             if source_excerpt:
                 source_excerpt.append(' ' * node.col_offset + '^')
                 source_excerpt = '\n'.join(source_excerpt)
@@ -979,7 +1150,12 @@ class CompilationError(Exception):
             message += '\n' + self.error_message
         return message
 
-    def __init__(self, src: Optional[str], node: ast.AST, error_message: Union[str, 'triton.language.core.constexpr', None]):
+    def __init__(
+        self,
+        src: Optional[str],
+        node: ast.AST,
+        error_message: Union[str, 'triton.language.core.constexpr', None],
+    ):
         self.src = src
         self.node = node
         self.error_message = _unwrap_if_constexpr(error_message)
@@ -1002,6 +1178,7 @@ class CompilationError(Exception):
 
 class CompileTimeAssertionFailure(CompilationError):
     """Specific exception for failed tests in `static_assert` invocations"""
+
     pass
 
 
@@ -1011,9 +1188,9 @@ class UnsupportedLanguageConstruct(CompilationError):
 
 class OutOfResources(Exception):
     def __init__(self, required, limit, name):
-        self.message = f'out of resource: {name}, '\
-                       f'Required: {required}, '\
-                       f'Hardware limit: {limit}'
+        self.message = (
+            f'out of resource: {name}, ' f'Required: {required}, ' f'Hardware limit: {limit}'
+        )
         self.message += '. Reducing block sizes or `num_stages` may help.'
         self.required = required
         self.limit = limit
@@ -1037,6 +1214,7 @@ def kernel_suffix(signature, specialization):
             suffix += 'd'
     return suffix
 
+
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 
@@ -1054,22 +1232,35 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
     context = _triton.ir.context()
     context.load_triton()
+
     # create kernel prototype
     def cst_key(i):
         return fn.arg_names.index(i) if isinstance(i, str) else i
+
     constants = {cst_key(key): value for key, value in constants.items()}
     # visit kernel AST
     gscope = fn.__globals__.copy()
     function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
     tys = list(signature.values())
-    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
+    new_constants = {
+        k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1
+    }
     new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
 
     prototype = triton.language.function_type([], arg_types)
-    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name, attributes=new_attrs, is_kernel=True, debug=debug)
+    generator = CodeGenerator(
+        context,
+        prototype,
+        gscope=gscope,
+        constants=all_constants,
+        function_name=function_name,
+        attributes=new_attrs,
+        is_kernel=True,
+        debug=debug,
+    )
     try:
         generator.visit(fn.parse())
     except CompilationError as e:
@@ -1193,7 +1384,9 @@ def amdgcn_get_kernel_name(amdgcn: str) -> str:
             return line.split()[-1].strip()
 
 
-def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str, gfx_triple: str, gfx_features: str) -> Tuple[str, str]:
+def llir_to_amdgcn_and_hsaco(
+    mod: Any, gfx_arch: str, gfx_triple: str, gfx_features: str
+) -> Tuple[str, str]:
     '''
     Translate TritonGPU module to HSACO code based on full details of gpu architecture.
     :param mod: a TritonGPU dialect module
@@ -1224,20 +1417,26 @@ def path_to_ptxas():
     base_dir = os.path.dirname(__file__)
     paths = [
         os.environ.get("TRITON_PTXAS_PATH", ""),
-        os.path.join(base_dir, "third_party", "cuda", "bin", "ptxas")
+        os.path.join(base_dir, "third_party", "cuda", "bin", "ptxas"),
     ]
 
     for ptxas in paths:
         if os.path.exists(ptxas) and os.path.isfile(ptxas):
             result = subprocess.check_output([ptxas, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
-                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+                version = re.search(
+                    r".*release (\d+\.\d+).*",
+                    result.decode("utf-8"),
+                    flags=re.MULTILINE,
+                )
                 if version is not None:
                     return ptxas, version.group(1)
     raise RuntimeError("Cannot find ptxas")
 
 
-instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()])
+instance_descriptor = namedtuple(
+    "instance_descriptor", ["divisible_by_16", "equal_to_1"], defaults=[set(), set()]
+)
 
 
 # ------------------------------------------------------------------------------
@@ -1592,7 +1791,6 @@ def default_cache_dir():
 
 
 class CacheManager:
-
     def __init__(self, key):
         self.key = key
         self.lock_path = None
@@ -1676,7 +1874,9 @@ def _build(name, src, srcdir):
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
         if cc is None:
-            raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
+            raise RuntimeError(
+                "Failed to find C compiler. Please specify via CC environment variable."
+            )
     # This function was renamed and made public in Python 3.10
     if hasattr(sysconfig, 'get_default_scheme'):
         scheme = sysconfig.get_default_scheme()
@@ -1689,9 +1889,35 @@ def _build(name, src, srcdir):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
     if torch.version.hip is not None:
-        ret = subprocess.check_call([cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{hip_lib_dir}", "-lamdhip64", "-o", so])
+        ret = subprocess.check_call(
+            [
+                cc,
+                src,
+                f"-I{hip_include_dir}",
+                f"-I{py_include_dir}",
+                f"-I{srcdir}",
+                "-shared",
+                "-fPIC",
+                f"-L{hip_lib_dir}",
+                "-lamdhip64",
+                "-o",
+                so,
+            ]
+        )
     else:
-        cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+        cc_cmd = [
+            cc,
+            src,
+            "-O3",
+            f"-I{cu_include_dir}",
+            f"-I{py_include_dir}",
+            f"-I{srcdir}",
+            "-shared",
+            "-fPIC",
+            "-lcuda",
+            "-o",
+            so,
+        ]
         cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
         ret = subprocess.check_call(cc_cmd)
 
@@ -1742,15 +1968,21 @@ def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_sta
     # Get unique key for the compiled code
     def get_conf_key(conf):
         return sorted(conf.divisible_by_16), sorted(conf.equal_to_1)
+
     configs_key = [get_conf_key(conf) for conf in configs]
     key = f"{fn_hash}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
 
-def read_or_execute(cache_manager, force_compile, file_name, metadata,
-                    run_if_found: Callable[[str], bytes] = None,
-                    run_if_not_found: Callable = None):
+def read_or_execute(
+    cache_manager,
+    force_compile,
+    file_name,
+    metadata,
+    run_if_found: Callable[[str], bytes] = None,
+    run_if_not_found: Callable = None,
+):
     suffix = file_name.split(".")[1]
     if not force_compile and cache_manager.has_file(file_name):
         module = run_if_found(cache_manager._make_path(file_name))
@@ -1778,9 +2010,10 @@ def get_amdgpu_arch_fulldetails():
         arch_name = arch_name_features[0]
         arch_features = ""
 
-        if (len(arch_name_features) == 3):
-            arch_features = "+" + re.search('\\w+', arch_name_features[1]).group(0) + ","\
-                            "-" + re.search('\\w+', arch_name_features[2]).group(0)
+        if len(arch_name_features) == 3:
+            arch_features = "+" + re.search('\\w+', arch_name_features[1]).group(
+                0
+            ) + "," "-" + re.search('\\w+', arch_name_features[2]).group(0)
         return [arch_triple, arch_name, arch_features]
     except BaseException:
         return None
@@ -1818,14 +2051,18 @@ def make_hash(fn, **kwargs):
         constants = kwargs.get("constants", dict())
         num_warps = kwargs.get("num_warps", 4)
         num_stages = kwargs.get("num_stages", 3)
+
         # Get unique key for the compiled code
         def get_conf_key(conf):
             return sorted(conf.divisible_by_16), sorted(conf.equal_to_1)
+
         configs_key = [get_conf_key(conf) for conf in configs]
         key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
-    return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
+    return hashlib.md5(
+        (Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")
+    ).hexdigest()
 
 
 # - ^\s*func\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
@@ -1859,11 +2096,13 @@ def _get_jsonable_constants(constants):
             return True
         except (TypeError, OverflowError):
             return False
+
     serialized_constants = {}
     for constant in constants:
         if _is_jsonable(constants[constant]):
             serialized_constants[constant] = constants[constant]
     return serialized_constants
+
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
 
@@ -1903,30 +2142,48 @@ def compile(fn, **kwargs):
             raise RuntimeError('gfx_arch is None (not specified)')
         stages = {
             "ast": (lambda path: fn, None),
-            "ttir": (lambda path: parse_mlir_module(path, context),
-                     lambda src: ast_to_ttir(src, signature, configs[0], constants)),
-            "ttgir": (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
-            "llir": (lambda path: Path(path).read_text(),
-                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
-            "amdgcn": (lambda path: Path(path).read_text(),
-                       lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch,
-                                                            gfx_arch_full_details[0],
-                                                            gfx_arch_full_details[2])),
+            "ttir": (
+                lambda path: parse_mlir_module(path, context),
+                lambda src: ast_to_ttir(src, signature, configs[0], constants),
+            ),
+            "ttgir": (
+                lambda path: parse_mlir_module(path, context),
+                lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability),
+            ),
+            "llir": (
+                lambda path: Path(path).read_text(),
+                lambda src: ttgir_to_llir(src, extern_libs, capability),
+            ),
+            "amdgcn": (
+                lambda path: Path(path).read_text(),
+                lambda src: llir_to_amdgcn_and_hsaco(
+                    src, gfx_arch, gfx_arch_full_details[0], gfx_arch_full_details[2]
+                ),
+            ),
         }
     else:
         stages = {
             "ast": (lambda path: fn, None),
-            "ttir": (lambda path: parse_mlir_module(path, context),
-                     lambda src: ast_to_ttir(src, signature, configs[0], constants, debug)),
-            "ttgir": (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability)),
-            "llir": (lambda path: Path(path).read_text(),
-                     lambda src: ttgir_to_llir(src, extern_libs, capability)),
-            "ptx": (lambda path: Path(path).read_text(),
-                    lambda src: llir_to_ptx(src, capability)),
-            "cubin": (lambda path: Path(path).read_bytes(),
-                      lambda src: ptx_to_cubin(src, capability))
+            "ttir": (
+                lambda path: parse_mlir_module(path, context),
+                lambda src: ast_to_ttir(src, signature, configs[0], constants, debug),
+            ),
+            "ttgir": (
+                lambda path: parse_mlir_module(path, context),
+                lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, capability),
+            ),
+            "llir": (
+                lambda path: Path(path).read_text(),
+                lambda src: ttgir_to_llir(src, extern_libs, capability),
+            ),
+            "ptx": (
+                lambda path: Path(path).read_text(),
+                lambda src: llir_to_ptx(src, capability),
+            ),
+            "cubin": (
+                lambda path: Path(path).read_bytes(),
+                lambda src: ptx_to_cubin(src, capability),
+            ),
         }
 
     # find out the signature of the function
@@ -1947,6 +2204,7 @@ def compile(fn, **kwargs):
         _, ir = os.path.basename(fn).split(".")
         src = Path(fn).read_text()
         import re
+
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
         # print(name, signature)
@@ -1972,8 +2230,13 @@ def compile(fn, **kwargs):
         with open(fn_cache_manager._make_path(f"{name}.json")) as f:
             metadata = json.load(f)
     else:
-        metadata = {"num_warps": num_warps, "num_stages": num_stages,
-                    "constants": _get_jsonable_constants(constants), "ctime": dict(), "debug": debug}
+        metadata = {
+            "num_warps": num_warps,
+            "num_stages": num_stages,
+            "constants": _get_jsonable_constants(constants),
+            "ctime": dict(),
+            "debug": debug,
+        }
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
@@ -1986,11 +2249,16 @@ def compile(fn, **kwargs):
         path = fn_cache_manager._make_path(f"{name}.{ir}")
         if ir == ext:
             next_module = parse(fn)
-        elif os.path.exists(path) and\
-                ir in metadata["ctime"] and\
-                os.path.getctime(path) == metadata["ctime"][ir]:
+        elif (
+            os.path.exists(path)
+            and ir in metadata["ctime"]
+            and os.path.getctime(path) == metadata["ctime"][ir]
+        ):
             if ir == "amdgcn":
-                next_module = (parse(path), parse(fn_cache_manager._make_path(f"{name}.hsaco_path")))
+                next_module = (
+                    parse(path),
+                    parse(fn_cache_manager._make_path(f"{name}.hsaco_path")),
+                )
             else:
                 next_module = parse(path)
         else:
@@ -2025,20 +2293,24 @@ def compile(fn, **kwargs):
 @static_vars(discovered_gfx_arch_fulldetails=get_amdgpu_arch_fulldetails())
 def _get_amdgcn_bitcode_paths():
     if torch.version.hip is not None:
-        gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
-                                               "ocml.bc",
-                                               "ockl.bc",
-                                               "oclc_finite_only_off.bc",
-                                               "oclc_daz_opt_off.bc",
-                                               "oclc_correctly_rounded_sqrt_on.bc",
-                                               "oclc_unsafe_math_off.bc",
-                                               "oclc_wavefrontsize64_on.bc"]
+        gpu_arch_agnostic_bitcode_libraries = [
+            "opencl.bc",
+            "ocml.bc",
+            "ockl.bc",
+            "oclc_finite_only_off.bc",
+            "oclc_daz_opt_off.bc",
+            "oclc_correctly_rounded_sqrt_on.bc",
+            "oclc_unsafe_math_off.bc",
+            "oclc_wavefrontsize64_on.bc",
+        ]
 
         gfx_arch = _get_amdgcn_bitcode_paths.discovered_gfx_arch_fulldetails[1]
         gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
 
         gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
-        bitcode_path_dir = os.path.join(Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/")
+        bitcode_path_dir = os.path.join(
+            Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/"
+        )
 
         amdgcn_bitcode_paths = {}
         i = 1
@@ -2062,7 +2334,6 @@ def get_amdgcn_bitcode_paths():
 
 
 class CompiledKernel:
-
     # Hooks for external tools to monitor the execution of triton kernels
     launch_enter_hook = None
     launch_exit_hook = None
@@ -2070,6 +2341,7 @@ class CompiledKernel:
     def __init__(self, fn, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         self.fn = fn
@@ -2099,14 +2371,18 @@ class CompiledKernel:
             max_shared = hip_utils.get_device_properties(device)["max_shared_mem"]
             if self.shared > max_shared:
                 raise OutOfResources(self.shared, max_shared, "shared memory")
-            mod, func, n_regs, n_spills = hip_utils.load_binary(self.metadata["name"], self.asm["hsaco_path"], self.shared, device)
+            mod, func, n_regs, n_spills = hip_utils.load_binary(
+                self.metadata["name"], self.asm["hsaco_path"], self.shared, device
+            )
         else:
             global cuda_utils
             init_cuda_utils()
             max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
             if self.shared > max_shared:
                 raise OutOfResources(self.shared, max_shared, "shared memory")
-            mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
+            mod, func, n_regs, n_spills = cuda_utils.load_binary(
+                self.metadata["name"], self.asm["cubin"], self.shared, device
+            )
 
         self.n_spills = n_spills
         self.n_regs = n_regs
@@ -2124,8 +2400,20 @@ class CompiledKernel:
         def runner(*args, stream=None):
             if stream is None:
                 stream = triton.runtime.jit.get_cuda_stream()
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
+            self.c_wrapper(
+                grid[0],
+                grid[1],
+                grid[2],
+                self.num_warps,
+                self.shared,
+                stream,
+                self.cu_function,
+                CompiledKernel.launch_enter_hook,
+                CompiledKernel.launch_exit_hook,
+                self,
+                *args,
+            )
+
         return runner
 
     def get_sass(self, fun=None):
@@ -2143,7 +2431,6 @@ class CompiledKernel:
 
 
 class CudaUtils(object):
-
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(CudaUtils, cls).__new__(cls)
@@ -2277,6 +2564,7 @@ class CudaUtils(object):
                 with open(so, "rb") as f:
                     cache.put(f.read(), fname, binary=True)
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("cuda_utils", cache._make_path(fname))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -2436,6 +2724,7 @@ class HIPUtils(object):
                 with open(so, "rb") as f:
                     cache.put(f.read(), fname, binary=True)
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("hip_utils", cache._make_path(fname))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

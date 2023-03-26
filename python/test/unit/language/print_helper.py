@@ -29,7 +29,7 @@ def kernel_static_print(X, Y, BLOCK: tl.constexpr):
 
 
 def test_print(func: str, data_type: str):
-    shape = (128, )
+    shape = (128,)
     # limit the range of integers so that the sum does not overflow
     x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda').to(getattr(torch, data_type))
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")

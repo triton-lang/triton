@@ -5,9 +5,13 @@ import triton.language as tl
 
 
 def test_normalization_with_remat():
-
     @triton.jit
-    def triton_(in_out_ptr0, in_out_ptr1, in_ptr0, in_ptr1, in_ptr2, in_ptr3, xnumel, rnumel, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
+    def triton_(
+        in_out_ptr0, in_out_ptr1,
+        in_ptr0, in_ptr1, in_ptr2, in_ptr3,
+        xnumel, rnumel,
+        XBLOCK: tl.constexpr, RBLOCK: tl.constexpr,
+    ):  # fmt: skip
         xnumel = 512
         rnumel = 4096
         xoffset = tl.program_id(0) * XBLOCK
@@ -25,7 +29,12 @@ def test_normalization_with_remat():
             rindex = roffset + rbase
             rmask = rindex < rnumel
             r2 = rindex
-            tmp0 = tl.load(in_out_ptr0 + (r2 + (4096 * x3)), rmask & xmask, eviction_policy='evict_last', other=0)
+            tmp0 = tl.load(
+                in_out_ptr0 + (r2 + (4096 * x3)),
+                rmask & xmask,
+                eviction_policy='evict_last',
+                other=0,
+            )
             tmp2 = tmp0 - tmp1
             tmp4 = 1e-05
             tmp5 = tmp3 + tmp4
@@ -37,7 +46,11 @@ def test_normalization_with_remat():
             tmp12 = tmp10 * tmp11
             tmp14 = tmp12 + tmp13
             _tmp17 = tl.where(rmask & xmask, _tmp17 + tmp14, _tmp17)
-            tl.store(in_out_ptr0 + (r2 + (4096 * x3) + tl.zeros([XBLOCK, RBLOCK], tl.int32)), tmp14, rmask & xmask)
+            tl.store(
+                in_out_ptr0 + (r2 + (4096 * x3) + tl.zeros([XBLOCK, RBLOCK], tl.int32)),
+                tmp14,
+                rmask & xmask,
+            )
         tmp17 = tl.sum(_tmp17, 1)[:, None]
         tmp18 = 4096.0
         tmp19 = tmp17 / tmp18

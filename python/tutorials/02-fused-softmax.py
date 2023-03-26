@@ -69,8 +69,12 @@ def naive_softmax(x):
 
 @triton.jit
 def softmax_kernel(
-    output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols,
-    BLOCK_SIZE: tl.constexpr
+    output_ptr,
+    input_ptr,
+    input_row_stride,
+    output_row_stride,
+    n_cols,
+    BLOCK_SIZE: tl.constexpr,
 ):
     # The rows of the softmax are independent, so we parallelize across those
     row_idx = tl.program_id(0)
@@ -155,9 +159,7 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['N'],  # argument names to use as an x-axis for the plot
-        x_vals=[
-            128 * i for i in range(2, 100)
-        ],  # different possible values for `x_name`
+        x_vals=[128 * i for i in range(2, 100)],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
         line_vals=[
             'triton',
@@ -183,8 +185,10 @@ def benchmark(M, N, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x))
     if provider == 'torch-jit':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x))
+
     def gbps(ms):
         return 2 * x.nelement() * x.element_size() * 1e-09 / (ms * 0.001)
+
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 

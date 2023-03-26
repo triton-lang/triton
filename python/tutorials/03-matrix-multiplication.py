@@ -146,6 +146,7 @@ import torch
 import triton
 import triton.language as tl
 
+
 # %
 # :code:`triton.jit`'ed functions can be auto-tuned by using the `triton.autotune`
 # decorator, which consumes:
@@ -157,7 +158,16 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 128,
+                'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 64,
+                'GROUP_SIZE_M': 8,
+            },
+            num_stages=3,
+            num_warps=8,
+        ),
     ],
     key=['M', 'N', 'K'],
 )
@@ -177,7 +187,7 @@ def matmul_kernel(
     BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     ACTIVATION: tl.constexpr,
-):
+):  # fmt: skip
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
@@ -265,9 +275,11 @@ def matmul(a, b, activation=None):
     ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
     # allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+
     # 1D launch kernel where each block gets its own program.
     def grid(META):
         return (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
+
     matmul_kernel[grid](
         a, b, c,
         M, N, K,
@@ -275,7 +287,7 @@ def matmul(a, b, activation=None):
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
         ACTIVATION=activation,
-    )
+    )  # fmt: skip
     return c
 
 
@@ -310,9 +322,7 @@ else:
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
-        x_vals=[
-            8192
-        ],  # different possible values for `x_name`
+        x_vals=[8192],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
         line_vals=['cublas', 'triton'],
@@ -332,8 +342,10 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
+
     def perf(ms):
         return 2 * M * N * K * 1e-12 / (ms * 0.001)
+
     return perf(ms), perf(max_ms), perf(min_ms)
 
 

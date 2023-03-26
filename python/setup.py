@@ -32,6 +32,7 @@ def get_build_type():
         # TODO: change to release when stable enough
         return "TritonRelBuildWithAsserts"
 
+
 # --- third party packages -----
 
 
@@ -43,13 +44,22 @@ class Package(NamedTuple):
     lib_flag: str
     syspath_var_name: str
 
+
 # pybind11
 
 
 def get_pybind11_package_info():
     name = "pybind11-2.10.0"
     url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
-    return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
+    return Package(
+        package="pybind11",
+        name=name,
+        url=url,
+        include_flag="PYBIND11_INCLUDE_DIR",
+        lib_flag="",
+        syspath_var_name="PYBIND11_SYSPATH",
+    )
+
 
 # llvm
 
@@ -65,13 +75,29 @@ def get_llvm_package_info():
         linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
         system_suffix = f"linux-gnu-{linux_suffix}"
     else:
-        return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+        return Package(
+            package="llvm",
+            name="LLVM-C.lib",
+            url="",
+            include_flag="LLVM_INCLUDE_DIRS",
+            lib_flag="LLVM_LIBRARY_DIR",
+            syspath_var_name="LLVM_SYSPATH",
+        )
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
     name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
     version = "llvm-17.0.0-2538e550420f"
-    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
-    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+    url = (
+        f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
+    )
+    return Package(
+        package="llvm",
+        name=name,
+        url=url,
+        include_flag="LLVM_INCLUDE_DIRS",
+        lib_flag="LLVM_LIBRARY_DIR",
+        syspath_var_name="LLVM_SYSPATH",
+    )
 
 
 def get_thirdparty_packages(triton_cache_path):
@@ -83,8 +109,9 @@ def get_thirdparty_packages(triton_cache_path):
         if p.syspath_var_name in os.environ:
             package_dir = os.environ[p.syspath_var_name]
         version_file_path = os.path.join(package_dir, "version.txt")
-        if p.syspath_var_name not in os.environ and\
-           (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url):
+        if p.syspath_var_name not in os.environ and (
+            not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url
+        ):
             try:
                 shutil.rmtree(package_root_dir)
             except Exception:
@@ -102,6 +129,7 @@ def get_thirdparty_packages(triton_cache_path):
         if p.lib_flag:
             thirdparty_cmake_args.append(f"-D{p.lib_flag}={package_dir}/lib")
     return thirdparty_cmake_args
+
 
 # ---- package data ---
 
@@ -136,7 +164,6 @@ class CMakeExtension(Extension):
 
 
 class CMakeBuild(build_ext):
-
     user_options = build_ext.user_options + [('base-dir=', None, 'base directory of Triton')]
 
     def initialize_options(self):
@@ -151,7 +178,8 @@ class CMakeBuild(build_ext):
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
             raise RuntimeError(
-                "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
+                "CMake must be installed to build the following extensions: "
+                + ", ".join(e.name for e in self.extensions)
             )
 
         if platform.system() == "Windows":
@@ -164,8 +192,7 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
-        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
-            os.getenv("HOMEPATH") or None
+        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
         if not user_home:
             raise RuntimeError("Could not find user home directory")
         triton_cache_path = os.path.join(user_home, ".triton")
@@ -201,6 +228,7 @@ class CMakeBuild(build_ext):
             build_args += ["--", "/m"]
         else:
             import multiprocessing
+
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             build_args += ['-j' + str(2 * multiprocessing.cpu_count())]
 
@@ -227,7 +255,8 @@ setup(
         "triton/impl",
         "triton/ops",
         "triton/runtime",
-        "triton/ops/blocksparse"],
+        "triton/ops/blocksparse",
+    ],
     install_requires=[
         "filelock",
     ],

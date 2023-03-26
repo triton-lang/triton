@@ -206,6 +206,7 @@ class Libdevice(ExternLibrary):
 
         # Group functions together by renaming.
         renaming = {
+            # fmt: off
             'llabs': 'abs', 'acosf': 'acos', 'acoshf': 'acosh',
             'dadd_rd': 'add_rd', 'fadd_rd': 'add_rd', 'dadd_rn': 'add_rn',
             'fadd_rn': 'add_rn', 'dadd_ru': 'add_ru', 'fadd_ru': 'add_ru',
@@ -255,7 +256,8 @@ class Libdevice(ExternLibrary):
             'fsub_rn': 'sub_rn', 'dsub_rn': 'sub_rn', 'fsub_ru': 'sub_ru',
             'dsub_ru': 'sub_ru', 'fsub_rz': 'sub_rz', 'dsub_rz': 'sub_rz',
             'tanf': 'tan', 'tanhf': 'tanh', 'tgammaf': 'tgamma', 'truncf': 'trunc',
-            'y0f': 'y0', 'y1f': 'y1', 'ynf': 'yn'
+            'y0f': 'y0', 'y1f': 'y1', 'ynf': 'yn',
+            # fmt: on
         }
 
         for symbol in self._symbols.values():
@@ -334,8 +336,9 @@ class LLVMDisassembler:
         self._ll_file = "/tmp/extern_lib.ll"
 
     def disasm(self, lib_path: str) -> None:
-        subprocess.Popen([self._path, lib_path, "-o", self.ll_file],
-                         stdout=subprocess.PIPE).communicate()
+        subprocess.Popen(
+            [self._path, lib_path, "-o", self.ll_file], stdout=subprocess.PIPE
+        ).communicate()
 
     @property
     def ll_file(self) -> str:
@@ -356,11 +359,11 @@ def build(
     output_dir: str,
 ) -> None:
     '''
-      Interface function to build the library file.
-      :param llvm_dis_path: path to the llvm-dis binary
-      :param lib_path: path to the external library file
-      :param lib_name: name of the library
-      :param output_dir: path to the output directory
+    Interface function to build the library file.
+    :param llvm_dis_path: path to the llvm-dis binary
+    :param lib_path: path to the external library file
+    :param lib_name: name of the library
+    :param output_dir: path to the output directory
     '''
     if lib_name == "libdevice":
         extern_lib = Libdevice(lib_path)
@@ -376,10 +379,28 @@ def build(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--llvm-dis", dest="llvm_dis_path", help="Path to llvm-dis", default="llvm-dis")
-    parser.add_argument("--lib-path", dest="lib_path", help="Path to the extern library")
-    parser.add_argument("--lib-name", dest="lib_name", help="Name of the extern library")
-    parser.add_argument("--output", dest="output_dir", help="Output file path", default="/tmp/")
+    parser.add_argument(
+        "--llvm-dis",
+        dest="llvm_dis_path",
+        help="Path to llvm-dis",
+        default="llvm-dis",
+    )
+    parser.add_argument(
+        "--lib-path",
+        dest="lib_path",
+        help="Path to the extern library",
+    )
+    parser.add_argument(
+        "--lib-name",
+        dest="lib_name",
+        help="Name of the extern library",
+    )
+    parser.add_argument(
+        "--output",
+        dest="output_dir",
+        help="Output file path",
+        default="/tmp/",
+    )
     args = parser.parse_args()
 
     build(args.llvm_dis_path, args.lib_path, args.lib_name, args.output_dir)

@@ -10,6 +10,7 @@ in other relevant `triton` module namespaces.
 from .base import builtin, extern, is_builtin
 from triton._C.libtriton.triton import ir
 
+
 __all__ = [
     "builtin",
     "extern",

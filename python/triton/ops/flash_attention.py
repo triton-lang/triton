@@ -23,7 +23,7 @@ def _fwd_kernel(
     Z, H, N_CTX,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
-):
+):  # fmt: skip
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     # initialize offsets
@@ -59,7 +59,7 @@ def _fwd_kernel(
         p = tl.exp(qk - m_curr[:, None])
         l_curr = tl.sum(p, 1) + l_prev
         # rescale operands of matmuls
-        l_rcp = 1. / l_curr
+        l_rcp = 1.0 / l_curr
         p *= l_rcp
         acc *= (l_prev * l_rcp)[:, None]
         # update acc
@@ -92,7 +92,7 @@ def _bwd_preprocess(
     Out, DO, L,
     NewDO, Delta,
     BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
-):
+):  # fmt: skip
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     off_n = tl.arange(0, D_HEAD)
     # load
@@ -120,7 +120,7 @@ def _bwd_kernel(
     num_block,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
-):
+):  # fmt: skip
     off_hz = tl.program_id(0)
     off_z = off_hz // H
     off_h = off_hz % H
@@ -192,13 +192,14 @@ def _bwd_kernel(
 
 
 class _attention(torch.autograd.Function):
-
     @staticmethod
     def forward(ctx, q, k, v, sm_scale):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
-            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
+            raise RuntimeError(
+                "Flash attention currently only supported for compute capability >= 80"
+            )
         BLOCK = 128
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
@@ -223,7 +224,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
             BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=2,
-        )
+        )  # fmt: skip
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.grid = grid
@@ -241,11 +242,11 @@ class _attention(torch.autograd.Function):
         dv = torch.empty_like(v)
         do_scaled = torch.empty_like(do)
         delta = torch.empty_like(l)
-        _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
+        _bwd_preprocess[(ctx.grid[0] * ctx.grid[1],)](
             o, do, l,
             do_scaled, delta,
             BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
-        )
+        )  # fmt: skip
         _bwd_kernel[(ctx.grid[1],)](
             q, k, v, ctx.sm_scale,
             o, do_scaled,
@@ -260,7 +261,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
             BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
             num_stages=1,
-        )
+        )  # fmt: skip
         return dq, dk, dv, None
 
 

@@ -3,6 +3,7 @@ import torch
 import triton
 import triton.language as tl
 
+
 # ********************************************************
 # --------------------------------------------------------
 # Sparse = Dense x Dense (SDD)
@@ -13,9 +14,11 @@ import triton.language as tl
 # ********************************************************
 
 
-@triton.heuristics({
-    'EVEN_K': lambda nargs: nargs['K'] % nargs['TILE_K'] == 0,
-})
+@triton.heuristics(
+    {
+        'EVEN_K': lambda nargs: nargs['K'] % nargs['TILE_K'] == 0,
+    }
+)
 @triton.jit
 def _sdd_kernel(
     A, B, C,
@@ -24,8 +27,8 @@ def _sdd_kernel(
     stride_zc, stride_hc, stride_mc, stride_nc,
     K, grid_offset, lut,
     TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
-    BLOCK: tl.constexpr, EVEN_K: tl.constexpr
-):
+    BLOCK: tl.constexpr, EVEN_K: tl.constexpr,
+):  # fmt: skip
     # ------------ #
     # - Prologue - #
     # ------------ #
@@ -39,20 +42,24 @@ def _sdd_kernel(
     start_am = tl.load(lut + 1)
     offs_am = start_am * BLOCK + (tl.arange(0, TILE_M) % BLOCK)
     offs_ak = tl.arange(0, TILE_K)
-    a_ptrs = A \
-        + off_z * stride_za \
-        + off_h * stride_ha \
-        + offs_am[:, None] * stride_ma \
+    a_ptrs = (
+        A
+        + off_z * stride_za
+        + off_h * stride_ha
+        + offs_am[:, None] * stride_ma
         + offs_ak[None, :] * stride_ak
+    )
     # initialize pointers to B
     start_bn = tl.load(lut + 2)
     offs_bn = start_bn * BLOCK + (tl.arange(0, TILE_N) % BLOCK)
     offs_bk = tl.arange(0, TILE_K)
-    b_ptrs = B \
-        + off_z * stride_zb \
-        + off_h * stride_hb \
-        + offs_bn[None, :] * stride_nb \
+    b_ptrs = (
+        B
+        + off_z * stride_zb
+        + off_h * stride_hb
+        + offs_bn[None, :] * stride_nb
         + offs_bk[:, None] * stride_bk
+    )
     # ---------------- #
     #    Inner Loop    #
     # ---------------- #
@@ -62,8 +69,8 @@ def _sdd_kernel(
             a = tl.load(a_ptrs)
             b = tl.load(b_ptrs)
         else:
-            a = tl.load(a_ptrs, mask=offs_ak[None, :] < k, other=0.)
-            b = tl.load(b_ptrs, mask=offs_bk[:, None] < k, other=0.)
+            a = tl.load(a_ptrs, mask=offs_ak[None, :] < k, other=0.0)
+            b = tl.load(b_ptrs, mask=offs_bk[:, None] < k, other=0.0)
         acc += tl.dot(a, b, out_dtype=tl.float32)
         a_ptrs += TILE_K * stride_ak
         b_ptrs += TILE_K * stride_bk
@@ -73,11 +80,13 @@ def _sdd_kernel(
     # ---------------- #
     offs_cm = tl.arange(0, TILE_M) % BLOCK
     offs_cn = tl.arange(0, TILE_N) % BLOCK
-    pc = C \
-        + off_z * stride_zc \
-        + block_id * stride_hc \
-        + offs_cm[:, None] * stride_mc \
+    pc = (
+        C
+        + off_z * stride_zc
+        + block_id * stride_hc
+        + offs_cm[:, None] * stride_mc
         + offs_cn[None, :] * stride_nc
+    )
     tl.store(pc, c, mask=True)
 
 
@@ -111,7 +120,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
         Ka, 0, lut,
         TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block, num_stages=4,
         num_warps=4,
-    )
+    )  # fmt: skip
     return c
 
 
@@ -119,6 +128,7 @@ def sdd_lut(layout, block, device):
     lut = layout.nonzero(as_tuple=False).to(device).int()
     lut = lut.contiguous()
     return lut, None
+
 
 # -----------------------------
 # Dense = Sparse x Dense (DSD)
@@ -135,8 +145,8 @@ def _dsd_kernel(
     stride_zc, stride_hc, stride_cm, stride_cn,
     DS0, DS1, lut,
     TILE_M: tl.constexpr, TILE_N: tl.constexpr, TILE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr, BLOCK: tl.constexpr
-):
+    GROUP_SIZE_M: tl.constexpr, BLOCK: tl.constexpr,
+):  # fmt: skip
     # ------------ #
     # - Prologue - #
     # ------------ #
@@ -157,20 +167,26 @@ def _dsd_kernel(
     block_id = tl.multiple_of(block_id, 8)  # compiler hint
     offs_am = tl.arange(0, TILE_M)
     offs_ak = tl.arange(0, TILE_K)
-    pa = A + pidz * stride_az \
-        + block_id * stride_ha \
-        + offs_am[:, None] * stride_am \
+    pa = (
+        A
+        + pidz * stride_az
+        + block_id * stride_ha
+        + offs_am[:, None] * stride_am
         + offs_ak[None, :] * stride_ak
+    )
     # initialize pointers to B (dense)
     offs_bn = pid_m * TILE_N + tl.arange(0, TILE_N)
     offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn % DS0, TILE_N), TILE_N)
     start_bk = tl.load(pinc)
     start_bk = tl.multiple_of(start_bk, 8)  # compiler hint
     offs_bk = start_bk + tl.arange(0, TILE_K)
-    pb = B + pidz * stride_zb \
-        + off_h * stride_hb \
-        + offs_bn[None, :] * stride_bn \
+    pb = (
+        B
+        + pidz * stride_zb
+        + off_h * stride_hb
+        + offs_bn[None, :] * stride_bn
         + offs_bk[:, None] * stride_bk
+    )
     # ---------------- #
     #    Inner Loop    #
     # ---------------- #
@@ -195,11 +211,13 @@ def _dsd_kernel(
     # initialize pointers to C
     offs_cm = column * TILE_M + tl.arange(0, TILE_M)
     offs_cn = pid_m * TILE_N + tl.arange(0, TILE_N)
-    pc = C \
-        + off_h * stride_hc \
-        + pidz * stride_zc \
-        + offs_cm[:, None] * stride_cm \
+    pc = (
+        C
+        + off_h * stride_hc
+        + pidz * stride_zc
+        + offs_cm[:, None] * stride_cm
         + offs_cn[None, :] * stride_cn
+    )
     tl.store(pc, c, mask=offs_cn[None, :] < DS0)
 
 
@@ -226,9 +244,11 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
         c = out
     # meta-parameter heuristics
     TILE_N = 128
+
     # compute output
     def grid(meta):
         return [triton.cdiv(BS3, meta['TILE_N']), width, BS0]
+
     _dsd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
@@ -237,13 +257,13 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
         BS3, AS1, lut,
         TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,
         num_warps=4, GROUP_SIZE_M=4,
-    )
+    )  # fmt: skip
     # exit()
     return c
 
 
 def dsd_lut(layout, block, step, trans, device):
-    """
+    r"""
     Generates the look-up table for incrementing pointers in the DSD/DDS matmul.
     Example (BLOCK=32, STEP=16)
     [[1, 0, 0, 1, 0],
@@ -252,11 +272,11 @@ def dsd_lut(layout, block, step, trans, device):
 
     Then the offsets for A are
      [0 , 16, 32, 48] <- row 0
-      \\----/  \\----/
+      \----/  \----/
       col=0   col=3
      [64, 80, 96, 112, 128, 144] <- row 1
-      \\----/   \\----/  \\------/
-       col=1    col=2    col=3
+      \----/  \-----/  \------/
+      col=1    col=2     col=3
      [160, 176, 192, 208]
     which leads to increments table
     [0, 16, 16, 16, || 64, 16, 16, 16, 16, 16, || 160, 16, 16, 16]
@@ -338,6 +358,7 @@ def dsd_lut(layout, block, step, trans, device):
     # create locks
     return lut, width
 
+
 # -----------------------------
 # Dense = Dense x Sparse (DDS)
 # -----------------------------
@@ -345,7 +366,10 @@ def dsd_lut(layout, block, step, trans, device):
 
 
 def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=None):
-    return dsd_matmul(b, a, not trans_b, not trans_a, not trans_c, spdims, block, lut, width, out=out)
+    return dsd_matmul(
+        b, a, not trans_b, not trans_a, not trans_c, spdims, block, lut, width, out=out
+    )
+
 
 ##############
 #  MAIN API  #
@@ -353,15 +377,16 @@ def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
 
 
 class _matmul(torch.autograd.Function):
-
     fn = {'sdd': sdd_matmul, 'dsd': dsd_matmul, 'dds': dds_matmul}
 
     @staticmethod
     def forward(
         ctx, a, b, trans_a, trans_b, trans_c, mode, spdims, block,
-        c_lut, c_width, da_lut, da_width, db_lut, db_width, out
-    ):
-        c = _matmul.fn[mode](a, b, trans_a, trans_b, trans_c, spdims, block, c_lut, c_width, out=out)
+        c_lut, c_width, da_lut, da_width, db_lut, db_width, out,
+    ):  # fmt: skip
+        c = _matmul.fn[mode](
+            a, b, trans_a, trans_b, trans_c, spdims, block, c_lut, c_width, out=out
+        )
         # save for backward
         ctx.save_for_backward(a, b)
         ctx.da_lut = da_lut
@@ -387,22 +412,51 @@ class _matmul(torch.autograd.Function):
         if ctx.needs_input_grad[0]:
             mode_da = mode[1] + mode[0] + mode[2]
             da = _matmul.fn[mode_da](
-                dc, b, ctx.trans_c, not ctx.trans_b, ctx.trans_a, ctx.spdims, ctx.block, ctx.da_lut, ctx.da_width,
+                dc,
+                b,
+                ctx.trans_c,
+                not ctx.trans_b,
+                ctx.trans_a,
+                ctx.spdims,
+                ctx.block,
+                ctx.da_lut,
+                ctx.da_width,
             )
         # gradients w.r.t. b
         if ctx.needs_input_grad[1]:
             mode_db = mode[2] + mode[1] + mode[0]
             db = _matmul.fn[mode_db](
-                a, dc, not ctx.trans_a, ctx.trans_c, ctx.trans_b, ctx.spdims, ctx.block, ctx.db_lut, ctx.db_width,
+                a,
+                dc,
+                not ctx.trans_a,
+                ctx.trans_c,
+                ctx.trans_b,
+                ctx.spdims,
+                ctx.block,
+                ctx.db_lut,
+                ctx.db_width,
             )
         dout = dc if ctx.has_out else None
-        return da, db, None, None, None,\
-            None, None, None, None,\
-            None, None, None, None, None, dout
+        return (
+            da,  # a
+            db,  # b
+            None,  # trans_a
+            None,  # trans_b
+            None,  # trans_c
+            None,  # mode
+            None,  # spdims
+            None,  # block
+            None,  # c_lut
+            None,  # c_width
+            None,  # da_lut
+            None,  # da_width
+            None,  # db_lut
+            None,  # db_width
+            dout,  # out
+        )
 
 
 class matmul:
-
     def __init__(self, layout, block, mode, device, trans_a=False, trans_b=False, trans_c=False):
         if mode not in ['sdd', 'dsd', 'dds']:
             raise NotImplementedError('Supported modes are: sdd, dsd, dds')
@@ -433,6 +487,6 @@ class matmul:
             self.c_lut, self.c_width,
             self.da_lut, self.da_width,
             self.db_lut, self.db_width,
-            out
-        )
+            out,
+        )  # fmt: skip
         return c

@@ -17,17 +17,38 @@ def get_configs_io_bound():
                 for block_n in [32, 64, 128, 256]:
                     num_warps = 2 if block_n <= 64 else 4
                     configs.append(
-                        triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': 1},
-                                      num_stages=num_stages, num_warps=num_warps))
+                        triton.Config(
+                            {
+                                'BLOCK_M': block_m,
+                                'BLOCK_N': block_n,
+                                'BLOCK_K': block_k,
+                                'SPLIT_K': 1,
+                            },
+                            num_stages=num_stages,
+                            num_warps=num_warps,
+                        )
+                    )
                     # split_k
                     for split_k in [2, 4, 8, 16]:
-                        configs.append(triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': split_k},
-                                                     num_stages=num_stages, num_warps=num_warps, pre_hook=init_to_zero('C')))
+                        configs.append(
+                            triton.Config(
+                                {
+                                    'BLOCK_M': block_m,
+                                    'BLOCK_N': block_n,
+                                    'BLOCK_K': block_k,
+                                    'SPLIT_K': split_k,
+                                },
+                                num_stages=num_stages,
+                                num_warps=num_warps,
+                                pre_hook=init_to_zero('C'),
+                            )
+                        )
     return configs
 
 
 @triton.autotune(
     configs=[
+        # fmt: off
         # basic configs for compute-bound matmuls
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
         triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
@@ -48,26 +69,27 @@ def get_configs_io_bound():
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
-    ] + get_configs_io_bound(),
+        # fmt: on
+    ]
+    + get_configs_io_bound(),
     key=['M', 'N', 'K'],
     prune_configs_by={
         'early_config_prune': early_config_prune,
         'perf_model': estimate_matmul_time,
-        'top_k': 10
+        'top_k': 10,
     },
 )
-@triton.heuristics({
-    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
-})
+@triton.heuristics({'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0})
 @triton.jit
-def _kernel(A, B, C, M, N, K,
-            stride_am, stride_ak,
-            stride_bk, stride_bn,
-            stride_cm, stride_cn,
-            dot_out_dtype: tl.constexpr,
-            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
-            ):
+def _kernel(
+    A, B, C, M, N, K,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    dot_out_dtype: tl.constexpr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
+):  # fmt: skip
     # matrix multiplication
     pid = tl.program_id(0)
     pid_z = tl.program_id(1)
@@ -95,8 +117,8 @@ def _kernel(A, B, C, M, N, K,
             b = tl.load(B)
         else:
             k_remaining = K - k * (BLOCK_K * SPLIT_K)
-            a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.)
-            b = tl.load(B, mask=rk[:, None] < k_remaining, other=0.)
+            a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.0)
+            b = tl.load(B, mask=rk[:, None] < k_remaining, other=0.0)
         acc += tl.dot(a, b, out_dtype=dot_out_dtype)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk
@@ -145,15 +167,22 @@ class _matmul(torch.autograd.Function):
                 dot_out_dtype = tl.float32
             else:
                 dot_out_dtype = tl.int32
+
         # launch kernel
         def grid(META):
-            return triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K']
-        _kernel[grid](a, b, c, M, N, K,
-                      a.stride(0), a.stride(1),
-                      b.stride(0), b.stride(1),
-                      c.stride(0), c.stride(1),
-                      dot_out_dtype=dot_out_dtype,
-                      GROUP_M=8)
+            return (
+                triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+                META['SPLIT_K'],
+            )
+
+        _kernel[grid](
+            a, b, c, M, N, K,
+            a.stride(0), a.stride(1),
+            b.stride(0), b.stride(1),
+            c.stride(0), c.stride(1),
+            dot_out_dtype=dot_out_dtype,
+            GROUP_M=8,
+        )  # fmt: skip
         return c
 
     @staticmethod

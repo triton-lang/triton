@@ -22,10 +22,10 @@ class MockTensor:
     Can be used in place of real tensors when calling:
         kernel.warmup(MockTensor(torch.float32), ...)
     """
+
     @staticmethod
     def wrap_dtype(arg):
-        if arg.__class__.__name__ == "dtype" and\
-           arg.__module__ == "torch":
+        if arg.__class__.__name__ == "dtype" and arg.__module__ == "torch":
             return MockTensor(arg)
         return arg
 

@@ -23,6 +23,7 @@
 import re
 import subprocess
 
+
 FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
 SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')
 FNAME_RE = re.compile(r'\s*Function : (\w+)\s*')
@@ -31,11 +32,11 @@ BRA_RE = re.compile(r'(.*BRA(?:\.U)? )(0x\w+);')
 
 def parseCtrl(sline):
     enc = int(SLINE_RE.match(sline).group(1), 16)
-    stall = (enc >> 41) & 0xf
+    stall = (enc >> 41) & 0xF
     yld = (enc >> 45) & 0x1
     wrtdb = (enc >> 46) & 0x7
     readb = (enc >> 49) & 0x7
-    watdb = (enc >> 52) & 0x3f
+    watdb = (enc >> 52) & 0x3F
 
     yld_str = 'Y' if yld == 0 else '-'
     wrtdb_str = '-' if wrtdb == 7 else str(wrtdb)

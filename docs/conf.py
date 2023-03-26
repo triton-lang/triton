@@ -50,6 +50,7 @@ def setup(app):
 
         def wrapped(obj, **kwargs):
             import triton
+
             if isinstance(obj, triton.code_gen.JITFunction):
                 obj = obj.fn
             return old(obj)
@@ -60,17 +61,15 @@ def setup(app):
 
     def documenter(app, obj, parent):
         import triton
+
         if isinstance(obj, triton.code_gen.JITFunction):
             obj = obj.fn
         return old_documenter(app, obj, parent)
 
     sphinx.ext.autosummary.get_documenter = documenter
-    sphinx.util.inspect.unwrap_all = forward_jit_fn(
-        sphinx.util.inspect.unwrap_all)
-    sphinx.util.inspect.signature = forward_jit_fn(
-        sphinx.util.inspect.signature)
-    sphinx.util.inspect.object_description = forward_jit_fn(
-        sphinx.util.inspect.object_description)
+    sphinx.util.inspect.unwrap_all = forward_jit_fn(sphinx.util.inspect.unwrap_all)
+    sphinx.util.inspect.signature = forward_jit_fn(sphinx.util.inspect.signature)
+    sphinx.util.inspect.object_description = forward_jit_fn(sphinx.util.inspect.object_description)
 
 
 # Auto Doc
@@ -82,7 +81,8 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx.ext.coverage',
     'sphinx.ext.napoleon',
-    'sphinx_multiversion']
+    'sphinx_multiversion',
+]
 autosummary_generate = True
 
 # versioning config
@@ -104,7 +104,7 @@ sphinx_gallery_conf = {
     'within_subsection_order': FileNameSortKey,
     'reference_url': {
         'sphinx_gallery': None,
-    }
+    },
 }
 
 # Add any paths that contain templates here, relative to this directory.
@@ -202,15 +202,15 @@ latex_elements = {
     # The paper size ('letterpaper' or 'a4paper').
     #
     # 'papersize': 'letterpaper',
-
+    #
     # The font size ('10pt', '11pt' or '12pt').
     #
     # 'pointsize': '10pt',
-
+    #
     # Additional stuff for the LaTeX preamble.
     #
     # 'preamble': '',
-
+    #
     # Latex figure (float) alignment
     #
     # 'figure_align': 'htbp',
@@ -235,6 +235,13 @@ man_pages = [(master_doc, 'triton', 'Triton Documentation', [author], 1)]
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, 'Triton', 'Triton Documentation', author,
-     'Triton', 'One line description of project.', 'Miscellaneous'),
+    (
+        master_doc,
+        'Triton',
+        'Triton Documentation',
+        author,
+        'Triton',
+        'One line description of project.',
+        'Miscellaneous',
+    ),
 ]

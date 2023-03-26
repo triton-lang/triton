@@ -28,10 +28,17 @@ def nvsmi(attrs):
     return ret
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
-             percentiles=(0.5, 0.2, 0.8),
-             record_clocks=False, fast_flush=False):
+def do_bench(
+    fn,
+    warmup=25,
+    rep=100,
+    grad_to_none=None,
+    percentiles=(0.5, 0.2, 0.8),
+    record_clocks=False,
+    fast_flush=False,
+):
     import torch
+
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -172,6 +179,7 @@ class Mark:
 
         import matplotlib.pyplot as plt
         import pandas as pd
+
         y_mean = bench.line_names
         y_min = [f'{x}-min' for x in bench.line_names]
         y_max = [f'{x}-max' for x in bench.line_names]
@@ -216,7 +224,11 @@ class Mark:
             print(bench.plot_name + ':')
             print(df)
         if save_path:
-            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
+            df.to_csv(
+                os.path.join(save_path, f"{bench.plot_name}.csv"),
+                float_format='%.1f',
+                index=False,
+            )
 
     def run(self, show_plots=False, print_data=False, save_path=''):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
@@ -239,19 +251,24 @@ def perf_report(benchmarks):
     :param benchmarks: Benchmarking configurations.
     :type benchmarks: List of :class:`Benchmark`
     """
+
     def wrapper(fn):
         return Mark(fn, benchmarks)
+
     return wrapper
 
 
 def get_dram_gbps(backend=None, device=None):
-    ''' return DRAM bandwidth in GB/s '''
+    '''return DRAM bandwidth in GB/s'''
     import torch
+
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    mem_clock_khz = triton.compiler.cuda_utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
+    mem_clock_khz = triton.compiler.cuda_utils.get_device_properties(device)[
+        "mem_clock_rate"
+    ]  # in kHz
     bus_width = triton.compiler.cuda_utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
     return bw_gbps
@@ -259,15 +276,20 @@ def get_dram_gbps(backend=None, device=None):
 
 def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None):
     import torch
+
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 
     triton.compiler.init_cuda_utils()
-    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    num_subcores = (
+        triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    )
     if not clock_rate:
-        clock_rate = triton.compiler.cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+        clock_rate = triton.compiler.cuda_utils.get_device_properties(device)[
+            "sm_clock_rate"
+        ]  # in kHz
     capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         assert dtype == torch.float16
@@ -284,6 +306,7 @@ def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None)
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
 
+
 # create decorator that wraps test function into
 # a cuda-memcheck system call
 
@@ -293,21 +316,35 @@ def cuda_memcheck(**target_kwargs):
         @functools.wraps(test_fn)
         def wrapper(*args, **kwargs):
             import psutil
+
             ppid_name = psutil.Process(os.getppid()).name()
             run_cuda_memcheck = target_kwargs.items() <= kwargs.items()
             if run_cuda_memcheck and ppid_name != "cuda-memcheck":
                 path = os.path.realpath(test_fn.__globals__["__file__"])
                 # get path of current file
-                env = {"PATH": os.environ["PATH"], "PYTORCH_NO_CUDA_MEMORY_CACHING": "1"}
-                assert 'request' in kwargs, "memcheck'ed test must have a (possibly unused) `request` fixture"
+                env = {
+                    "PATH": os.environ["PATH"],
+                    "PYTORCH_NO_CUDA_MEMORY_CACHING": "1",
+                }
+                assert (
+                    'request' in kwargs
+                ), "memcheck'ed test must have a (possibly unused) `request` fixture"
                 test_id = kwargs['request'].node.callspec.id
                 cmd = f"{path}::{test_fn.__name__}[{test_id}]"
-                out = subprocess.run(["cuda-memcheck", "pytest", "-vs", cmd], capture_output=True, env=env)
-                assert out.returncode == 0, "cuda-memcheck returned an error: bounds checking failed"
+                out = subprocess.run(
+                    ["cuda-memcheck", "pytest", "-vs", cmd],
+                    capture_output=True,
+                    env=env,
+                )
+                assert (
+                    out.returncode == 0
+                ), "cuda-memcheck returned an error: bounds checking failed"
                 assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
             else:
                 test_fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -361,13 +398,16 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
 
 def get_max_simd_tflops(dtype, backend=None, device=None):
     import torch
+
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 
     triton.compiler.init_cuda_utils()
-    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    num_subcores = (
+        triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    )
     clock_rate = triton.compiler.cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:

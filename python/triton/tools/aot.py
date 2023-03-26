@@ -5,8 +5,8 @@ import triton
 import triton._C.libtriton.triton as libtriton
 import triton.compiler as tc
 
-if __name__ == '__main__':
 
+if __name__ == '__main__':
     # valid source and target formats
     VALID_FORMATS = ['triton-ir', 'triton-gpu-ir', 'llvm-ir', 'ptx', 'amdgcn']
 
@@ -14,14 +14,41 @@ if __name__ == '__main__':
     # TODO: conditional requirements
     parser = argparse.ArgumentParser()
     parser.add_argument('src', help="Source file to compile")
-    parser.add_argument('--target', required=True,
-                        help="Target format, one of: " + ', '.join(VALID_FORMATS))
-    parser.add_argument('--sm', type=int, help="Compute capability to compile for")
-    parser.add_argument('--ptx-version', type=int, help="PTX version to compile for")
-    parser.add_argument('--gfx', type=str, help="AMDGPU target to compile for")
-    parser.add_argument('--triple', type=str, help="target triple, for example: amdgcn-amd-amdhsa")
-    parser.add_argument('--features', type=str, help="target features, for example: +sramecc,-xnack")
-    parser.add_argument('--num_warps', type=int, help="number of warps to compile ttgir for")
+    parser.add_argument(
+        '--target',
+        required=True,
+        help="Target format, one of: " + ', '.join(VALID_FORMATS),
+    )
+    parser.add_argument(
+        '--sm',
+        type=int,
+        help="Compute capability to compile for",
+    )
+    parser.add_argument(
+        '--ptx-version',
+        type=int,
+        help="PTX version to compile for",
+    )
+    parser.add_argument(
+        '--gfx',
+        type=str,
+        help="AMDGPU target to compile for",
+    )
+    parser.add_argument(
+        '--triple',
+        type=str,
+        help="target triple, for example: amdgcn-amd-amdhsa",
+    )
+    parser.add_argument(
+        '--features',
+        type=str,
+        help="target features, for example: +sramecc,-xnack",
+    )
+    parser.add_argument(
+        '--num_warps',
+        type=int,
+        help="number of warps to compile ttgir for",
+    )
 
     # parse the args
     args = parser.parse_args()
@@ -72,13 +99,17 @@ if __name__ == '__main__':
 
         # triton-ir -> triton-gpu-ir
         # use compute_capability == 80
-        module = triton.compiler.ttir_to_ttgir(module, num_warps=args.num_warps)  # num_stages=3, compute_capability=80)
+        module = triton.compiler.ttir_to_ttgir(
+            module, num_warps=args.num_warps  # num_stages=3, compute_capability=80
+        )
         module = triton.compiler.optimize_ttgir(module, num_stages=3, compute_capability=80)
         # triton-gpu-ir -> llvm-ir
         # use compute_capability == 80
         module = triton.compiler.ttgir_to_llir(module, extern_libs=None, compute_capability=80)
         # llvm-ir -> amdgcn asm, hsaco binary
-        module, hsaco_path = triton.compiler.llir_to_amdgcn_and_hsaco(module, arch_name, arch_triple, arch_features)
+        module, hsaco_path = triton.compiler.llir_to_amdgcn_and_hsaco(
+            module, arch_name, arch_triple, arch_features
+        )
 
         print(hsaco_path)
         print(module)
@@ -104,7 +135,9 @@ if __name__ == '__main__':
     if args.target == 'ptx':
         if not args.ptx_version:
             raise argparse.ArgumentError(None, "Must specify --ptx-version for PTX compilation")
-        module = triton.compiler.llir_to_ptx(module, compute_capability=args.sm, ptx_version=args.ptx_version)
+        module = triton.compiler.llir_to_ptx(
+            module, compute_capability=args.sm, ptx_version=args.ptx_version
+        )
 
     # llvm-ir -> amdgcn
     if args.target == 'amdgcn':

@@ -31,11 +31,15 @@ class Autotuner(KernelInterface):
             def _hook(args):
                 for i in self.reset_idx:
                     args[i].zero_()
+
             self.hook = _hook
         self.arg_names = arg_names
         # prune configs
         if prune_configs_by:
-            perf_model, top_k = prune_configs_by['perf_model'], prune_configs_by['top_k']
+            perf_model, top_k = (
+                prune_configs_by['perf_model'],
+                prune_configs_by['top_k'],
+            )
             if 'early_config_prune' in prune_configs_by:
                 early_config_prune = prune_configs_by['early_config_prune']
         else:
@@ -60,7 +64,13 @@ class Autotuner(KernelInterface):
             if config.pre_hook:
                 config.pre_hook(self.nargs)
             self.hook(args)
-            self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
+            self.fn.run(
+                *args,
+                num_warps=config.num_warps,
+                num_stages=config.num_stages,
+                **current,
+            )
+
         try:
             return do_bench(kernel_call, percentiles=(0.5, 0.2, 0.8))
         except OutOfResources:
@@ -74,8 +84,9 @@ class Autotuner(KernelInterface):
                 # prune configs
                 pruned_configs = self.prune_configs(kwargs)
                 bench_start = time.time()
-                timings = {config: self._bench(*args, config=config, **kwargs)
-                           for config in pruned_configs}
+                timings = {
+                    config: self._bench(*args, config=config, **kwargs) for config in pruned_configs
+                }
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
@@ -87,7 +98,13 @@ class Autotuner(KernelInterface):
         self.best_config = config
         if config.pre_hook is not None:
             config.pre_hook(self.nargs)
-        return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        return self.fn.run(
+            *args,
+            num_warps=config.num_warps,
+            num_stages=config.num_stages,
+            **kwargs,
+            **config.kwargs,
+        )
 
     def prune_configs(self, kwargs):
         pruned_configs = self.configs
@@ -99,8 +116,13 @@ class Autotuner(KernelInterface):
                 top_k = int(len(self.configs) * top_k)
             if len(pruned_configs) > top_k:
                 est_timing = {
-                    config: self.perf_model(**self.nargs, **kwargs, **config.kwargs, num_stages=config.num_stages,
-                                            num_warps=config.num_warps)
+                    config: self.perf_model(
+                        **self.nargs,
+                        **kwargs,
+                        **config.kwargs,
+                        num_stages=config.num_stages,
+                        num_warps=config.num_warps,
+                    )
                     for config in pruned_configs
                 }
                 pruned_configs = sorted(est_timing.keys(), key=lambda x: est_timing[x])[:top_k]
@@ -180,6 +202,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
     """
+
     def decorator(fn):
         return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
 
@@ -187,7 +210,6 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
 
 
 class Heuristics(KernelInterface):
-
     def __init__(self, fn, arg_names, values) -> None:
         self.fn = fn
         self.values = values
@@ -213,6 +235,7 @@ def heuristics(values):
                    each such function takes a list of positional arguments as input.
     :type values: dict[str, Callable[[list[Any]], Any]]
     """
+
     def decorator(fn):
         return Heuristics(fn, fn.arg_names, values)
 

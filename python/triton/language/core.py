@@ -7,6 +7,7 @@ import triton
 from . import builtin, semantic
 from triton._C.libtriton.triton import ir
 
+
 T = TypeVar('T')
 
 TRITON_MAX_TENSOR_NUMEL = 131072
@@ -17,11 +18,11 @@ def _to_tensor(x, builder):
         return tensor(builder.get_int1(x), int1)
     # Note: compile-time const integers are represented by unsigned values
     elif isinstance(x, int):
-        if -2**31 <= x < 2**31:
+        if -(2**31) <= x < 2**31:
             return tensor(builder.get_int32(x), int32)
         elif 2**31 <= x < 2**32:
             return tensor(builder.get_int32(x), uint32)
-        elif -2**63 <= x < 2**63:
+        elif -(2**63) <= x < 2**63:
             return tensor(builder.get_int64(x), int64)
         elif 2**63 <= x < 2**64:
             return tensor(builder.get_int64(x), uint64)
@@ -49,7 +50,9 @@ class dtype:
 
     def __init__(self, name):
         self.name = name
-        assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
+        assert (
+            name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES
+        ), name
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
             self.int_bitwidth = int(name.split('int')[-1])
@@ -260,7 +263,10 @@ class block_type(dtype):
         for s in self.shape:
             self.numel *= s
         if self.numel > TRITON_MAX_TENSOR_NUMEL:
-            raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
+            raise ValueError(
+                f"numel ({self.numel}) exceeds triton maximum tensor numel "
+                f"({TRITON_MAX_TENSOR_NUMEL})"
+            )
 
         self.name = self.__str__()
 
@@ -436,7 +442,7 @@ class constexpr:
         return constexpr(~self.value)
 
     def __pow__(self, other):
-        return constexpr(self.value ** other.value)
+        return constexpr(self.value**other.value)
 
     def __rshift__(self, other):
         return constexpr(self.value >> other.value)
@@ -456,7 +462,7 @@ class tensor:
         # IR handle
         self.handle = handle
         # Block shape
-        self.shape = (1, )
+        self.shape = (1,)
         if type.is_block():
             self.shape = type.shape
         self.numel = 1
@@ -760,7 +766,10 @@ def _shape_check_impl(shape):
         if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
-            raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+            raise TypeError(
+                f"Shape element {i} must have type `constexpr[int]`, "
+                f"got `constexpr[{type(d.value)}]"
+            )
     return [_constexpr_to_value(x) for x in shape]
 
 
@@ -856,6 +865,7 @@ def reshape(input, shape, _builder=None):
     shape = _shape_check_impl(shape)
     return semantic.reshape(input, shape, _builder)
 
+
 # -----------------------
 # Linear Algebra
 # -----------------------
@@ -884,7 +894,15 @@ def dot(input, other, allow_tf32=True, out_dtype=float32, _builder=None):
 
 
 @builtin
-def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None):
+def load(
+    pointer,
+    mask=None,
+    other=None,
+    cache_modifier="",
+    eviction_policy="",
+    volatile=False,
+    _builder=None,
+):
     """
     Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
 
@@ -939,8 +957,8 @@ def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _bui
 # Atomic Memory Operations
 # -----------------------
 
-def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
+def _add_atomic_docstr(name: str) -> Callable[[T], T]:
     def _decorator(func: T) -> T:
         docstr = """
     Performs an atomic {name} at the memory location specified by :code:`pointer`.
@@ -1049,6 +1067,7 @@ def where(condition, x, y, _builder=None):
 # Math
 # -----------------------
 
+
 @builtin
 def umulhi(x, y, _builder=None):
     x = _to_tensor(x, _builder)
@@ -1063,7 +1082,6 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 
 
 def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
-
     def _decorator(func: T) -> T:
         docstr = """
     Computes the element-wise {name} of :code:`x`.
@@ -1117,8 +1135,8 @@ def abs(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name: str) -> Callable[[T], T]:
 
+def _add_reduction_docstr(name: str) -> Callable[[T], T]:
     def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
@@ -1195,7 +1213,10 @@ def multiple_of(input, values, _builder=None):
         if not isinstance(d, constexpr):
             raise TypeError(f"values element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
-            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+            raise TypeError(
+                f"values element {i} must have type `constexpr[int]`, "
+                f"got `constexpr[{type(d.value)}]"
+            )
     values = [x.value for x in values]
     return semantic.multiple_of(input, values)
 
@@ -1211,7 +1232,10 @@ def max_contiguous(input, values, _builder=None):
         if not isinstance(d, constexpr):
             raise TypeError(f"values element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
-            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+            raise TypeError(
+                f"values element {i} must have type `constexpr[int]`, "
+                f"got `constexpr[{type(d.value)}]"
+            )
     values = [x.value for x in values]
     return semantic.max_contiguous(input, values)
 
@@ -1336,6 +1360,7 @@ def zeros(shape, dtype):
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
 
+
 # -----------------------
 # Debugging functions
 # -----------------------
@@ -1354,6 +1379,7 @@ def static_assert(cond, msg="", _builder=None):
 @builtin
 def device_print(prefix, *args, _builder=None):
     import string
+
     prefix = _constexpr_to_value(prefix)
     assert isinstance(prefix, str), f"{prefix} is not string"
     b_ascii = True
@@ -1372,6 +1398,7 @@ def device_print(prefix, *args, _builder=None):
 def device_assert(cond, msg="", _builder=None):
     msg = _constexpr_to_value(msg)
     import inspect
+
     frame = inspect.currentframe()
     module = inspect.getmodule(frame)
     # The triton function module doesn't have the name attribute.
@@ -1385,7 +1412,10 @@ def device_assert(cond, msg="", _builder=None):
     # where the triton function is called but not where the
     # device_assert is called. Need to enhance this.
     lineno = frame.f_back.f_lineno
-    return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
+    return semantic.device_assert(
+        _to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder
+    )
+
 
 # -----------------------
 # Iterators

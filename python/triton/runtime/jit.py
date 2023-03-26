@@ -19,24 +19,29 @@ def get_cuda_stream(idx=None):
         idx = get_current_device()
     try:
         from torch._C import _cuda_getCurrentRawStream
+
         return _cuda_getCurrentRawStream(idx)
     except ImportError:
         import torch
+
         return torch.cuda.current_stream(idx).cuda_stream
 
 
 def get_current_device():
     import torch
+
     return torch.cuda.current_device()
 
 
 def set_current_device(idx):
     import torch
+
     torch.cuda.set_device(idx)
 
 
 def get_device_capability(idx):
     import torch
+
     return torch.cuda.get_device_capability(idx)
 
 
@@ -87,6 +92,7 @@ class DependenciesFinder(ast.NodeVisitor):
         self.ret = (self.ret + func.hash).encode("utf-8")
         self.ret = hashlib.md5(self.ret).hexdigest()
 
+
 # -----------------------------------------------------------------------------
 # JITFunction
 # -----------------------------------------------------------------------------
@@ -95,6 +101,7 @@ class DependenciesFinder(ast.NodeVisitor):
 @functools.lru_cache()
 def version_key():
     import pkgutil
+
     contents = []
     # frontend
     with open(__file__, "rb") as f:
@@ -130,7 +137,6 @@ class KernelInterface(Generic[T]):
 
 
 class JITFunction(KernelInterface[T]):
-
     # Hook for inspecting compiled functions and modules
     cache_hook = None
     divisibility = 16
@@ -142,7 +148,7 @@ class JITFunction(KernelInterface[T]):
         elif isinstance(arg, bool):
             return "i1"
         elif isinstance(arg, int):
-            if -2**31 <= arg and arg <= 2**31 - 1:
+            if -(2**31) <= arg and arg <= 2**31 - 1:
                 return "i32"
             elif 2**63 <= arg and arg <= 2**64 - 1:
                 return "u64"
@@ -158,10 +164,10 @@ class JITFunction(KernelInterface[T]):
     @staticmethod
     def _spec_of(arg):
         if hasattr(arg, "data_ptr"):
-            return (arg.data_ptr() % JITFunction.divisibility == 0)
+            return arg.data_ptr() % JITFunction.divisibility == 0
         elif isinstance(arg, int):
             return (arg % 16 == 0, arg == 1)
-        return (arg is None, )
+        return (arg is None,)
 
     def _get_config(self, *args):
         def is_divisible_by_16(x):
@@ -172,9 +178,20 @@ class JITFunction(KernelInterface[T]):
             if x is None:
                 return True
             return False
-        divisible_by_16 = {i for i, arg in enumerate(args) if is_divisible_by_16(arg) and i not in self.do_not_specialize}
-        equal_to_1 = {i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize}
-        return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])(tuple(divisible_by_16), tuple(equal_to_1))
+
+        divisible_by_16 = {
+            i
+            for i, arg in enumerate(args)
+            if is_divisible_by_16(arg) and i not in self.do_not_specialize
+        }
+        equal_to_1 = {
+            i
+            for i, arg in enumerate(args)
+            if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize
+        }
+        return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])(
+            tuple(divisible_by_16), tuple(equal_to_1)
+        )
         # return _triton.code_gen.instance_descriptor(divisible_by_16, equal_to_1)
 
     @staticmethod
@@ -213,7 +230,17 @@ class JITFunction(KernelInterface[T]):
         constants = dict(zip(self.constexprs, constexpr_key))
         return constants
 
-    def _call_hook(self, key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
+    def _call_hook(
+        self,
+        key,
+        signature,
+        device,
+        constants,
+        num_warps,
+        num_stages,
+        extern_libs,
+        configs,
+    ):
         if JITFunction.cache_hook is None:
             return False
         name = self.fn.__name__
@@ -228,14 +255,29 @@ class JITFunction(KernelInterface[T]):
                 self.name = name
                 pass
 
-        kwargs = dict(signature=signature, device=device, constants=constants,
-                      num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs,
-                      configs=configs)
+        kwargs = {
+            "signature": signature,
+            "device": device,
+            "constants": constants,
+            "num_warps": num_warps,
+            "num_stages": num_stages,
+            "extern_libs": extern_libs,
+            "configs": configs,
+        }
 
-        return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(module, name), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
+        return JITFunction.cache_hook(
+            key=key,
+            repr=repr,
+            fn=LegacyCompiler(module, name),
+            compile={"key": key, **kwargs},
+            is_manual_warmup=False,
+            already_compiled=False,
+        )
 
     def _make_launcher(self):
-        regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
+        regular_args = [
+            f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs
+        ]
         constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
         args = ', '.join(regular_args)
         # cache key for regular argument type
@@ -247,9 +289,11 @@ class JITFunction(KernelInterface[T]):
         for i, arg in enumerate(regular_args):
             if i in self.do_not_specialize:
                 continue
-            specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
-                                f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
-                                f'else (False,)']
+            specializations += [
+                f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
+                f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
+                f'else (False,)'
+            ]
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
@@ -300,11 +344,17 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         return bin
       return None
 """
-        scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,
-                 "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of,
-                 "cache": self.cache, "triton": triton,
-                 "get_current_device": get_current_device,
-                 "set_current_device": set_current_device}
+        scope = {
+            "version_key": version_key(),
+            "get_cuda_stream": get_cuda_stream,
+            "self": self,
+            "_spec_of": self._spec_of,
+            "_key_of": self._key_of,
+            "cache": self.cache,
+            "triton": triton,
+            "get_current_device": get_current_device,
+            "set_current_device": set_current_device,
+        }
         exec(src, scope)
         return scope[self.fn.__name__]
 
@@ -318,10 +368,13 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.has_defaults = any(v.default != inspect._empty for v in signature.parameters.values())
         # specialization hints
         self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
-        self.do_not_specialize = {self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize}
+        self.do_not_specialize = {
+            self.arg_names.index(arg) if isinstance(arg, str) else arg
+            for arg in self.do_not_specialize
+        }
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = self.src[self.src.find("def"):]
+        self.src = self.src[self.src.find("def") :]
         # cache of just-in-time compiled kernels
         self.cache = defaultdict(dict)
         self.hash = None
@@ -331,12 +384,20 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.kernel = None
         self.debug = os.environ.get("TRITON_DEBUG", "0") == "1" if debug is None else debug
         # annotations
-        self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
+        self.annotations = {
+            self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()
+        }
         self.__annotations__ = fn.__annotations__
         # index of constexprs
-        from triton.language.core import \
-            constexpr  # import here rather than at module level due to circular import tangle
-        self.constexprs = [index for index, ty in self.annotations.items() if isinstance(ty, type) and issubclass(ty, constexpr)]
+        from triton.language.core import (
+            constexpr,  # import here rather than at module level due to circular import tangle
+        )
+
+        self.constexprs = [
+            index
+            for index, ty in self.annotations.items()
+            if isinstance(ty, type) and issubclass(ty, constexpr)
+        ]
         # launcher
         self.run = self._make_launcher()
         # re-use docs of wrapped function

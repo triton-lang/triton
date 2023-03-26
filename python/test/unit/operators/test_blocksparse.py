@@ -8,11 +8,19 @@ import triton.ops
 def sparsify_tensor(x, mask, block):
     ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
     for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
-        ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
+        ret[:, idx, :, :] = x[:, h, i * block : (i + 1) * block, j * block : (j + 1) * block]
     return ret
 
 
-def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None, dtype=torch.float32):
+def make_pair(
+    shape,
+    device="cuda",
+    alpha=1e-2,
+    beta=0.0,
+    trans=False,
+    data=None,
+    dtype=torch.float32,
+):
     if data is None:
         data = torch.randn(shape, dtype=torch.float32, requires_grad=True, device=device)
     ref_ret = data
@@ -28,7 +36,7 @@ def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None,
 def mask_tensor(x, mask, block, value=0):
     ret = x.clone()
     for h, i, j in zip(*(mask == 0).nonzero(as_tuple=True)):
-        ret[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block] = value
+        ret[:, h, i * block : (i + 1) * block, j * block : (j + 1) * block] = value
     return ret
 
 
@@ -44,10 +52,13 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     is_sdd = MODE == "sdd"
     is_dsd = MODE == "dsd"
     is_dds = MODE == "dds"
+
     def do_sparsify(x):
         return sparsify_tensor(x, layout, BLOCK)
+
     def do_mask(x):
         return mask_tensor(x, layout, BLOCK)
+
     # create inputs
     # create op
     a_shape = (Z, H, K, M) if TRANS_A else (Z, H, M, K)
@@ -62,8 +73,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     layout[1, 2, :] = 0
     layout[1, :, 1] = 0
     # create data
-    a_ref, a_tri = make_pair(a_shape, alpha=.1, dtype=DTYPE)
-    b_ref, b_tri = make_pair(b_shape, alpha=.1, dtype=DTYPE)
+    a_ref, a_tri = make_pair(a_shape, alpha=0.1, dtype=DTYPE)
+    b_ref, b_tri = make_pair(b_shape, alpha=0.1, dtype=DTYPE)
     dc_ref, dc_tri = make_pair(c_shape, dtype=DTYPE)
     # compute [torch]
     dc_ref = do_mask(dc_ref) if is_sdd else dc_ref
@@ -71,8 +82,10 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     b_ref = do_mask(b_ref) if is_dds else b_ref
     a_ref.retain_grad()
     b_ref.retain_grad()
-    c_ref = torch.matmul(a_ref.transpose(2, 3) if TRANS_A else a_ref,
-                         b_ref.transpose(2, 3) if TRANS_B else b_ref)
+    c_ref = torch.matmul(
+        a_ref.transpose(2, 3) if TRANS_A else a_ref,
+        b_ref.transpose(2, 3) if TRANS_B else b_ref,
+    )
     c_ref.backward(dc_ref)
     c_ref = do_sparsify(c_ref) if is_sdd else c_ref
     da_ref = do_sparsify(a_ref.grad) if is_dsd else a_ref.grad
@@ -83,7 +96,9 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     b_tri = do_sparsify(b_tri) if is_dds else b_tri
     a_tri.retain_grad()
     b_tri.retain_grad()
-    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
+    op = triton.ops.blocksparse.matmul(
+        layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda"
+    )
     c_tri = triton.testing.catch_oor(lambda: op(a_tri, b_tri), pytest)
     triton.testing.catch_oor(lambda: c_tri.backward(dc_tri), pytest)
     da_tri = a_tri.grad
@@ -163,7 +178,10 @@ def test_attention_fwd_bwd(
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)
     qkvs = [
-        torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).cuda() for _ in range(3)
+        torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True)
+        .to(dtype)
+        .cuda()
+        for _ in range(3)
     ]
 
     # Triton:
@@ -175,7 +193,7 @@ def test_attention_fwd_bwd(
     value.retain_grad()
     attn_out = triton_attention(layout, block, query=query, key=key, value=value, scale=scale)
     # ad hoc loss
-    loss = (attn_out ** 2).mean()
+    loss = (attn_out**2).mean()
     loss.backward()
     grads = [query.grad, key.grad, value.grad]
 
@@ -192,7 +210,7 @@ def test_attention_fwd_bwd(
     probs = torch.softmax(scores, dim=-1)
     torch_attn_out = torch.einsum("bhst,bhtd->bhsd", probs, torch_v)
     # ad hoc loss
-    torch_loss = (torch_attn_out ** 2).mean()
+    torch_loss = (torch_attn_out**2).mean()
     torch_loss.backward()
     torch_grads = [torch_q.grad, torch_k.grad, torch_v.grad]
 
@@ -212,8 +230,12 @@ def triton_attention(
     value: torch.Tensor,
     scale: float,
 ):
-    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(layout, block, "sdd", trans_a=False, trans_b=True, device=value.device)
-    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(layout, block, "dsd", trans_a=False, trans_b=False, device=value.device)
+    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(
+        layout, block, "sdd", trans_a=False, trans_b=True, device=value.device
+    )
+    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(
+        layout, block, "dsd", trans_a=False, trans_b=False, device=value.device
+    )
     sparse_softmax = triton.ops.blocksparse.softmax(layout, block, device=value.device)
 
     w = sparse_dot_sdd_nt(query, key)

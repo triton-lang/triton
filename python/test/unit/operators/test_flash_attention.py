@@ -12,9 +12,21 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype):
     if capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
     torch.manual_seed(20)
-    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
-    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
+    q = (
+        torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda")
+        .normal_(mean=0.1, std=0.2)
+        .requires_grad_()
+    )
+    k = (
+        torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda")
+        .normal_(mean=0.4, std=0.2)
+        .requires_grad_()
+    )
+    v = (
+        torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda")
+        .normal_(mean=0.3, std=0.2)
+        .requires_grad_()
+    )
     sm_scale = 0.2
     dout = torch.randn_like(q)
     # reference implementation

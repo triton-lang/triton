@@ -8,7 +8,6 @@ import triton.language as tl
 
 
 def test_memory_leak() -> None:
-
     @triton.jit
     def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
         xnumel = 10

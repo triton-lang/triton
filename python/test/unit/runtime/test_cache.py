@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction
 
+
 tmpdir = ".tmp"
 
 
@@ -81,6 +82,7 @@ def test_reuse():
     def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
+
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
@@ -96,6 +98,7 @@ def test_specialize(mode):
     def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
+
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
@@ -114,13 +117,13 @@ def test_constexpr_not_callable() -> None:
     x = torch.empty(1, dtype=torch.int32, device='cuda')
     error = False
     try:
-        kernel[(1, )](x, c="str")
+        kernel[(1,)](x, c="str")
     except BaseException:
         error = True
     assert error is False
     # try and catch
     try:
-        kernel[(1, )](x, c=tl.abs)
+        kernel[(1,)](x, c=tl.abs)
     except BaseException:
         error = True
     assert error is True
@@ -130,8 +133,7 @@ def test_jit_warmup_cache() -> None:
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
-        tl.store(o + idx,
-                 tl.load(a + idx) + tl.load(b + idx))
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     args = [
         torch.randn(32, dtype=torch.float32, device="cuda"),
@@ -153,8 +155,7 @@ def test_jit_debug() -> None:
     def kernel_add(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
         tl.device_assert(idx < 32, "idx < 32")
-        tl.store(o + idx,
-                 tl.load(a + idx) + tl.load(b + idx))
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     device = torch.cuda.current_device()
     assert len(kernel_add.cache[device]) == 0
@@ -172,15 +173,13 @@ def test_compile_in_subproc() -> None:
     @triton.jit
     def kernel_sub(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
-        tl.store(o + idx,
-                 tl.load(a + idx) - tl.load(b + idx) * 777)
+        tl.store(o + idx, tl.load(a + idx) - tl.load(b + idx) * 777)
 
     major, minor = torch.cuda.get_device_capability(0)
     cc = major * 10 + minor
-    config = namedtuple("instance_descriptor", [
-        "divisible_by_16", "equal_to_1"])(
-        tuple(range(4)),
-        ())
+    config = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])(
+        tuple(range(4)), ()
+    )
 
     proc = multiprocessing.Process(
         target=triton.compile,
@@ -192,7 +191,8 @@ def test_compile_in_subproc() -> None:
             configs=[config],
             warm_cache_only=True,
             cc=cc,
-        ))
+        ),
+    )
     proc.start()
     proc.join()
     assert proc.exitcode == 0
