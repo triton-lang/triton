@@ -358,12 +358,12 @@ def bench_layer_norm(M, N, dtype, provider, mode="backward", eps=1e-5, device="c
         def y_fwd():
             return layer_norm(x, w_shape, weight, bias, eps)
 
-    if provider == "torch":
+    elif provider == "torch":
 
         def y_fwd():
             return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)
 
-    if provider == "apex":
+    elif provider == "apex":
         apex_layer_norm = apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
 
         def y_fwd():
@@ -377,7 +377,7 @@ def bench_layer_norm(M, N, dtype, provider, mode="backward", eps=1e-5, device="c
 
         ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, rep=500)
     # backward pass
-    if mode == "backward":
+    elif mode == "backward":
 
         def gbps(ms):
             return 3 * x.numel() * x.element_size() / ms * 1e-06
