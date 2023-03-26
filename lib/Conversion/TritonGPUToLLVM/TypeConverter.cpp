@@ -92,16 +92,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   if (mmaParent.isAmpere()) {
     int bitwidth = elemTy.getIntOrFloatBitWidth();
     assert(bitwidth <= 32);
-    // sub-word integer types need to be packed for perf reasons
     return IntegerType::get(ctx, 32);
-    // TODO: unify everything to use packed integer-types
-    // otherwise, vector types are ok
-    // const llvm::DenseMap<int, Type> elemTyMap = {
-    //     {32, vec_ty(elemTy, 1)},
-    //     {16, vec_ty(elemTy, 2)},
-    //     {8, vec_ty(elemTy, 4)},
-    // };
-    // return elemTyMap.lookup(bitwidth);
   } else {
     assert(mmaParent.isVolta());
     return vec_ty(elemTy, 2);
