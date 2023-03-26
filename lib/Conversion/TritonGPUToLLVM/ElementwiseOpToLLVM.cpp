@@ -493,6 +493,7 @@ struct FpToFpOpConversion
   LogicalResult
   matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << 0 << "\n";
     auto srcTensorType = op.getFrom().getType().cast<mlir::RankedTensorType>();
     auto dstTensorType =
         op.getResult().getType().cast<mlir::RankedTensorType>();
@@ -563,6 +564,7 @@ struct FpToFpOpConversion
     auto result = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
                                                      dstTensorType);
     rewriter.replaceOp(op, result);
+    llvm::outs() << 1 << "\n";
     return success();
   }
 };
