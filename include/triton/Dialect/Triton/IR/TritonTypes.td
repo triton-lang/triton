@@ -48,7 +48,7 @@ class TT_PtrOf<list<Type> pointeeTypes> :
                 "ptr", "::mlir::triton::PointerType">;
 
 // Pointer Type in C++ (corresponding to `TT_PtrOf`)
-def TT_Ptr : TritonTypeDef<"Pointer", "ptr"> {
+def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
     let summary = "Pointer type (`::mlir::triton::PointerType`) in Triton IR type system";
 
     let description = [{
@@ -71,23 +71,20 @@ def TT_Ptr : TritonTypeDef<"Pointer", "ptr"> {
     let skipDefaultBuilders = 1;
 }
 
-// Element-wise Scalar Type
-def TT_Scalar : AnyTypeOf<[TT_Float, TT_Int]>;
-
-// Pointer Type to Scalar Type
-def TT_ScalarPtr : TT_PtrOf<[TT_Scalar]>;
+// Scalar Pointer Type: `ptr<>`
+def TT_Ptr : TT_PtrOf<[AnyType]>;
 
 // Tensor of Pointer Type
-def TT_PtrTensor : TensorOf<[TT_ScalarPtr]>;
+def TT_PtrTensor : TensorOf<[TT_Ptr]>;
 
-// Tensor of Pointer Type or Pointer type: `tensor<ptr>` or `ptr`
-def TT_PtrLike : AnyTypeOf<[TT_ScalarPtr, TT_PtrTensor]>;
+// Tensor of Pointer Type or Pointer type: `tensor<ptr<>>` or `ptr<>`
+def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 
 // Tensor Type
 def TT_FpIntTensor : AnyTypeOf<[TT_FloatTensor, TT_IntTensor]>;
 def TT_Tensor : AnyTypeOf<[TT_FpIntTensor, TT_PtrTensor]>;
 
-// Pointer Type to Tensor Type: `ptr<tensor>`
+// Pointer Type to Tensor Type: `ptr<tensor<>>`
 def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
 
 // Any Type in Triton IR

@@ -493,7 +493,7 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
   }];
 
   let arguments = (ins
-    TT_ScalarPtr:$base,
+    TT_Ptr:$base,
     Variadic<I64>:$shape,
     Variadic<I64>:$strides,
     Variadic<I32>:$offsets,
