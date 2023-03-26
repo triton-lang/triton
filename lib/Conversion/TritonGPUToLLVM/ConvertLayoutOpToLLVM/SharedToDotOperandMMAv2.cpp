@@ -288,8 +288,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
                         ->o("trans", needTrans /*predicate*/)
                         .o("shared.b16");
     ldmatrix(resArgs, addrArg);
-
-    // The result type is 4xi32, each i32 is composed of 2xf16
+    // The result type is 4xi32, each i32 implicitly represents 2xf16
     // elements (adjacent two columns in a row) or a single f32 element.
     Value resV4 = builder.launch(rewriter, loc, resTy);
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
@@ -315,12 +314,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
       elems[1] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
       elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
     }
-    std::array<Value, 4> retElems;
-    retElems.fill(undef(elemTy));
-    for (auto i = 0; i < 4; ++i) {
-      retElems[i] = insert_element(elemTy, retElems[i], elems[i], i32_val(0));
-    }
-    return {retElems[0], retElems[1], retElems[2], retElems[3]};
+    return {bitcast(elems[0], i32_ty), bitcast(elems[1], i32_ty),
+            bitcast(elems[2], i32_ty), bitcast(elems[3], i32_ty)};
   } else if (elemBytes == 1 && needTrans) { // work with int8
     // Can't use i32 here. Use LLVM's VectorType
     elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
@@ -549,9 +544,11 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
           bitcast(gep(smemPtrTy, smemBase, ValueRange({offs[i]})), smemPtrTy);
     }
 
+    auto matTy = LLVM::LLVMStructType::getLiteral(eltTy.getContext(),
+                                                  SmallVector<Type>(4, i32_ty));
     auto [ha0, ha1, ha2, ha3] = loader.loadX4(
         (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
-        ptrs, getMatType(eltTy), getShemPtrTy(eltTy));
+        ptrs, matTy, getShemPtrTy(eltTy));
 
     if (isA) {
       ld2(vals, a, b, ha0);
