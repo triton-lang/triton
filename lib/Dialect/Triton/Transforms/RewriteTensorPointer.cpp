@@ -168,15 +168,22 @@ public:
     auto elementType =
         base.getType().cast<triton::PointerType>().getPointeeType();
     auto otherTensorType = RankedTensorType::get(tensorShape, elementType);
-    auto floatAttr = builder.getFloatAttr(elementType, 0);
+
+    // Set zero padding value
+    Attribute attr = elementType.isIntOrIndex() ?
+      builder.getIntegerAttr(elementType, 0).cast<Attribute>() :
+      builder.getFloatAttr(elementType, 0).cast<Attribute>();
+
+    // Float NaN padding case
     // TODO(Chenggang): add tests to check alignment later
     if (padding.value() == triton::PaddingOption::PAD_NAN) {
-      auto apNaN = llvm::APFloat::getNaN(floatAttr.getValue().getSemantics());
-      floatAttr = builder.getFloatAttr(elementType, apNaN);
+      auto apNaN = llvm::APFloat::getNaN(
+          attr.cast<FloatAttr>().getValue().getSemantics());
+      attr = builder.getFloatAttr(elementType, apNaN);
     }
 
     // Create tensor
-    Value constant = builder.create<arith::ConstantOp>(loc, floatAttr);
+    Value constant = builder.create<arith::ConstantOp>(loc, attr);
     return builder.create<triton::SplatOp>(loc, otherTensorType, constant);
   }
 };

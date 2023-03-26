@@ -840,9 +840,10 @@ def load(ptr: tl.tensor,
         if mask or other:
             raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
 
-        # TODO(Chenggang): support `tl.int1` casting with block pointers
         elt_ty = ptr.type.element_ty.element_ty
-        assert elt_ty != tl.int1, "`tl.int1` is currently not supported with block pointers"
+        assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
+        if elt_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
+            raise ValueError("Padding option `nan` is not supported for integer block pointers")
 
         # `dst_ty` is de-referenced type of the pointer type
         dst_ty = ptr.type.element_ty
@@ -934,9 +935,8 @@ def store(ptr: tl.tensor,
         assert val.type.is_block(), "Value argument must be block type or a scalar"
         assert block_shape == val.type.get_block_shapes(), "Block shape and value shape mismatch"
 
-        # TODO(Chenggang): support `tl.int1` casting with block pointers
         elt_ty = ptr.type.element_ty.element_ty
-        assert elt_ty != tl.int1, "`tl.int1` is currently not supported with block pointers"
+        assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
 
         # Check `boundary_check` argument
         boundary_check = canonicalize_boundary_check(boundary_check, block_shape)
@@ -1394,6 +1394,14 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
     shape = convert_to_ir_values(builder, shape)
     strides = convert_to_ir_values(builder, strides)
     offsets = convert_to_ir_values(builder, offsets, require_i64=False)
+
+    # Check `base` type
+    if not base.type.is_ptr() or base.type.element_ty.is_block():
+        raise ValueError("Expected `base` to be a pointer type (but not a block pointer type or others)")
+
+    # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
+    if base.type.element_ty == tl.int1:
+        base = cast(base, tl.pointer_type(tl.int8, base.type.address_space), builder)
 
     # Check whether `block_shape` is static
     if not hasattr(block_shape, "__iter__"):

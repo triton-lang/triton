@@ -16,14 +16,19 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr):
     tl.store(b_block_ptr, a, boundary_check=(0, ))
 
 
-@pytest.mark.parametrize('n', [64, 128, 256, 512, 1024])
-def test_block_copy(n):
+@pytest.mark.parametrize("dtype_str, n",
+                         [(dtype_str, n) for dtype_str in ('bool', 'int16', 'float16') for n in (64, 128, 256, 512, 1024)])
+def test_block_copy(dtype_str, n):
     capability = torch.cuda.get_device_capability()
     if capability[0] >= 9:
-        pytest.skip('Hopper support is working in progress')
+        pytest.skip("Hopper support is working in progress")
 
-    a = torch.randn((n, ), device='cuda', dtype=torch.float16)
-    b = torch.zeros((n, ), device='cuda', dtype=torch.float16)
+    dtype = getattr(torch, dtype_str)
+    if dtype_str in ('bool', 'int16'):
+        a = torch.randint(0, 2, (n, ), device="cuda", dtype=dtype)
+    else:
+        a = torch.randn((n, ), device="cuda", dtype=dtype)
+    b = torch.zeros((n, ), device="cuda", dtype=dtype)
 
     grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)
     block_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64)
