@@ -20,11 +20,11 @@ repos:
     hooks:
       - id: isort
         stages: [commit, push, manual]
-  - repo: https://github.com/pre-commit/mirrors-autopep8
-    rev: v1.6.0
+  - repo: https://github.com/psf/black
+    rev: 23.1.0
     hooks:
-      - id: autopep8
-        args: ["-a", "-i", "--max-line-length", "88"]
+      - id: black
+        args: ["--safe", "--line-length=88"]
         stages: [commit, push, manual]
   - repo: https://github.com/pycqa/flake8
     rev: 6.0.0

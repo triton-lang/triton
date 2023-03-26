@@ -253,7 +253,7 @@ setup(
             "lit",
         ],
         "tests": [
-            "autopep8",
+            "black",
             "flake8",
             "isort",
             "numpy",

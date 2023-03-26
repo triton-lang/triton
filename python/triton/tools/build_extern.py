@@ -141,9 +141,8 @@ class ExternLibrary(ABC):
             f.write(file_str)
             f.close()
             if self._format:
-                subprocess.Popen(["autopep8", "-a", "-r", "-i", output_file],
-                                 stdout=subprocess.PIPE).communicate()
                 subprocess.Popen(["isort", output_file], stdout=subprocess.PIPE).communicate()
+                subprocess.Popen(["black", output_file], stdout=subprocess.PIPE).communicate()
 
 
 class Libdevice(ExternLibrary):
