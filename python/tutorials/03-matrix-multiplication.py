@@ -223,8 +223,8 @@ def matmul_kernel(
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         if IS_INT8:
-          a = a.to(tl.float8e5, bitcast=True).to(tl.float16)
-          b = b.to(tl.float8e5, bitcast=True).to(tl.float16)
+            a = a.to(tl.float8e5, bitcast=True).to(tl.float16)
+            b = b.to(tl.float8e5, bitcast=True).to(tl.float16)
         # b = b * 2
         # We accumulate along the K dimension
         accumulator += tl.dot(a, b)
@@ -283,7 +283,7 @@ def matmul(a, b, activation=None):
 
 
 def f8_to_f16(x):
-    
+
     @triton.jit
     def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
         pid = tl.program_id(0)
@@ -292,14 +292,15 @@ def f8_to_f16(x):
         x = tl.load(X + offs, mask=mask)
         y = x.to(tl.float8e5)
         tl.store(Y + offs, y, mask=mask)
-    
+
     ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
     grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
-    kernel[grid](ret, triton.reinterpret(x, tl.float8e5),ret.numel(), BLOCK_SIZE=1024)
+    kernel[grid](ret, triton.reinterpret(x, tl.float8e5), ret.numel(), BLOCK_SIZE=1024)
     return ret
 
+
 def f16_to_f8(x):
-    
+
     @triton.jit
     def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
         pid = tl.program_id(0)
@@ -308,7 +309,7 @@ def f16_to_f8(x):
         x = tl.load(X + offs, mask=mask)
         y = x.to(tl.float8e5)
         tl.store(Y + offs, y, mask=mask)
-    
+
     ret = torch.empty(x.shape, dtype=torch.int8, device=x.device)
     grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
     kernel[grid](triton.reinterpret(ret, tl.float8e5), x, x.numel(), BLOCK_SIZE=1024)
@@ -319,18 +320,19 @@ def f16_to_f8(x):
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
+
 torch.manual_seed(0)
 # a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-a = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
-b = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
+a = torch.randint(10, 11, (2048, 2048), dtype=torch.int8, device='cuda')
+b = torch.randint(10, 11, (2048, 2048), dtype=torch.int8, device='cuda')
 # b[1:, :] = 0
 # b[:, 1:] = 0
 b = b.T
 # b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 
 triton_output = matmul(a, b, activation=None)
-torch_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
-# torch_output = torch.matmul(a, f8_to_f16(b))
+# torch_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
+torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
 if triton.testing.allclose(triton_output, torch_output):
