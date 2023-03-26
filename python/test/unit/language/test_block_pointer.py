@@ -84,4 +84,4 @@ def test_block_ptr_matmul_no_scf(shape, num_warps):
                                             BLOCK_M=m, BLOCK_N=n, BLOCK_K=k,
                                             num_warps=num_warps)
     golden = torch.matmul(a, b)
-    triton.testing.assert_almost_equal(c, golden, decimal=1)
+    torch.testing.assert_allclose(c, golden)

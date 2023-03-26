@@ -1092,4 +1092,3 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     return
   }
 }
-

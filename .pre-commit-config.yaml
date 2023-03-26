@@ -1,43 +1,61 @@
 repos:
-  - repo: local
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: check-symlinks
+      - id: destroyed-symlinks
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-ast
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: detect-private-key
+      - id: debug-statements
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.12.0
     hooks:
       - id: isort
-        name: isort
-        entry: isort
-        args: ["./python"]
-        language: python
-        types: [python]
-        additional_dependencies:
-          - isort==5.10.1
-
+        stages: [commit, push, manual]
+  - repo: https://github.com/pre-commit/mirrors-autopep8
+    rev: v1.6.0
+    hooks:
       - id: autopep8
-        name: autopep8
-        entry: autopep8
-        args: ["-a", "-r", "-i", "./python"]
-        language: python
-        types: [python]
-        additional_dependencies:
-          - autopep8==1.6.0
-
+        args: ["-a", "-i", "--max-line-length", "88"]
+        stages: [commit, push, manual]
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        # TODO: uncomment this to enable more flake8 plugins
+        # additional_dependencies:
+        #   - flake8-bugbear
+        #   - flake8-comprehensions
+        #   - flake8-docstrings
+        #   - flake8-pyi
+        #   - flake8-simplify
+        stages: [commit, push, manual]
+        exclude: |
+          (?x)(
+            ^test/|
+            ^docs/conf.py$
+          )
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v14.0.6
+    hooks:
       - id: clang-format
-        name: clang-format
-        entry: python -m clang_format
-        args:
-          [
-            "-regex",
-            ".*\\.(cpp|hpp|h|cc)",
-            "-not",
-            "-path",
-            "./python/triton/*",
-            "-not",
-            "-path",
-            "./python/build/*",
-            "-not",
-            "-path",
-            "./include/triton/external/*",
-            "-i",
-          ]
-        language: python
-        types: [c, c++]
-        additional_dependencies:
-          - clang-format==14.0.6
+        stages: [commit, push, manual]
+        exclude: |
+          (?x)(
+            ^include/triton/external/|
+            ^python/triton/third_party/
+          )
+
+exclude: |
+  (?x)(
+    ^include/triton/external/|
+    ^python/triton/third_party/
+  )

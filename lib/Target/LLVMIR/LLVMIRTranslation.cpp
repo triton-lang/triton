@@ -9,14 +9,17 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetPlatform.hpp"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
@@ -67,12 +70,17 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   }
 
   if (metadata.isKernel) {
-    llvm::Metadata *mdArgs[] = {
-        llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
-        llvm::ValueAsMetadata::get(
-            llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
-    module->getOrInsertNamedMetadata("nvvm.annotations")
-        ->addOperand(llvm::MDNode::get(ctx, mdArgs));
+    if (isROCM()) {
+      func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+      func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
+    } else {
+      llvm::Metadata *mdArgs[] = {
+          llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
+          llvm::ValueAsMetadata::get(
+              llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
+      module->getOrInsertNamedMetadata("nvvm.annotations")
+          ->addOperand(llvm::MDNode::get(ctx, mdArgs));
+    }
   }
 }
 
@@ -220,10 +228,13 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
     return true;
   }
 
-  if (name == "libdevice") {
-    linkLibdevice(module);
-  } else {
-    assert(false && "unknown extern lib: ");
+  // check if ROCM
+  if (!isROCM()) {
+    if (name == "libdevice") {
+      linkLibdevice(module);
+    } else {
+      assert(false && "unknown extern lib: ");
+    }
   }
 
   return false;
@@ -233,6 +244,7 @@ std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   DialectRegistry registry;
   mlir::registerLLVMDialectTranslation(registry);
+  mlir::registerROCDLDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
   module->getContext()->appendDialectRegistry(registry);
 
@@ -313,6 +325,16 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     llvm::errs() << "Translate to LLVM IR failed";
     return nullptr;
   }
+
+  if (::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+    std::string mod_string;
+    std::unique_ptr<llvm::raw_string_ostream> ir_ss(
+        new llvm::raw_string_ostream(mod_string));
+    llvmIR->print(*ir_ss, nullptr);
+    std::cout << "// -----// LLVM IR Dump //----- //\n"
+              << mod_string << std::endl;
+  }
+
   return llvmIR;
 }
 
