@@ -175,8 +175,8 @@ public:
       builder.getFloatAttr(elementType, 0).cast<Attribute>();
 
     // Float NaN padding case
-    // TODO(Chenggang): add tests to check alignment later
     if (padding.value() == triton::PaddingOption::PAD_NAN) {
+      assert(!elementType.isIntOrIndex());
       auto apNaN = llvm::APFloat::getNaN(
           attr.cast<FloatAttr>().getValue().getSemantics());
       attr = builder.getFloatAttr(elementType, apNaN);
