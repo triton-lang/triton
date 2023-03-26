@@ -1,4 +1,6 @@
 [flake8]
+max-line-length = 120
+max-doc-length = 100
 ignore =
     # E203: whitespace before ':'
     # W503: line break before binary operator

@@ -24,7 +24,7 @@ repos:
     rev: 23.1.0
     hooks:
       - id: black
-        args: ["--safe", "--line-length=88"]
+        args: ["--safe", "--line-length=100"]
         stages: [commit, push, manual]
   - repo: https://github.com/pycqa/flake8
     rev: 6.0.0
