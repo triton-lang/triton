@@ -1,2 +1,10 @@
 [flake8]
-ignore = E501,E701,E731
+ignore =
+    # E203: whitespace before ':'
+    # W503: line break before binary operator
+    # W504: line break after binary operator
+    # format by black
+    E203,W503,W504,
+    # E501: line too long
+    # W505: doc line too long
+    E501,W505,
