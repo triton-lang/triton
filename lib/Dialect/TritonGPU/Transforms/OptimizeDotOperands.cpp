@@ -99,8 +99,6 @@ public:
     if (!argOp)
       return failure();
     //
-    if (!isa<triton::LoadOp>(argOp))
-      return failure();
     SetVector<Operation *> processed;
     SetVector<Attribute> layout;
     llvm::MapVector<Value, Attribute> toConvert;
@@ -117,6 +115,10 @@ public:
       // since it would result in more shared memory traffic
       if (srcTy.getElementType().getIntOrFloatBitWidth() >
           dstTy.getElementType().getIntOrFloatBitWidth())
+        return failure();
+      // we only push back when the first op in the chain has a load operand
+      if ((op == processed.back()) &&
+          !isa<triton::LoadOp>(op->getOperand(0).getDefiningOp()))
         return failure();
     }
     IRMapping mapping;
