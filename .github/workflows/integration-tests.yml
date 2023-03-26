@@ -60,13 +60,13 @@ jobs:
 
       - name: Update PATH
         run: |
-          echo "${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
       - name: Setup virtual environment
         run: |
           rm -rf venv
           python3 -m venv venv
-          echo "${PWD}/venv/bin:${PATH}" >> "${GITHUB_ENV}"
+          echo "PATH=${PWD}/venv/bin:${PATH}" >> "${GITHUB_ENV}"
           python3 -m pip install --upgrade pip setuptools wheel
 
       - name: Check pre-commit
