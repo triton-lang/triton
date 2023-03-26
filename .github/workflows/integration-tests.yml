@@ -56,7 +56,13 @@ jobs:
 
       - name: Update path
         run: |
-          echo "$HOME/.local/bin/" >> $GITHUB_PATH
+
+      - name: Setup virtual environment
+        run: |
+          rm -rf venv
+          python3 -m venv venv
+          echo "${PWD}/venv/bin:${PATH}" >> "${GITHUB_ENV}"
+          python3 -m pip install --upgrade pip setuptools wheel
 
       - name: Check pre-commit
         if: ${{ matrix.runner != 'macos-10.15' }}
@@ -75,8 +81,7 @@ jobs:
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python
-          python3 -m pip uninstall --yes torch torchvision torchaudio
-          python3 -m pip install --no-cache-dir --force-reinstall torch==1.13.1 --extra-index-url https://download.pytorch.org/whl/rocm5.2
+          python3 -m pip install torch==1.13.1 --extra-index-url https://download.pytorch.org/whl/rocm5.2
           TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install -vvv -e '.[tests]'
 
       - name: Run lit tests
