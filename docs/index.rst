@@ -36,7 +36,7 @@ Python API
    python-api/triton.language
    python-api/triton.testing
 
-   
+
 Going Further
 -------------
 

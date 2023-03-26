@@ -8,15 +8,13 @@ import tempfile
 
 import lit.formats
 import lit.util
-
 from lit.llvm import llvm_config
-from lit.llvm.subst import ToolSubst
-from lit.llvm.subst import FindTool
+from lit.llvm.subst import FindTool, ToolSubst
 
 # Configuration file for the 'lit' test runner
 
 # name: The name of this test suite
-config.name  = 'TRITON'
+config.name = 'TRITON'
 
 config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
 
@@ -40,7 +38,12 @@ llvm_config.with_system_environment(
 # excludes: A list of directories to exclude from the testsuite. The 'Inputs'
 # subdirectories contain auxiliary inputs for various tests in their parent
 # directories.
-config.excludes = ['Inputs', 'Examples', 'CMakeLists.txt', 'README.txt', 'LICENSE.txt']
+config.excludes = [
+    'Inputs',
+    'Examples',
+    'CMakeLists.txt',
+    'README.txt',
+    'LICENSE.txt']
 
 # test_source_root: The root path where tests are located.
 config.test_source_root = os.path.dirname(__file__)
@@ -49,7 +52,10 @@ config.test_source_root = os.path.dirname(__file__)
 config.test_exec_root = os.path.join(config.triton_obj_root, 'test')
 config.triton_tools_dir = os.path.join(config.triton_obj_root, 'bin')
 config.filecheck_dir = os.path.join(config.triton_obj_root, 'bin', 'FileCheck')
-tool_dirs = [config.triton_tools_dir, config.llvm_tools_dir, config.filecheck_dir]
+tool_dirs = [
+    config.triton_tools_dir,
+    config.llvm_tools_dir,
+    config.filecheck_dir]
 
 # Tweak the PATH to include the tools dir.
 for d in tool_dirs:

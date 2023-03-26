@@ -1107,6 +1107,12 @@ def sqrt(x, _builder=None):
     return semantic.sqrt(x, _builder)
 
 
+@builtin
+@_add_math_1arg_docstr("absolute value")
+def abs(x, _builder=None):
+    return semantic.abs(x, _builder)
+
+
 # -----------------------
 # Reductions
 # -----------------------
@@ -1213,19 +1219,6 @@ def max_contiguous(input, values, _builder=None):
 # -----------------------
 # Standard library
 # -----------------------
-
-@triton.jit
-def abs(x):
-    x_dtype = x.dtype
-    if x_dtype.is_floating():
-        num_bits: constexpr = x.dtype.primitive_bitwidth
-        int_dtype = dtype(f'int{num_bits}')
-        mask = 2 ** (num_bits - 1) - 1
-        ret = x.to(int_dtype, bitcast=True) & mask.to(int_dtype)
-        ret = ret.to(x_dtype, bitcast=True)
-    else:
-        ret = where(x >= 0, x, -x)
-    return ret
 
 
 @triton.jit
