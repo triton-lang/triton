@@ -227,7 +227,8 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
     # meta-parameter heuristics
     TILE_N = 128
     # compute output
-    grid = lambda meta: [triton.cdiv(BS3, meta['TILE_N']), width, BS0]
+    def grid(meta):
+        return [triton.cdiv(BS3, meta['TILE_N']), width, BS0]
     _dsd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),

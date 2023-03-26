@@ -79,7 +79,8 @@ class _cross_entropy(torch.autograd.Function):
         # run the kernel
         result = torch.empty_like(indices, dtype=dtype, device=device)
         neg_logprobs = torch.empty_like(logits, dtype=dtype, device=device)
-        grid = lambda opt: (logits.numel() // n_cols, )
+        def grid(opt):
+            return (logits.numel() // n_cols,)
         _forward[grid](logits, neg_logprobs, indices, result, n_cols)
         # save for backward
         ctx.save_for_backward(neg_logprobs, indices)
@@ -97,7 +98,8 @@ class _cross_entropy(torch.autograd.Function):
         # run the kernel
         # neg_logprobs will be modified in place to become our gradient:
         n_cols = neg_logprobs.shape[-1]
-        grid = lambda opt: (neg_logprobs.numel() // n_cols, )
+        def grid(opt):
+            return neg_logprobs.numel() // n_cols,
         _backward[grid](neg_logprobs, indices, dneg_logprobs, n_cols)
         return neg_logprobs, None
 

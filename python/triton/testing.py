@@ -239,7 +239,8 @@ def perf_report(benchmarks):
     :param benchmarks: Benchmarking configurations.
     :type benchmarks: List of :class:`Benchmark`
     """
-    wrapper = lambda fn: Mark(fn, benchmarks)
+    def wrapper(fn):
+        return Mark(fn, benchmarks)
     return wrapper
 
 

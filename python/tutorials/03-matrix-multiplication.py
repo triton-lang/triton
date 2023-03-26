@@ -266,9 +266,8 @@ def matmul(a, b, activation=None):
     # allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
-    grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-    )
+    def grid(META):
+        return (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
     matmul_kernel[grid](
         a, b, c,
         M, N, K,
@@ -333,7 +332,8 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
-    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
+    def perf(ms):
+        return 2 * M * N * K * 1e-12 / (ms * 0.001)
     return perf(ms), perf(max_ms), perf(min_ms)
 
 

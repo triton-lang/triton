@@ -213,11 +213,9 @@ class CodeGenerator(ast.NodeVisitor):
         elif isinstance(node, ast.Assign):
             return self.contains_return_op(node.value)
         elif isinstance(node, ast.Module):
-            pred = lambda s: self.contains_return_op(s)
-            return any(pred(s) for s in node.body)
+            return any(self.contains_return_op(s) for s in node.body)
         elif isinstance(node, ast.FunctionDef):
-            pred = lambda s: self.contains_return_op(s)
-            return any(pred(s) for s in node.body)
+            return any(self.contains_return_op(s) for s in node.body)
         elif isinstance(node, ast.Call):
             fn = self.visit(node.func)
             if isinstance(fn, triton.JITFunction):
@@ -228,7 +226,8 @@ class CodeGenerator(ast.NodeVisitor):
                 return ret
             return False
         elif isinstance(node, ast.If):
-            pred = lambda s: self.contains_return_op(s)
+            def pred(s):
+                return self.contains_return_op(s)
             ret = any(pred(s) for s in node.body)
             if node.orelse:
                 ret = ret or any(pred(s) for s in node.orelse)
@@ -1056,7 +1055,8 @@ def build_triton_ir(fn, signature, specialization, constants, debug=False):
     context = _triton.ir.context()
     context.load_triton()
     # create kernel prototype
-    cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
+    def cst_key(i):
+        return fn.arg_names.index(i) if isinstance(i, str) else i
     constants = {cst_key(key): value for key, value in constants.items()}
     # visit kernel AST
     gscope = fn.__globals__.copy()
@@ -1740,7 +1740,8 @@ def make_so_cache_key(version_hash, signature, constants):
 
 def make_fn_cache_key(fn_hash, signature, configs, constants, num_warps, num_stages):
     # Get unique key for the compiled code
-    get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
+    def get_conf_key(conf):
+        return sorted(conf.divisible_by_16), sorted(conf.equal_to_1)
     configs_key = [get_conf_key(conf) for conf in configs]
     key = f"{fn_hash}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
@@ -1818,7 +1819,8 @@ def make_hash(fn, **kwargs):
         num_warps = kwargs.get("num_warps", 4)
         num_stages = kwargs.get("num_stages", 3)
         # Get unique key for the compiled code
-        get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
+        def get_conf_key(conf):
+            return sorted(conf.divisible_by_16), sorted(conf.equal_to_1)
         configs_key = [get_conf_key(conf) for conf in configs]
         key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()

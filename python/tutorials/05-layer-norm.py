@@ -280,7 +280,8 @@ class LayerNorm(torch.autograd.Function):
                                        BLOCK_SIZE_N=ctx.BLOCK_SIZE,
                                        GROUP_SIZE_M=GROUP_SIZE_M,
                                        num_warps=ctx.num_warps)
-        grid = lambda meta: [triton.cdiv(N, meta['BLOCK_SIZE_N'])]
+        def grid(meta):
+            return [triton.cdiv(N, meta['BLOCK_SIZE_N'])]
         # accumulate partial sums in separate kernel
         _layer_norm_bwd_dwdb[grid](_dw, _db, dw, db, GROUP_SIZE_M, N,
                                    BLOCK_SIZE_M=32,
@@ -341,19 +342,24 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     x.requires_grad_(True)
     # utility functions
     if provider == 'triton':
-        y_fwd = lambda: layer_norm(x, w_shape, weight, bias, eps)
+        def y_fwd():
+            return layer_norm(x, w_shape, weight, bias, eps)
     if provider == 'torch':
-        y_fwd = lambda: torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)
+        def y_fwd():
+            return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)
     if provider == 'apex':
         apex_layer_norm = apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
-        y_fwd = lambda: apex_layer_norm(x)
+        def y_fwd():
+            return apex_layer_norm(x)
     # forward pass
     if mode == 'forward':
-        gbps = lambda ms: 2 * x.numel() * x.element_size() / ms * 1e-6
+        def gbps(ms):
+            return 2 * x.numel() * x.element_size() / ms * 1e-06
         ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, rep=500)
     # backward pass
     if mode == 'backward':
-        gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6
+        def gbps(ms):
+            return 3 * x.numel() * x.element_size() / ms * 1e-06
         y = y_fwd()
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True),
                                                      grad_to_none=[x], rep=500)

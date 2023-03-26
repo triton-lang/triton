@@ -44,8 +44,10 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     is_sdd = MODE == "sdd"
     is_dsd = MODE == "dsd"
     is_dds = MODE == "dds"
-    do_sparsify = lambda x: sparsify_tensor(x, layout, BLOCK)
-    do_mask = lambda x: mask_tensor(x, layout, BLOCK)
+    def do_sparsify(x):
+        return sparsify_tensor(x, layout, BLOCK)
+    def do_mask(x):
+        return mask_tensor(x, layout, BLOCK)
     # create inputs
     # create op
     a_shape = (Z, H, K, M) if TRANS_A else (Z, H, M, K)

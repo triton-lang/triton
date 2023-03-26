@@ -336,11 +336,13 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         sm_scale = 1.3
-        fn = lambda: attention(q, k, v, sm_scale)
+        def fn():
+            return attention(q, k, v, sm_scale)
         if mode == 'bwd':
             o = fn()
             do = torch.randn_like(o)
-            fn = lambda: o.backward(do, retain_graph=True)
+            def fn():
+                return o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
         return ms
     if provider == "flash":
@@ -348,11 +350,13 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
         cu_seqlens[1:] = lengths.cumsum(0)
         qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
-        fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)
+        def fn():
+            return flash_attn_func(qkv, cu_seqlens, 0.0, N_CTX, causal=True)
         if mode == 'bwd':
             o = fn()
             do = torch.randn_like(o)
-            fn = lambda: o.backward(do, retain_graph=True)
+            def fn():
+                return o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
         return ms
 

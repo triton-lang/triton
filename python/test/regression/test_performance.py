@@ -93,7 +93,8 @@ def test_matmul(M, N, K, dtype_str):
     else:
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
-    fn = lambda: triton.ops.matmul(a, b)
+    def fn():
+        return triton.ops.matmul(a, b)
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=300)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
@@ -148,8 +149,10 @@ def test_elementwise(N):
     z = torch.empty((N, ), dtype=torch.float16, device='cuda')
     x = torch.randn_like(z)
     y = torch.randn_like(z)
-    grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
-    fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
+    def grid(args):
+        return (triton.cdiv(N, args['BLOCK_SIZE']),)
+    def fn():
+        return _add[grid](x, y, z, N, BLOCK_SIZE=1024)
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=500)
     cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
@@ -184,11 +187,13 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, mode, dtype_str):
     v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
     sm_scale = 0.2
     # benchmark
-    fn = lambda: triton.ops.attention(q, k, v, sm_scale)
+    def fn():
+        return triton.ops.attention(q, k, v, sm_scale)
     if is_backward:
         o = fn()
         do = torch.randn_like(o)
-        fn = lambda: o.backward(do, retain_graph=True)
+        def fn():
+            return o.backward(do, retain_graph=True)
     ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=500)
     # compute flops
     flops_per_matmul = 2. * Z * H * N_CTX * N_CTX * D_HEAD * 0.5
