@@ -1,10 +1,10 @@
-from enum import Enum
+from enum import IntEnum
 
-CUDA: backend
 HOST: backend
+CUDA: backend
 ROCM: backend
 
-class backend(Enum):
-    CUDA = ...
-    HOST = ...
-    ROCM = ...
+class backend(IntEnum):
+    HOST = 0
+    CUDA = 1
+    ROCM = 2
