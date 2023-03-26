@@ -56,7 +56,7 @@ if __name__ == "__main__":
     # TODO: clean-up and re-use triton.compiler primitive functions
     # check for validity of format arguments
     if args.target not in VALID_FORMATS:
-        print("Invalid target format: " + args.target)
+        print(f"Invalid target format: {args.target}")
         sys.exit(0)
 
     # parse source file to MLIR module

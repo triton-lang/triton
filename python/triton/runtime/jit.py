@@ -121,7 +121,7 @@ def version_key():
         ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
     except Exception:
         ptxas_version = ""
-    return "-".join(triton.__version__) + "-" + ptxas_version + "-" + "-".join(contents)
+    return "-".join([*triton.__version__, ptxas_version, *contents])
 
 
 class KernelInterface(Generic[T]):

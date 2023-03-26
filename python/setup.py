@@ -206,15 +206,15 @@ class CMakeBuild(build_ext):
         python_include_dir = distutils.sysconfig.get_python_inc()
         cmake_args = [
             "-DLLVM_ENABLE_WERROR=ON",
-            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
+            f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON",
-            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
+            f"-DPython3_EXECUTABLE:FILEPATH={sys.executable}",
             "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
-            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
+            f"-DPYTHON_INCLUDE_DIRS={python_include_dir}",
         ]
         if lit_dir is not None:
-            cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
+            cmake_args.append(f"-DLLVM_EXTERNAL_LIT={lit_dir}")
         cmake_args.extend(thirdparty_cmake_args)
 
         # configuration
@@ -229,8 +229,8 @@ class CMakeBuild(build_ext):
         else:
             import multiprocessing
 
-            cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ["-j" + str(2 * multiprocessing.cpu_count())]
+            cmake_args += [f"-DCMAKE_BUILD_TYPE={cfg}"]
+            build_args += [f"-j{2 * multiprocessing.cpu_count()}"]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)

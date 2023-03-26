@@ -21,7 +21,7 @@ def catch_oor(kernel, pytest_handle=None):
 
 def nvsmi(attrs):
     attrs = ",".join(attrs)
-    cmd = ["nvidia-smi", "-i", "0", "--query-gpu=" + attrs, "--format=csv,noheader,nounits"]
+    cmd = ["nvidia-smi", "-i", "0", f"--query-gpu={attrs}", "--format=csv,noheader,nounits"]
     out = subprocess.check_output(cmd)
     ret = out.decode(sys.stdout.encoding).split(",")
     ret = [int(x) for x in ret]
@@ -202,7 +202,7 @@ class Mark:
             ax = plt.subplot()
             x = bench.x_names[0]
             for i, y in enumerate(bench.line_names):
-                y_min, y_max = df[y + "-min"], df[y + "-max"]
+                y_min, y_max = df[f"{y}-min"], df[f"{y}-max"]
                 col = bench.styles[i][0] if bench.styles else None
                 sty = bench.styles[i][1] if bench.styles else None
                 ax.plot(df[x], df[y], label=y, color=col, ls=sty)
@@ -221,7 +221,7 @@ class Mark:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
         df = df[[bench.x_names[0]] + bench.line_names]
         if print_data:
-            print(bench.plot_name + ":")
+            print(f"{bench.plot_name}:")
             print(df)
         if save_path:
             df.to_csv(
@@ -350,13 +350,7 @@ def cuda_memcheck(**target_kwargs):
 
 def nvsmi_attr(attrs):
     attrs = ",".join(attrs)
-    cmd = [
-        "nvidia-smi",
-        "-i",
-        "0",
-        "--query-gpu=" + attrs,
-        "--format=csv,noheader,nounits",
-    ]
+    cmd = ["nvidia-smi", "-i", "0", f"--query-gpu={attrs}", "--format=csv,noheader,nounits"]
     out = subprocess.check_output(cmd)
     ret = out.decode(sys.stdout.encoding).split(",")
     ret = [int(x) for x in ret]

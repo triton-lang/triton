@@ -244,9 +244,9 @@ def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     elif scalar_ty.is_int():
         if scalar_ty.int_signedness != other_scalar_ty.int_signedness:
             raise ValueError(
-                "Cannot mod " + scalar_ty.__repr__() + " by " + other_scalar_ty.__repr__() + " "
-                "because they have different signedness;"
-                "this is unlikely to result in a useful answer. Cast them to the same signedness."
+                f"Cannot mod {scalar_ty!r} by {other_scalar_ty!r} "
+                f"because they have different signedness; "
+                f"this is unlikely to result in a useful answer. Cast them to the same signedness."
             )
         if scalar_ty.is_int_signed():
             return tl.tensor(builder.create_srem(input.handle, other.handle), input.type)
@@ -340,7 +340,7 @@ def plus(input: tl.tensor) -> tl.tensor:
 def minus(input: tl.tensor, builder: ir.builder) -> tl.tensor:
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr():
-        raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
+        raise ValueError(f"wrong type argument to unary minus ({input_sca_ty!r})")
     _0 = tl.tensor(builder.get_null_value(input_sca_ty.to_ir(builder)), input_sca_ty)
     return sub(_0, input, builder)
 
@@ -348,7 +348,7 @@ def minus(input: tl.tensor, builder: ir.builder) -> tl.tensor:
 def invert(input: tl.tensor, builder: tl.tensor) -> tl.tensor:
     input_sca_ty = input.type.scalar
     if input_sca_ty.is_ptr() or input_sca_ty.is_floating():
-        raise ValueError("wrong type argument to unary invert (" + input_sca_ty.__repr__() + ")")
+        raise ValueError(f"wrong type argument to unary invert ({input_sca_ty!r})")
     _1 = tl.tensor(builder.get_all_ones_value(input_sca_ty.to_ir(builder)), input_sca_ty)
     return xor_(input, _1, builder)
 

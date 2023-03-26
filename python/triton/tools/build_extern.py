@@ -184,7 +184,7 @@ class Libdevice(ExternLibrary):
             arg_type = convert_type(arg_str.split()[0])
             if arg_type is None:
                 return None
-            arg_name = "arg" + str(i)
+            arg_name = f"arg{i}"
             arg_types.append(arg_type)
             arg_names.append(arg_name)
         if op_name == "sad":
@@ -311,7 +311,7 @@ class Libdevice(ExternLibrary):
                 for arg_type in symbol.arg_types:
                     arg_type_symbol_dict_str += f'core.dtype("{arg_type}"),'
                 ret_type = f'core.dtype("{symbol.ret_type}")'
-                arg_type_symbol_dict_str += '): ("' + symbol.name + '", ' + ret_type + "),\n"
+                arg_type_symbol_dict_str += f'): ("{symbol.name}", {ret_type}),\n'
             arg_type_symbol_dict_str += "}"
 
             return_str += arg_type_symbol_dict_str

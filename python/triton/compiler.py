@@ -681,7 +681,7 @@ class CodeGenerator(ast.NodeVisitor):
             raise UnsupportedLanguageConstruct(
                 None,
                 node,
-                "AST unary operator '{}' is not (currently) implemented.".format(node.op.__name__),
+                f"AST unary operator '{node.op.__name__}' is not (currently) implemented.",
             )
         if _is_triton_tensor(op):
             return getattr(op, fn)(_builder=self.builder)
@@ -1122,7 +1122,7 @@ class CodeGenerator(ast.NodeVisitor):
                 try:
                     message = self.visit(node.args[1])
                 except Exception as e:
-                    message = "<failed to evaluate assertion message: " + repr(e) + ">"
+                    message = f"<failed to evaluate assertion message: {e!r}>"
 
             raise CompileTimeAssertionFailure(None, node, message)
         return None
@@ -1145,7 +1145,7 @@ class CompilationError(Exception):
             else:
                 source_excerpt = " <source empty>"
 
-        message = "at {}:{}:{}".format(node.lineno, node.col_offset, source_excerpt)
+        message = f"at {node.lineno}:{node.col_offset}:{source_excerpt}"
         if self.error_message:
             message += "\n" + self.error_message
         return message
@@ -1169,7 +1169,7 @@ class CompilationError(Exception):
         return self.message
 
     def __repr__(self):
-        return "{}({!r})".format(type(self).__name__, self.message)
+        return f"{type(self).__name__}({self.message!r})"
 
     def __reduce__(self):
         # this is necessary to make CompilationError picklable
@@ -1820,9 +1820,9 @@ class CacheManager:
         with FileLock(self.lock_path):
             # use tempfile to be robust against program interruptions
             mode = "wb" if binary else "w"
-            with open(filepath + ".tmp", mode) as f:
+            with open(f"{filepath}.tmp", mode) as f:
                 f.write(data)
-            os.rename(filepath + ".tmp", filepath)
+            os.rename(f"{filepath}.tmp", filepath)
 
 
 # Utilities for generating and compiling C wrappers
@@ -1865,7 +1865,7 @@ def _build(name, src, srcdir):
         if not os.path.exists(cuda_header) and os.path.exists(triton_cuda_header):
             cu_include_dir = triton_include_dir
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
-    so = os.path.join(srcdir, "{name}{suffix}".format(name=name, suffix=suffix))
+    so = os.path.join(srcdir, f"{name}{suffix}")
     # try to avoid setuptools if possible
     cc = os.environ.get("CC")
     if cc is None:
@@ -1943,8 +1943,8 @@ def _build(name, src, srcdir):
     )
     # build extension module
     args = ["build_ext"]
-    args.append("--build-temp=" + srcdir)
-    args.append("--build-lib=" + srcdir)
+    args.append(f"--build-temp={srcdir}")
+    args.append(f"--build-lib={srcdir}")
     args.append("-q")
     args = dict(
         name=name,
@@ -2003,7 +2003,7 @@ def get_amdgpu_arch_fulldetails():
     i.e., arch_triple: amdgcn-amd-amdhsa; arch_name: gfx906; arch_features: sramecc+:xnack-
     """
     try:
-        rocminfo = subprocess.check_output(rocm_path_dir() + "/bin/rocminfo").decode()
+        rocminfo = subprocess.check_output(f"{rocm_path_dir()}/bin/rocminfo").decode()
         gfx_arch_details = re.search("amd.*", rocminfo).group(0).strip().split("--")
         arch_triple = gfx_arch_details[0]
         arch_name_features = gfx_arch_details[1].split(":")
@@ -2011,9 +2011,12 @@ def get_amdgpu_arch_fulldetails():
         arch_features = ""
 
         if len(arch_name_features) == 3:
-            arch_features = "+" + re.search("\\w+", arch_name_features[1]).group(
-                0
-            ) + "," "-" + re.search("\\w+", arch_name_features[2]).group(0)
+            arch_features = (
+                "+"
+                + re.search(r"\w+", arch_name_features[1]).group(0)
+                + ",-"
+                + re.search(r"\w+", arch_name_features[2]).group(0)
+            )
         return [arch_triple, arch_name, arch_features]
     except BaseException:
         return None
@@ -2307,7 +2310,7 @@ def _get_amdgcn_bitcode_paths():
         gfx_arch = _get_amdgcn_bitcode_paths.discovered_gfx_arch_fulldetails[1]
         gfx_arch_id = re.search("gfx(\\w+)", gfx_arch).group(1).strip()
 
-        gpu_arch_specific_bitcode_library = "oclc_isa_version_" + gfx_arch_id + ".bc"
+        gpu_arch_specific_bitcode_library = f"oclc_isa_version_{gfx_arch_id}.bc"
         bitcode_path_dir = os.path.join(
             Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/"
         )
@@ -2317,11 +2320,11 @@ def _get_amdgcn_bitcode_paths():
         for bc_lib in gpu_arch_agnostic_bitcode_libraries:
             bc_path = bitcode_path_dir + bc_lib
             if os.path.exists(bc_path):
-                amdgcn_bitcode_paths["library_" + str(i)] = bc_path
+                amdgcn_bitcode_paths[f"library_{i}"] = bc_path
                 i += 1
         bc_gfx_path = bitcode_path_dir + gpu_arch_specific_bitcode_library
         if os.path.exists(bc_gfx_path):
-            amdgcn_bitcode_paths["library_" + str(i)] = bc_gfx_path
+            amdgcn_bitcode_paths[f"library_{i}"] = bc_gfx_path
 
         return amdgcn_bitcode_paths
     else:
