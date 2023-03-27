@@ -19,18 +19,17 @@ PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
   return opr;
 }
 
-void PTXBuilder::initOperand(Operand *opr, int numBits) {
-  // If numBits is not specified, we derive it from the constraint.
-  if (numBits == 0) {
-    if (opr->constraint[0] == 'c' || opr->constraint[0] == 'h')
-      numBits = 16;
-    else if (opr->constraint[0] == 'r')
-      numBits = 32;
-    else if (opr->constraint[0] == 'l')
-      numBits = 64;
-    else
-      llvm_unreachable(("Unknown constraint: " + opr->constraint).c_str());
-  }
+void PTXBuilder::initOperand(Operand *opr) {
+  auto numBits = 0;
+  // Derive numBits from the constraint.
+  if (opr->constraint[1] == 'c' || opr->constraint[1] == 'h')
+    numBits = 16;
+  else if (opr->constraint[1] == 'r')
+    numBits = 32;
+  else if (opr->constraint[1] == 'l')
+    numBits = 64;
+  else
+    llvm_unreachable(("Unknown constraint: " + opr->constraint).c_str());
   // If numBits is less than 16, we use 16 as default because PTX does not
   // support 8-bit mov.
   numBits = numBits < 16 ? 16 : numBits;
@@ -39,15 +38,14 @@ void PTXBuilder::initOperand(Operand *opr, int numBits) {
   init(opr, zero);
 }
 
-PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint, bool init,
-                                            int numBits) {
+PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint, bool init) {
   // Constraint should be something like "=r"
   assert(!constraint.empty() && constraint[0] == '=');
   auto *opr = newOperand();
   opr->idx = oprCounter++;
   opr->constraint = constraint;
   if (init) {
-    initOperand(opr, numBits);
+    initOperand(opr);
   }
   return opr;
 }

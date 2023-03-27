@@ -141,9 +141,8 @@ struct LoadOpConversion
       // prepare asm operands
       auto *dstsOpr = ptxBuilder.newListOperand();
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-        auto *opr =
-            ptxBuilder.newOperand(writeConstraint, /*init=*/true,
-                                  /*numBits=*/movWidth); // =r operations
+        auto *opr = ptxBuilder.newOperand(writeConstraint,
+                                          /*init=*/true); // =r operations
         dstsOpr->listAppend(opr);
       }
 
@@ -425,8 +424,7 @@ struct AtomicCASOpConversion
     Value casVal = valElements[0];
 
     PTXBuilder ptxBuilderAtomicCAS;
-    auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=r", /*init=*/true,
-                                                  /*numBits=*/valueElemNBits);
+    auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=r", /*init=*/true);
     auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
     auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, "r");
     auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, "r");
@@ -528,8 +526,7 @@ struct AtomicRMWOpConversion
       std::string tyId = valueElemNBits * vec == 64
                              ? "l"
                              : (valueElemNBits * vec == 32 ? "r" : "h");
-      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true,
-                                                    /*numBits=*/valueElemNBits);
+      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
       auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
       auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
 

@@ -176,7 +176,7 @@ private:
     return argArchive.back().get();
   }
 
-  void initOperand(Operand *opr, int numBits);
+  void initOperand(Operand *opr);
 
   // Make the operands in argArchive follow the provided \param order.
   void reorderArgArchive(ArrayRef<Operand *> order) {
