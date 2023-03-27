@@ -323,8 +323,8 @@ def f16_to_f8(x):
 
 torch.manual_seed(0)
 # a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-a = torch.randint(10, 11, (2048, 2048), dtype=torch.int8, device='cuda')
-b = torch.randint(10, 11, (2048, 2048), dtype=torch.int8, device='cuda')
+a = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
+b = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
 # b[1:, :] = 0
 # b[:, 1:] = 0
 b = b.T

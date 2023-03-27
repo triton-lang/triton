@@ -666,9 +666,6 @@ struct FpToFpOpConversion
         op.getResult().getType().cast<mlir::RankedTensorType>();
     auto loc = op->getLoc();
     // check that the number of elements is divisible by 4
-    auto elems = getElemsPerThread(dstTensorType);
-    assert(elems % 4 == 0 &&
-           "FP8 casting only support tensors with 4-aligned sizes");
     // Get convertor
     auto cvtFunc = getConversionFunc(srcTensorType.getElementType(),
                                      dstTensorType.getElementType());
@@ -679,6 +676,9 @@ struct FpToFpOpConversion
         unpackI32(inVals, srcTensorType, rewriter, loc, getTypeConverter());
     // Cast
     SmallVector<Value> outVals;
+    auto elems = inVals.size();
+    assert(elems % 4 == 0 &&
+           "FP8 casting only support tensors with 4-aligned sizes");
     for (size_t i = 0; i < elems; i += 4)
       outVals.append(cvtFunc(loc, rewriter, inVals[i], inVals[i + 1],
                              inVals[i + 2], inVals[i + 3]));
@@ -707,27 +707,33 @@ public:
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcTy = op->getOperand(0).getType();
+    auto argTy = op->getOperand(0).getType();
     auto resultTy = op.getType();
     Location loc = op->getLoc();
-
-    unsigned elems = getElemsPerThread(resultTy);
+    // element type
     auto resultElementTy = getElementTypeOrSelf(resultTy);
     Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
-    SmallVector<Type> types(elems, elemTy);
-    Type structTy = this->getTypeConverter()->convertType(resultTy);
-
-    auto *concreteThis = static_cast<const ConcreteT *>(this);
-    auto operands = getOperands(rewriter, adaptor, srcTy, resultTy, elems, loc,
-                                this->getTypeConverter());
-    SmallVector<Value> resultVals(elems);
-    for (unsigned i = 0; i < elems; ++i) {
-      resultVals[i] = concreteThis->createDestOp(op, adaptor, rewriter, elemTy,
-                                                 operands[i], loc);
-      if (!bool(resultVals[i]))
-        return failure();
+    SmallVector<Value> resultVals;
+    //
+    SmallVector<SmallVector<Value>> allOperands;
+    for (auto operand : adaptor.getOperands()) {
+      auto sub_operands = this->getTypeConverter()->unpackLLElements(
+          loc, operand, rewriter, argTy);
+      sub_operands = unpackI32(sub_operands, argTy, rewriter, loc,
+                               this->getTypeConverter());
+      allOperands.resize(sub_operands.size());
+      for (auto v : llvm::enumerate(sub_operands))
+        allOperands[v.index()].push_back(v.value());
     }
-    // resultVals = reorderValues(resultVals, srcTensorType, dstTensorType);
+    for (const SmallVector<Value> &operands : allOperands) {
+      Value curr =
+          ((ConcreteT *)(this))
+              ->createDestOp(op, adaptor, rewriter, elemTy, operands, loc);
+      if (!bool(curr))
+        return failure();
+      resultVals.push_back(curr);
+    }
+    resultVals = reorderValues(resultVals, argTy, resultTy);
     resultVals =
         packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
@@ -735,24 +741,6 @@ public:
     rewriter.replaceOp(op, view);
 
     return success();
-  }
-
-protected:
-  SmallVector<SmallVector<Value>>
-  getOperands(ConversionPatternRewriter &rewriter, OpAdaptor adaptor,
-              Type srcTy, Type operandTy, const unsigned elems, Location loc,
-              TypeConverter *typeConverter) const {
-    SmallVector<SmallVector<Value>> operands(elems);
-    for (auto operand : adaptor.getOperands()) {
-      auto sub_operands = this->getTypeConverter()->unpackLLElements(
-          loc, operand, rewriter, operandTy);
-      sub_operands =
-          unpackI32(sub_operands, srcTy, rewriter, loc, typeConverter);
-      for (size_t i = 0; i < elems; ++i) {
-        operands[i].push_back(sub_operands[i]);
-      }
-    }
-    return operands;
   }
 };
 
