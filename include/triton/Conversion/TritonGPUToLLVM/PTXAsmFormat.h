@@ -149,7 +149,7 @@ struct PTXBuilder {
   // Otherwise if the register is only used in the true branch or the false
   // branch but not both, the register is undefined and ptxas can perform
   // aggressive optimizations that may lead to incorrect results.
-  Operand *newOperand(StringRef constraint, bool init = false);
+  Operand *newOperand(StringRef constraint, bool init = false, int numBits = 0);
 
   // Create a constant integer operand.
   Operand *newConstantOperand(int64_t v);
@@ -176,7 +176,7 @@ private:
     return argArchive.back().get();
   }
 
-  void initOperand(Operand *opr);
+  void initOperand(Operand *opr, int numBits);
 
   // Make the operands in argArchive follow the provided \param order.
   void reorderArgArchive(ArrayRef<Operand *> order) {

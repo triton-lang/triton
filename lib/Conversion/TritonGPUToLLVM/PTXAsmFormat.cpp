@@ -19,21 +19,26 @@ PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
   return opr;
 }
 
-void PTXBuilder::initOperand(Operand *opr) {
+void PTXBuilder::initOperand(Operand *opr, int numBits) {
+  // If numBits is not specified, we use 32 as default.
+  numBits = numBits ? numBits : 32;
+  // If numBits is less than 16, we use 16 as default because PTX does not
+  // support 8-bit mov.
+  numBits = numBits < 16 ? 16 : numBits;
   auto *zero = newConstantOperand(0);
-  auto numBits = opr->constraint[1] == 'r' ? 32 : 64;
   auto &init = create<>("mov")->o("u" + std::to_string(numBits));
   init(opr, zero);
 }
 
-PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint, bool init) {
+PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint, bool init,
+                                            int numBits) {
   // Constraint should be something like "=r"
   assert(!constraint.empty() && constraint[0] == '=');
   auto *opr = newOperand();
   opr->idx = oprCounter++;
   opr->constraint = constraint;
   if (init) {
-    initOperand(opr);
+    initOperand(opr, numBits);
   }
   return opr;
 }
