@@ -52,7 +52,6 @@ jobs:
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
         run: |
           echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
-          echo "PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/rocm5.2" >> "${GITHUB_ENV}"
 
       - name: Clear cache
         run: |
@@ -79,7 +78,8 @@ jobs:
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python
-          python3 -m pip install cmake==3.24 torch==1.13.1
+          python3 -m pip install cmake==3.24
+          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
           python3 -m pip install -vvv -e '.[tests]'
 
       - name: Run lit tests
