@@ -278,7 +278,7 @@ def matmul(a, b, activation=None):
         ACTIVATION=activation,
         IS_INT8=b.dtype == torch.int8,
     )
-    print(h.asm["ptx"])
+    print(h.asm["ttgir"])
     return c
 
 
@@ -333,9 +333,11 @@ b = b.T
 triton_output = matmul(a, b, activation=None)
 # torch_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
 torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
+# print((triton_output - torch_output).nonzero())
+# print(triton_output[0, 1933], torch_output[0, 1933])
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
-if triton.testing.allclose(triton_output, torch_output):
+if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
