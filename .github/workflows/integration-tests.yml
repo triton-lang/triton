@@ -12,6 +12,9 @@ concurrency:
   group: ${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
+env:
+  TRITON_USE_ASSERT_ENABLED_LLVM: 'TRUE'
+
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
@@ -43,20 +46,21 @@ jobs:
       - name: Set CUDA ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100')}}
         run: |
-          echo "BACKEND=CUDA" >> $GITHUB_ENV
+          echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
 
       - name: Set ROCM ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
         run: |
-          echo "BACKEND=ROCM" >> $GITHUB_ENV
+          echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
+          echo "PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/rocm5.2" >> "${GITHUB_ENV}"
 
       - name: Clear cache
         run: |
-          rm -rf ~/.triton/
+          rm -rf ~/.triton
 
-      - name: Update path
+      - name: Update PATH
         run: |
-          echo "$HOME/.local/bin/" >> $GITHUB_PATH
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
       - name: Check pre-commit
         if: ${{ matrix.runner != 'macos-10.15' }}
@@ -69,15 +73,14 @@ jobs:
         run: |
           cd python
           python3 -m pip install cmake==3.24
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install -e '.[tests]'
+          python3 -m pip install -vvv -e '.[tests]'
 
       - name: Install Triton on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python
-          python3 -m pip uninstall --yes torch torchvision torchaudio
-          python3 -m pip install --no-cache-dir --force-reinstall torch==1.13.1 --extra-index-url https://download.pytorch.org/whl/rocm5.2
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install -e '.[tests]'
+          python3 -m pip install cmake==3.24 torch==1.13.1
+          python3 -m pip install -vvv -e '.[tests]'
 
       - name: Run lit tests
         if: ${{ env.BACKEND != 'ROCM'}}
@@ -85,27 +88,27 @@ jobs:
           python3 -m pip install lit
           cd python
           LIT_TEST_DIR="build/$(ls build)/test"
-          if [ ! -d "$LIT_TEST_DIR" ]; then
-            echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Not found '${LIT_TEST_DIR}'.  Did you change an installation method?" ; exit -1
           fi
-          lit -v "$LIT_TEST_DIR"
+          lit -v "${LIT_TEST_DIR}"
 
       - name: Run python tests on CUDA
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
-          cd python/test/unit/
+          cd python/test/unit
           python3 -m pytest
 
       - name: Run python tests on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
-          cd python/test/unit/language/
+          cd python/test/unit/language
           python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
 
       - name: Run CXX unittests
         if: ${{ env.BACKEND != 'ROCM'}}
         run: |
-          cd python/
+          cd python
           cd "build/$(ls build)"
           ctest
 
