@@ -55,19 +55,25 @@ public:
     cachedOffsetWithRange.clear();
   }
 
-  Value getExpandedI64OffsetWithRange(OpBuilder &builder, const Location &loc,
-                                      unsigned i) {
+  Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
+                                   unsigned i) {
     if (cachedOffsetWithRange.count(i))
       return cachedOffsetWithRange[i];
 
+    // Add range
     auto indexI32RowType =
         RankedTensorType::get({tensorShape[i]}, builder.getI32Type());
+    auto indexRowType =
+        RankedTensorType::get({tensorShape[i]}, builder.getI64Type());
     Value splatOffset =
-        builder.create<triton::SplatOp>(loc, indexI32RowType, offsets[i]);
+        builder.create<triton::SplatOp>(loc, indexRowType, offsets[i]);
     Value range = builder.create<triton::MakeRangeOp>(loc, indexI32RowType, 0,
                                                       tensorShape[i]);
+    Value i64Range = builder.create<arith::ExtSIOp>(loc, indexRowType, range);
+
+    // Expand dimensions
     Value expandedResult =
-        builder.create<arith::AddIOp>(loc, splatOffset, range);
+        builder.create<arith::AddIOp>(loc, splatOffset, i64Range);
     for (int j = 0; j < tensorShape.size(); ++j) {
       if (j == i)
         continue;
@@ -75,16 +81,7 @@ public:
           builder.create<triton::ExpandDimsOp>(loc, expandedResult, j);
     }
 
-    // `expandedShape` should be like {1, 1, ..., tensorShape[i], 1}
-    auto expandedShape =
-        expandedResult.getType().cast<RankedTensorType>().getShape();
-    auto expandedI64Type =
-        RankedTensorType::get(expandedShape, builder.getI64Type());
-    // Current `tt.make_range` and `offsets` only support I32,
-    // so we need a cast here
-    Value i64Result =
-        builder.create<arith::ExtSIOp>(loc, expandedI64Type, expandedResult);
-    return cachedOffsetWithRange[i] = i64Result;
+    return cachedOffsetWithRange[i] = expandedResult;
   }
 
   Value generatePtr(OpBuilder &builder, const Location &loc) {
@@ -98,7 +95,7 @@ public:
     // Generate offsets per dimension
     Value ptr = builder.create<triton::SplatOp>(loc, ptrTensorType, base);
     for (unsigned i = 0; i < tensorShape.size(); ++i) {
-      auto offsetWithRange = getExpandedI64OffsetWithRange(builder, loc, i);
+      auto offsetWithRange = getExpandedOffsetWithRange(builder, loc, i);
 
       // We must splat strides into the expanded shape not a row for retaining
       // the divisibility information given by strides
@@ -127,7 +124,7 @@ public:
         RankedTensorType::get(tensorShape, builder.getI1Type());
     Value mask;
     for (auto i : boundaryCheck.value()) {
-      auto offsetWithRange = getExpandedI64OffsetWithRange(builder, loc, i);
+      auto offsetWithRange = getExpandedOffsetWithRange(builder, loc, i);
 
       // Compare with lower bound
       Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
@@ -170,9 +167,10 @@ public:
     auto otherTensorType = RankedTensorType::get(tensorShape, elementType);
 
     // Set zero padding value
-    Attribute attr = elementType.isIntOrIndex() ?
-      builder.getIntegerAttr(elementType, 0).cast<Attribute>() :
-      builder.getFloatAttr(elementType, 0).cast<Attribute>();
+    Attribute attr =
+        elementType.isIntOrIndex()
+            ? builder.getIntegerAttr(elementType, 0).cast<Attribute>()
+            : builder.getFloatAttr(elementType, 0).cast<Attribute>();
 
     // Float NaN padding case
     if (padding.value() == triton::PaddingOption::PAD_NAN) {
@@ -224,9 +222,19 @@ public:
     // Save info for later use
     auto ptrType = op.getResult().getType().cast<triton::PointerType>();
     auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
+
+    // Cast I32 offsets into I64
+    SmallVector<Value> i64Offsets;
+    for (auto offset : op.getOffsets()) {
+      auto i64Offset = builder.create<arith::ExtSIOp>(
+          op.getLoc(), builder.getI64Type(), offset);
+      i64Offsets.push_back(i64Offset);
+    }
+
+    // Save information
     rewritedInfo[op.getResult()] =
-        RewritedInfo(op.getBase(), op.getShape(), op.getStrides(),
-                     op.getOffsets(), tensorType.getShape());
+        RewritedInfo(op.getBase(), op.getShape(), op.getStrides(), i64Offsets,
+                     tensorType.getShape());
 
     // Erase the original operation
     eraser.push(op);
@@ -243,8 +251,10 @@ public:
     assert(info.length() == op.getOffsets().size());
     SmallVector<Value> newOffsets;
     for (int i = 0; i < info.length(); ++i) {
+      Value i64Offset = builder.create<arith::ExtSIOp>(
+          op.getLoc(), builder.getI64Type(), op.getOffsets()[i]);
       Value newOffset = builder.create<arith::AddIOp>(
-          op.getLoc(), info.getOffset(i), op.getOffsets()[i]);
+          op.getLoc(), info.getOffset(i), i64Offset);
       newOffsets.push_back(newOffset);
     }
 
