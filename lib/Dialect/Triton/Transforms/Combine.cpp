@@ -94,7 +94,8 @@ public:
       return mlir::failure();
 
     rewriter.replaceOpWithNewOp<triton::LoadOp>(
-        op, loadOp.getPtr(), loadOp.getMask(), falseValue, loadOp.getCache(),
+        op, loadOp.getPtr(), loadOp.getMask(), falseValue,
+        loadOp.getBoundaryCheck(), loadOp.getPadding(), loadOp.getCache(),
         loadOp.getEvict(), loadOp.getIsVolatile());
     return mlir::success();
   }
@@ -127,6 +128,7 @@ struct CanonicalizeMaskedLoadPattern
       // mask = splat(1)
       rewriter.replaceOpWithNewOp<triton::LoadOp>(
           loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
+          loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
           loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
     } else {
       // mask = splat(0)
