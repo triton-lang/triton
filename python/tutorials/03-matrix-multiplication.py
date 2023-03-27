@@ -269,7 +269,7 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    h = matmul_kernel[grid](
+    matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -278,7 +278,7 @@ def matmul(a, b, activation=None):
         ACTIVATION=activation,
         IS_INT8=b.dtype == torch.int8,
     )
-    print(h.asm["ttgir"])
+    # print(h.asm["ttgir"])
     return c
 
 
@@ -331,8 +331,8 @@ b = b.T
 # b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 
 triton_output = matmul(a, b, activation=None)
-# torch_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
-torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
+torch_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
+# torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
 # print((triton_output - torch_output).nonzero())
 # print(triton_output[0, 1933], torch_output[0, 1933])
 print(f"triton_output={triton_output}")

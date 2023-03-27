@@ -136,7 +136,19 @@ LogicalResult Prefetcher::initialize() {
 
   // returns source of cvt
   auto getPrefetchSrc = [](Value v) -> Value {
-    if (auto cvt = v.getDefiningOp<triton::gpu::ConvertLayoutOp>())
+    // walk back to conversion
+    Operation *op = v.getDefiningOp();
+    // while (op) {
+    //   if (op->getNumOperands() != 1)
+    //     break;
+    //   if (!op->getResult(0).hasOneUse())
+    //     break;
+    //   if (isa<triton::gpu::ConvertLayoutOp>(op))
+    //     break;
+    //   op = op->getOperand(0).getDefiningOp();
+    // }
+
+    if (auto cvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op))
       if (isSharedEncoding(cvt.getOperand()))
         return cvt.getSrc();
     return Value();
