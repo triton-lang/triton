@@ -62,13 +62,6 @@ jobs:
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
-      - name: Setup virtual environment
-        run: |
-          rm -rf venv
-          python3 -m venv venv
-          echo "PATH=${PWD}/venv/bin:${PATH}" >> "${GITHUB_ENV}"
-          python3 -m pip install --upgrade pip setuptools wheel
-
       - name: Check pre-commit
         if: ${{ matrix.runner != 'macos-10.15' }}
         run: |
@@ -79,13 +72,14 @@ jobs:
         if: ${{ env.BACKEND != 'ROCM'}}
         run: |
           cd python
+          python3 -m pip install cmake==3.24
           python3 -m pip install -vvv -e '.[tests]'
 
       - name: Install Triton on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python
-          python3 -m pip install torch==1.13.1
+          python3 -m pip install cmake==3.24 torch==1.13.1
           python3 -m pip install -vvv -e '.[tests]'
 
       - name: Run lit tests
