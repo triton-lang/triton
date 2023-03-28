@@ -585,7 +585,8 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
 
   auto numRep = aEncoding.getMMAv2Rep(aTensorTy.getShape(), bitwidth);
-  int numRepM = numRep[0], numRepK = numRep[1];
+  int numRepM = numRep[0];
+  int numRepK = numRep[1];
 
   if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
     int wpt0 = mmaLayout.getWarpsPerCTA()[0];
