@@ -248,7 +248,7 @@ class JITFunction(KernelInterface[T]):
             if i in self.do_not_specialize:
                 continue
             arg_annotation = self.__annotations__.get(arg, None)
-            if not arg_annotation:
+            if True:
                 specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
                                     f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
                                     f'else (False,)']
