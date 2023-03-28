@@ -208,8 +208,8 @@ def matmul_kernel(
     # We will advance this pointer as we move in the K direction
     # and accumulate
     # a_ptrs is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
-    # b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_n] pointers
-    # see above `Pointer Arithmetics` section for details
+    # b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
+    # See above `Pointer Arithmetics` section for details
     offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = tl.arange(0, BLOCK_SIZE_K)
