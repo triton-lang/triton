@@ -594,7 +594,8 @@ struct AtomicRMWOpConversion
         atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
         // Only threads with rmwMask = True store the result
         PTXBuilder ptxBuilderStore;
-        auto &storeShared = ptxBuilderStore.create<>("st")->shared().o(sTy);
+        auto &storeShared =
+            ptxBuilderStore.create<>("st")->shared().o("b" + sBits);
         auto *ptrOpr = ptxBuilderStore.newAddrOperand(atomPtr, "r");
         auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
         storeShared(ptrOpr, valOpr).predicate(rmwMask);
