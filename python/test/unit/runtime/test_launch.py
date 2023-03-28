@@ -2,6 +2,7 @@ import gc
 import importlib
 import os
 import sys
+import tempfile
 import textwrap
 import time
 import tracemalloc
@@ -11,6 +12,8 @@ import torch
 
 import triton
 import triton.language as tl
+
+LATENCY_THRESHOLD_US = 35
 
 
 def test_memory_leak() -> None:
@@ -42,7 +45,7 @@ def test_memory_leak() -> None:
 
 
 def test_kernel_launch_latency() -> None:
-    def define_empty_kernel(file_path, num_tensor_args):
+    def define_kernel(num_tensor_args):
         arg_str = ",".join([f"arg{i}: torch.Tensor" for i in range(num_tensor_args)])
         arg_str += ", n_elements: int, BLOCK_SIZE: tl.constexpr"
         func_str = f"""
@@ -55,10 +58,13 @@ def test_kernel_launch_latency() -> None:
         def empty_kernel({arg_str}):
             pass
         """
-        with open(file_path, "w") as f:
-            f.write(textwrap.dedent(func_str))
+        with tempfile.NamedTemporaryFile(mode="w+t", suffix=".py", delete=False) as temp_file:
+            temp_file.write(textwrap.dedent(func_str))
+            temp_file_path = temp_file.name
 
-    def import_empty_kernel(file_path):
+        return temp_file_path
+
+    def import_kernel(file_path):
         directory, filename = os.path.split(file_path)
         module_name, _ = os.path.splitext(filename)
         sys.path.insert(0, directory)
@@ -71,29 +77,23 @@ def test_kernel_launch_latency() -> None:
         first_arg = kernel_args[0]
         n_elements = first_arg.numel()
         grid = (triton.cdiv(n_elements, 1024),)
+        device = torch.cuda.current_device()
         # Warmup
-        empty_kernel[grid](*kernel_args, n_elements, BLOCK_SIZE=1024, device=torch.cuda.current_device())
+        empty_kernel[grid](*kernel_args, n_elements, BLOCK_SIZE=1024, device=device)
         torch.cuda.synchronize()
         # Measure launch overhead at steady state
         num_runs = 1000
-        latency = []
+        start_time = time.time()
         for i in range(num_runs):
-            single_start_time = time.time()
-            empty_kernel[grid](*kernel_args, n_elements, BLOCK_SIZE=1024, device=torch.cuda.current_device())
-            single_end_time = time.time()
-            latency.append((single_end_time - single_start_time) * 1e6)
+            empty_kernel[grid](*kernel_args, n_elements, BLOCK_SIZE=1024, device=device)
+        end_time = time.time()
+        latency_us = (end_time - start_time) / num_runs * 1e6
 
-        latency.sort()
-        mid = len(latency) // 2
-        median = (latency[mid] + latency[~mid]) / 2
-        # print(f"Median latency (usec) = {median}")
-        assert median < 35, "Kernel launch time has increased!"
+        assert latency_us < LATENCY_THRESHOLD_US, "Kernel launch time has increased!"
 
-    # Define a jitted empty_kernel in /tmp and import
-    file_path = '/tmp/empty_kernel.py'
     num_tensor_args = 40
-    define_empty_kernel(file_path, num_tensor_args)
-    empty_kernel = import_empty_kernel(file_path)
+    file_path = define_kernel(num_tensor_args)
+    empty_kernel = import_kernel(file_path)
 
     # Initialize random tensors for the empty_kernel
     torch.manual_seed(0)
