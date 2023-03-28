@@ -739,6 +739,17 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
 
+def test_atomic_rmw_predicate(device="cuda"):
+    @triton.jit
+    def kernel(X):
+        val = tl.program_id(0)
+        if val < 64:
+            tl.atomic_max(X, val)
+    x = torch.zeros((1,), device=device, dtype=torch.int32)
+    kernel[(4096,)](x)
+    assert x.item() == 63
+
+
 @pytest.mark.parametrize("shape, axis",
                          [(shape, axis) for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32)] for axis in [0, 1]])
 def test_tensor_atomic_rmw(shape, axis, device="cuda"):
