@@ -355,6 +355,7 @@ struct TritonLoadPattern : public OpConversionPattern<triton::LoadOp> {
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::LoadOp>(
                       op, typeConverter->convertType(op.getType()),
                       adaptor.getPtr(), adaptor.getMask(), adaptor.getOther(),
+                      adaptor.getBoundaryCheckAttr(), adaptor.getPaddingAttr(),
                       adaptor.getCache(), adaptor.getEvict(),
                       adaptor.getIsVolatile()),
                   adaptor.getAttributes());

@@ -407,8 +407,9 @@ void LoopPipeliner::emitPrologue() {
           newOp = builder.create<triton::LoadOp>(
               loadOp.getLoc(), loadOp.getResult().getType(),
               lookupOrDefault(loadOp.getPtr(), stage), newMask,
-              lookupOrDefault(loadOp.getOther(), stage), loadOp.getCache(),
-              loadOp.getEvict(), loadOp.getIsVolatile());
+              lookupOrDefault(loadOp.getOther(), stage),
+              loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
+              loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
           addNamedAttrs(newOp, op->getAttrDictionary());
         } else {
           newOp = builder.clone(*op);
@@ -630,8 +631,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         nextOp = builder.create<triton::LoadOp>(
             loadOp.getLoc(), loadOp.getResult().getType(),
             nextMapping.lookupOrDefault(loadOp.getPtr()), newMask,
-            nextMapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
-            loadOp.getEvict(), loadOp.getIsVolatile());
+            nextMapping.lookupOrDefault(loadOp.getOther()),
+            loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
+            loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
         addNamedAttrs(nextOp, op->getAttrDictionary());
         nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
       } else {
