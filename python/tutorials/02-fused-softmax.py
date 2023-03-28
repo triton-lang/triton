@@ -187,6 +187,8 @@ def benchmark(M, N, provider):
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
+import pandas as pd
+pd.set_option('display.max_rows', 500)
 benchmark.run(show_plots=True, print_data=True)
 
 # %%
