@@ -1,5 +1,5 @@
-#include "ConvertLayoutOpToLLVM.h"
-#include "Utility.h"
+#include "../ConvertLayoutOpToLLVM.h"
+#include "../Utility.h"
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
