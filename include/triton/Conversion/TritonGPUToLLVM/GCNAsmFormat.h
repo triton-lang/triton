@@ -41,7 +41,8 @@ class GCNInstrExecution;
 // auto rhs = gcnBuilder.newOperand(operands[1], readConstraint);
 //
 // create inst
-// auto &mul_inst = gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+// auto &mul_inst =
+// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
 //
 // launch insts
 // mul_inst(res, lhs, rhs);
@@ -63,7 +64,8 @@ class GCNInstrExecution;
 //
 // GCNBuilder builder;
 // auto &rcp = gcnBuilder.create<GCNInstr>("v_rcp")->float_op_type(bitwidth);
-// auto &mul_inst = gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+// auto &mul_inst =
+// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
 //
 // rcp(...);
 // mul_inst(...);
@@ -72,9 +74,9 @@ class GCNInstrExecution;
 // Similar to a C function, a declared GCNInstr instance can be launched
 // multiple times with different operands, e.g.
 //
-//   auto &mul_inst = gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
-//   mul_inst(... some operands ...);
-//   mul_inst(... some different operands ...);
+//   auto &mul_inst =
+//   gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth); mul_inst(...
+//   some operands ...); mul_inst(... some different operands ...);
 //
 // Finally, we will get a GCN code with two mov instructions.
 //
