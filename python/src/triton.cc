@@ -129,11 +129,11 @@ void init_triton_ir(py::module &&m) {
       .def("load_triton", [](mlir::MLIRContext &self) {
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
         self.getOrLoadDialect<mlir::index::IndexDialect>();
+        self.getOrLoadDialect<mlir::triton::TritonDialect>();
+        self.getOrLoadDialect<mlir::gpu::GPUDialect>();
         // we load LLVM because the frontend uses LLVM.undef for
         // some placeholders
-        self.getOrLoadDialect<mlir::triton::TritonDialect>();
         self.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-        self.getOrLoadDialect<mlir::gpu::GPUDialect>();
       });
   // .def(py::init([](){
   //   mlir::MLIRContext context;
@@ -404,7 +404,8 @@ void init_triton_ir(py::module &&m) {
                         mlir::triton::gpu::TritonGPUDialect,
                         mlir::math::MathDialect, mlir::arith::ArithDialect,
                         mlir::index::IndexDialect, mlir::func::FuncDialect,
-                        mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect>();
+                        mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect,
+                        mlir::LLVM::LLVMDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
 
