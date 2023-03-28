@@ -78,6 +78,11 @@ void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
 
+  py::enum_<mlir::triton::PaddingOption>(m, "PADDING_OPTION")
+      .value("PAD_ZERO", mlir::triton::PaddingOption::PAD_ZERO)
+      .value("PAD_NAN", mlir::triton::PaddingOption::PAD_NAN)
+      .export_values();
+
   py::enum_<mlir::triton::CacheModifier>(m, "CACHE_MODIFIER")
       .value("NONE", mlir::triton::CacheModifier::NONE)
       .value("CA", mlir::triton::CacheModifier::CA)
@@ -1124,6 +1129,27 @@ void init_triton_ir(py::module &&m) {
              self.create<mlir::triton::StoreOp>(loc, ptrs, value, cacheModifier,
                                                 evictionPolicy);
            })
+      .def("create_tensor_pointer_load",
+           [](mlir::OpBuilder &self, mlir::Value &ptr,
+              std::vector<int32_t> &boundaryCheck,
+              std::optional<mlir::triton::PaddingOption> paddingOption,
+              mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy,
+              bool isVolatile) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::LoadOp>(
+                 loc, ptr, boundaryCheck, paddingOption, cacheModifier,
+                 evictionPolicy, isVolatile);
+           })
+      .def("create_tensor_pointer_store",
+           [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &val,
+              std::vector<int32_t> &boundaryCheck,
+              mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy) -> void {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::triton::StoreOp>(loc, ptr, val, boundaryCheck,
+                                                cacheModifier, evictionPolicy);
+           })
       .def("create_masked_load",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &mask,
               std::optional<mlir::Value> &other,
@@ -1390,10 +1416,31 @@ void init_triton_ir(py::module &&m) {
              return self.create<::mlir::LLVM::UndefOp>(loc, type);
            })
       // Force GPU barrier
-      .def("create_barrier", [](mlir::OpBuilder &self) {
-        auto loc = self.getUnknownLoc();
-        self.create<mlir::gpu::BarrierOp>(loc);
-      });
+      .def("create_barrier",
+           [](mlir::OpBuilder &self) {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::gpu::BarrierOp>(loc);
+           })
+      // Make a block pointer (tensor pointer in Triton IR)
+      .def("create_make_block_ptr",
+           [](mlir::OpBuilder &self, mlir::Value &base,
+              std::vector<mlir::Value> &shape,
+              std::vector<mlir::Value> &strides,
+              std::vector<mlir::Value> &offsets,
+              std::vector<int32_t> &tensorShape,
+              std::vector<int32_t> &order) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::MakeTensorPtrOp>(
+                 loc, base, shape, strides, offsets, tensorShape, order);
+           })
+      // Advance a block pointer
+      .def("create_advance",
+           [](mlir::OpBuilder &self, mlir::Value &ptr,
+              std::vector<mlir::Value> &offsets) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::AdvanceOp>(loc, ptr.getType(),
+                                                         ptr, offsets);
+           });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
       .def(py::init<mlir::MLIRContext *>())
@@ -1447,6 +1494,11 @@ void init_triton_ir(py::module &&m) {
       .def("add_triton_combine_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createCombineOpsPass());
+           })
+      .def("add_rewrite_tensor_pointer_pass",
+           [](mlir::PassManager &self, int computeCapability) {
+             self.addPass(mlir::triton::createRewriteTensorPointerPass(
+                 computeCapability));
            })
       .def("add_convert_triton_to_tritongpu_pass",
            [](mlir::PassManager &self, int numWarps) {

@@ -8,6 +8,7 @@ from ..impl import (
 from . import math
 from .core import (
     abs,
+    advance,
     arange,
     argmin,
     argmax,
@@ -48,6 +49,7 @@ from .core import (
     int8,
     load,
     log,
+    make_block_ptr,
     max,
     max_contiguous,
     maximum,
@@ -101,6 +103,7 @@ from .random import (
 
 __all__ = [
     "abs",
+    "advance",
     "arange",
     "argmin",
     "argmax",
@@ -144,6 +147,7 @@ __all__ = [
     "math",
     "load",
     "log",
+    "make_block_ptr",
     "max",
     "max_contiguous",
     "maximum",

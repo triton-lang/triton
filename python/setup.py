@@ -155,8 +155,8 @@ class CMakeBuild(build_ext):
 
         match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
         cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
-        if (cmake_major, cmake_minor) < (3, 20):
-            raise RuntimeError("CMake >= 3.20.0 is required")
+        if (cmake_major, cmake_minor) < (3, 18):
+            raise RuntimeError("CMake >= 3.18.0 is required")
 
         for ext in self.extensions:
             self.build_extension(ext)
@@ -242,7 +242,6 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
@@ -252,7 +251,7 @@ setup(
     test_suite="tests",
     extras_require={
         "build": [
-            "cmake>=3.20",
+            "cmake>=3.18",
             "lit",
         ],
         "tests": [
