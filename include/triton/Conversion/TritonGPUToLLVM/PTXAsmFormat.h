@@ -149,7 +149,7 @@ struct PTXBuilder {
   // Otherwise if the register is only used in the true branch or the false
   // branch but not both, the register is undefined and ptxas can perform
   // aggressive optimizations that may lead to incorrect results.
-  Operand *newOperand(StringRef constraint, bool init = false, int numBits = 0);
+  Operand *newOperand(StringRef constraint, bool init = false);
 
   // Create a constant integer operand.
   Operand *newConstantOperand(int64_t v);
