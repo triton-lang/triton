@@ -1184,6 +1184,7 @@ def dot(lhs: tl.tensor,
         "small blocks not supported!"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
+        # TODO: This is CUDA specific, check if ROCm has the same limitation
         assert lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
