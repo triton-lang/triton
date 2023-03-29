@@ -1183,6 +1183,8 @@ def dot(lhs: tl.tensor,
         and rhs.shape[1].value >= 16,\
         "small blocks not supported!"
     if lhs.type.scalar.is_int():
+        assert lhs.type.scalar == tl.int8, "only int8 supported!"
+        assert lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
