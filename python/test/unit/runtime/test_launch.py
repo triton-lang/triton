@@ -45,7 +45,7 @@ def test_memory_leak() -> None:
 
 
 def test_kernel_launch_latency() -> None:
-    def define_kernel(num_tensor_args):
+    def define_kernel(kernel_name: str, num_tensor_args: int) -> str:
         arg_str = ",".join([f"arg{i}: torch.Tensor" for i in range(num_tensor_args)])
         arg_str += ", n_elements: int, BLOCK_SIZE: tl.constexpr"
         func_str = f"""
@@ -55,7 +55,7 @@ def test_kernel_launch_latency() -> None:
         import triton.language as tl
 
         @triton.jit
-        def empty_kernel({arg_str}):
+        def {kernel_name}({arg_str}):
             pass
         """
         with tempfile.NamedTemporaryFile(mode="w+t", suffix=".py", delete=False) as temp_file:
@@ -64,14 +64,14 @@ def test_kernel_launch_latency() -> None:
 
         return temp_file_path
 
-    def import_kernel(file_path):
+    def import_kernel(file_path, kernel_name):
         directory, filename = os.path.split(file_path)
         module_name, _ = os.path.splitext(filename)
         sys.path.insert(0, directory)
 
         module = importlib.import_module(module_name)
-        empty_kernel = module.empty_kernel
-        return empty_kernel
+        kernel = getattr(module, kernel_name)
+        return kernel
 
     def empty(*kernel_args: Tuple[torch.Tensor]):
         first_arg = kernel_args[0]
@@ -92,8 +92,9 @@ def test_kernel_launch_latency() -> None:
         assert latency_us < LATENCY_THRESHOLD_US, "Kernel launch time has increased!"
 
     num_tensor_args = 40
-    file_path = define_kernel(num_tensor_args)
-    empty_kernel = import_kernel(file_path)
+    kernel_name = 'empty_kernel'
+    file_path = define_kernel(kernel_name, num_tensor_args)
+    empty_kernel = import_kernel(file_path, kernel_name)
 
     # Initialize random tensors for the empty_kernel
     torch.manual_seed(0)

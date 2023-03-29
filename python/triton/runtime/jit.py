@@ -248,7 +248,7 @@ class JITFunction(KernelInterface[T]):
             if i in self.do_not_specialize:
                 continue
             arg_annotation = self.__annotations__.get(arg, None)
-            if True:
+            if not arg_annotation:
                 specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
                                     f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
                                     f'else (False,)']
@@ -263,7 +263,7 @@ class JITFunction(KernelInterface[T]):
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, device=None, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
+def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None):
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
