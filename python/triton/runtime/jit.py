@@ -78,7 +78,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if func.__module__ and func.__module__.startswith('triton.'):
             return
-        assert isinstance(func, JITFunction)
+        assert isinstance(func, JITFunction), f"Function \"{func.__name__}\" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this"
         if func.hash is None:
             tree = ast.parse(func.src)
             finder = DependenciesFinder(func.__globals__, func.src)
@@ -247,14 +247,23 @@ class JITFunction(KernelInterface[T]):
         for i, arg in enumerate(regular_args):
             if i in self.do_not_specialize:
                 continue
-            specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
-                                f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
-                                f'else (False,)']
+            arg_annotation = self.__annotations__.get(arg, None)
+            if not arg_annotation:
+                specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
+                                    f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
+                                    f'else (False,)']
+            elif arg_annotation == 'torch.Tensor':
+                specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)']
+            elif arg_annotation == 'int':
+                specializations += [f'({arg} % {JITFunction.divisibility} == 0, {arg} == 1)']
+            else:
+                specializations += ['(False,)']
+
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
+def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None):
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
@@ -268,8 +277,9 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
-    device = get_current_device()
-    set_current_device(device)
+    if device is None:
+        device = get_current_device()
+        set_current_device(device)
     if stream is None and not warmup:
       stream = get_cuda_stream(device)
     try:

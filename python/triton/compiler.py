@@ -109,7 +109,7 @@ def _unwrap_if_constexpr(o: Any):
     return o.value if isinstance(o, triton.language.constexpr) else o
 
 
-_condition_types = {bool, int}  # Python types accepted for conditionals inside kernels
+_condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
 
 
 class enter_sub_region:
