@@ -10,6 +10,8 @@ import textwrap
 from collections import defaultdict, namedtuple
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
 
+import torch
+
 import triton
 from triton.utils import MockTensor
 
@@ -234,6 +236,18 @@ class JITFunction(KernelInterface[T]):
 
         return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(module, name), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
 
+    def _get_arg_specialization_key(self, arg) -> str:
+        arg_annotation = self.__annotations__.get(arg, None)
+        if not arg_annotation:
+            return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") \
+                        else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) \
+                        else (False,)'
+        elif arg_annotation is torch.Tensor:
+            return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)'
+        elif arg_annotation is int:
+            return f'({arg} % {JITFunction.divisibility} == 0, {arg} == 1)'
+        else:
+            return '(False,)'
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
         constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
@@ -247,17 +261,7 @@ class JITFunction(KernelInterface[T]):
         for i, arg in enumerate(regular_args):
             if i in self.do_not_specialize:
                 continue
-            arg_annotation = self.__annotations__.get(arg, None)
-            if not arg_annotation:
-                specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
-                                    f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
-                                    f'else (False,)']
-            elif arg_annotation == 'torch.Tensor':
-                specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)']
-            elif arg_annotation == 'int':
-                specializations += [f'({arg} % {JITFunction.divisibility} == 0, {arg} == 1)']
-            else:
-                specializations += ['(False,)']
+            specializations += [self._get_arg_specialization_key(arg)]
 
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
