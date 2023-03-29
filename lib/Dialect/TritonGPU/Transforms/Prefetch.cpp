@@ -287,7 +287,8 @@ scf::ForOp Prefetcher::createNewForOp() {
                                            true, dotEncoding, builder));
   }
   // Update ops of yield
-  builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
+  if (!yieldValues.empty())
+    builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
   return newForOp;
 }
 
