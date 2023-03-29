@@ -514,11 +514,9 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 # ----------------
 
 
-@pytest.mark.parametrize("expr", [
-    'exp', 'log', 'cos', 'sin'
-])
-def test_math_op(expr, device='cuda'):
-    _test_unary('float32', f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
+@pytest.mark.parametrize("dtype_x, expr", [(dtype_x, expr) for dtype_x in float_dtypes for expr in ['exp', 'log', 'cos', 'sin']])
+def test_math_op(dtype_x, expr, device='cuda'):
+    _test_unary(dtype_x, f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
 
 # ----------------
 # test abs
