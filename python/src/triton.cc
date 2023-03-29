@@ -1590,6 +1590,15 @@ void init_triton_translation(py::module &m) {
   });
 
   m.def(
+      "set_rocm", []() { setROCM(); }, ret::take_ownership);
+
+  m.def(
+      "get_arch_info", []() { return std::get<0>(getArchInfo()); }, ret::take_ownership);
+
+  m.def(
+      "get_warp_size", []() { return std::get<1>(getArchInfo()); }, ret::take_ownership);
+
+  m.def(
       "translate_triton_gpu_to_llvmir",
       [](mlir::ModuleOp op, int computeCapability) {
         py::gil_scoped_release allow_threads;
