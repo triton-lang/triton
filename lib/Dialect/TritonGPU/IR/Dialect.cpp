@@ -420,11 +420,11 @@ DotOperandEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
   assert(mmaParent.isAmpere());
   if (getOpIdx() == 0)
     return {std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0])),
-            shape[1] / shapePerWarp[2]};
+            std::max<int64_t>(1, shape[1] / shapePerWarp[2])};
   else {
     assert(getOpIdx() == 1);
     return {
-        shape[0] / shapePerWarp[2],
+        std::max<int64_t>(1, shape[0] / shapePerWarp[2]),
         std::max<int64_t>(1, shape[1] / (shapePerWarp[1] * warpsPerCTA[1]))};
   }
 }
