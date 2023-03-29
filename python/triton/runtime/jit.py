@@ -78,7 +78,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if func.__module__ and func.__module__.startswith('triton.'):
             return
-        assert isinstance(func, JITFunction)
+        assert isinstance(func, JITFunction), f"Function \"{func.__name__}\" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this"
         if func.hash is None:
             tree = ast.parse(func.src)
             finder = DependenciesFinder(func.__globals__, func.src)
