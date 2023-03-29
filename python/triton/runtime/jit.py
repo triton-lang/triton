@@ -248,12 +248,24 @@ class JITFunction(KernelInterface[T]):
             return f'({arg} % {JITFunction.divisibility} == 0, {arg} == 1)'
         else:
             return '(False,)'
+
+    def _get_arg_sig_key(self, arg) -> str:
+        arg_annotation = self.__annotations__.get(arg, None)
+        if arg_annotation is torch.Tensor:
+            return f'{arg}.dtype'
+        elif arg_annotation is bool:
+            return "i1"
+        elif arg_annotation is float:
+            return 'fp32'
+        else:
+            return f'_key_of({arg})'
+
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
         constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
         args = ', '.join(regular_args)
         # cache key for regular argument type
-        sig_keys = ', '.join([f'_key_of({arg})' for arg in regular_args])
+        sig_keys = ', '.join([self._get_arg_sig_key(arg) for arg in regular_args])
         # cache key for constexpr argument values
         constexpr_keys = ', '.join(constexpr_args)
         # cache key for argument specialization
