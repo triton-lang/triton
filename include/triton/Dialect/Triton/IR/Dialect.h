@@ -21,19 +21,6 @@
 namespace mlir {
 namespace triton {
 
-// Type inference
-Type getPointeeType(Type type);
-
-Type getPointerType(Type type);
-
-Type getElementTypeOfTensorPointerType(Type type);
-
-Type getI1SameShape(Type type);
-
-Type getI32SameShape(Type type);
-
-Type getPointerTypeSameShape(Type type);
-
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {
 public:
