@@ -32,7 +32,7 @@ public:
       return computeLdmatrixMatOffs(warpOff, lane, cSwizzleOffset);
     else if (elemBytes == 4 && needTrans)
       return computeB32MatOffs(warpOff, lane, cSwizzleOffset);
-    else if (elemBytes == 1 && needTrans)
+    else if (elemBytes == 1)
       return computeB8MatOffs(warpOff, lane, cSwizzleOffset);
     else
       llvm::report_fatal_error("Invalid smem load config");
@@ -76,6 +76,7 @@ private:
   int cMatShape;
   int sMatShape;
 
+  Value cStride;
   Value sStride;
 
   bool needTrans;
@@ -191,15 +192,21 @@ SmallVector<Value> MMA16816SmemLoader::computeB32MatOffs(Value warpOff,
 SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
                                                         Value lane,
                                                         Value cSwizzleOffset) {
-  assert(needTrans && "Only used in transpose mode.");
   Value cOffInMat = udiv(lane, i32_val(4));
   Value sOffInMat =
       mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
+  // if(!needTrans){
+  //   std::swap(cOffInMat, sOffInMat);
+  // }
+
+  bool test = (needTrans && kOrder == 1) ||
+              (!needTrans && kOrder == 0);
+  // bool test = kOrder == 1;
 
   SmallVector<Value> offs(numPtrs);
   for (int mat = 0; mat < 4; ++mat) {
-    int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
-    int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
+    int kMatArrInt = test ? mat / 2 : mat % 2;
+    int nkMatArrInt = test ? mat % 2 : mat / 2;
     if (kMatArrInt > 0) // we don't need pointers for k
       continue;
     Value kMatArr = i32_val(kMatArrInt);
@@ -213,7 +220,7 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
         int ptrOff = loadx4Off * 8 + nkMatArrInt * 4 + elemOff;
         Value cMatOffI = add(cMatOff, i32_val(loadx4Off * pLoadStrideInMat *
-                                              (kOrder == 1 ? 1 : 2)));
+                                              (test ? 1 : 2)));
         Value sOffInMatElem = add(sOffInMat, i32_val(elemOff));
 
         // disable swizzling ...
@@ -221,9 +228,12 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
         Value sOff = add(sOffInMatElem, mul(sMatOff, i32_val(sMatShape)));
         // To prevent out-of-bound access when tile is too small.
-        cOff = urem(cOff, i32_val(tileShape[order[0]]));
-        sOff = urem(sOff, i32_val(tileShape[order[1]]));
-        offs[ptrOff] = add(cOff, mul(sOff, sStride));
+        // cOff = urem(cOff, i32_val(tileShape[order[0]]));
+        // sOff = urem(sOff, i32_val(tileShape[order[1]]));
+        if(needTrans)
+          offs[ptrOff] = add(cOff, mul(sOff, sStride));
+        else
+          offs[ptrOff] = add(mul(cOff, cStride), sOff);
       }
     }
   }
@@ -243,7 +253,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
   else if (elemBytes == 4 && needTrans)
     ptrIdx = matIdx[order[0]];
-  else if (elemBytes == 1 && needTrans)
+  else if (elemBytes == 1)
     ptrIdx = matIdx[order[0]] * 4;
   else
     llvm::report_fatal_error("unsupported mma type found");
@@ -321,7 +331,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
       retElems[i] = insert_element(elemTy, retElems[i], elems[i], i32_val(0));
     }
     return {retElems[0], retElems[1], retElems[2], retElems[3]};
-  } else if (elemBytes == 1 && needTrans) { // work with int8
+  } else if (elemBytes == 1) { // work with int8
     // Can't use i32 here. Use LLVM's VectorType
     elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
     std::array<std::array<Value, 4>, 2> ptrs;
@@ -339,7 +349,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
         getPtr(ptrIdx + 7),
     };
 
-    assert(sMatStride == 1);
+    // assert(sMatStride == 1);
     int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
     Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
     int sOffsetArrElem = 1 * (sMatStride * sMatShape);
@@ -350,7 +360,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     i8v4Elems.fill(undef(elemTy));
 
     Value i8Elems[4][4];
-    if (kOrder == 1) {
+    if ((needTrans && kOrder == 1) ||
+        (!needTrans && kOrder == 0)) {
       for (int i = 0; i < 2; ++i)
         for (int j = 0; j < 4; ++j)
           i8Elems[i][j] = load(gep(shemPtrTy, ptrs[i][j], sOffsetElemVal));
@@ -405,11 +416,14 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   cMatShape = matShape[order[0]];
   sMatShape = matShape[order[1]];
 
+  cStride = smemStrides[order[0]];
   sStride = smemStrides[order[1]];
 
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
+  if(elemBytes == 1)
+    canUseLdmatrix = false;
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwpt] if not transposed,
@@ -417,13 +431,14 @@ MMA16816SmemLoader::MMA16816SmemLoader(
     numPtrs =
         tileShape[order[0]] / (needTrans ? wpt : 1) / instrShape[order[0]];
   } else {
-    numPtrs = tileShape[order[0]] / wpt / matShape[order[0]];
+    numPtrs = tileShape[order[0]] / (needTrans ? wpt : 1) / matShape[order[0]];
   }
   numPtrs = std::max<int>(numPtrs, 2);
 
   // Special rule for i8/u8, 4 ptrs for each matrix
   if (!canUseLdmatrix && elemBytes == 1)
     numPtrs *= 4;
+  llvm::outs() << numPtrs << "\n";
 
   int loadStrideInMat[2];
   loadStrideInMat[kOrder] =
