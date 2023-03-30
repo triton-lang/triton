@@ -163,8 +163,8 @@ class CodeGenerator(ast.NodeVisitor):
         ))
         # TODO: this needs to be moved to class scope when cyclic imports untangled and `triton.language` can be imported at module level
         self.statically_implemented_functions.update((
-            (triton.language.core.static_assert, self.execute_static_assert),
-            (triton.language.core.static_print, self.execute_static_print),
+            (triton.language.core.static_assert, CodeGenerator.execute_static_assert),
+            (triton.language.core.static_print, CodeGenerator.execute_static_print),
         ))
 
         def local_lookup(name: str, absent):
@@ -813,7 +813,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         static_implementation = self.statically_implemented_functions.get(fn)
         if static_implementation is not None:
-            return static_implementation(node)
+            return static_implementation(self, node)
 
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
