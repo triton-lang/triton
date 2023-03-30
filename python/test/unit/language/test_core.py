@@ -514,11 +514,9 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 # ----------------
 
 
-@pytest.mark.parametrize("expr", [
-    'exp', 'log', 'cos', 'sin'
-])
-def test_math_op(expr, device='cuda'):
-    _test_unary('float32', f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
+@pytest.mark.parametrize("dtype_x, expr", [(dtype_x, expr) for dtype_x in float_dtypes for expr in ['exp', 'log', 'cos', 'sin']])
+def test_math_op(dtype_x, expr, device='cuda'):
+    _test_unary(dtype_x, f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
 
 # ----------------
 # test abs
@@ -1968,7 +1966,8 @@ def test_math_tensor(dtype_str, expr, lib_path):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
-                         [('float32', 'math.pow', '')])
+                         [('float32', 'math.pow', ''),
+                          ('float64', 'math.pow', tl.math.LIBDEVICE_PATH)])
 def test_math_scalar(dtype_str, expr, lib_path):
 
     @triton.jit
@@ -1991,7 +1990,7 @@ def test_math_scalar(dtype_str, expr, lib_path):
     # triton result
     x_tri = to_triton(x)[0].item()
     y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
-    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'math': lib_path})
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
 

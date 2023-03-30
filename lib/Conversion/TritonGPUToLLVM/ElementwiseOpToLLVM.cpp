@@ -995,8 +995,8 @@ struct ExpOpConversionApprox
   Value createDestOp(mlir::math::ExpOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
-    // For FP64 input, call __nv_expf for higher-precision calculation
-    if (elemTy.getIntOrFloatBitWidth() == 64)
+    // For non-FP32 input, call __nv_expf for higher-precision calculation
+    if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
     const double log2e = 1.4426950408889634;
@@ -1117,7 +1117,7 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
-  // FP32. For FP64 input type, ExpOpConversionApprox will return failure and
+  // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
