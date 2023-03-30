@@ -107,66 +107,104 @@ def TT_AddPtrOp : TT_Op<"addptr",
     let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result) `,` type($offset)";
 }
 
+def TT_AdvanceOp : TT_Op<"advance",
+                         [Pure,
+                          TypesMatchWith<"result type matches ptr type",
+                                         "result", "ptr", "$_self">]> {
+    let summary = "Advance a tensor pointer by offsets";
+
+    let arguments = (ins TT_TensorPtr:$ptr, Variadic<I32>:$offsets);
+
+    let results = (outs TT_TensorPtr:$result);
+
+    let assemblyFormat = "$ptr `,` `[` $offsets `]` attr-dict `:` type($result)";
+}
 
 //
 // Load/Store Ops
 //
 def TT_LoadOp : TT_Op<"load",
-                      [SameOperandsAndResultShape,
-                       SameOperandsAndResultEncoding,
+                      [SameLoadStoreOperandsAndResultShape,
+                       SameLoadStoreOperandsAndResultEncoding,
                        AttrSizedOperandSegments,
                        MemoryEffects<[MemRead]>,
                        TypesMatchWith<"infer ptr type from result type",
-                                      "result", "ptr", "getPointerTypeSameShape($_self)">,
+                                      "result", "ptr", "$_self",
+                                      "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
                        TypesMatchWith<"infer mask type from result type or none",
                                       "result", "mask", "getI1SameShape($_self)",
                                       "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
                        TypesMatchWith<"infer other type from result type or none",
                                       "result", "other", "$_self",
                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
-    let summary = "load";
+    let summary = "Load from a tensor of pointers or from a tensor pointer";
 
-    let arguments = (ins TT_PtrLike:$ptr, Optional<TT_BoolLike>:$mask, Optional<TT_Type>:$other,
-                         TT_CacheModifierAttr:$cache, TT_EvictionPolicyAttr:$evict,
-                         BoolAttr:$isVolatile);
+    let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, Optional<TT_BoolLike>:$mask,
+                         Optional<TT_Type>:$other, OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
+                         OptionalAttr<TT_PaddingOptionAttr>:$padding, TT_CacheModifierAttr:$cache,
+                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
 
     let results = (outs TT_Type:$result);
 
     let builders = [
+        // A tensor of pointers or a pointer to a scalar
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A tensor pointer with boundary check and padding
+        OpBuilder<(ins "Value":$ptr, "ArrayRef<int32_t>":$boundaryCheck,
+                       "Optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A tensor of pointers or a pointer to a scalar with mask
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A tensor of pointers or a pointer to a scalar with mask and other
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // A utility function to build the operation with all attributes
+        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "Optional<ArrayRef<int32_t>>":$boundaryCheck,
+                       "Optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 
+    // Format: `tt.load operands attrs : optional(type(ptr)) -> type(result)`
+    // We need an extra `optional(type(ptr))` for inferring the tensor pointer type with back compatibility
     let hasCustomAssemblyFormat = 1;
+
     let hasCanonicalizer = 1;
 }
 
 def TT_StoreOp : TT_Op<"store",
-                       [SameOperandsShape,
-                        SameOperandsEncoding,
+                       [SameLoadStoreOperandsShape,
+                        SameLoadStoreOperandsEncoding,
                         MemoryEffects<[MemWrite]>,
                         TypesMatchWith<"infer ptr type from value type",
-                                       "value", "ptr",
-                                       "getPointerTypeSameShape($_self)">,
+                                       "value", "ptr", "$_self",
+                                       "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
                         TypesMatchWith<"infer mask type from value type",
                                        "value", "mask", "getI1SameShape($_self)",
                                        "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
-    let summary = "store";
+    let summary = "Store by a tensor of pointers or by a tensor pointer";
 
-    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
-                     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-                     DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
+    let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
+                         OptionalAttr<DenseI32ArrayAttr>:$boundaryCheck,
+                         DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+                         DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict);
 
     let builders = [
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache,
+        // A tensor of pointers or a pointer to a scalar
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>,
+        // A tensor of pointers or a pointer to a scalar with mask
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict)>,
+        // A tensor pointer with boundary check
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "ArrayRef<int32_t>":$boundaryCheck, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict)>
     ];
 
+    // Format: `tt.store operands attrs : optional(type(ptr)), type(val)
+    // We need an extra `optional(type(ptr))` for inferring the tensor pointer type with back compatibility
     let hasCustomAssemblyFormat = 1;
+
     let hasCanonicalizer = 1;
 }
 
@@ -213,7 +251,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
         return $old
     }];
 
-    let arguments = (ins TT_Ptr:$ptr, TT_Type:$cmp, TT_Type:$val);
+    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$cmp, TT_Type:$val);
 
     let results = (outs TT_Type:$result);
 }
@@ -444,6 +482,48 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
   }];
   let arguments = (ins TT_Tensor:$condition, StrAttr:$message, StrAttr:$file, StrAttr:$func, I32Attr:$line);
   let assemblyFormat = "$condition `,` $message `,` $file `,` $func `,` $line attr-dict `:` type($condition)";
+}
+
+//
+// Make a Tensor Pointer
+//
+def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
+                               [Pure,
+                                SameVariadicOperandSize,
+                                TypesMatchWith<"infer pointer type from the result type",
+                                               "result", "base",
+                                               "getPointerType(getElementTypeOfTensorPointerType($_self))">]> {
+  let summary = "Make a tensor pointer type with meta information of the parent tensor and the block specified";
+
+  let description = [{
+      `tt.make_tensor_ptr` takes both meta information of the parent tensor and the block tensor, then it returns a
+      pointer to the block tensor, e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
+  }];
+
+  // TODO(Chenggang): unify the integer types. Currently we cannot do that due to hardware constraints.
+  let arguments = (ins
+    TT_Ptr:$base,
+    Variadic<I64>:$shape,
+    Variadic<I64>:$strides,
+    Variadic<I32>:$offsets,
+    DenseI32ArrayAttr:$order
+  );
+
+  let results = (outs TT_TensorPtr:$result);
+
+  // Add additional `[]` to increase readability and split variadic lists
+  let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` `,` `[` $offsets `]` attr-dict `:` type($result)";
+
+  let builders = [
+    OpBuilder<(ins
+        "Value":$base,
+        "ValueRange":$shape,
+        "ValueRange":$strides,
+        "ValueRange":$offsets,
+        "ArrayRef<int32_t>":$tensorShape,
+        "ArrayRef<int32_t>":$order
+    )>
+  ];
 }
 
 #endif // Triton_OPS

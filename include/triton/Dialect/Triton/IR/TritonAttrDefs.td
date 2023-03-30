@@ -3,7 +3,7 @@
 
 include "mlir/IR/EnumAttr.td"
 
-// Attrs for LoadOp
+// Attributes for LoadOp
 def TT_CacheModifierAttr : I32EnumAttr<
     "CacheModifier", "",
     [
@@ -13,12 +13,23 @@ def TT_CacheModifierAttr : I32EnumAttr<
     ]> {
     let cppNamespace = "::mlir::triton";
 }
+
 def TT_EvictionPolicyAttr : I32EnumAttr<
     "EvictionPolicy", "",
     [
         I32EnumAttrCase<"NORMAL", 1, "evict_normal">,
         I32EnumAttrCase<"EVICT_FIRST", 2, "evict_first">,
         I32EnumAttrCase<"EVICT_LAST", 3, "evict_last">
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+def TT_PaddingOptionAttr : I32EnumAttr<
+    "PaddingOption", "",
+    [
+        I32EnumAttrCase<"PAD_ZERO", 1, "zero">,
+        // We can not set the string value to "NAN" because it is a keyword in C++
+        I32EnumAttrCase<"PAD_NAN", 2, "nan">
     ]> {
     let cppNamespace = "::mlir::triton";
 }

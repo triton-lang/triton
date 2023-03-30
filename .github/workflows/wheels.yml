@@ -1,13 +1,13 @@
 name: Wheels
 on:
   workflow_dispatch:
-  #schedule:    
+  #schedule:
   #  - cron: "0 0 * * *"
 
 jobs:
 
   Build-Wheels:
-    
+
     runs-on: [self-hosted, V100]
 
     steps:

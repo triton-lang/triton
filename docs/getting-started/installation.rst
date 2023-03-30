@@ -17,7 +17,7 @@ Binary wheels are available for CPython 3.6-3.9 and PyPy 3.6-3.7.
 And the latest nightly release:
 
 .. code-block:: bash
-  
+
       pip install -U --pre triton
 
 
@@ -50,6 +50,6 @@ You can then test your installation by running the unit tests:
 and the benchmarks
 
 .. code-block:: bash
-      
+
       cd bench
       python -m run --with-plots --result-dir /tmp/triton-bench

@@ -8,7 +8,7 @@ First of all, thank you for considering contributing to the Triton programming l
 
 2. **Code Formatting:** Our Continuous Integration (CI) pipeline uses autopep8, isort, and clang-format to check code formatting. To avoid failing the CI workflow due to formatting issues, please utilize the provided `.pre-commit-config.yaml` pre-commit configuration file.
 
-3. **Unit Testing:** When contributing new functionalities, please also include appropriate tests. We aim to continuously improve and expand our CI pipeline to ensure the robustness and reliability of the project. PRs that add a large amount of untested code will be rejected. 
+3. **Unit Testing:** When contributing new functionalities, please also include appropriate tests. We aim to continuously improve and expand our CI pipeline to ensure the robustness and reliability of the project. PRs that add a large amount of untested code will be rejected.
 
 4. **Respectful Communication:** In all discussions related to PRs or other contributions, please maintain a courteous and civil tone. We strive to foster a collaborative environment that is inclusive and respectful to all contributors.
 
