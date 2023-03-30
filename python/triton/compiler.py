@@ -865,7 +865,7 @@ class CodeGenerator(ast.NodeVisitor):
             sig = inspect.signature(fn)
             if '_generator' in sig.parameters:
                 extra_kwargs['_generator'] = self
-            return fn(*args, _builder=self.builder, **kws)
+            return fn(*args, **extra_kwargs, **kws)
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         return fn(*args, **kws)

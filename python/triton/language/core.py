@@ -1243,6 +1243,7 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
 def _max_combine(a, b):
     return maximum(a, b)
 
+
 @triton.jit
 @_add_reduction_docstr("maximum")
 def max(input, axis):

@@ -117,7 +117,6 @@ public:
     if (!reduce)
       return mlir::failure();
 
-
     SmallVector<Value> newOperands = reduce.getOperands();
 
     newOperands[0] = convert.getOperand();

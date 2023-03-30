@@ -1,7 +1,6 @@
 from __future__ import annotations  # remove after python 3.11
 
-from contextlib import contextmanager
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from . import core as tl
 from triton._C.libtriton.triton import ir
