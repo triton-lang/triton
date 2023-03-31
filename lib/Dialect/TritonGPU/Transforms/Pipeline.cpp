@@ -22,15 +22,6 @@ namespace ttg = triton::gpu;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-static Type getI1SameShape(Value v) {
-  Type vType = v.getType();
-  auto i1Type = IntegerType::get(vType.getContext(), 1);
-  if (auto tensorType = vType.dyn_cast<RankedTensorType>())
-    return RankedTensorType::get(tensorType.getShape(), i1Type,
-                                 tensorType.getEncoding());
-  return i1Type;
-}
-
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
   for (const NamedAttribute attr : dictAttrs.getValue())
@@ -321,7 +312,7 @@ LogicalResult LoopPipeliner::initialize() {
 
 Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value mappedMask,
                                  Value loopCond, OpBuilder &builder) {
-  Type maskType = getI1SameShape(loadOp);
+  Type maskType = triton::getI1SameShape(loadOp.getType());
   Value mask = loadOp.getMask();
   Value newMask;
   if (mask) {
