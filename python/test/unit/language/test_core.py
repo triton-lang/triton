@@ -1883,22 +1883,26 @@ def test_call():
 # -------------
 
 
-def test_if():
+@pytest.mark.parametrize("if_type", ["if", "if_exp"])
+def test_if(if_type):
 
     @triton.jit
-    def kernel(Cond, XTrue, XFalse, Ret):
+    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr):
         pid = tl.program_id(0)
         cond = tl.load(Cond)
-        if pid % 2:
-            tl.store(Ret, tl.load(XTrue))
+        if IfType == "if":
+            if pid % 2:
+                tl.store(Ret, tl.load(XTrue))
+            else:
+                tl.store(Ret, tl.load(XFalse))
         else:
-            tl.store(Ret, tl.load(XFalse))
+            tl.store(Ret, tl.load(XTrue)) if pid % 2 else tl.store(Ret, tl.load(XFalse))
 
     cond = torch.ones(1, dtype=torch.int32, device='cuda')
     x_true = torch.tensor([3.14], dtype=torch.float32, device='cuda')
     x_false = torch.tensor([1.51], dtype=torch.float32, device='cuda')
     ret = torch.empty(1, dtype=torch.float32, device='cuda')
-    kernel[(1,)](cond, x_true, x_false, ret)
+    kernel[(1,)](cond, x_true, x_false, ret, if_type)
 
 
 def test_num_warps_pow2():
