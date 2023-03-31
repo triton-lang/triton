@@ -299,10 +299,10 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
-    triton.testing.assert_almost_equal(ref_out, tri_out)
-    triton.testing.assert_almost_equal(ref_dv, tri_dv)
-    triton.testing.assert_almost_equal(ref_dk, tri_dk)
-    triton.testing.assert_almost_equal(ref_dq, tri_dq)
+    assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=0)
 
 
 try:
