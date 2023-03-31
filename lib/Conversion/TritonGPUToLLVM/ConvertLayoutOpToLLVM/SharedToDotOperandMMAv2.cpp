@@ -227,10 +227,13 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         // To prevent out-of-bound access when tile is too small.
         cOff = urem(cOff, i32_val(tileShape[order[0]]));
         sOff = urem(sOff, i32_val(tileShape[order[1]]));
-        if (needTrans)
+        if (needTrans) {
           offs[ptrOff] = add(cOff, mul(sOff, sStride));
-        else
+        } else {
           offs[ptrOff] = add(mul(cOff, sStride), sOff);
+          // if (nkMatArrInt == 1)
+          //   offs[ptrOff] = add(offs[ptrOff], i32_val(16));
+        }
       }
     }
   }
