@@ -229,7 +229,7 @@ def matmul_kernel(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # you can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
-    if ACTIVATION:
+    if ACTIVATION is not None:
         accumulator = ACTIVATION(accumulator)
     c = accumulator.to(tl.float16)
 
