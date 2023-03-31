@@ -1,6 +1,8 @@
 #include "../ConvertLayoutOpToLLVM.h"
 #include "../Utility.h"
 
+using namespace mlir;
+
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -199,8 +201,8 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
 
   bool test = (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
 
-  llvm::outs() << cMatShape << " " << sMatShape << "\n";
   SmallVector<Value> offs(numPtrs);
+
   for (int mat = 0; mat < 4; ++mat) {
     int kMatArrInt = test ? mat / 2 : mat % 2;
     int nkMatArrInt = test ? mat % 2 : mat / 2;
@@ -209,30 +211,32 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
     Value kMatArr = i32_val(kMatArrInt);
     Value nkMatArr = i32_val(nkMatArrInt);
 
-    Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
-                        mul(nkMatArr, i32_val(matArrStride)));
-    Value sMatOff = kMatArr;
+    Value cMatOff;
+    if (needTrans)
+      cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
+                    mul(nkMatArr, i32_val(matArrStride)));
+    else
+      cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
+                    mul(kMatArr, i32_val(matArrStride)));
 
     for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
         int ptrOff = loadx4Off * 8 + nkMatArrInt * 4 + elemOff;
         Value cMatOffI = add(
             cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
-        Value sOffInMatElem = add(sOffInMat, i32_val(elemOff));
-
         // disable swizzling ...
 
         Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
-        Value sOff = add(sOffInMatElem, mul(sMatOff, i32_val(sMatShape)));
+        Value sOff = add(sOffInMat, i32_val(elemOff + kMatArrInt * sMatShape));
         // To prevent out-of-bound access when tile is too small.
-        cOff = urem(cOff, i32_val(tileShape[order[0]]));
-        sOff = urem(sOff, i32_val(tileShape[order[1]]));
+        // cOff = urem(cOff, i32_val(tileShape[order[0]]));
+        // sOff = urem(sOff, i32_val(tileShape[order[1]]));
         if (needTrans) {
           offs[ptrOff] = add(cOff, mul(sOff, sStride));
         } else {
+          Value sOff =
+              add(sOffInMat, i32_val(elemOff + nkMatArrInt * cMatShape));
           offs[ptrOff] = add(mul(cOff, sStride), sOff);
-          // if (nkMatArrInt == 1)
-          //   offs[ptrOff] = add(offs[ptrOff], i32_val(16));
         }
       }
     }
@@ -363,8 +367,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
       sOffsetArrElemVal =
           add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
 
-      for (int j = 0; j < 4; j++)
-        ptrs[1][j] = gep(shemPtrTy, ptrs[0][j], i32_val(16));
+      // for (int j = 0; j < 4; j++)
+      //   ptrs[1][j] = gep(shemPtrTy, ptrs[0][j], i32_val(16));
     }
 
     std::array<Value, 4> i8v4Elems;
