@@ -86,6 +86,7 @@ private:
 
   int pLoadStrideInMat;
   int sMatStride;
+  int cMatStride;
 
   int matArrStride;
   int warpOffStride;
@@ -198,6 +199,7 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
 
   bool test = (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
 
+  llvm::outs() << cMatShape << " " << sMatShape << "\n";
   SmallVector<Value> offs(numPtrs);
   for (int mat = 0; mat < 4; ++mat) {
     int kMatArrInt = test ? mat / 2 : mat % 2;
@@ -223,8 +225,8 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
         Value sOff = add(sOffInMatElem, mul(sMatOff, i32_val(sMatShape)));
         // To prevent out-of-bound access when tile is too small.
-        // cOff = urem(cOff, i32_val(tileShape[order[0]]));
-        // sOff = urem(sOff, i32_val(tileShape[order[1]]));
+        cOff = urem(cOff, i32_val(tileShape[order[0]]));
+        sOff = urem(sOff, i32_val(tileShape[order[1]]));
         if (needTrans)
           offs[ptrOff] = add(cOff, mul(sOff, sStride));
         else
@@ -346,15 +348,21 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
 
     // assert(sMatStride == 1);
     int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
-    Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
     int sOffsetArrElem = 1 * (sMatStride * sMatShape);
+    Value sOffsetElemVal;
     Value sOffsetArrElemVal;
-    if (needTrans)
+    if (needTrans) {
+      sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
       sOffsetArrElemVal =
           add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
-    else
+    } else {
+      sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
       sOffsetArrElemVal =
-          add(mul(sOffsetElemVal, cStride), i32_val(sOffsetArrElem));
+          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
+
+      for (int j = 0; j < 4; j++)
+        ptrs[1][j] = gep(shemPtrTy, ptrs[0][j], i32_val(16));
+    }
 
     std::array<Value, 4> i8v4Elems;
     i8v4Elems.fill(undef(elemTy));
@@ -376,25 +384,14 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
                                         i8Elems[m][e], i32_val(e));
       }
     } else { // k first
-      if (needTrans) {
-        for (int j = 0; j < 4; ++j)
-          i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetElemVal));
-        for (int j = 0; j < 4; ++j)
-          i8Elems[2][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetElemVal));
-        for (int j = 0; j < 4; ++j)
-          i8Elems[1][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetArrElemVal));
-        for (int j = 0; j < 4; ++j)
-          i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetArrElemVal));
-      } else {
-        for (int j = 0; j < 4; ++j)
-          i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetElemVal));
-        for (int j = 0; j < 4; ++j)
-          i8Elems[1][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetElemVal));
-        for (int j = 0; j < 4; ++j)
-          i8Elems[2][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetArrElemVal));
-        for (int j = 0; j < 4; ++j)
-          i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetArrElemVal));
-      }
+      for (int j = 0; j < 4; ++j)
+        i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetElemVal));
+      for (int j = 0; j < 4; ++j)
+        i8Elems[2][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetElemVal));
+      for (int j = 0; j < 4; ++j)
+        i8Elems[1][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetArrElemVal));
+      for (int j = 0; j < 4; ++j)
+        i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetArrElemVal));
 
       for (int m = 0; m < 4; ++m) {
         for (int e = 0; e < 4; ++e)
@@ -460,6 +457,8 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   pLoadStrideInMat = loadStrideInMat[order[0]];
   sMatStride =
       loadStrideInMat[order[1]] / (instrShape[order[1]] / matShape[order[1]]);
+  cMatStride =
+      loadStrideInMat[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
 
   // Each matArr contains warpOffStride matrices.
   matArrStride = kOrder == 1 ? 1 : wpt;
