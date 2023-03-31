@@ -200,7 +200,8 @@ class CMakeBuild(build_ext):
             build_args += ["--", "/m"]
         else:
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ['-j' + str(2 * os.cpu_count())]
+            max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
+            build_args += ['-j' + max_jobs]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
