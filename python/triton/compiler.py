@@ -1328,6 +1328,21 @@ def generate_launcher(constants, signature):
             "int64_t": "L",
         }[ty]
 
+    def ty_to_cast_method(ty):
+        return {
+            "i1": "PyLong_AsLong",
+            "i8": "PyLong_AsLong",
+            "i16": "PyLong_AsLong",
+            "i32": "PyLong_AsLong",
+            "i64": "PyLong_AsLongLong",
+            "u32": "PyLong_AsUnsignedLong",
+            "u64": "PyLong_AsUnsignedLongLong",
+            "fp16": "PyFloat_AsDouble",
+            "bf16": "PyFloat_AsDouble",
+            "fp32": "PyFloat_AsDouble",
+            "f32": "PyFloat_AsDouble",
+            "fp64": "PyFloat_AsDouble",
+        }[ty]
     format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
@@ -1546,31 +1561,42 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   return ptr_info;
 }}
 
-static PyObject* launch(PyObject* self, PyObject* args) {{
-  int gridX, gridY, gridZ;
-  uint64_t _stream;
-  uint64_t _function;
-  int num_warps;
-  int shared_memory;
-  PyObject *launch_enter_hook = NULL;
-  PyObject *launch_exit_hook = NULL;
-  PyObject *compiled_kernel = NULL;
-  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
-    return NULL;
+static PyObject* launch(PyObject* self, PyObject* const* args, Py_ssize_t nargs, PyObject* kwnames) {{
+  int gridX = (int) PyLong_AsLong(args[0]);
+  int gridY = (int) PyLong_AsLong(args[1]);
+  int gridZ = (int) PyLong_AsLong(args[2]);
+  int num_warps = (int) PyLong_AsLong(args[3]);
+  int shared_memory = (int) PyLong_AsLong(args[4]);
+
+  uint64_t _stream = PyLong_AsUnsignedLongLong(args[5]);
+  uint64_t _function = PyLong_AsUnsignedLongLong(args[6]);
+
+  PyObject *launch_enter_hook = args[7];
+  PyObject *launch_exit_hook = args[8];
+  PyObject *compiled_kernel = args[9];
+
+  {" ".join([f"PyObject* _arg{i} = args[{10+i}];" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  {" ".join([f"{ty_to_cpp(ty)} _arg{i} = ({ty_to_cpp(ty)}) {ty_to_cast_method(ty)}(args[{10+i}]);" if ty[0] != "*" else "" for i, ty in signature.items()])};
+
+  PyObject *py_args = NULL;
+  if(launch_enter_hook != Py_None || launch_exit_hook != Py_None) {{
+    py_args = PyTuple_New(nargs);
+    for(Py_ssize_t i = 0; i < nargs; ++i) {{
+        Py_INCREF(args[i]);
+        PyTuple_SetItem(py_args, i, args[i]);
+    }}
   }}
 
   if (launch_enter_hook != Py_None) {{
-    PyObject_CallObject(launch_enter_hook, args);
+    PyObject_CallObject(launch_enter_hook, py_args);
   }}
-
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
   _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
   if (launch_exit_hook != Py_None) {{
-    PyObject_CallObject(launch_exit_hook, args);
+    PyObject_CallObject(launch_exit_hook, py_args);
   }}
 
   if(PyErr_Occurred()) {{
@@ -1578,11 +1604,14 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
   // return None
   Py_INCREF(Py_None);
+  if(py_args != NULL) {{
+    Py_DECREF(py_args);
+  }}
   return Py_None;
 }}
 
 static PyMethodDef ModuleMethods[] = {{
-  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+  {{"launch", (PyCFunction)launch, METH_FASTCALL, "Entry point for all kernels with this signature"}},
   {{NULL, NULL, 0, NULL}} // sentinel
 }};
 
