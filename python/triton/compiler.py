@@ -1838,10 +1838,11 @@ def make_hash(fn, **kwargs):
         constants = kwargs.get("constants", dict())
         num_warps = kwargs.get("num_warps", 4)
         num_stages = kwargs.get("num_stages", 3)
+        debug = kwargs.get("debug", False)
         # Get unique key for the compiled code
         get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
         configs_key = [get_conf_key(conf) for conf in configs]
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}"
+        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{debug}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
