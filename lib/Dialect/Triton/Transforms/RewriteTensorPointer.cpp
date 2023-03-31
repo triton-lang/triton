@@ -197,9 +197,10 @@ public:
       : computeCapability(computeCapability) {}
 
   static bool needRewrite(Operation *op) {
-    return std::any_of(
-        op->getOperands().begin(), op->getOperands().end(),
-        [](Value operand) { return isTensorPointerType(operand.getType()); });
+    return std::any_of(op->getOperands().begin(), op->getOperands().end(),
+                       [](Value operand) {
+                         return triton::isTensorPointerType(operand.getType());
+                       });
   }
 
   static SmallVector<Value>
@@ -273,7 +274,7 @@ public:
 
     // We only have to rewrite load/stores with tensor pointers
     auto ptr = op->getOperand(0);
-    if (!isTensorPointerType(ptr.getType()))
+    if (!triton::isTensorPointerType(ptr.getType()))
       return nullptr;
 
     // Get info from previous results
@@ -324,7 +325,7 @@ public:
     SmallVector<Value> newIterOperands = op.getIterOperands();
     for (unsigned i = 0, oldI = 0, size = op.getNumIterOperands(); i < size;
          ++i, ++oldI) {
-      if (!isTensorPointerType(newIterOperands[i].getType()))
+      if (!triton::isTensorPointerType(newIterOperands[i].getType()))
         continue;
 
       // Expand the tensor pointer into offsets
@@ -348,7 +349,7 @@ public:
     for (unsigned i = 0, oldI = 0; oldI < op.getNumIterOperands();
          ++i, ++oldI) {
       auto oldRegionIterArg = op.getRegionIterArg(oldI);
-      if (isTensorPointerType(oldRegionIterArg.getType())) {
+      if (triton::isTensorPointerType(oldRegionIterArg.getType())) {
         // Pass rewrited info inside
         assert(rewritedInfo.count(oldIterOperands[oldI]));
         auto info = rewritedInfo[oldIterOperands[oldI]];
@@ -375,7 +376,7 @@ public:
     assert(op.getNumResults() == op.getNumIterOperands());
     for (unsigned i = 0, oldI = 0; oldI < op.getNumResults(); ++i, ++oldI) {
       auto oldResult = op.getResult(oldI);
-      if (isTensorPointerType(oldResult.getType())) {
+      if (triton::isTensorPointerType(oldResult.getType())) {
         // Pack new offsets into rewrited info
         assert(rewritedInfo.count(oldIterOperands[oldI]));
         auto info = rewritedInfo[oldIterOperands[oldI]];
@@ -398,7 +399,7 @@ public:
     // Replace tensor pointers with offsets
     SmallVector<Value> newOperands = op->getOperands();
     for (unsigned i = 0, size = op.getNumOperands(); i < size; ++i) {
-      if (!isTensorPointerType(newOperands[i].getType()))
+      if (!triton::isTensorPointerType(newOperands[i].getType()))
         continue;
 
       assert(rewritedInfo.count(newOperands[i]));
