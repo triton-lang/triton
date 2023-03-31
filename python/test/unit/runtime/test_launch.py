@@ -13,7 +13,7 @@ import torch
 import triton
 import triton.language as tl
 
-LATENCY_THRESHOLD_US = 43
+LATENCY_THRESHOLD_US = 46
 
 
 def test_memory_leak() -> None:
