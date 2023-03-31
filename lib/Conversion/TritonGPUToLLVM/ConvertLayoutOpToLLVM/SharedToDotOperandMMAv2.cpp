@@ -195,13 +195,10 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
   Value cOffInMat = udiv(lane, i32_val(4));
   Value sOffInMat =
       mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
-  // if(!needTrans){
-  //   std::swap(cOffInMat, sOffInMat);
-  // }
 
+  llvm::outs() << cMatShape << " " << sMatShape << "\n";
   bool test = (needTrans && kOrder == 1) ||
               (!needTrans && kOrder == 0);
-  // bool test = kOrder == 1;
 
   SmallVector<Value> offs(numPtrs);
   for (int mat = 0; mat < 4; ++mat) {
@@ -353,8 +350,12 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
     Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
     int sOffsetArrElem = 1 * (sMatStride * sMatShape);
-    Value sOffsetArrElemVal =
-        add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
+    Value sOffsetArrElemVal;
+    if(needTrans)
+      sOffsetArrElemVal = add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
+    else
+      sOffsetArrElemVal = add(mul(sOffsetElemVal, cStride), i32_val(sOffsetArrElem));
+
 
     std::array<Value, 4> i8v4Elems;
     i8v4Elems.fill(undef(elemTy));
@@ -434,11 +435,11 @@ MMA16816SmemLoader::MMA16816SmemLoader(
     numPtrs = tileShape[order[0]] / (needTrans ? wpt : 1) / matShape[order[0]];
   }
   numPtrs = std::max<int>(numPtrs, 2);
+  // llvm::outs() << order[0] << " " << order[1] << " " << needTrans << " " << matShape[0] << " " << matShape[1] << " " << tileShape[1] << "\n";
 
   // Special rule for i8/u8, 4 ptrs for each matrix
   if (!canUseLdmatrix && elemBytes == 1)
     numPtrs *= 4;
-  llvm::outs() << numPtrs << "\n";
 
   int loadStrideInMat[2];
   loadStrideInMat[kOrder] =
