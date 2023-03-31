@@ -196,9 +196,7 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
   Value sOffInMat =
       mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
 
-  llvm::outs() << cMatShape << " " << sMatShape << "\n";
-  bool test = (needTrans && kOrder == 1) ||
-              (!needTrans && kOrder == 0);
+  bool test = (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
 
   SmallVector<Value> offs(numPtrs);
   for (int mat = 0; mat < 4; ++mat) {
@@ -216,8 +214,8 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
     for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
         int ptrOff = loadx4Off * 8 + nkMatArrInt * 4 + elemOff;
-        Value cMatOffI = add(cMatOff, i32_val(loadx4Off * pLoadStrideInMat *
-                                              (test ? 1 : 2)));
+        Value cMatOffI = add(
+            cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
         Value sOffInMatElem = add(sOffInMat, i32_val(elemOff));
 
         // disable swizzling ...
@@ -227,10 +225,10 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         // To prevent out-of-bound access when tile is too small.
         // cOff = urem(cOff, i32_val(tileShape[order[0]]));
         // sOff = urem(sOff, i32_val(tileShape[order[1]]));
-        if(needTrans)
+        if (needTrans)
           offs[ptrOff] = add(cOff, mul(sOff, sStride));
         else
-          offs[ptrOff] = add(mul(cOff, cStride), sOff);
+          offs[ptrOff] = add(mul(cOff, sStride), sOff);
       }
     }
   }
@@ -351,18 +349,18 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
     int sOffsetArrElem = 1 * (sMatStride * sMatShape);
     Value sOffsetArrElemVal;
-    if(needTrans)
-      sOffsetArrElemVal = add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
+    if (needTrans)
+      sOffsetArrElemVal =
+          add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
     else
-      sOffsetArrElemVal = add(mul(sOffsetElemVal, cStride), i32_val(sOffsetArrElem));
-
+      sOffsetArrElemVal =
+          add(mul(sOffsetElemVal, cStride), i32_val(sOffsetArrElem));
 
     std::array<Value, 4> i8v4Elems;
     i8v4Elems.fill(undef(elemTy));
 
     Value i8Elems[4][4];
-    if ((needTrans && kOrder == 1) ||
-        (!needTrans && kOrder == 0)) {
+    if ((needTrans && kOrder == 1) || (!needTrans && kOrder == 0)) {
       for (int i = 0; i < 2; ++i)
         for (int j = 0; j < 4; ++j)
           i8Elems[i][j] = load(gep(shemPtrTy, ptrs[i][j], sOffsetElemVal));
@@ -378,14 +376,25 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
                                         i8Elems[m][e], i32_val(e));
       }
     } else { // k first
-      for (int j = 0; j < 4; ++j)
-        i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetElemVal));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[2][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetElemVal));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[1][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetArrElemVal));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetArrElemVal));
+      if (needTrans) {
+        for (int j = 0; j < 4; ++j)
+          i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetElemVal));
+        for (int j = 0; j < 4; ++j)
+          i8Elems[2][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetElemVal));
+        for (int j = 0; j < 4; ++j)
+          i8Elems[1][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetArrElemVal));
+        for (int j = 0; j < 4; ++j)
+          i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetArrElemVal));
+      } else {
+        for (int j = 0; j < 4; ++j)
+          i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetElemVal));
+        for (int j = 0; j < 4; ++j)
+          i8Elems[1][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetElemVal));
+        for (int j = 0; j < 4; ++j)
+          i8Elems[2][j] = load(gep(shemPtrTy, ptrs[0][j], sOffsetArrElemVal));
+        for (int j = 0; j < 4; ++j)
+          i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], sOffsetArrElemVal));
+      }
 
       for (int m = 0; m < 4; ++m) {
         for (int e = 0; e < 4; ++e)
@@ -423,7 +432,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
-  if(elemBytes == 1)
+  if (elemBytes == 1)
     canUseLdmatrix = false;
 
   if (canUseLdmatrix) {
@@ -435,7 +444,8 @@ MMA16816SmemLoader::MMA16816SmemLoader(
     numPtrs = tileShape[order[0]] / (needTrans ? wpt : 1) / matShape[order[0]];
   }
   numPtrs = std::max<int>(numPtrs, 2);
-  // llvm::outs() << order[0] << " " << order[1] << " " << needTrans << " " << matShape[0] << " " << matShape[1] << " " << tileShape[1] << "\n";
+  // llvm::outs() << order[0] << " " << order[1] << " " << needTrans << " " <<
+  // matShape[0] << " " << matShape[1] << " " << tileShape[1] << "\n";
 
   // Special rule for i8/u8, 4 ptrs for each matrix
   if (!canUseLdmatrix && elemBytes == 1)
