@@ -195,6 +195,12 @@ SmallVector<Value> MMA16816SmemLoader::computeB32MatOffs(Value warpOff,
 SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
                                                         Value lane,
                                                         Value cSwizzleOffset) {
+
+  int cMatShape = matShape[order[0]];
+  int sMatShape = matShape[order[1]];
+  if (!needTrans)
+    std::swap(cMatShape, sMatShape);
+
   Value cOffInMat = udiv(lane, i32_val(4));
   Value sOffInMat =
       mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
@@ -208,20 +214,19 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
     int nkMatArrInt = test ? mat % 2 : mat / 2;
     if (kMatArrInt > 0) // we don't need pointers for k
       continue;
+    if (!needTrans) {
+      std::swap(kMatArrInt, nkMatArrInt);
+    }
     Value kMatArr = i32_val(kMatArrInt);
     Value nkMatArr = i32_val(nkMatArrInt);
 
-    Value cMatOff;
-    if (needTrans)
-      cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
-                    mul(nkMatArr, i32_val(matArrStride)));
-    else
-      cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
-                    mul(kMatArr, i32_val(matArrStride)));
+    Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
+                        mul(nkMatArr, i32_val(matArrStride)));
 
     for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
-        int ptrOff = loadx4Off * 8 + nkMatArrInt * 4 + elemOff;
+        int ptrOff =
+            loadx4Off * 8 + std::max(kMatArrInt, nkMatArrInt) * 4 + elemOff;
         Value cMatOffI = add(
             cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
         // disable swizzling ...
@@ -234,8 +239,6 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         if (needTrans) {
           offs[ptrOff] = add(cOff, mul(sOff, sStride));
         } else {
-          Value sOff =
-              add(sOffInMat, i32_val(elemOff + nkMatArrInt * cMatShape));
           offs[ptrOff] = add(mul(cOff, sStride), sOff);
         }
       }
