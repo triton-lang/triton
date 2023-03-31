@@ -10,9 +10,25 @@
 
 namespace mlir {
 
-unsigned getPointeeBitWidth(RankedTensorType tensorTy);
+namespace triton {
 
 bool isTensorPointerType(Type type);
+
+unsigned getPointeeBitWidth(Type type);
+
+Type getPointeeType(Type type);
+
+Type getPointerType(Type type);
+
+Type getElementTypeOfTensorPointerType(Type type);
+
+Type getI1SameShape(Type type);
+
+Type getI32SameShape(Type type);
+
+Type getPointerTypeSameShape(Type type);
+
+} // namespace triton
 
 } // namespace mlir
 
