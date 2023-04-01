@@ -126,8 +126,8 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 
   Value matOff[2];
   matOff[kOrder ^ 1] =
-      add(mul(warpId, i32_val(warpOffStride)),   // warp offset (kOrder = 0)
-          mul(nkMatArr, i32_val(matArrStride))); // matrix offset inside a warp (kOrder = 0)
+      add(mul(warpId, i32_val(warpOffStride)),   // warp offset (kOrder=1)
+          mul(nkMatArr, i32_val(matArrStride))); // matrix offset inside a warp (kOrder=1)
   matOff[kOrder] = kMatArr;
 
   // Physical offset (before swizzling)
