@@ -1,7 +1,6 @@
 import torch
 
 import triton
-import triton.language as tl
 
 src = """
 --[----->+<]>--.+.+.[--->+<]>--.+[----->+<]>.------------.--[--->+<]>-.-------.++++++++.---------.-------------.++++++++
@@ -288,9 +287,11 @@ src = """
 BLOCK_M = 128
 BLOCK_N = 128
 BLOCK_K = 32
-matmul_kernel = triton.compile(src, signature="*f16,*f16,*f16,i32,i32,i32,i32,i32,i32",
-                                constants={7: 1, 9: 1, 11: 1, 12: BLOCK_M, 13: BLOCK_N, 14: BLOCK_K, 
-                                           15: 8, 16: None})
+matmul_kernel = triton.compile(src,
+                               constants={12: 128, 13: 128, 14: 32, 15: 8, 16: None, 9: 1, 11: 1, 7: 1},
+                               signature={0: '*fp16', 1: '*fp16', 2: '*fp16', 3: 'i32', 4: 'i32', 5: 'i32', 6: 'i32', 7: 'i32', 8: 'i32', 9: 'i32', 10: 'i32', 11: 'i32'},
+                               num_warps=4,
+                               brainfuck=True)
 
 
 # %%
@@ -311,13 +312,13 @@ def matmul(a, b, activation=None):
     # allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
-    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1, 1)
     matmul_kernel[grid](
         a, b, c,
         M, N, K,
-        a.stride(0),
-        b.stride(0),
-        c.stride(0),
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
     )
     return c
 
@@ -339,44 +340,3 @@ if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
-
-# %%
-# Benchmark
-# ---------
-#
-# Square Matrix Performance
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~
-#
-# We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
-
-
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
-        x_vals=[
-            8192
-        ],  # different possible values for `x_name`
-        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg``
-        line_vals=['cublas', 'triton'],
-        # label name for the lines
-        line_names=["cuBLAS", "Triton"],
-        # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel="TFLOPS",  # label name for the y-axis
-        plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
-        args={},
-    )
-)
-def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-    if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
-    if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
-    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
-    return perf(ms), perf(max_ms), perf(min_ms)
-
-
-benchmark.run(show_plots=True, print_data=True)

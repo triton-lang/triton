@@ -4,6 +4,7 @@ import ast
 import contextlib
 import functools
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import textwrap
 import warnings
 from collections import namedtuple
 from pathlib import Path
@@ -1887,9 +1889,101 @@ def _get_jsonable_constants(constants):
 
 # def compile(fn, signature: str, device: int = -1, constants=dict(), num_warps: int = 4, num_stages: int = 3, extern_libs=None, configs=None):
 
+# --------------------
+# Brainfuck
+# --------------------
+
+
+class _GetchUnix:
+    def __init__(self):
+        pass
+
+    def __call__(self):
+        import sys
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(sys.stdin.fileno())
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch
+
+
+getch = _GetchUnix()
+
+
+def evaluate(code):
+    code = cleanup(list(code))
+    bracemap = buildbracemap(code)
+
+    cells, codeptr, cellptr = [0], 0, 0
+    ret = ""
+    while codeptr < len(code):
+        command = code[codeptr]
+
+        if command == ">":
+            cellptr += 1
+            if cellptr == len(cells): cells.append(0)
+
+        if command == "<":
+            cellptr = 0 if cellptr <= 0 else cellptr - 1
+
+        if command == "+":
+            cells[cellptr] = cells[cellptr] + 1 if cells[cellptr] < 255 else 0
+
+        if command == "-":
+            cells[cellptr] = cells[cellptr] - 1 if cells[cellptr] > 0 else 255
+
+        if command == "[" and cells[cellptr] == 0: codeptr = bracemap[codeptr]
+        if command == "]" and cells[cellptr] != 0: codeptr = bracemap[codeptr]
+        if command == ".": ret += (chr(cells[cellptr]))
+        if command == ",": cells[cellptr] = ord(getch.getch())
+
+        codeptr += 1
+
+    return ret
+
+
+def cleanup(code):
+    return ''.join(filter(lambda x: x in ['.', ',', '[', ']', '<', '>', '+', '-'], code))
+
+
+def buildbracemap(code):
+    temp_bracestack, bracemap = [], {}
+
+    for position, command in enumerate(code):
+        if command == "[": temp_bracestack.append(position)
+        if command == "]":
+            start = temp_bracestack.pop()
+            bracemap[start] = position
+            bracemap[position] = start
+    return bracemap
+
+
+def decode_brainfuck_src(fn_src):
+    fn_src = evaluate(fn_src)
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".py") as f:
+        f.write(textwrap.dedent(fn_src))
+        f.flush()
+        module_name = os.path.splitext(os.path.basename(f.name))[0]
+        spec = importlib.util.spec_from_file_location(module_name, f.name)
+        module = importlib.util.module_from_spec(spec)
+        module.__dict__.update({"triton": triton, "tl": triton.language})
+        spec.loader.exec_module(module)
+        callables = list(filter(callable, module.__dict__.values()))
+        assert len(callables) == 1
+        ret = triton.JITFunction(callables[0])
+    return ret
+
 
 @static_vars(discovered_gfx_arch_fulldetails=get_amdgpu_arch_fulldetails())
 def compile(fn, **kwargs):
+    if "brainfuck" in kwargs:
+        fn = decode_brainfuck_src(fn)
+
     capability = kwargs.get("cc", None)
     if capability is None:
         device = triton.runtime.jit.get_current_device()
@@ -1975,6 +2069,8 @@ def compile(fn, **kwargs):
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
 
+    print(constants)
+    print(signature)
     # cache manager
     so_path = make_stub(name, signature, constants)
     # create cache manager
