@@ -166,6 +166,8 @@ def test_jit_debug() -> None:
     kernel_add.debug = True
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
     assert len(kernel_add.cache[device]) == 2
+    bins = list(kernel_add.cache[device].values())
+    assert bins[0].asm['ttir'] != bins[1].asm['ttir']
 
 
 def test_compile_in_subproc() -> None:
