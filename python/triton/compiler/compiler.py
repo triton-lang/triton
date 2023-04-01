@@ -44,13 +44,13 @@ def ttir_to_ttgir(mod, num_warps):
     return mod
 
 
-def optimize_ttgir(mod, num_stages, compute_capability):
+def optimize_ttgir(mod, num_stages, arch):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
-    if isinstance(compute_capability, int):
-        pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
+    if isinstance(arch, int):
+        pm.add_tritongpu_accelerate_matmul_pass(arch)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
@@ -111,7 +111,7 @@ def path_to_ptxas():
     raise RuntimeError("Cannot find ptxas")
 
 
-def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> str:
+def llir_to_ptx(mod: Any, arch: int, ptx_version: int = None) -> str:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -120,10 +120,10 @@ def llir_to_ptx(mod: Any, compute_capability: int, ptx_version: int = None) -> s
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
-    return _triton.translate_llvmir_to_ptx(mod, compute_capability, ptx_version)
+    return _triton.translate_llvmir_to_ptx(mod, arch, ptx_version)
 
 
-def ptx_to_cubin(ptx: str, compute_capability: int):
+def ptx_to_cubin(ptx: str, arch: int):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
@@ -131,7 +131,7 @@ def ptx_to_cubin(ptx: str, compute_capability: int):
     :return: str
     '''
     ptxas, _ = path_to_ptxas()
-    return _triton.compile_ptx_to_cubin(ptx, ptxas, compute_capability)
+    return _triton.compile_ptx_to_cubin(ptx, ptxas, arch)
 
 
 # AMDGCN translation
