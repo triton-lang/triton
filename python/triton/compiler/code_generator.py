@@ -910,3 +910,81 @@ class CodeGenerator(ast.NodeVisitor):
 
             raise errors.CompileTimeAssertionFailure(None, node, message)
         return None
+
+
+def str_to_ty(name):
+    if name[0] == "*":
+        ty = str_to_ty(name[1:])
+        return triton.language.pointer_type(ty)
+    tys = {
+        "fp8e5": triton.language.float8e5,
+        "fp8e4": triton.language.float8e4,
+        "fp16": triton.language.float16,
+        "bf16": triton.language.bfloat16,
+        "fp32": triton.language.float32,
+        "fp64": triton.language.float64,
+        "i1": triton.language.int1,
+        "i8": triton.language.int8,
+        "i16": triton.language.int16,
+        "i32": triton.language.int32,
+        "i64": triton.language.int64,
+        "u8": triton.language.uint8,
+        "u16": triton.language.uint16,
+        "u32": triton.language.uint32,
+        "u64": triton.language.uint64,
+        "B": triton.language.int1,
+    }
+    return tys[name]
+
+
+def kernel_suffix(signature, specialization):
+    # suffix format:
+    # <argid><'c' if equal to 1><'d' if divisible by 16>
+    suffix = ''
+    for i, _ in enumerate(signature):
+        suffix += str(i)
+        if i in specialization.equal_to_1:
+            suffix += 'c'
+        if i in specialization.divisible_by_16:
+            suffix += 'd'
+    return suffix
+
+
+def ast_to_ttir(fn, signature, specialization, constants, debug=False):
+    # canonicalize signature
+    if isinstance(signature, str):
+        signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
+    context = _triton.ir.context()
+    context.load_triton()
+    # create kernel prototype
+    cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
+    constants = {cst_key(key): value for key, value in constants.items()}
+    # visit kernel AST
+    gscope = fn.__globals__.copy()
+    function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
+    tys = list(signature.values())
+    new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
+    new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
+    all_constants = constants.copy()
+    all_constants.update(new_constants)
+    arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
+
+    prototype = triton.language.function_type([], arg_types)
+    generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,
+                              function_name=function_name, attributes=new_attrs,
+                              is_kernel=True, debug=debug)
+    try:
+        generator.visit(fn.parse())
+    except errors.CompilationError as e:
+        if e.src is None:
+            e.set_source_code(fn.src)
+        raise
+    except Exception as e:
+        node = generator.last_node
+        if node is None:
+            raise
+        raise errors.CompilationError(fn.src, node, repr(e)) from e
+    ret = generator.module
+    # module takes ownership of the context
+    ret.context = context
+    return ret
