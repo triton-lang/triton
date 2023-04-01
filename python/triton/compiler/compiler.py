@@ -9,10 +9,9 @@ import subprocess
 import tempfile
 from collections import namedtuple
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
+from typing import Any, Tuple
 
 import torch
-from dataclasses import dataclass
 
 import triton
 import triton._C.libtriton.triton as _triton
