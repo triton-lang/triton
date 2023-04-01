@@ -70,10 +70,10 @@ def ttgir_to_llir(mod, extern_libs, arch):
         _triton.add_external_libs(mod, list(extern_libs.keys()),
                                   list(extern_libs.values()))
     # TODO: separate tritongpu_to_llvmir for different backends
-    if _is_rocm(arch):
-        return _triton.translate_triton_gpu_to_llvmir(mod, 0, True)
-    else:
+    if _is_cuda(arch):
         return _triton.translate_triton_gpu_to_llvmir(mod, arch, False)
+    else:
+        return _triton.translate_triton_gpu_to_llvmir(mod, 0, True)
 
 
 # PTX translation
@@ -289,9 +289,6 @@ instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equ
 
 
 # TODO: architecture descriptor class
-def _is_rocm(arch):
-    return isinstance(arch, tuple)
-
 
 def _is_cuda(arch):
     return isinstance(arch, int)
@@ -378,9 +375,7 @@ def compile(fn, **kwargs):
         import re
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
-        # print(name, signature)
         types = re.findall(arg_type_pattern[ir], signature)
-        # print(types)
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
