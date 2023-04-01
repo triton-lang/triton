@@ -69,7 +69,11 @@ def ttgir_to_llir(mod, extern_libs, arch):
     if extern_libs:
         _triton.add_external_libs(mod, list(extern_libs.keys()),
                                   list(extern_libs.values()))
-    return _triton.translate_triton_gpu_to_llvmir(mod, arch, _is_rocm(arch))
+    # TODO: separate tritongpu_to_llvmir for different backends
+    if _is_rocm(arch):
+        return _triton.translate_triton_gpu_to_llvmir(mod, 0, True)
+    else:
+        return _triton.translate_triton_gpu_to_llvmir(mod, arch, False)
 
 
 # PTX translation
