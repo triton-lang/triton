@@ -10,6 +10,7 @@ def get_hip_utils():
     global _hip_utils
     if _hip_utils is None:
         _hip_utils = HIPUtils()
+    return _hip_utils
 
 
 _hip_utils = None
