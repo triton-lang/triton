@@ -5,7 +5,7 @@ import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 from .. import language
-# ideally we wouldn't need this
+# ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure,
                      UnsupportedLanguageConstruct)
