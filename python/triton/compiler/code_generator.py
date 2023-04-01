@@ -4,13 +4,12 @@ import sys
 import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
-from .. import impl
-from . import errors
-from .errors import UnsupportedLanguageConstruct
-
-from .. import language as tl
 import triton
 import triton._C.libtriton.triton as _triton
+from .. import impl
+from .. import language as tl
+from . import errors
+from .errors import UnsupportedLanguageConstruct
 
 
 def mangle_ty(ty):
@@ -910,7 +909,7 @@ class CodeGenerator(ast.NodeVisitor):
                 except Exception as e:
                     message = "<failed to evaluate assertion message: " + repr(e) + ">"
 
-            raise errors.CompileTimeAssertionFailure(None, node, message)
+            raise errors.CompileTimeAssertionFailure(None, node, _unwrap_if_constexpr(message))
         return None
 
 

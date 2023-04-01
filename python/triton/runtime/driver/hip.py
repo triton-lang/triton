@@ -2,6 +2,7 @@ import hashlib
 import os
 import tempfile
 
+from ...common.build import _build
 from ..cache import CacheManager
 
 

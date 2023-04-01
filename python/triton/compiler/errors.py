@@ -22,10 +22,10 @@ class CompilationError(Exception):
             message += '\n' + self.error_message
         return message
 
-    def __init__(self, src: Optional[str], node: ast.AST, error_message: Union[str, 'triton.language.core.constexpr', None]):
+    def __init__(self, src: Optional[str], node: ast.AST, error_message: Union[str, None]):
         self.src = src
         self.node = node
-        self.error_message = _unwrap_if_constexpr(error_message)
+        self.error_message = error_message
         self.message = self._format_message()
 
     def set_source_code(self, src: Optional[str]):
