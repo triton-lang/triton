@@ -64,13 +64,11 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     return mod
 
 
-def ttgir_to_llir(mod, extern_libs, compute_capability):
+def ttgir_to_llir(mod, extern_libs, arch):
     if extern_libs:
         _triton.add_external_libs(mod, list(extern_libs.keys()),
                                   list(extern_libs.values()))
-    # TODO: move rocm info in its own class
-    is_rocm = isinstance(compute_capability, tuple)
-    return _triton.translate_triton_gpu_to_llvmir(mod, compute_capability, is_rocm)
+    return _triton.translate_triton_gpu_to_llvmir(mod, arch, _is_rocm(arch))
 
 
 # PTX translation
@@ -286,11 +284,11 @@ instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equ
 
 
 # TODO: architecture descriptor class
-def is_rocm(arch):
+def _is_rocm(arch):
     return isinstance(arch, tuple)
 
 
-def is_cuda(arch):
+def _is_cuda(arch):
     return isinstance(arch, int)
 
 
@@ -331,11 +329,12 @@ def add_cuda_stages(arch, extern_libs, stages):
 
 def compile(fn, **kwargs):
     arch = get_architecture_descriptor(kwargs.get("cc", None))
+    is_cuda = _is_cuda(arch)
     context = _triton.ir.context()
     asm = dict()
     constants = kwargs.get("constants", dict())
     num_warps = kwargs.get("num_warps", 4)
-    num_stages = kwargs.get("num_stages", 3 if arch >= 75 else 2)
+    num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else 2)
     extern_libs = kwargs.get("extern_libs", dict())
     debug = kwargs.get("debug", False)
     # build compilation stages
@@ -347,7 +346,7 @@ def compile(fn, **kwargs):
                        lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, arch))
     stages["llir"] = (lambda path: Path(path).read_text(),
                       lambda src: ttgir_to_llir(src, extern_libs, arch))
-    if is_cuda(arch):
+    if is_cuda:
         add_cuda_stages(arch, extern_libs, stages)
     else:
         add_rocm_stages(arch, extern_libs, stages)
