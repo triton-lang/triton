@@ -336,6 +336,8 @@ def compile(fn, **kwargs):
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else 2)
     extern_libs = kwargs.get("extern_libs", dict())
+    if extern_libs is None:
+        extern_libs = dict()
     debug = kwargs.get("debug", False)
     # build compilation stages
     stages = dict()
