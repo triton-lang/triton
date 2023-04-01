@@ -49,7 +49,8 @@ def optimize_ttgir(mod, num_stages, compute_capability):
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
-    pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
+    if isinstance(compute_capability, int):
+        pm.add_tritongpu_accelerate_matmul_pass(compute_capability)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_pipeline_pass(num_stages)
