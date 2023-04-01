@@ -9,7 +9,6 @@ __version__ = '2.1.0'
 import torch  # noqa: F401
 
 # submodules
-from . import impl
 from .runtime import (
     autotune,
     Config,

@@ -1,17 +1,20 @@
 import contextlib
 import functools
 import io
+import os
 import shutil
 import subprocess
 import sys
 import sysconfig
+
 import setuptools
-import os
+
 
 # TODO: is_hip shouldn't be here
 def is_hip():
     import torch
     return torch.version.hip is not None
+
 
 @functools.lru_cache()
 def libcuda_dirs():
@@ -23,6 +26,7 @@ def libcuda_dirs():
 def rocm_path_dir():
     return os.getenv("ROCM_PATH", default="/opt/rocm")
 
+
 @contextlib.contextmanager
 def quiet():
     old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -31,7 +35,8 @@ def quiet():
         yield
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
-    
+
+
 def _build(name, src, srcdir):
     if is_hip():
         hip_lib_dir = os.path.join(rocm_path_dir(), "lib")

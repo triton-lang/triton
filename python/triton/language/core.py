@@ -1,15 +1,44 @@
 from __future__ import annotations
 
 from enum import Enum
+from functools import wraps
 from typing import Callable, List, TypeVar
 
 import triton
-from . import builtin, semantic
+from . import semantic
 from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
 TRITON_MAX_TENSOR_NUMEL = 131072
+
+
+T = TypeVar("T")
+
+TRITON_BUILTIN = "__triton_builtin__"
+
+
+def builtin(fn: T) -> T:
+    """Mark a function as a builtin."""
+    assert callable(fn)
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_builder" not in kwargs or kwargs["_builder"] is None:
+            raise ValueError(
+                "Did you forget to add @triton.jit ? "
+                "(`_builder` argument must be provided outside of JIT functions.)"
+            )
+        return fn(*args, **kwargs)
+
+    setattr(wrapper, TRITON_BUILTIN, True)
+
+    return wrapper
+
+
+def is_builtin(fn) -> bool:
+    """Is this a registered triton builtin function?"""
+    return getattr(fn, TRITON_BUILTIN, False)
 
 
 def _to_tensor(x, builder):
