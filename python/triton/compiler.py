@@ -1561,7 +1561,7 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   return ptr_info;
 }}
 
-static PyObject* launch(PyObject* self, PyObject* const* args, Py_ssize_t nargs, PyObject* kwnames) {{
+static PyObject* launch(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {{
   int gridX = (int) PyLong_AsLong(args[0]);
   int gridY = (int) PyLong_AsLong(args[1]);
   int gridZ = (int) PyLong_AsLong(args[2]);
