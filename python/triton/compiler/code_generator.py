@@ -4,11 +4,13 @@ import sys
 import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
+from .. import impl
+from . import errors
+from .errors import UnsupportedLanguageConstruct
+
+from .. import language as tl
 import triton
 import triton._C.libtriton.triton as _triton
-from .. import impl
-from .. import language as tl
-from . import errors
 
 
 def mangle_ty(ty):

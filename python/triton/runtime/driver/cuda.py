@@ -1,5 +1,7 @@
 import hashlib
+import os
 import tempfile
+
 from ..cache import CacheManager
 
 
@@ -9,7 +11,9 @@ def get_cuda_utils():
         _cuda_utils = CudaUtils()
     return _cuda_utils
 
+
 _cuda_utils = None
+
 
 class CudaUtils(object):
 
@@ -151,7 +155,3 @@ class CudaUtils(object):
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
-
-
-
-

@@ -1,5 +1,7 @@
 import hashlib
+import os
 import tempfile
+
 from ..cache import CacheManager
 
 
@@ -8,7 +10,9 @@ def get_hip_utils():
     if _hip_utils is None:
         _hip_utils = HIPUtils()
 
+
 _hip_utils = None
+
 
 class HIPUtils(object):
     def __new__(cls):

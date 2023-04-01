@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import triton
 import triton._C.libtriton.triton as _triton
 
+
 def nvsmi(attrs):
     attrs = ','.join(attrs)
     cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']

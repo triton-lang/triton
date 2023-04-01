@@ -171,7 +171,6 @@ def ty_to_cpp(ty):
 
 
 def generate_launcher(constants, signature):
-    import torch
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):

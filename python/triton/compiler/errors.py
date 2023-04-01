@@ -1,5 +1,5 @@
 import ast
-from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
+from typing import Optional, Union
 
 
 class CompilationError(Exception):

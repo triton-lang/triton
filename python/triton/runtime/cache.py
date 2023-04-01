@@ -1,9 +1,12 @@
 import os
-from filelock import FileLock
 from pathlib import Path
+
+from filelock import FileLock
+
 
 def default_cache_dir():
     return os.path.join(Path.home(), ".triton", "cache")
+
 
 class CacheManager:
 

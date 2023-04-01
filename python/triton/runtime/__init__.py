@@ -1,9 +1,10 @@
-from .autotuner import Config, Heuristics, autotune, heuristics
-from .jit import JITFunction, KernelInterface, version_key, reinterpret, TensorWrapper, MockTensor
 from . import driver
-
+from .autotuner import Config, Heuristics, autotune, heuristics
+from .jit import (JITFunction, KernelInterface, MockTensor, TensorWrapper, reinterpret,
+                  version_key)
 
 __all__ = [
+    "driver",
     "Config",
     "Heuristics",
     "autotune",

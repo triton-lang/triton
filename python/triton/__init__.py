@@ -48,8 +48,8 @@ __all__ = [
 
 
 # -------------------------------------
-# misc. utilities that  don't fit well 
-# into any specific module 
+# misc. utilities that  don't fit well
+# into any specific module
 # -------------------------------------
 
 def cdiv(x, y):
