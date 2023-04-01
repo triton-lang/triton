@@ -131,7 +131,7 @@ def ptx_to_cubin(ptx: str, compute_capability: int):
 
 # AMDGCN translation
 
-def get_amdgcn_bitcode_paths(capability):
+def get_amdgcn_bitcode_paths(arch):
     gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
                                            "ocml.bc",
                                            "ockl.bc",
@@ -141,7 +141,7 @@ def get_amdgcn_bitcode_paths(capability):
                                            "oclc_unsafe_math_off.bc",
                                            "oclc_wavefrontsize64_on.bc"]
 
-    gfx_arch = capability[1]
+    gfx_arch = arch[1]
     gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
 
     gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
@@ -304,7 +304,7 @@ def get_architecture_descriptor(capability):
 
 
 def add_rocm_stages(arch, extern_libs, stages):
-    extern_libs.update(get_amdgcn_bitcode_paths())
+    extern_libs.update(get_amdgcn_bitcode_paths(arch))
 
     for key in list(extern_libs):
         if extern_libs[key] == '' or extern_libs[key] is None:
