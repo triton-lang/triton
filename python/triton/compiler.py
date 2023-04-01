@@ -1578,17 +1578,8 @@ static PyObject* launch(PyObject* self, PyObject* const* args, Py_ssize_t nargs,
   {" ".join([f"PyObject* _arg{i} = args[{10+i}];" if ty[0] == "*" else "" for i, ty in signature.items()])};
   {" ".join([f"{ty_to_cpp(ty)} _arg{i} = ({ty_to_cpp(ty)}) {ty_to_cast_method(ty)}(args[{10+i}]);" if ty[0] != "*" else "" for i, ty in signature.items()])};
 
-  PyObject *py_args = NULL;
-  if(launch_enter_hook != Py_None || launch_exit_hook != Py_None) {{
-    py_args = PyTuple_New(nargs);
-    for(Py_ssize_t i = 0; i < nargs; ++i) {{
-        Py_INCREF(args[i]);
-        PyTuple_SetItem(py_args, i, args[i]);
-    }}
-  }}
-
   if (launch_enter_hook != Py_None) {{
-    PyObject_CallObject(launch_enter_hook, py_args);
+    PyObject_CallObject(launch_enter_hook, *args);
   }}
 
   // raise exception asap
@@ -1596,7 +1587,7 @@ static PyObject* launch(PyObject* self, PyObject* const* args, Py_ssize_t nargs,
   _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
   if (launch_exit_hook != Py_None) {{
-    PyObject_CallObject(launch_exit_hook, py_args);
+    PyObject_CallObject(launch_exit_hook, *args);
   }}
 
   if(PyErr_Occurred()) {{
@@ -1604,9 +1595,6 @@ static PyObject* launch(PyObject* self, PyObject* const* args, Py_ssize_t nargs,
   }}
   // return None
   Py_INCREF(Py_None);
-  if(py_args != NULL) {{
-    Py_DECREF(py_args);
-  }}
   return Py_None;
 }}
 
