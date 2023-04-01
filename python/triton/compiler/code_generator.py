@@ -500,7 +500,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
         if _is_triton_tensor(cond):
-            cond = cond.to(triton.language.int1, _builder=self.builder)
+            cond = cond.to(language.int1, _builder=self.builder)
         if _unwrap_if_constexpr(cond):
             return self.visit(node.body)
         else:
