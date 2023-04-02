@@ -4,19 +4,8 @@ import subprocess
 import sys
 from contextlib import contextmanager
 
-import triton
 import triton._C.libtriton.triton as _triton
-from .compiler import OutOfResources
-
-
-def catch_oor(kernel, pytest_handle=None):
-    try:
-        res = kernel()
-    except OutOfResources as e:
-        if pytest_handle:
-            pytest_handle.skip(str(e))
-        return None
-    return res
+from .runtime.driver.cuda import get_cuda_utils
 
 
 def nvsmi(attrs):
@@ -250,8 +239,9 @@ def get_dram_gbps(backend=None, device=None):
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    mem_clock_khz = triton.compiler.cuda_utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
-    bus_width = triton.compiler.cuda_utils.get_device_properties(device)["mem_bus_width"]
+    cuda_utils = get_cuda_utils()
+    mem_clock_khz = cuda_utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
+    bus_width = cuda_utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
     return bw_gbps
 
@@ -263,10 +253,10 @@ def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None)
     if not device:
         device = torch.cuda.current_device()
 
-    triton.compiler.init_cuda_utils()
-    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    cuda_utils = get_cuda_utils()
+    num_subcores = cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
     if not clock_rate:
-        clock_rate = triton.compiler.cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+        clock_rate = cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
     capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         assert dtype == torch.float16
@@ -365,9 +355,9 @@ def get_max_simd_tflops(dtype, backend=None, device=None):
     if not device:
         device = torch.cuda.current_device()
 
-    triton.compiler.init_cuda_utils()
-    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
-    clock_rate = triton.compiler.cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+    cuda_utils = get_cuda_utils()
+    num_subcores = cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    clock_rate = cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         if dtype == torch.float32:

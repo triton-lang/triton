@@ -42,11 +42,11 @@ namespace {
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, bool isROCM)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-    if (isROCM()) {
+    if (isROCM) {
       addLegalDialect<ROCDL::ROCDLDialect>();
     } else {
       addLegalDialect<NVVM::NVVMDialect>();
@@ -135,10 +135,10 @@ private:
 
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx)
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx, bool isROCM)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    if (isROCM()) {
+    if (isROCM) {
       addLegalDialect<ROCDL::ROCDLDialect>();
     } else {
       addLegalDialect<NVVM::NVVMDialect>();
@@ -154,8 +154,8 @@ class ConvertTritonGPUToLLVM
     : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
 
 public:
-  explicit ConvertTritonGPUToLLVM(int computeCapability)
-      : computeCapability(computeCapability) {}
+  explicit ConvertTritonGPUToLLVM(int computeCapability, bool isROCM)
+      : computeCapability(computeCapability), isROCM(isROCM) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -163,7 +163,7 @@ public:
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget target(*context);
+    TritonLLVMConversionTarget target(*context, isROCM);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
     /* preprocess */
@@ -181,7 +181,7 @@ public:
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          /*benefit=*/1);
@@ -225,7 +225,7 @@ public:
     populatePatterns2(populateViewOpToLLVMPatterns);
 
     // Native lowering patterns
-    if (isROCM()) {
+    if (isROCM) {
       mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
                                                  mlir::gpu::amd::HIP);
     } else {
@@ -237,7 +237,7 @@ public:
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
 
-    if (isROCM()) {
+    if (isROCM) {
       TritonGCNConversionTarget gcnTarget(*context);
       RewritePatternSet gcnPatterns(context);
       populateElementwiseOpToPTXPatterns(typeConverter, gcnPatterns,
@@ -272,6 +272,7 @@ private:
       indexCache;
 
   int computeCapability{};
+  bool isROCM{};
 
   void initSharedMemory(size_t size,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
@@ -464,8 +465,8 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int computeCapability) {
-  return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability);
+createConvertTritonGPUToLLVMPass(int computeCapability, bool isROCM) {
+  return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability, isROCM);
 }
 
 } // namespace triton
