@@ -37,7 +37,7 @@ if __name__ == '__main__':
     module.context = context
 
     # optimizer triton-ir
-    module = tc.optimize_ttir(module)
+    module = tc.optimize_ttir(module, arch=args.sm)
     if args.target == 'triton-ir':
         print(module.str())
         sys.exit(0)
