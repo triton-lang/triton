@@ -29,8 +29,8 @@
 #include <memory>
 #include <string>
 
-inline bool _isROCM = false;
-inline void setROCM() { _isROCM = true; }
-inline bool isROCM() { return _isROCM; }
+// inline bool _isROCM = false;
+// inline void setROCM() { _isROCM = true; }
+// inline bool isROCM() { return _isROCM; }
 
 #endif

@@ -1,10 +1,6 @@
 """isort:skip_file"""
 # Import order is significant here.
 
-from ..impl import (
-    ir,
-    builtin,
-)
 from . import math
 from .core import (
     abs,

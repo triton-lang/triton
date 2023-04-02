@@ -223,7 +223,7 @@ setup(
         "triton/_C",
         "triton/language",
         "triton/tools",
-        "triton/impl",
+        "triton/common",
         "triton/ops",
         "triton/runtime",
         "triton/ops/blocksparse"],
