@@ -65,10 +65,16 @@ def optimize_ttgir(mod, num_stages, arch):
     return mod
 
 
+def _add_external_libs(mod, libs):
+    for name, path in libs.items():
+        if len(name) == 0 or len(path) == 0:
+            return
+    _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
+
+
 def ttgir_to_llir(mod, extern_libs, arch):
     if extern_libs:
-        _triton.add_external_libs(mod, list(extern_libs.keys()),
-                                  list(extern_libs.values()))
+        _add_external_libs(mod, extern_libs)
     # TODO: separate tritongpu_to_llvmir for different backends
     if _is_cuda(arch):
         return _triton.translate_triton_gpu_to_llvmir(mod, arch, False)
