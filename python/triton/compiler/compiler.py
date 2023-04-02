@@ -323,6 +323,7 @@ def add_rocm_stages(arch, extern_libs, stages):
 
 
 def add_cuda_stages(arch, extern_libs, stages):
+
     stages["ptx"] = (lambda path: Path(path).read_text(),
                      lambda src: llir_to_ptx(src, arch))
     stages["cubin"] = (lambda path: Path(path).read_bytes(),
