@@ -107,7 +107,7 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   Value nkMatArr = kOrder == 1 ? s0 : s1;
 
   // Matrix coordinates inside a CTA,
-  // the matrix layout is [2x2wpt] for A and [2wptx2] for B.
+  // the matrix layout is [2wpt[0], 2] for A and [2, 2wpt[1]] for B.
   // e.g., Setting wpt=4, the data layout for A(kOrder=1) is
   //   |0 0|  -> 0,1,2,3 are the warpids
   //   |0 0|
