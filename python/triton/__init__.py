@@ -17,6 +17,7 @@ from .runtime import (
     KernelInterface,
     reinterpret,
     TensorWrapper,
+    OutOfResources,
     MockTensor,
 )
 from .runtime.jit import jit
@@ -39,6 +40,7 @@ __all__ = [
     "MockTensor",
     "next_power_of_2",
     "ops",
+    "OutOfResources",
     "reinterpret",
     "runtime",
     "TensorWrapper",

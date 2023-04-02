@@ -24,7 +24,27 @@ from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
 
 
-def optimize_ttir(mod):
+def inline_triton_ir(mod):
+    pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
+    pm.add_inliner_pass()
+    pm.run(mod)
+    return mod
+
+
+def ttir_compute_capability_rewrite(mod, arch):
+    # For hardware without support, we must rewrite all load/store
+    # with block (tensor) pointers into tensors of pointers
+    pm = _triton.ir.pass_manager(mod.context)
+    pm.enable_debug()
+    pm.add_rewrite_tensor_pointer_pass(arch)
+    pm.run(mod)
+    return mod
+
+
+def optimize_ttir(mod, arch):
+    mod = inline_triton_ir(mod)
+    mod = ttir_compute_capability_rewrite(mod, arch)
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
@@ -352,7 +372,7 @@ def compile(fn, **kwargs):
     stages = dict()
     stages["ast"] = (lambda path: fn, None)
     stages["ttir"] = (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants)))
+                      lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug), arch))
     stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
                        lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, arch))
     stages["llir"] = (lambda path: Path(path).read_text(),

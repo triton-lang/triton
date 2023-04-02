@@ -756,6 +756,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Assert(self, node) -> Any:
         if not self.debug:
             return
+        print("AA")
         test = self.visit(node.test)
         msg = self.visit(node.msg)
         # Convert assert to triton's device_assert which happens on the device
@@ -951,7 +952,7 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, signature, specialization, constants, debug=False):
+def ast_to_ttir(fn, signature, specialization, constants, debug):
     # canonicalize signature
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
