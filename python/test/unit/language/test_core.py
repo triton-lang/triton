@@ -1283,6 +1283,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                            [64, 128, 128, 4],
                                            [32, 128, 64, 2],
                                            [64, 64, 32, 4],
+                                           [32, 32, 128, 16],
                                            [128, 128, 64, 2],
                                            [64, 128, 128, 2]]
                           for allow_tf32 in [True]
@@ -1436,7 +1437,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
-    if K > 16 or N > 16 or M > 16:
+    if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
         # XXX: skip small sizes because they are not vectorized
         assert 'ld.global.v4' in ptx
         assert 'st.global.v4' in ptx
