@@ -198,8 +198,12 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
 
   int cMatShape = matShape[order[0]];
   int sMatShape = matShape[order[1]];
-  if (!needTrans)
+  int cTileShape = tileShape[order[0]];
+  int sTileShape = tileShape[order[1]];
+  if (!needTrans) {
     std::swap(cMatShape, sMatShape);
+    std::swap(cTileShape, sTileShape);
+  }
 
   Value cOffInMat = udiv(lane, i32_val(4));
   Value sOffInMat =
@@ -234,8 +238,8 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
         Value sOff = add(sOffInMat, i32_val(elemOff + kMatArrInt * sMatShape));
         // To prevent out-of-bound access when tile is too small.
-        // cOff = urem(cOff, i32_val(tileShape[order[0]]));
-        // sOff = urem(sOff, i32_val(tileShape[order[1]]));
+        cOff = urem(cOff, i32_val(cTileShape));
+        sOff = urem(sOff, i32_val(sTileShape));
         if (needTrans) {
           offs[ptrOff] = add(cOff, mul(sOff, sStride));
         } else {
