@@ -37,7 +37,8 @@ def ttir_compute_capability_rewrite(mod, arch):
     # with block (tensor) pointers into tensors of pointers
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_rewrite_tensor_pointer_pass(arch)
+    if _is_cuda(arch):
+        pm.add_rewrite_tensor_pointer_pass(arch)
     pm.run(mod)
     return mod
 
@@ -315,7 +316,6 @@ instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equ
 
 
 # TODO: architecture descriptor class
-
 def _is_cuda(arch):
     return isinstance(arch, int)
 
