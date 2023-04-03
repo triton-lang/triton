@@ -233,10 +233,14 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
             loadx4Off * 8 + std::max(kMatArrInt, nkMatArrInt) * 4 + elemOff;
         Value cMatOffI = add(
             cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
-        // disable swizzling ...
-
-        Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
+        //
+        Value cOff = cOffInMat;
         Value sOff = add(sOffInMat, i32_val(elemOff + kMatArrInt * sMatShape));
+        if (needTrans)
+          cOff = add(cOff, mul(cMatOffI, i32_val(cMatShape)));
+        else
+          sOff = add(sOff, mul(cMatOffI, i32_val(cMatShape)));
+
         // To prevent out-of-bound access when tile is too small.
         cOff = urem(cOff, i32_val(cTileShape));
         sOff = urem(sOff, i32_val(sTileShape));
@@ -469,6 +473,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
       wpt * (instrShape[kOrder ^ 1] / matShape[kOrder ^ 1]);
 
   pLoadStrideInMat = loadStrideInMat[order[0]];
+
   sMatStride =
       loadStrideInMat[order[1]] / (instrShape[order[1]] / matShape[order[1]]);
   cMatStride =
