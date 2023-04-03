@@ -91,6 +91,35 @@ struct BroadcastOpConversion
   }
 };
 
+#ifdef USE_ROCM
+static SmallString<16> getUniqueFormatGlobalName(mlir::ModuleOp moduleOp) {
+  const char formatStringPrefix[] = "printfFormat_";
+  // Get a unique global name.
+  unsigned stringNumber = 0;
+  SmallString<16> stringConstName;
+  do {
+    stringConstName.clear();
+    (formatStringPrefix + Twine(stringNumber++)).toStringRef(stringConstName);
+  } while (moduleOp.lookupSymbol(stringConstName));
+  return stringConstName;
+}
+
+template <typename T>
+static LLVM::LLVMFuncOp getOrDefineFunction(T &moduleOp, const Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            StringRef name,
+                                            LLVM::LLVMFunctionType type) {
+  LLVM::LLVMFuncOp ret;
+  if (!(ret = moduleOp.template lookupSymbol<LLVM::LLVMFuncOp>(name))) {
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    ret = rewriter.create<LLVM::LLVMFuncOp>(loc, name, type,
+                                            LLVM::Linkage::External);
+  }
+  return ret;
+}
+#endif // USE_ROCM
+
 struct PrintOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::PrintOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -118,7 +147,11 @@ struct PrintOpConversion
     for (size_t i = 1; i < operands.size(); ++i) {
       os << ", " << getFormatSubstr(operands[i]);
     }
+#ifdef USE_ROCM
+    llPrintfHIP(op, formatStr, operands, rewriter);
+#else
     llPrintf(formatStr, operands, rewriter);
+#endif
     rewriter.eraseOp(op);
     return success();
   }
@@ -137,6 +170,123 @@ struct PrintOpConversion
     assert(false && "not supported type");
     return "";
   }
+
+#ifdef USE_ROCM
+  // The code is borrowed from https://reviews.llvm.org/D110448
+  // from GPUPrintfOpToHIPLowering::matchAndRewrite().
+  void llPrintfHIP(triton::PrintOp op, StringRef msg, ValueRange args,
+                ConversionPatternRewriter &rewriter) const {
+    mlir::Location loc = op->getLoc();
+
+    mlir::Type llvmI8 = typeConverter->convertType(rewriter.getI8Type());
+    mlir::Type i8Ptr = getTypeConverter()->getPointerType(llvmI8);
+    mlir::Type llvmI32 = typeConverter->convertType(rewriter.getI32Type());
+    mlir::Type llvmI64 = typeConverter->convertType(rewriter.getI64Type());
+
+    // Original code from llvm-project needs gpu::GPUModuleOp here to check
+    // gpu.printf is in gpu.module scope.
+    auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
+
+    auto ocklBegin =
+        getOrDefineFunction(moduleOp, loc, rewriter, "__ockl_printf_begin",
+                            LLVM::LLVMFunctionType::get(llvmI64, {llvmI64}));
+    LLVM::LLVMFuncOp ocklAppendArgs;
+    if (!args.empty()) {
+      ocklAppendArgs = getOrDefineFunction(
+          moduleOp, loc, rewriter, "__ockl_printf_append_args",
+          LLVM::LLVMFunctionType::get(llvmI64,
+                                      {llvmI64, /*numArgs*/ llvmI32, llvmI64,
+                                       llvmI64, llvmI64, llvmI64, llvmI64,
+                                       llvmI64, llvmI64, /*isLast*/ llvmI32}));
+    }
+    auto ocklAppendStringN = getOrDefineFunction(
+        moduleOp, loc, rewriter, "__ockl_printf_append_string_n",
+        LLVM::LLVMFunctionType::get(
+            llvmI64,
+            {llvmI64, i8Ptr, /*length (bytes)*/ llvmI64, /*isLast*/ llvmI32}));
+
+    /// Start the printf hostcall
+    Value zeroI64 = rewriter.create<LLVM::ConstantOp>(loc, llvmI64, 0);
+    auto printfBeginCall =
+        rewriter.create<LLVM::CallOp>(loc, ocklBegin, zeroI64);
+    Value printfDesc = printfBeginCall.getResult();
+
+    // Get a unique global name for the format.
+    SmallString<16> stringConstName = getUniqueFormatGlobalName(moduleOp);
+
+    llvm::SmallString<20> formatString(msg);
+    formatString.push_back('\n'); // Triton adds CR for each print.
+    formatString.push_back('\0'); // Null terminate for C
+    size_t formatStringSize = formatString.size_in_bytes();
+
+    auto globalType = LLVM::LLVMArrayType::get(llvmI8, formatStringSize);
+    LLVM::GlobalOp global;
+    {
+      ConversionPatternRewriter::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      global = rewriter.create<LLVM::GlobalOp>(
+          loc, globalType,
+          /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
+          rewriter.getStringAttr(formatString));
+    }
+
+    // Get a pointer to the format string's first element and pass it to
+    // printf()
+    Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
+        loc,
+        getTypeConverter()->getPointerType(globalType, global.getAddrSpace()),
+        global.getSymNameAttr());
+    Value stringStart = rewriter.create<LLVM::GEPOp>(
+        loc, i8Ptr, globalType, globalPtr, ArrayRef<LLVM::GEPArg>{0, 0});
+    Value stringLen =
+        rewriter.create<LLVM::ConstantOp>(loc, llvmI64, formatStringSize);
+
+    Value oneI32 = rewriter.create<LLVM::ConstantOp>(loc, llvmI32, 1);
+    Value zeroI32 = rewriter.create<LLVM::ConstantOp>(loc, llvmI32, 0);
+
+    auto appendFormatCall = rewriter.create<LLVM::CallOp>(
+        loc, ocklAppendStringN,
+        ValueRange{printfDesc, stringStart, stringLen,
+                   args.empty() ? oneI32 : zeroI32});
+    printfDesc = appendFormatCall.getResult();
+
+    // __ockl_printf_append_args takes 7 values per append call
+    constexpr size_t argsPerAppend = 7;
+    size_t nArgs = args.size();
+    for (size_t group = 0; group < nArgs; group += argsPerAppend) {
+      size_t bound = std::min(group + argsPerAppend, nArgs);
+      size_t numArgsThisCall = bound - group;
+
+      SmallVector<mlir::Value, 2 + argsPerAppend + 1> arguments;
+      arguments.push_back(printfDesc);
+      arguments.push_back(
+          rewriter.create<LLVM::ConstantOp>(loc, llvmI32, numArgsThisCall));
+      for (size_t i = group; i < bound; ++i) {
+        Value arg = args[i];
+        if (auto floatType = arg.getType().dyn_cast<FloatType>()) {
+          if (!floatType.isF64())
+            arg = rewriter.create<LLVM::FPExtOp>(
+                loc, typeConverter->convertType(rewriter.getF64Type()), arg);
+          arg = rewriter.create<LLVM::BitcastOp>(loc, llvmI64, arg);
+        }
+        if (arg.getType().getIntOrFloatBitWidth() != 64)
+          arg = rewriter.create<LLVM::ZExtOp>(loc, llvmI64, arg);
+
+        arguments.push_back(arg);
+      }
+      // Pad out to 7 arguments since the hostcall always needs 7
+      for (size_t extra = numArgsThisCall; extra < argsPerAppend; ++extra) {
+        arguments.push_back(zeroI64);
+      }
+
+      auto isLast = (bound == nArgs) ? oneI32 : zeroI32;
+      arguments.push_back(isLast);
+      auto call = rewriter.create<LLVM::CallOp>(loc, ocklAppendArgs, arguments);
+      printfDesc = call.getResult();
+    }
+  }
+
+#endif // USE_ROCM
 
   // declare vprintf(i8*, i8*) as external function
   static LLVM::LLVMFuncOp
