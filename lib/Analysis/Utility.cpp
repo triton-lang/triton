@@ -126,13 +126,21 @@ bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
-#ifdef USE_ROCM
-  return false;
-#endif
   auto aElemTy = op.getA().getType().cast<RankedTensorType>().getElementType();
   auto bElemTy = op.getB().getType().cast<RankedTensorType>().getElementType();
+
+#ifdef USE_ROCM
+  auto aOrder = triton::gpu::getOrder(
+      op.getA().getType().cast<RankedTensorType>().getEncoding());
+  auto bOrder = triton::gpu::getOrder(
+      op.getB().getType().cast<RankedTensorType>().getEncoding());
+  if (aOrder[0] == 0 || bOrder[0] == 0)
+    return false;
+#endif
+
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.getAllowTF32() && version >= 2;
+    return (op.getAllowTF32() && version == 2) ||
+           (!op.getAllowTF32() && version == 3);
   }
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
@@ -141,11 +149,9 @@ bool supportMMA(Value value, int version) {
   // Tell whether a DotOp support HMMA by the operand type(either $a or $b).
   // We cannot get both the operand types(in TypeConverter), here we assume the
   // types of both the operands are identical here.
-  assert((version == 1 || version == 2) &&
+  assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-#ifdef USE_ROCM
-  return false;
-#endif
+
   auto elemTy = value.getType().cast<RankedTensorType>().getElementType();
   return elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||

@@ -121,6 +121,32 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     assert(mmaParent.isVolta());
     return vec_ty(elemTy, 2);
   }
+
+#ifdef USE_ROCM
+      if (mmaLayout.isMI200()) {
+        const llvm::DenseMap<int, Type> targetTyMap = {
+            {32, elemTy},
+            {16, vec_ty(elemTy, 4)},
+            {8, IntegerType::get(ctx, 32)},
+        };
+        Type targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
+        if (dotOpLayout.getOpIdx() == 0) { // $a
+          auto elems =
+              DotOpMFMAConversionHelper::getANumElemsPerThread(type, wpt[0]);
+          return struct_ty(SmallVector<Type>(elems, targetTy));
+        }
+        if (dotOpLayout.getOpIdx() == 1) { // $b
+          auto elems =
+              DotOpMFMAConversionHelper::getBNumElemsPerThread(type, wpt[1]);
+          return struct_ty(SmallVector<Type>(elems, targetTy));
+        }
+      }
+      // llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+#endif
+
+  llvm::errs() << "Unexpected dot operand layout detected in "
+                  "TritonToLLVMTypeConverter";
+  return std::nullopt;
 }
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(

@@ -1,6 +1,9 @@
 #include "ConvertLayoutOpToLLVM.h"
 #include "Utility.h"
 
+using ::mlir::LLVM::DotOpFMAConversionHelper;
+using ::mlir::LLVM::DotOpMFMAConversionHelper;
+using ::mlir::LLVM::DotOpMmaV1ConversionHelper;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -124,7 +127,7 @@ private:
     }
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       SmallVector<Value> mmaColIdx(4);
-      SmallVector<Value> mmaRowIdx(2);
+      SmallVector<Value> mmaRowIdx(16);
       Value threadId = getThreadId(rewriter, loc);
 #ifdef USE_ROCM
       Value warpSize = i32_val(64);
@@ -137,11 +140,13 @@ private:
       SmallVector<Value> multiDimWarpId(2);
       multiDimWarpId[0] = urem(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
       multiDimWarpId[1] = udiv(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
+      Value _0 = i32_val(0);
       Value _1 = i32_val(1);
       Value _2 = i32_val(2);
       Value _4 = i32_val(4);
       Value _8 = i32_val(8);
       Value _16 = i32_val(16);
+      Value _32 = i32_val(32);
       if (mmaLayout.isAmpere()) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
         multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
@@ -158,7 +163,27 @@ private:
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
         // Volta doesn't follow the pattern here."
-      } else {
+      }
+#ifdef USE_ROCM
+      else if (mmaLayout.isMI200()) {
+        multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 32));
+        multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 32));
+        Value halfOffset = select(icmp_uge(laneId, _32), _4, _0);
+        Value mfmaGroup32 = urem(laneId, _32);
+        Value rowWarpOffset = mul(multiDimWarpId[0], _32);
+        for (unsigned block = 0; block < 4; ++block) {
+          mmaRowIdx[4 * block] = block == 0
+                                     ? add(halfOffset, rowWarpOffset)
+                                     : add(mmaRowIdx[4 * (block - 1)], _8);
+          for (int r = 1; r < 4; ++r) {
+            mmaRowIdx[4 * block + r] = add(mmaRowIdx[4 * block + r - 1], _1);
+          }
+        }
+        Value colWarpOffset = mul(multiDimWarpId[1], _32);
+        mmaColIdx[0] = add(mfmaGroup32, colWarpOffset);
+      }
+#endif
+      else {
         llvm_unreachable("Unexpected MMALayout version");
       }
 
@@ -178,7 +203,19 @@ private:
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
             isARow, isBRow, isAVec4, isBVec4);
         return coords[elemId];
-      } else {
+      }
+#ifdef USE_ROCM
+      else if (mmaLayout.isMI200()) {
+        multiDimOffset[0] = mmaRowIdx[elemId % 16];
+
+        multiDimOffset[1] = mmaColIdx[0];
+        multiDimOffset[0] = add(
+            multiDimOffset[0], i32_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
+        multiDimOffset[1] = add(
+            multiDimOffset[1], i32_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
+      }
+#endif
+      else {
         llvm_unreachable("Unexpected MMALayout version");
       }
       return multiDimOffset;
@@ -465,7 +502,8 @@ private:
         if (isDstMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
                                  multiDimRepId, outVec, paddedRepShape, outOrd,
-                                 outVals, smemBase, shape, /*isDestMma=*/true);
+                                 outVals, smemBase, shape,
+                                 /*isDestMma=*/true);
         else
           processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
                          outNumCTAsEachRep, multiDimRepId, outVec,
@@ -583,9 +621,9 @@ private:
       // so they can be consumed by tensor core operations
       SmallVector<Value> vecVals;
       SmallVector<Type> types;
-      // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
-      // instructions to pack & unpack sub-word integers. A workaround is to
-      // store the results of ldmatrix in i32
+      // For some reasons, LLVM's NVPTX backend inserts unnecessary (?)
+      // integer instructions to pack & unpack sub-word integers. A workaround
+      // is to store the results of ldmatrix in i32
       auto elemSize = elemTy.getIntOrFloatBitWidth();
       if (auto intTy = elemTy.dyn_cast<IntegerType>() && elemSize <= 16) {
         auto fold = 32 / elemSize;
@@ -611,7 +649,7 @@ private:
           vecVals.push_back(packed);
         }
       }
-
+#ifndef USE_ROCM
       // This needs to be ordered the same way that
       // ldmatrix.x4 would order it
       // TODO: this needs to be refactor so we don't
@@ -624,9 +662,13 @@ private:
         reorderedVals.push_back(vecVals[i + 1]);
         reorderedVals.push_back(vecVals[i + 3]);
       }
-
       Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
                                                       rewriter, dstTy);
+      rewriter.replaceOp(op, view);
+      return success();
+#endif
+      Value view =
+          getTypeConverter()->packLLElements(loc, vecVals, rewriter, dstTy);
       rewriter.replaceOp(op, view);
       return success();
     }
@@ -648,7 +690,6 @@ private:
     Value res;
 
     if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2
-
       res = SharedToDotOperandMMAv2::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
           smemObj, getTypeConverter(), tid_val());
@@ -666,15 +707,30 @@ private:
         llvm::errs() << "Unsupported Shared -> DotOperand[MMAv1] conversion\n";
         return Value();
       }
-
       res = SharedToDotOperandMMAv1::convertLayout(
           dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
           loc, getTypeConverter(), rewriter, dst.getType());
+    }
+#ifdef USE_ROCM
+    // AMD MI200 matrix cores
+    else if (!isOuter && mmaLayout.isMI200() && isHMMA) {
+      DotOpMFMAConversionHelper mfmaHelper(src.getType(), mmaLayout,
+                                           getThreadId(rewriter, loc), rewriter,
+                                           getTypeConverter(), op.getLoc());
+      if (dotOperandLayout.getOpIdx() == 0) {
+        // operand $a
+        res = mfmaHelper.loadA(src, smemObj);
+      } else if (dotOperandLayout.getOpIdx() == 1) {
+        // operand $b
+        res = mfmaHelper.loadB(src, smemObj);
+#endif
     } else {
       assert(false && "Unsupported mma layout found");
     }
     return res;
-  }
+    }
+  };
+
 }; // namespace triton::gpu::ConvertLayoutOp>
 
 void populateConvertLayoutOpToLLVMPatterns(

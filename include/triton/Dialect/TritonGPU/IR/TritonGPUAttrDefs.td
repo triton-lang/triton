@@ -132,6 +132,14 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
           llvm_unreachable("invalid operand index");
         }
 
+#ifdef USE_ROCM
+        // ---- begin MI200 ----
+        if (mmaEnc.isMI200()) {
+          // Swizzling is currently disabled for MFMA
+          return $_get(context, 1, 1, 1, order);
+        }
+#endif
+
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
     }]>
@@ -446,6 +454,9 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     bool isVolta() const;
     bool isAmpere() const;
+#ifdef USE_ROCM
+    bool isMI200() const;
+#endif
     // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
     std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
     // Number of bits in versionMinor to hold the ID of the MMA encoding instance.

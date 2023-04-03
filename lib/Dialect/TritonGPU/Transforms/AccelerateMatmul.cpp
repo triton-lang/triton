@@ -16,7 +16,8 @@ using triton::gpu::SliceEncodingAttr;
 
 int computeCapabilityToMMAVersion(int computeCapability) {
 #ifdef USE_ROCM
-  return 1;
+  // check on gfx908 or gfx90A should be added here
+  return 3;
 #endif
   if (computeCapability < 70) {
     return 0;
@@ -77,6 +78,54 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
   } while (true);
   return ret;
 }
+
+#ifdef USE_ROCM
+SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
+                                           const ArrayRef<int64_t> shape,
+                                           int numWarps) {
+  // TODO: needs to be updated with appropriate shapePerWarp etc.
+  SetVector<Operation *> slices;
+  mlir::getForwardSlice(dotOp.getResult(), &slices);
+  if (llvm::find_if(slices, [](Operation *op) {
+        return isa<triton::DotOp>(op);
+      }) != slices.end())
+    return {(unsigned)numWarps, 1};
+  SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
+  SmallVector<unsigned, 2> ret = {1, 1};
+  SmallVector<int64_t, 2> shapePerWarp = {32, 32};
+  bool changed = false;
+  // TODO (@daadaada): double-check.
+  // original logic in
+  // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
+  // seems buggy for shape = [32, 16] ?
+
+  // TODO(@B1tway): the comment above is also true for AMDGPU for shape =
+  // [64,32], as a temporary solution the dims have been swapped
+  if (shape[0] == 2 * shape[1])
+    tensorShape = {shape[1], shape[0]};
+
+  do {
+    changed = false;
+    if (ret[0] * ret[1] >= numWarps)
+      break;
+    if (tensorShape[0] / shapePerWarp[0] / ret[0] >=
+        tensorShape[1] / (shapePerWarp[1] * 2) / ret[1]) {
+      if (ret[0] < tensorShape[0] / shapePerWarp[0]) {
+        ret[0] *= 2;
+      } else
+        ret[1] *= 2;
+    } else {
+      ret[1] *= 2;
+    }
+  } while (true);
+
+  if (ret[1] * shapePerWarp[1] > tensorShape[1]) {
+    return {ret[1], ret[0]};
+  }
+
+  return ret;
+}
+#endif
 
 class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
@@ -152,7 +201,17 @@ public:
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
           warpsPerTile);
-    } else {
+    }
+#ifdef USE_ROCM
+    else if (versionMajor == 3) {
+      auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
+      mmaEnc = triton::gpu::MmaEncodingAttr::get(
+          oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
+          warpsPerTile);
+
+    }
+#endif
+    else {
       llvm_unreachable("Mma layout only supports versionMajor in {1, 2}");
     }
     auto newRetType =
