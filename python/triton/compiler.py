@@ -1602,12 +1602,8 @@ static PyObject* launch(PyObject* self, PyObject* const* args, Py_ssize_t nargs)
   if(PyErr_Occurred()) {{
     return NULL;
   }}
-  // return None
-  Py_INCREF(Py_None);
-  if(py_args != NULL) {{
-    Py_DECREF(py_args);
-  }}
-  return Py_None;
+  Py_XDECREF(py_args);
+  Py_RETURN_NONE;
 }}
 
 static PyMethodDef ModuleMethods[] = {{
