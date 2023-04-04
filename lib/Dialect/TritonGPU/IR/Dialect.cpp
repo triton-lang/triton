@@ -16,30 +16,6 @@ using namespace mlir::triton::gpu;
 namespace mlir {
 namespace triton {
 
-// Type inference
-static Type getI1SameShape(Type type) {
-  auto i1Type = IntegerType::get(type.getContext(), 1);
-  if (auto tensorType = type.dyn_cast<RankedTensorType>())
-    return RankedTensorType::get(tensorType.getShape(), i1Type,
-                                 tensorType.getEncoding());
-  return Type();
-}
-
-static Type getPointeeType(Type type) {
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
-    // Tensor of pointers
-    auto shape = tensorType.getShape();
-    auto ptrType = tensorType.getElementType().dyn_cast<PointerType>();
-    Type pointeeType = ptrType.getPointeeType();
-    return RankedTensorType::get(shape, pointeeType, tensorType.getEncoding());
-  } else if (auto ptrType = type.dyn_cast<PointerType>()) {
-    // scalar pointer
-    Type pointeeType = ptrType.getPointeeType();
-    return pointeeType;
-  }
-  return Type();
-}
-
 namespace gpu {
 
 // TODO: Inheritance of layout attributes
@@ -921,7 +897,7 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
                             Attribute &resultEncoding,
-                            Optional<Location> location) const override {
+                            std::optional<Location> location) const override {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
     if (!sliceEncoding)
       return emitOptionalError(
@@ -933,9 +909,10 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
-                                   Attribute retEncoding,
-                                   Optional<Location> location) const override {
+  LogicalResult
+  inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
+                     Attribute retEncoding,
+                     std::optional<Location> location) const override {
     if (auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
       if (opIdx != dotOpEnc.getOpIdx())
         return emitOptionalError(location, "Wrong opIdx");

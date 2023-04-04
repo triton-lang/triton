@@ -1535,15 +1535,12 @@ void init_triton_translation(py::module &m) {
   });
 
   m.def(
-      "set_rocm", []() { setROCM(); }, ret::take_ownership);
-
-  m.def(
       "translate_triton_gpu_to_llvmir",
-      [](mlir::ModuleOp op, int computeCapability) {
+      [](mlir::ModuleOp op, int computeCapability, bool isROCM) {
         py::gil_scoped_release allow_threads;
         llvm::LLVMContext llvmContext;
         auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(
-            &llvmContext, op, computeCapability);
+            &llvmContext, op, computeCapability, isROCM);
         if (!llvmModule)
           llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
 

@@ -8,43 +8,6 @@
 namespace mlir {
 namespace triton {
 
-// Type inference
-static Type getI1SameShape(Type type) {
-  auto i1Type = IntegerType::get(type.getContext(), 1);
-  if (auto tensorType = type.dyn_cast<RankedTensorType>())
-    return RankedTensorType::get(tensorType.getShape(), i1Type,
-                                 tensorType.getEncoding());
-  return i1Type;
-}
-
-static Type getI32SameShape(Type type) {
-  auto i32Type = IntegerType::get(type.getContext(), 32);
-  if (auto tensorType = type.dyn_cast<RankedTensorType>())
-    return RankedTensorType::get(tensorType.getShape(), i32Type,
-                                 tensorType.getEncoding());
-  return i32Type;
-}
-
-static Type getPointerTypeSameShape(Type type) {
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
-    Type elementType = tensorType.getElementType();
-    auto shape = tensorType.getShape();
-    PointerType ptrType = PointerType::get(elementType, 1);
-    return RankedTensorType::get(shape, ptrType, tensorType.getEncoding());
-  } else {
-    return PointerType::get(type, 1);
-  }
-}
-
-static Type getPointerType(Type type) { return PointerType::get(type, 1); }
-
-static Type getElementTypeOfTensorPointerType(Type type) {
-  if (auto ptrType = type.dyn_cast<PointerType>())
-    if (auto tensorType = ptrType.getPointeeType().dyn_cast<RankedTensorType>())
-      return tensorType.getElementType();
-  return {};
-}
-
 // Parser & printer for assembly forms
 ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
   // Parse operands
@@ -294,7 +257,7 @@ void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
 
 //-- TransOp --
 mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
@@ -321,7 +284,7 @@ mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
 
 //-- DotOp --
 mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the accumulator
@@ -389,7 +352,7 @@ void ReduceOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
 }
 
 mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   for (auto arg : operands) {
@@ -496,7 +459,7 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
 
 //-- ExpandDimsOp --
 mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> loc, ValueRange operands,
+    MLIRContext *context, std::optional<Location> loc, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // infer shape
