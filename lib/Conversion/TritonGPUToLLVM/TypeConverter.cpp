@@ -17,21 +17,21 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, option, analysis) {
-  addConversion([&](triton::PointerType type) -> llvm::Optional<Type> {
+  addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
   });
-  addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
+  addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type);
   });
   // Internally store float8 as int8
-  addConversion([&](mlir::Float8E4M3FNType type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
-  addConversion([&](mlir::Float8E5M2Type type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::Float8E5M2Type type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
   // Internally store bfloat16 as int16
-  addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
+  addConversion([&](BFloat16Type type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 16);
   });
 }

@@ -897,7 +897,7 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
                             Attribute &resultEncoding,
-                            Optional<Location> location) const override {
+                            std::optional<Location> location) const override {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
     if (!sliceEncoding)
       return emitOptionalError(
@@ -909,9 +909,10 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
-                                   Attribute retEncoding,
-                                   Optional<Location> location) const override {
+  LogicalResult
+  inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
+                     Attribute retEncoding,
+                     std::optional<Location> location) const override {
     if (auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
       if (opIdx != dotOpEnc.getOpIdx())
         return emitOptionalError(location, "Wrong opIdx");
