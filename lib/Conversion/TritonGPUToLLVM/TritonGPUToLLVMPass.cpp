@@ -59,9 +59,6 @@ public:
 class TritonPTXConversionTarget : public ConversionTarget {
 public:
   explicit TritonPTXConversionTarget(MLIRContext &ctx) : ConversionTarget(ctx) {
-    addDynamicallyLegalDialect<LLVM::LLVMDialect>(
-        [&](Operation *op) { return isLegalElementwiseOp(op); });
-
     addLegalDialect<NVVM::NVVMDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
@@ -70,9 +67,6 @@ public:
 class TritonGCNConversionTarget : public ConversionTarget {
 public:
   explicit TritonGCNConversionTarget(MLIRContext &ctx) : ConversionTarget(ctx) {
-    addDynamicallyLegalDialect<LLVM::LLVMDialect>(
-        [&](Operation *op) { return isLegalElementwiseOp(op); });
-
     addLegalDialect<ROCDL::ROCDLDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
@@ -240,8 +234,6 @@ public:
     if (isROCM) {
       TritonGCNConversionTarget gcnTarget(*context);
       RewritePatternSet gcnPatterns(context);
-      populateElementwiseOpToPTXPatterns(typeConverter, gcnPatterns,
-                                         /*benefits=*/10);
       if (failed(
               applyPartialConversion(mod, gcnTarget, std::move(gcnPatterns))))
         return signalPassFailure();
@@ -252,9 +244,6 @@ public:
       // 2. In some cases, we may generate faster PTX code than NVPTX backend
       TritonPTXConversionTarget ptxTarget(*context);
       RewritePatternSet ptxPatterns(context);
-      // Add patterns to convert LLVM to PTX
-      populateElementwiseOpToPTXPatterns(typeConverter, ptxPatterns,
-                                         /*benefits=*/10);
       if (failed(
               applyPartialConversion(mod, ptxTarget, std::move(ptxPatterns))))
         return signalPassFailure();
