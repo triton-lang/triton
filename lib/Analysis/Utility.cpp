@@ -71,11 +71,11 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     elems = product<unsigned>(smemShape);
   }
 
-  unsigned bytes_per_elem = 0;
+  unsigned bytesPerElem = 0;
   for (const auto &ty : srcElementTypes) {
-    bytes_per_elem += ty.getIntOrFloatBitWidth() / 8;
+    bytesPerElem += ty.getIntOrFloatBitWidth() / 8;
   }
-  return bytes_per_elem * elems;
+  return bytesPerElem * elems;
 }
 
 bool isSharedEncoding(Value value) {

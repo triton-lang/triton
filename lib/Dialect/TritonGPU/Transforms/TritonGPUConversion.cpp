@@ -80,7 +80,7 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
   addIllegalOp<scf::ExecuteRegionOp, scf::ParallelOp, scf::ReduceOp,
                scf::ReduceReturnOp>();
   // We have custom versions of some arith operators
-  addIllegalOp<arith::CmpIOp, arith::CmpFOp, arith::SelectOp>();
+  addIllegalOp<arith::CmpIOp, arith::CmpFOp>();
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
                              func::FuncDialect, triton::TritonDialect,

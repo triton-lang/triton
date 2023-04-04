@@ -100,8 +100,8 @@ def TTG_SelectOp : TTG_Op<"select", [Pure, Elementwise,
   let description = [{}];
 
   let arguments = (ins TT_BoolLike:$condition,
-                       TT_Type:$true_value,
-                       TT_Type:$false_value);
+                       TT_Tensor:$true_value,
+                       TT_Tensor:$false_value);
 
   let results = (outs TT_Type:$result);
 }

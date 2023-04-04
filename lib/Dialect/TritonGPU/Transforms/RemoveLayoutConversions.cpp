@@ -106,8 +106,8 @@ public:
         continue;
       }
 
-      // TODO: This always takes layout from the first argument which
-      // is fine for argmin/argmax but may not be optimal generally
+      // TODO: This only moves conversions from the first argument which is
+      // fine for argmin/argmax but may not be optimal generally
       if (convert.getResult() != owner.getOperands()[0]) {
         continue;
       }
@@ -123,8 +123,8 @@ public:
     auto newEncoding =
         newOperands[0].getType().cast<RankedTensorType>().getEncoding();
 
-    if (!newEncoding.isa<triton::gpu::BlockedEncodingAttr>()) {
-      // ReduceOpToLLVM requires block encoding
+    // this may generate unsupported conversions in the LLVM codegen
+    if (newEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
       return failure();
     }
 
