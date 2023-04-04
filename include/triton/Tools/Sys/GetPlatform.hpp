@@ -297,24 +297,4 @@ inline std::tuple<std::string, int> getArchInfo() {
   return arch_info;
 }
 
-// inline std::string getName() {
-
-//   int device_id;
-
-//   hipDeviceProp_t props;
-//   hipGetDeviceProperties(&props, device_id);
-
-//   return props.name;
-// }
-
-// inline int getWarpSize() {
-
-//   int device_id;
-
-//   hipDeviceProp_t props;
-//   hipGetDeviceProperties(&props, device_id);
-
-//   return props.warpSize;
-// }
-
 #endif
