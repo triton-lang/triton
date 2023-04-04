@@ -29,6 +29,8 @@
 #include <memory>
 #include <string>
 
+// #include <hip/hip_runtime.h>
+
 #include "triton/rocm/hsa/hsa.h"
 #include "triton/rocm/hsa/hsa_ext_amd.h"
 
@@ -294,5 +296,25 @@ inline std::tuple<std::string, int> getArchInfo() {
 
   return arch_info;
 }
+
+// inline std::string getName() {
+
+//   int device_id;
+
+//   hipDeviceProp_t props;
+//   hipGetDeviceProperties(&props, device_id);
+
+//   return props.name;
+// }
+
+// inline int getWarpSize() {
+
+//   int device_id;
+
+//   hipDeviceProp_t props;
+//   hipGetDeviceProperties(&props, device_id);
+
+//   return props.warpSize;
+// }
 
 #endif
