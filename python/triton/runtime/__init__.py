@@ -16,4 +16,5 @@ __all__ = [
     "TensorWrapper",
     "OutOfResources",
     "MockTensor",
+    "Autotuner",
 ]
