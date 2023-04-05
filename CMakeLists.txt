@@ -240,16 +240,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRIR
   )
 
+  set(ROCM_LIBRARIES
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/rocm/libhsa-runtime64.so
+  )
+
   if(WIN32)
-    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${CMAKE_DL_LIBS}
+    target_link_libraries(triton PRIVATE ${ROCM_LIBRARIES} ${LLVM_LIBRARIES} ${CMAKE_DL_LIBS}
       ${TRITON_LIBRARIES}
     )
   elseif(APPLE)
-    target_link_libraries(triton ${LLVM_LIBRARIES} z
+    target_link_libraries(triton ${ROCM_LIBRARIES} ${LLVM_LIBRARIES} z
       ${TRITON_LIBRARIES}
     )
   else()
-    target_link_libraries(triton ${LLVM_LIBRARIES} z
+    target_link_libraries(triton ${ROCM_LIBRARIES} ${LLVM_LIBRARIES} z
       ${TRITON_LIBRARIES}
     )
     # TODO: Figure out which target is sufficient to fix errors; triton is

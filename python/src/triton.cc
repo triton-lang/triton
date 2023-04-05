@@ -27,6 +27,7 @@
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -1588,6 +1589,23 @@ void init_triton_translation(py::module &m) {
     auto shared = mod->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared");
     return shared.getInt();
   });
+
+  m.def(
+      "set_rocm", []() { setROCM(); }, ret::take_ownership);
+
+  m.def(
+      "get_arch_info",
+      []() {
+        return std::get<0>(getArchInfo());
+      },
+      ret::take_ownership);
+
+  m.def(
+      "get_warp_size",
+      []() {
+        return std::get<1>(getArchInfo());
+      },
+      ret::take_ownership);
 
   m.def(
       "translate_triton_gpu_to_llvmir",
