@@ -89,6 +89,35 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
         return torch.mean(times).item()
 
 
+def assert_close(x, y, atol=None, rtol=None, err_msg=''):
+    import torch
+
+    def default_atol(dtype):
+        return 1e-2
+
+    def default_rtol(dtype):
+        return 0.
+    if atol is None:
+        atol = default_atol
+    if rtol is None:
+        rtol = default_rtol
+    if not isinstance(x, torch.Tensor):
+        x = torch.tensor(x)
+    if not isinstance(y, torch.Tensor):
+        y = torch.tensor(y)
+    atol = atol(x.dtype) if callable(atol) else atol
+    rtol = rtol(x.dtype) if callable(rtol) else rtol
+    if x.numel() > 1 or y.numel() > 1:
+        # we could use a fused kernel for fast `isclose`
+        # if x.numel()*16 > torch.cuda.mem_get_info()[0]:
+        torch.testing.assert_close(x.cpu(), y.cpu(), atol=atol, rtol=rtol, equal_nan=True)
+        # else:
+        #     torch.testing.assert_close(x, y, atol=atol, rtol=rtol, equal_nan=True)
+        return
+    if not torch.isclose(x, y, atol=atol, rtol=rtol):
+        raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
+
+
 class Benchmark:
     """
     This class is used by the :code:`perf_report` function to generate line plots with a concise API.
