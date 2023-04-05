@@ -3,7 +3,7 @@ import os
 import tempfile
 
 from ..common import _build
-from ..runtime.cache import CacheManager
+from ..runtime.cache import get_cache_manager
 from ..runtime.jit import version_key
 
 
@@ -26,10 +26,11 @@ def make_so_cache_key(version_hash, signature, constants):
 def make_stub(name, signature, constants):
     # name of files that are cached
     so_cache_key = make_so_cache_key(version_key(), signature, constants)
-    so_cache_manager = CacheManager(so_cache_key)
+    so_cache_manager = get_cache_manager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
-    if not so_cache_manager.has_file(so_name):
+    cache_path = so_cache_manager.get_file(so_name)
+    if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src = generate_launcher(constants, signature)
             src_path = os.path.join(tmpdir, "main.c")
@@ -37,8 +38,9 @@ def make_stub(name, signature, constants):
                 f.write(src)
             so = _build(name, src_path, tmpdir)
             with open(so, "rb") as f:
-                so_cache_manager.put(f.read(), so_name, binary=True)
-    return so_cache_manager._make_path(so_name)
+                return so_cache_manager.put(f.read(), so_name, binary=True)
+    else:
+        return cache_path
 
 # ----- source code generation --------
 
