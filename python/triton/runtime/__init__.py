@@ -1,5 +1,6 @@
 from . import driver
-from .autotuner import Config, Heuristics, OutOfResources, autotune, heuristics
+from .autotuner import (Autotuner, Config, Heuristics, OutOfResources, autotune,
+                        heuristics)
 from .jit import (JITFunction, KernelInterface, MockTensor, TensorWrapper, reinterpret,
                   version_key)
 
@@ -16,4 +17,5 @@ __all__ = [
     "TensorWrapper",
     "OutOfResources",
     "MockTensor",
+    "Autotuner",
 ]
