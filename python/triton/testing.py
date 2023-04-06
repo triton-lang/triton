@@ -93,18 +93,18 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     import numpy as np
     import torch
 
-    # absolute tolerance hook
-    def default_atol(dtype):
-        return 1e-2
+    # canonicalize arguments to be tensors
+    if not isinstance(x, torch.Tensor):
+        x = torch.tensor(x)
+    if not isinstance(y, torch.Tensor):
+        y = torch.tensor(y)
+    # absolute tolerance
     if atol is None:
-        atol = default_atol
+        atol = 1e-2
     atol = atol(x.dtype) if callable(atol) else atol
     # relative tolerance hook
-
-    def default_rtol(dtype):
-        return 0.
     if rtol is None:
-        rtol = default_rtol
+        rtol = 0.
     rtol = rtol(x.dtype) if callable(rtol) else rtol
     # we use numpy instead of pytorch
     # as it seems more memory efficient
@@ -117,6 +117,8 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
         if y.dtype == torch.bfloat16:
             y = y.float()
         y = y.cpu().detach().numpy()
+    # we handle size==1 case separately as we can
+    # provide better error message there
     if x.size > 1 or y.size > 1:
         np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
         return
