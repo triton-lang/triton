@@ -81,17 +81,14 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     a_tri.retain_grad()
     b_tri.retain_grad()
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
-    try:
-        c_tri = op(a_tri, b_tri)
-        c_tri.backward(dc_tri)
-        da_tri = a_tri.grad
-        db_tri = b_tri.grad
-        # compare
-        torch.testing.assert_allclose(c_ref, c_tri)
-        torch.testing.assert_allclose(da_ref, da_tri)
-        torch.testing.assert_allclose(db_ref, db_tri)
-    except triton.OutOfResourcesError as e:
-        pytest.skip(str(e))
+    c_tri = op(a_tri, b_tri)
+    c_tri.backward(dc_tri)
+    da_tri = a_tri.grad
+    db_tri = b_tri.grad
+    # compare
+    torch.testing.assert_allclose(c_ref, c_tri)
+    torch.testing.assert_allclose(da_ref, da_tri)
+    torch.testing.assert_allclose(db_ref, db_tri)
 
 
 configs = [
