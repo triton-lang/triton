@@ -1,9 +1,8 @@
 #ifndef TRITON_IR_TRAITS_H_
 #define TRITON_IR_TRAITS_H_
 
-#include "mlir/IR/OpDefinition.h"
-
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/Support/LogicalResult.h"
 
 #include <iostream>
@@ -12,11 +11,9 @@ namespace mlir {
 namespace OpTrait {
 
 // These functions are out-of-line implementations of the methods in the
-// corresponding trait classes.  This avoids them being template
+// corresponding trait classes. This avoids them being template
 // instantiated/duplicated.
 namespace impl {
-LogicalResult verifySameOperandsAndResultEncoding(Operation *op);
-LogicalResult verifySameOperandsEncoding(Operation *op);
 // The rationale for this trait is to prevent users from creating programs
 // that would have catastrophic register pressure and cause the compiler to
 // hang.
@@ -25,7 +22,22 @@ LogicalResult verifySameOperandsEncoding(Operation *op);
 // but we probably should limit number of elements (rather than bytes) to
 // keep specs simple
 int constexpr maxTensorNumElements = 1048576;
+
 LogicalResult verifyTensorSize(Operation *op);
+
+LogicalResult verifySameOperandsEncoding(Operation *op,
+                                         bool allowTensorPointerType = false);
+
+LogicalResult
+verifySameOperandsAndResultEncoding(Operation *op,
+                                    bool allowTensorPointerType = false);
+
+LogicalResult verifySameLoadStoreOperandsShape(Operation *op);
+
+LogicalResult verifySameLoadStoreOperandsAndResultShape(Operation *op);
+
+bool verifyLoadStorePointerAndValueType(Type valueType, Type ptrType);
+
 } // namespace impl
 
 template <class ConcreteType>
@@ -51,6 +63,44 @@ class SameOperandsEncoding
 public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifySameOperandsEncoding(op);
+  }
+};
+
+template <typename ConcreteType>
+class SameLoadStoreOperandsShape
+    : public TraitBase<ConcreteType, SameLoadStoreOperandsShape> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameLoadStoreOperandsShape(op);
+  }
+};
+
+template <typename ConcreteType>
+class SameLoadStoreOperandsAndResultShape
+    : public TraitBase<ConcreteType, SameLoadStoreOperandsAndResultShape> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameLoadStoreOperandsAndResultShape(op);
+  }
+};
+
+template <typename ConcreteType>
+class SameLoadStoreOperandsEncoding
+    : public TraitBase<ConcreteType, SameLoadStoreOperandsEncoding> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameOperandsEncoding(op,
+                                            /*allowTensorPointerType=*/true);
+  }
+};
+
+template <typename ConcreteType>
+class SameLoadStoreOperandsAndResultEncoding
+    : public TraitBase<ConcreteType, SameLoadStoreOperandsAndResultEncoding> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameOperandsAndResultEncoding(
+        op, /*allowTensorPointerType=*/true);
   }
 };
 

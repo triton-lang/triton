@@ -293,7 +293,7 @@ class Libdevice(ExternLibrary):
         header_str += "LIBDEVICE_PATH = os.getenv(\"TRITON_LIBDEVICE_PATH\", LOCAL_PATH)\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
-            func_str += "@extern.extern\n"
+            func_str += "@language.extern\n"
             func_name_str = f"def {symbols[0].op_name}("
             for arg_name in symbols[0].arg_names:
                 func_name_str += f"{arg_name}, "

@@ -55,6 +55,5 @@ llvm_update_compile_flags(triton-translate)
          MLIRLLVMToLLVMIRTranslation
          MLIRNVVMToLLVMIRTranslation
          MLIRROCDLToLLVMIRTranslation
-         MLIRSCFToControlFlow
          )
 mlir_check_all_link_libraries(triton-translate)

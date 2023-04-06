@@ -79,6 +79,7 @@ Math Ops
     :toctree: generated
     :nosignatures:
 
+    abs
     exp
     log
     cos

@@ -193,6 +193,24 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     // PTX: "@${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: mov.u32 $0, 0x0
+    // CHECK: @${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: mov.u32 $0, 0x0
+    // CHECK: @${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: mov.u32 $0, 0x0
+    // CHECK: @${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: mov.u32 $0, 0x0
+    // CHECK: @${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+
+    // Load 4 elements from vector1
+    // CHECK: mov.u32 $0, 0x0
+    // CHECK: @${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: mov.u32 $0, 0x0
+    // CHECK: @${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: mov.u32 $0, 0x0
+    // CHECK: @${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
+    // CHECK: mov.u32 $0, 0x0
+    // CHECK: @${{.*}} ld.global.b32 { ${{.*}} }, [ ${{.*}} + 0 ];
     %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
@@ -1544,7 +1562,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
       // PTX-NOT: nvvm.read.ptx.sreg.tid.x
       // GCN-NOT: rocdl.workitem.id.x
       %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
-    }
-    return
+      cf.br ^bb2
+    ^bb2:  // 2 preds: ^bb0, ^bb1
+      return
   }
 }

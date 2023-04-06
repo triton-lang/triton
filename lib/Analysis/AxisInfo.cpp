@@ -220,7 +220,16 @@ private:
     // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
     // lhs + rhs = k * d_lhs + p * d_rhs = (k * d_lhs + p * d_rhs) *
     // gcd(d_lhs, d_rhs)
-    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    auto elemSize = 1;
+    if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
+      //  %ptr = addptr %lhs, %rhs
+      // is equivalent to
+      //  %0 = mul %lhs, %elemSize
+      //  %ptr = add %0, %rhs
+      elemSize = std::max<unsigned int>(
+          1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
+    }
+    return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim) * elemSize);
   }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -910,7 +919,7 @@ unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   auto maxMultipleBytes = axisInfo.getDivisibility(order[0]);
   auto maxContig = axisInfo.getContiguity(order[0]);
-  auto elemNumBits = getPointeeBitWidth(tensorTy);
+  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);

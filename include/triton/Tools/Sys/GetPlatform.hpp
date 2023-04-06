@@ -29,8 +29,6 @@
 #include <memory>
 #include <string>
 
-// #include <hip/hip_runtime.h>
-
 #include "triton/rocm/hsa/hsa.h"
 #include "triton/rocm/hsa/hsa_ext_amd.h"
 

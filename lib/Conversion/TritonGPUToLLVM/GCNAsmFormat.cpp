@@ -27,7 +27,8 @@ GCNBuilder::Operand *GCNBuilder::newOperand(StringRef constraint) {
   return opr;
 }
 
-GCNBuilder::Modifier *GCNBuilder::newModifier(StringRef modifier, StringRef arg) {
+GCNBuilder::Modifier *GCNBuilder::newModifier(StringRef modifier,
+                                              StringRef arg) {
   assert(!modifier.empty());
   auto *mod = newModifier();
   mod->modifier = modifier;
@@ -134,13 +135,15 @@ std::string GCNBuilder::dump() const {
   return strJoin(lines, "\n\t");
 }
 
-GCNInstrExecution &GCNInstrCommon::call(ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods) {
+GCNInstrExecution &GCNInstrCommon::call(ArrayRef<Operand *> oprs,
+                                        ArrayRef<Modifier *> mods) {
   builder->executions.emplace_back(
       std::make_unique<GCNInstrExecution>(this, oprs, mods));
   return *builder->executions.back();
 }
 
-GCNInstrExecution &GCNInstrCommon::operator()(ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods) {
+GCNInstrExecution &GCNInstrCommon::operator()(ArrayRef<Operand *> oprs,
+                                              ArrayRef<Modifier *> mods) {
   return call(oprs, mods);
 }
 
@@ -158,7 +161,7 @@ std::string GCNInstrExecution::dump() const {
   std::string argsRepr = strJoin(argReprs, ", ");
 
   llvm::SmallVector<std::string, 4> modReprs;
-  for(auto *mod : mods) {
+  for (auto *mod : mods) {
     modReprs.push_back(mod->dump());
   }
 
