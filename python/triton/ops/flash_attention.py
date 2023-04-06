@@ -60,7 +60,7 @@ def _fwd_kernel(
         l_curr = tl.sum(p, 1) + l_prev
         # rescale operands of matmuls
         l_rcp = 1. / l_curr
-        p *= l_rcp
+        p *= l_rcp[:, None]
         acc *= (l_prev * l_rcp)[:, None]
         # update acc
         p = p.to(Q.dtype.element_ty)
