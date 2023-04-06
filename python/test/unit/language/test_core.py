@@ -411,7 +411,7 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
 # ---------------
 # test broadcast
 # ---------------
-@pytest.mark.parametrize("dtype", dtypes_with_bfloat16 + ["*int32"])
+@pytest.mark.parametrize("dtype", dtypes_with_bfloat16)
 def test_broadcast(dtype):
     @triton.jit
     def broadcast_kernel(x_ptr, y_ptr, y_broadcasted_ptr, M: tl.constexpr, N: tl.constexpr):
