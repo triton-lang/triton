@@ -1991,7 +1991,9 @@ def _get_amdgcn_bitcode_paths():
                                              "oclc_daz_opt_off.bc",
                                              "oclc_correctly_rounded_sqrt_on.bc",
                                              "oclc_unsafe_math_off.bc",
-                                             "oclc_wavefrontsize64_on.bc"]
+                                             "oclc_wavefrontsize64_on.bc",
+                                             "oclc_abi_version_400.bc",
+                                             ]
     
       gfx_arch = _get_amdgcn_bitcode_paths.discovered_gfx_arch_fulldetails[1]
       gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
@@ -2000,7 +2002,7 @@ def _get_amdgcn_bitcode_paths():
       bitcode_path_dir = os.path.join(Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/")
 
       amdgcn_bitcode_paths = {}
-      i = 1
+      i = 0
       for bc_lib in gpu_arch_agnostic_bitcode_libraries:
         bc_path = bitcode_path_dir + bc_lib
         if os.path.exists(bc_path):
