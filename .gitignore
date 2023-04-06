@@ -8,8 +8,14 @@ python/triton/_C/libtriton.pyd
 python/triton/_C/libtriton.so
 
 # Python caches
-__pycache__
+__pycache__/
+*.py[cod]
 .pytest_cache
+
+# Environments
+.venv
+venv/
+venv.bak/
 
 # VS Code project files
 .vscode

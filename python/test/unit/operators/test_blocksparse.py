@@ -2,13 +2,40 @@ import pytest
 import torch
 
 import triton
+import triton.ops
+
+
+def sparsify_tensor(x, mask, block):
+    ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
+    for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
+        ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
+    return ret
+
+
+def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None, dtype=torch.float32):
+    if data is None:
+        data = torch.randn(shape, dtype=torch.float32, requires_grad=True, device=device)
+    ref_ret = data
+    ref_ret = ref_ret * alpha + beta
+    ref_ret = ref_ret.half().to(dtype)
+    if trans:
+        ref_ret = ref_ret.t().requires_grad_()
+    ref_ret = ref_ret.detach().requires_grad_()
+    tri_ret = ref_ret.clone().detach().requires_grad_()
+    return ref_ret, tri_ret
+
+
+def mask_tensor(x, mask, block, value=0):
+    ret = x.clone()
+    for h, i, j in zip(*(mask == 0).nonzero(as_tuple=True)):
+        ret[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block] = value
+    return ret
 
 
 @pytest.mark.parametrize("MODE", ["sdd", "dds", "dsd"])
 @pytest.mark.parametrize("TRANS_A", [False, True])
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
-# TODO: float32 fails
 @pytest.mark.parametrize("DTYPE", [torch.float16])
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
     seed = 0
@@ -16,8 +43,8 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     is_sdd = MODE == "sdd"
     is_dsd = MODE == "dsd"
     is_dds = MODE == "dds"
-    do_sparsify = lambda x: triton.testing.sparsify_tensor(x, layout, BLOCK)
-    do_mask = lambda x: triton.testing.mask_tensor(x, layout, BLOCK)
+    do_sparsify = lambda x: sparsify_tensor(x, layout, BLOCK)
+    do_mask = lambda x: mask_tensor(x, layout, BLOCK)
     # create inputs
     # create op
     a_shape = (Z, H, K, M) if TRANS_A else (Z, H, M, K)
@@ -32,9 +59,9 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     layout[1, 2, :] = 0
     layout[1, :, 1] = 0
     # create data
-    a_ref, a_tri = triton.testing.make_pair(a_shape, alpha=.1, dtype=DTYPE)
-    b_ref, b_tri = triton.testing.make_pair(b_shape, alpha=.1, dtype=DTYPE)
-    dc_ref, dc_tri = triton.testing.make_pair(c_shape, dtype=DTYPE)
+    a_ref, a_tri = make_pair(a_shape, alpha=.1, dtype=DTYPE)
+    b_ref, b_tri = make_pair(b_shape, alpha=.1, dtype=DTYPE)
+    dc_ref, dc_tri = make_pair(c_shape, dtype=DTYPE)
     # compute [torch]
     dc_ref = do_mask(dc_ref) if is_sdd else dc_ref
     a_ref = do_mask(a_ref) if is_dsd else a_ref
@@ -54,14 +81,17 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     a_tri.retain_grad()
     b_tri.retain_grad()
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="cuda")
-    c_tri = triton.testing.catch_oor(lambda: op(a_tri, b_tri), pytest)
-    triton.testing.catch_oor(lambda: c_tri.backward(dc_tri), pytest)
-    da_tri = a_tri.grad
-    db_tri = b_tri.grad
-    # compare
-    triton.testing.assert_almost_equal(c_ref, c_tri)
-    triton.testing.assert_almost_equal(da_ref, da_tri)
-    triton.testing.assert_almost_equal(db_ref, db_tri)
+    try:
+        c_tri = op(a_tri, b_tri)
+        c_tri.backward(dc_tri)
+        da_tri = a_tri.grad
+        db_tri = b_tri.grad
+        # compare
+        torch.testing.assert_allclose(c_ref, c_tri)
+        torch.testing.assert_allclose(da_ref, da_tri)
+        torch.testing.assert_allclose(db_ref, db_tri)
+    except triton.OutOfResourcesError as e:
+        pytest.skip(str(e))
 
 
 configs = [
@@ -88,10 +118,10 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
         layout[1, :, 1] = 0
     # initialize data
     a_shape = (Z, H, M, N)
-    a_ref, a_tri = triton.testing.make_pair(a_shape)
-    dout_ref, dout_tri = triton.testing.make_pair(a_shape)
+    a_ref, a_tri = make_pair(a_shape)
+    dout_ref, dout_tri = make_pair(a_shape)
     # compute [torch]
-    a_ref = triton.testing.mask_tensor(a_ref, layout, BLOCK, value=float("-inf"))
+    a_ref = mask_tensor(a_ref, layout, BLOCK, value=float("-inf"))
     a_ref.retain_grad()
     at_mask = torch.ones((M, N), device="cuda")
     if is_causal:
@@ -100,19 +130,19 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     a_ref[M == 0] = float("-inf")
     out_ref = torch.softmax(a_ref * scale, -1)
     out_ref.backward(dout_ref)
-    out_ref = triton.testing.sparsify_tensor(out_ref, layout, BLOCK)
-    da_ref = triton.testing.sparsify_tensor(a_ref.grad, layout, BLOCK)
+    out_ref = sparsify_tensor(out_ref, layout, BLOCK)
+    da_ref = sparsify_tensor(a_ref.grad, layout, BLOCK)
     # compute [triton]
-    a_tri = triton.testing.sparsify_tensor(a_tri, layout, BLOCK)
+    a_tri = sparsify_tensor(a_tri, layout, BLOCK)
     a_tri.retain_grad()
-    dout_tri = triton.testing.sparsify_tensor(dout_tri, layout, BLOCK)
+    dout_tri = sparsify_tensor(dout_tri, layout, BLOCK)
     op = triton.ops.blocksparse.softmax(layout, BLOCK, device="cuda", is_dense=is_dense)
     out_tri = op(a_tri, scale=scale, is_causal=is_causal)
     out_tri.backward(dout_tri)
     da_tri = a_tri.grad
     # compare
-    triton.testing.assert_almost_equal(out_tri, out_ref)
-    triton.testing.assert_almost_equal(da_tri, da_ref)
+    torch.testing.assert_allclose(out_tri, out_ref)
+    torch.testing.assert_allclose(da_tri, da_ref)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])
@@ -168,9 +198,9 @@ def test_attention_fwd_bwd(
 
     # comparison
     # print(f"Triton loss {loss} and torch loss {torch_loss}.  Also checking grads...")
-    triton.testing.assert_almost_equal(loss, torch_loss)
+    torch.testing.assert_allclose(loss, torch_loss, atol=1e-3, rtol=0)
     for g1, g2 in zip(grads, torch_grads):
-        triton.testing.assert_almost_equal(g1, g2)
+        torch.testing.assert_allclose(g1, g2)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])

@@ -1,9 +1,10 @@
 #ifndef TRITON_ANALYSIS_AXISINFO_H
 #define TRITON_ANALYSIS_AXISINFO_H
 
-#include "mlir/Analysis/DataFlowAnalysis.h"
+#include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -62,13 +63,29 @@ public:
   }
 
   /// The pessimistic value state of the contiguity is unknown.
-  static AxisInfo getPessimisticValueState(MLIRContext *context) {
+  static AxisInfo getPessimisticValueState(MLIRContext *context = nullptr) {
     return AxisInfo();
   }
   static AxisInfo getPessimisticValueState(Value value);
 
   /// The gcd of both arguments for each dimension
   static AxisInfo join(const AxisInfo &lhs, const AxisInfo &rhs);
+
+  void print(raw_ostream &os) const {
+    auto print = [&](StringRef name, DimVectorT vec) {
+      os << name << " = [";
+      llvm::interleaveComma(vec, os);
+      os << "]";
+    };
+    print("contiguity", contiguity);
+    print(", divisibility", divisibility);
+    print(", constancy", constancy);
+    os << ", constant_value = ";
+    if (constantValue)
+      os << *constantValue;
+    else
+      os << "<none>";
+  }
 
 private:
   /// The _contiguity_ information maps the `d`-th
@@ -95,7 +112,8 @@ private:
 
   /// The _divisibility_ information maps the `d`-th
   /// dimension to the largest power-of-two that
-  /// divides the first element of all the values along it
+  /// divides the first element of all groups of
+  // _contiguity_ values along it
   /// For example:
   /// [10, 11, 12, 13, 18, 19, 20, 21]
   /// [20, 21, 22, 23, 28, 29, 30, 31]
@@ -106,6 +124,10 @@ private:
   /// [14, 18, 22, 26]
   /// [15, 19, 23, 27]
   //  would have divisibility [4, 1]
+  //  On the other hand:
+  //  [0, 1, 2, 0, 4, 5, 6, 7]
+  //  would have divisibility 1 because
+  //  _contiguity_=1
   DimVectorT divisibility;
 
   /// The _constancy_ information maps the `d`-th
@@ -147,7 +169,8 @@ public:
   }
 
   virtual AxisInfo
-  getAxisInfo(Operation *op, ArrayRef<LatticeElement<AxisInfo> *> operands) = 0;
+  getAxisInfo(Operation *op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
 
   virtual bool match(Operation *op) = 0;
 };
@@ -157,15 +180,16 @@ template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
 public:
   using AxisInfoVisitor::AxisInfoVisitor;
 
-  AxisInfo getAxisInfo(Operation *op,
-                       ArrayRef<LatticeElement<AxisInfo> *> operands) final {
+  AxisInfo
+  getAxisInfo(Operation *op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) final {
     return getAxisInfo(cast<OpTy>(op), operands);
   }
 
   bool match(Operation *op) final { return isa<OpTy>(op); }
 
-  virtual AxisInfo getAxisInfo(OpTy op,
-                               ArrayRef<LatticeElement<AxisInfo> *> operands) {
+  virtual AxisInfo
+  getAxisInfo(OpTy op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
     llvm_unreachable("Unimplemented getAxisInfo");
   }
 };
@@ -176,8 +200,9 @@ class BinaryOpVisitorImpl : public AxisInfoVisitorImpl<OpTy> {
 public:
   using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
 
-  AxisInfo getAxisInfo(OpTy op,
-                       ArrayRef<LatticeElement<AxisInfo> *> operands) override {
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     auto lhsInfo = operands[0]->getValue();
     auto rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
@@ -230,7 +255,8 @@ public:
     (visitors.emplace_back(std::make_unique<Ts>()), ...);
   }
 
-  AxisInfo apply(Operation *op, ArrayRef<LatticeElement<AxisInfo> *> operands) {
+  AxisInfo apply(Operation *op,
+                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
     for (auto &visitor : visitors)
       if (visitor->match(op))
         return visitor->getAxisInfo(op, operands);
@@ -241,16 +267,25 @@ private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
 };
 
-class AxisInfoAnalysis : public ForwardDataFlowAnalysis<AxisInfo> {
+class AxisInfoAnalysis
+    : public dataflow::SparseDataFlowAnalysis<dataflow::Lattice<AxisInfo>> {
 private:
   AxisInfoVisitorList visitors;
 
-public:
-  AxisInfoAnalysis(MLIRContext *context);
+  void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
+    propagateIfChanged(
+        lattice,
+        lattice->join(AxisInfo::getPessimisticValueState(lattice->getPoint())));
+  }
 
-  ChangeResult
-  visitOperation(Operation *op,
-                 ArrayRef<LatticeElement<AxisInfo> *> operands) override;
+public:
+  AxisInfoAnalysis(DataFlowSolver &solver);
+  using dataflow::SparseDataFlowAnalysis<
+      dataflow::Lattice<AxisInfo>>::getLatticeElement;
+
+  void visitOperation(Operation *op,
+                      ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
+                      ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
 
   unsigned getPtrContiguity(Value ptr);
 

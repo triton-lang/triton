@@ -6,10 +6,9 @@ using namespace mlir;
 namespace {
 
 struct TestAllocationPass
-    : public PassWrapper<TestAllocationPass, OperationPass<FuncOp>> {
+    : public PassWrapper<TestAllocationPass, OperationPass<func::FuncOp>> {
 
-  // LLVM15+
-  // MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAllocationPass);
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAllocationPass);
 
   StringRef getArgument() const final { return "test-print-allocation"; }
   StringRef getDescription() const final {

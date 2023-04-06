@@ -64,7 +64,7 @@ def _sdd_kernel(
         else:
             a = tl.load(a_ptrs, mask=offs_ak[None, :] < k, other=0.)
             b = tl.load(b_ptrs, mask=offs_bk[:, None] < k, other=0.)
-        acc += tl.dot(a, b)
+        acc += tl.dot(a, b, out_dtype=tl.float32)
         a_ptrs += TILE_K * stride_ak
         b_ptrs += TILE_K * stride_bk
     c = acc.to(C.dtype.element_ty)
@@ -181,9 +181,9 @@ def _dsd_kernel(
     inc_b = tl.load(pinc)
     inc_b = tl.multiple_of(inc_b, 8)
     for k in range(K, 0, -TILE_K):
-        a = tl.load(pa, mask=True)
-        b = tl.load(pb, mask=offs_bn[None, :] < DS0)
-        acc += tl.dot(a, b)
+        a = tl.load(pa)
+        b = tl.load(pb)
+        acc += tl.dot(a, b, out_dtype=tl.float32)
         pa += inc_a
         pb += inc_b * stride_bk
         pinc += 2

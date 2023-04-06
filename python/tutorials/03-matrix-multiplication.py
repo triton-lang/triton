@@ -1,10 +1,10 @@
 """
 Matrix Multiplication
-======================
+=====================
 In this tutorial, you will write a 25-lines high-performance FP16 matrix multiplication
 kernel that achieves performance on par with cuBLAS.
-You will specifically learn about:
 
+In doing so, you will learn about:
 - Block-level matrix multiplications
 - Multi-dimensional pointer arithmetic
 - Program re-ordering for improved L2 cache hit rate
@@ -13,7 +13,8 @@ You will specifically learn about:
 
 # %%
 # Motivations
-# -------------
+# -----------
+#
 # Matrix multiplications are a key building block of most modern high-performance computing systems.
 # They are notoriously hard to optimize, hence their implementation is generally done by
 # hardware vendors themselves as part of so-called "kernel libraries" (e.g., cuBLAS).
@@ -42,15 +43,16 @@ You will specifically learn about:
 
 # %%
 # Compute Kernel
-# ----------------
+# --------------
 #
 # The above algorithm is, actually, fairly straightforward to implement in Triton.
 # The main difficulty comes from the computation of the memory locations at which blocks
 # of :code:`A` and :code:`B` must be read in the inner loop. For that, we need
-# multi-dimensional pointer arithmetics.
+# multi-dimensional pointer arithmetic.
 #
-# Pointer Arithmetics
-# ~~~~~~~~~~~~~~~~~~~~
+#
+# Pointer Arithmetic
+# ~~~~~~~~~~~~~~~~~~
 #
 # For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given b
 # y :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
@@ -81,7 +83,7 @@ You will specifically learn about:
 #
 #
 # L2 Cache Optimizations
-# ~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~
 #
 # As mentioned above, each program instance computes a :code:`[BLOCK_SIZE_M, BLOCK_SIZE_N]`
 # block of :code:`C`.
@@ -137,8 +139,7 @@ You will specifically learn about:
 
 # %%
 # Final Result
-# -------------
-#
+# ------------
 
 import torch
 
@@ -187,6 +188,7 @@ def matmul_kernel(
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
@@ -200,7 +202,7 @@ def matmul_kernel(
     # and accumulate
     # a_ptrs is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_n] pointers
-    # see above `Pointer Arithmetics` section for details
+    # see above `Pointer Arithmetic` section for details
     offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     offs_k = tl.arange(0, BLOCK_SIZE_K)
@@ -213,7 +215,7 @@ def matmul_kernel(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in range(0, K, BLOCK_SIZE_K):
+    for k in range(0, num_pid_k):
         # Note that for simplicity, we don't apply a mask here.
         # This means that if K is not a multiple of BLOCK_SIZE_K,
         # this will access out-of-bounds memory and produce an
@@ -280,7 +282,7 @@ def matmul(a, b, activation=None):
 
 # %%
 # Unit Test
-# -----------
+# ---------
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
 
@@ -291,17 +293,18 @@ triton_output = matmul(a, b, activation=None)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
-if triton.testing.allclose(triton_output, torch_output):
+if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
 
 # %%
 # Benchmark
-# --------------
+# ---------
 #
 # Square Matrix Performance
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
 # We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
 

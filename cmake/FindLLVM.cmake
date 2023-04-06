@@ -1,4 +1,3 @@
-
 # - Find LLVM headers and libraries.
 # This module locates LLVM and adapts the llvm-config output for use with
 # CMake.
@@ -109,7 +108,7 @@ else()
         )
         if(result_code)
             _LLVM_FAIL("Failed to execute llvm-config ('${LLVM_CONFIG}', result code: '${result_code})'")
-        else()        
+        else()
             file(TO_CMAKE_PATH "${tmplibs}" tmplibs)
             string(REGEX MATCHALL "${pattern}[^ ]+" LLVM_${var} ${tmplibs})
         endif()

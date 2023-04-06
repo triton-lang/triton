@@ -1,5 +1,5 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
@@ -14,11 +14,10 @@ using namespace mlir::triton::gpu;
 TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
                                                int numWarps)
     : context(context), numWarps(numWarps) {
-  // TODO: how does MLIR pick the right conversion?
   addConversion([](Type type) { return type; });
   addConversion([this](RankedTensorType tensorType) -> RankedTensorType {
     // types with encoding are already in the right format
-    // TODO: check for layout encodings specifically
+    // TODO: check for layout encodings more specifically
     if (tensorType.getEncoding())
       return tensorType;
     // pessimistic values for attributes:
@@ -41,17 +40,20 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // This will create newArg, and map(origArg, newArg)
   addArgumentMaterialization([&](OpBuilder &builder,
                                  RankedTensorType tensorType, ValueRange inputs,
-                                 Location loc) {
-    llvm_unreachable("Argument rematerialization not implemented");
-    return llvm::None;
+                                 Location loc) -> std::optional<Value> {
+    llvm_unreachable("Argument rematerialization should not happen in Triton "
+                     "-> TritonGPU conversion");
+    return std::nullopt;
   });
 
   // If the origValue still has live user(s), use this to
   // convert origValue to newValue
   addSourceMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
-                               ValueRange inputs, Location loc) {
-    llvm_unreachable("Source rematerialization not implemented");
-    return llvm::None;
+                               ValueRange inputs,
+                               Location loc) -> std::optional<Value> {
+    llvm_unreachable("Source rematerialization should not happen in Triton -> "
+                     "TritonGPU Conversion");
+    return std::nullopt;
   });
 
   // This will be called when (desiredType != newOperandType)
@@ -61,10 +63,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
                                ValueRange inputs, Location loc) {
     auto cast =
         builder.create<triton::gpu::ConvertLayoutOp>(loc, tensorType, inputs);
-    return Optional<Value>(cast.getResult());
-    // return Optional<Value>(cast.getResult(0));
-    // llvm_unreachable("Not implemented");
-    // return llvm::None;
+    return std::optional<Value>(cast.getResult());
   });
 }
 
@@ -81,20 +80,26 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
   addIllegalOp<scf::ExecuteRegionOp, scf::ParallelOp, scf::ReduceOp,
                scf::ReduceReturnOp>();
 
-  addDynamicallyLegalDialect<arith::ArithmeticDialect, math::MathDialect,
-                             triton::TritonDialect, StandardOpsDialect,
-                             scf::SCFDialect>([&](Operation *op) {
-    if (typeConverter.isLegal(op))
-      return true;
-    return false;
-  });
+  addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
+                             func::FuncDialect, triton::TritonDialect,
+                             cf::ControlFlowDialect, scf::SCFDialect>(
+      [&](Operation *op) {
+        bool hasLegalRegions = true;
+        for (auto &region : op->getRegions()) {
+          hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
+        }
+        if (hasLegalRegions && typeConverter.isLegal(op)) {
+          return true;
+        }
+        return false;
+      });
 
   // We have requirements for the data layouts
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {
     Attribute aEncoding =
-        dotOp.a().getType().cast<RankedTensorType>().getEncoding();
+        dotOp.getA().getType().cast<RankedTensorType>().getEncoding();
     Attribute bEncoding =
-        dotOp.b().getType().cast<RankedTensorType>().getEncoding();
+        dotOp.getB().getType().cast<RankedTensorType>().getEncoding();
     if (aEncoding && aEncoding.isa<triton::gpu::DotOperandEncodingAttr>() &&
         bEncoding && bEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
       return true;

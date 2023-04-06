@@ -1,5 +1,15 @@
 add_mlir_conversion_library(TritonGPUToLLVM
+    TritonGPUToLLVM.cpp
+    GCNAsmFormat.cpp
+    PTXAsmFormat.cpp
+    TritonGPUToLLVMPass.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
     ConvertLayoutOpToLLVM.cpp
+    DotOpToLLVM/FMA.cpp
+    DotOpToLLVM/MMAv1.cpp
+    DotOpToLLVM/MMAv2.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
@@ -8,14 +18,15 @@ add_mlir_conversion_library(TritonGPUToLLVM
     PTXAsmFormat.cpp
     ReduceOpToLLVM.cpp
     Utility.cpp
+    TypeConverter.cpp
     ViewOpToLLVM.cpp
-    DotOpHelpers.cpp
 
     ADDITIONAL_HEADER_DIRS
     ${PROJECT_SOURCE_DIR}/include/triton/Conversion/TritonGPUToLLVM
+    ${PROJECT_BINARY_DIR}/include/triton/Conversion/TritonGPUToLLVM
 
     DEPENDS
-    TritonConversionPassIncGen
+    TritonGPUConversionPassIncGen
 
     LINK_COMPONENTS
     Core
@@ -25,6 +36,7 @@ add_mlir_conversion_library(TritonGPUToLLVM
     MLIRPass
     MLIRGPUOps
     MLIRGPUToNVVMTransforms
+    MLIRGPUToROCDLTransforms
     MLIRGPUTransforms
     TritonAnalysis
     TritonIR

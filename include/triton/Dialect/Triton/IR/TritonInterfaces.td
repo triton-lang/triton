@@ -4,8 +4,11 @@
 include "mlir/IR/OpBase.td"
 
 def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
-def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
 def SameOperandsEncoding : NativeOpTrait<"SameOperandsEncoding">;
-
+def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
+def SameLoadStoreOperandsShape : NativeOpTrait<"SameLoadStoreOperandsShape">;
+def SameLoadStoreOperandsAndResultShape : NativeOpTrait<"SameLoadStoreOperandsAndResultShape">;
+def SameLoadStoreOperandsEncoding : NativeOpTrait<"SameLoadStoreOperandsEncoding">;
+def SameLoadStoreOperandsAndResultEncoding : NativeOpTrait<"SameLoadStoreOperandsAndResultEncoding">;
 
 #endif // TRITON_INTERFACES

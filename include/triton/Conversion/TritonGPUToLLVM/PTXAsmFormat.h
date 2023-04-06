@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_ASM_FORMAT_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_ASM_FORMAT_H
+#ifndef TRITON_CONVERSION_TRITON_GPU_TO_LLVM_PTX_ASM_FORMAT_H_
+#define TRITON_CONVERSION_TRITON_GPU_TO_LLVM_PTX_ASM_FORMAT_H_
 
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -144,7 +144,12 @@ struct PTXBuilder {
 
   // Create a new operand which is written to, that is, the constraint starts
   // with "=", e.g. "=r".
-  Operand *newOperand(StringRef constraint);
+  // If the operand will be used in predicated execution,
+  // users may want to initialize it before use.
+  // Otherwise if the register is only used in the true branch or the false
+  // branch but not both, the register is undefined and ptxas can perform
+  // aggressive optimizations that may lead to incorrect results.
+  Operand *newOperand(StringRef constraint, bool init = false);
 
   // Create a constant integer operand.
   Operand *newConstantOperand(int64_t v);
@@ -170,6 +175,8 @@ private:
     argArchive.emplace_back(std::make_unique<Operand>());
     return argArchive.back().get();
   }
+
+  void initOperand(Operand *opr);
 
   // Make the operands in argArchive follow the provided \param order.
   void reorderArgArchive(ArrayRef<Operand *> order) {

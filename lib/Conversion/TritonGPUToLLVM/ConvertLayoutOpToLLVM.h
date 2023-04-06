@@ -9,7 +9,7 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 
 void populateConvertLayoutOpToLLVMPatterns(
-    mlir::LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
     const Allocation *allocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,

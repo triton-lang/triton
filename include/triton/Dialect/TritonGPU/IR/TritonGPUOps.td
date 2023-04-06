@@ -3,12 +3,14 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
-include "mlir/Dialect/Arithmetic/IR/ArithmeticBase.td"
+include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td" // NoSideEffect
+include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
+include "mlir/Interfaces/DestinationStyleOpInterface.td"
+include "mlir/Interfaces/ViewLikeInterface.td"
 
 def ResultsAreSharedEncoding: NativeOpTrait<"ResultsAreSharedEncoding">;
 
@@ -18,12 +20,14 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,
-                                  NoSideEffect]> {
+                                  Pure]> {
   let summary = "convert layout";
 
   let arguments = (ins TT_Tensor:$src);
 
   let results = (outs TT_Tensor:$result);
+
+  let hasCanonicalizeMethod = 1;
 
   let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
@@ -59,8 +63,8 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 // This is needed because these ops don't
 // handle encodings
 // e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td#L111
-def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise, 
-                                 SameOperandsAndResultShape, 
+def TTG_CmpIOp : TTG_Op<"cmpi", [Pure, Elementwise,
+                                 SameOperandsAndResultShape,
                                  SameOperandsAndResultEncoding]> {
   let summary = "integer comparison operation";
 
@@ -73,8 +77,8 @@ def TTG_CmpIOp : TTG_Op<"cmpi", [NoSideEffect, Elementwise,
   let results = (outs TT_BoolLike:$result);
 }
 
-def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise, 
-                                 SameOperandsAndResultShape, 
+def TTG_CmpFOp : TTG_Op<"cmpf", [Pure, Elementwise,
+                                 SameOperandsAndResultShape,
                                  SameOperandsAndResultEncoding]> {
   let summary = "floating-point comparison operation";
 
@@ -88,8 +92,8 @@ def TTG_CmpFOp : TTG_Op<"cmpf", [NoSideEffect, Elementwise,
 }
 
 // TODO: migrate to arith::SelectOp on LLVM16
-def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise, 
-                                     SameOperandsAndResultShape, 
+def TTG_SelectOp : TTG_Op<"select", [Pure, Elementwise,
+                                     SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding]> {
   let summary = "select operation";
 
@@ -102,6 +106,69 @@ def TTG_SelectOp : TTG_Op<"select", [NoSideEffect, Elementwise,
   let results = (outs TT_Tensor:$result);
 }
 
+
+
+def TTG_ExtractSliceOp : TTG_Op<"extract_slice",
+                                [AttrSizedOperandSegments,
+                                 ResultsAreSharedEncoding,
+                                 Pure,
+                                 OffsetSizeAndStrideOpInterface
+                                 ]> {
+  let summary = "extract slice operation";
+  let description = [{
+    same as tensor.extract_slice, but with int32 index. The motivations for re-implementing it are:
+    We reimplement ExtractSliceOp with int32 index, because:
+    - we want to enforce int32 indexing on GPUs since Triton tensors fit in SRAM
+    - we still want to use indexWidth = 64 when lowering to LLVM because our loops can have
+      64-bit induction variables and scf.for uses indexType for bounds/ivs
+  }];
+
+  let arguments = (ins
+    AnyRankedTensor:$source,
+    Variadic<I32>:$offsets,
+    Variadic<I32>:$sizes,
+    Variadic<I32>:$strides,
+    DenseI64ArrayAttr:$static_offsets,
+    DenseI64ArrayAttr:$static_sizes,
+    DenseI64ArrayAttr:$static_strides
+  );
+  let results = (outs AnyRankedTensor:$result);
+
+  let builders = [
+    // Build an ExtractSliceOp with mixed static and dynamic entries and custom
+    // result type. If the type passed is nullptr, it is inferred.
+    OpBuilder<(ins "RankedTensorType":$resultType, "Value":$source,
+      "ArrayRef<OpFoldResult>":$offsets, "ArrayRef<OpFoldResult>":$sizes,
+      "ArrayRef<OpFoldResult>":$strides,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
+  ];
+
+  let extraClassDeclaration = [{
+    /// Return the number of leading operands before the `offsets`, `sizes` and
+    /// and `strides` operands.
+    static unsigned getOffsetSizeAndStrideStartOperandIndex() { return 1; }
+
+    /// Returns the type of the base tensor operand.
+    RankedTensorType getSourceType() {
+      return getSource().getType().cast<RankedTensorType>();
+    }
+
+    std::array<unsigned, 3> getArrayAttrMaxRanks() {
+      unsigned rank = getSourceType().getRank();
+      return {rank, rank, rank};
+    }
+  }];
+
+  let assemblyFormat = [{
+    $source ``
+    custom<DynamicIndexList>($offsets, $static_offsets)
+    custom<DynamicIndexList>($sizes, $static_sizes)
+    custom<DynamicIndexList>($strides, $static_strides)
+    attr-dict `:` type($source) `to` type($result)
+  }];
+}
+
+//
 
 def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
                                     [AttrSizedOperandSegments,
@@ -188,10 +255,7 @@ def TTG_InsertSliceAsyncOp : TTG_Op<"insert_slice_async",
     }
   }];
 
-  // The custom parser could be replaced with oilist in LLVM-16
-  let parser = [{ return parseInsertSliceAsyncOp(parser, result); }];
-
-  let printer = [{ return printInsertSliceAsyncOp(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // Allocate shared memory

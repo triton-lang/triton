@@ -4,109 +4,8 @@ import subprocess
 import sys
 from contextlib import contextmanager
 
-import torch
-
 import triton._C.libtriton.triton as _triton
-from .compiler import OutOfResources
-
-try:
-    import triton._C.libtriton.cutlass as _cutlass
-    has_cutlass = True
-except ImportError:
-    _cutlass = None
-    has_cutlass = False
-
-# TODO: move to separate module
-import triton
-
-
-def catch_oor(kernel, pytest_handle=None):
-    try:
-        res = kernel()
-    except OutOfResources as e:
-        if pytest_handle:
-            pytest_handle.skip(str(e))
-        return None
-    return res
-
-
-def sparsify_tensor(x, mask, block):
-    ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
-    for idx, (h, i, j) in enumerate(zip(*mask.nonzero(as_tuple=True))):
-        ret[:, idx, :, :] = x[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block]
-    return ret
-
-
-def make_pair(shape, device="cuda", alpha=1e-2, beta=0., trans=False, data=None, dtype=torch.float32):
-    if data is None:
-        data = torch.randn(shape, dtype=torch.float32, requires_grad=True, device=device)
-    ref_ret = data
-    ref_ret = ref_ret * alpha + beta
-    ref_ret = ref_ret.half().to(dtype)
-    if trans:
-        ref_ret = ref_ret.t().requires_grad_()
-    ref_ret = ref_ret.detach().requires_grad_()
-    tri_ret = ref_ret.clone().detach().requires_grad_()
-    return ref_ret, tri_ret
-
-
-def cutlass_matmul(a, b):
-    if _cutlass is None:
-        raise RuntimeError("Cannot find cutlass library")
-    M, N = a.shape[0], b.shape[1]
-    Ka, Kb = a.shape[1], b.shape[0]
-    assert Ka == Kb
-    assert a.dtype == b.dtype
-    assert a.device == b.device
-    # allocate output
-    c = torch.empty_strided((M, N), (1, M), dtype=a.dtype, device=a.device)
-    # run function
-    dtype = str(a.dtype).split('.')[-1]
-    _cutlass.matmul(a.data_ptr(), b.data_ptr(), c.data_ptr(),
-                    M, N, Ka,
-                    a.stride(0), a.stride(1),
-                    b.stride(0), b.stride(1),
-                    c.stride(0), c.stride(1),
-                    dtype, dtype, dtype,
-                    a.device.index, torch.cuda.current_stream(a.device).cuda_stream)
-
-    return c
-
-
-def mask_tensor(x, mask, block, value=0):
-    ret = x.clone()
-    for h, i, j in zip(*(mask == 0).nonzero(as_tuple=True)):
-        ret[:, h, i * block:(i + 1) * block, j * block:(j + 1) * block] = value
-    return ret
-
-
-def assert_almost_equal(x, y, decimal=2, err_msg=''):
-    import numpy.testing as npt
-    if isinstance(x, torch.Tensor):
-        if x.dtype == torch.bfloat16:
-            x = x.float()
-        x = x.cpu().detach().numpy()
-    if isinstance(y, torch.Tensor):
-        if y.dtype == torch.bfloat16:
-            y = y.float()
-        y = y.cpu().detach().numpy()
-    npt.assert_array_almost_equal(x, y, err_msg=err_msg, decimal=decimal)
-
-
-def allclose(x, y, tol=1e-2):
-    if x.dtype != y.dtype:
-        raise RuntimeError(f'{x.dtype} did not match with {x.dtype}')
-    if x.shape != y.shape:
-        raise RuntimeError(f'{x.shape} did not match with {y.shape}')
-    if x.dtype == torch.bool:
-        return torch.sum(x ^ y) == 0
-    if x.dtype in [torch.int8, torch.int16, torch.int32, torch.int64]:
-        tol = 0
-    diff = abs(x - y)
-    x_max = torch.max(x)
-    y_max = torch.max(y)
-    err = torch.max(diff) / torch.max(x_max, y_max)
-    return err <= tol
+from .runtime.driver.cuda import get_cuda_utils
 
 
 def nvsmi(attrs):
@@ -121,6 +20,7 @@ def nvsmi(attrs):
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
              percentiles=(0.5, 0.2, 0.8),
              record_clocks=False, fast_flush=False):
+    import torch
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -187,6 +87,41 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
         return tuple(percentiles)
     else:
         return torch.mean(times).item()
+
+
+def assert_close(x, y, atol=None, rtol=None, err_msg=''):
+    import numpy as np
+    import torch
+
+    # absolute tolerance hook
+    def default_atol(dtype):
+        return 1e-2
+    if atol is None:
+        atol = default_atol
+    atol = atol(x.dtype) if callable(atol) else atol
+    # relative tolerance hook
+
+    def default_rtol(dtype):
+        return 0.
+    if rtol is None:
+        rtol = default_rtol
+    rtol = rtol(x.dtype) if callable(rtol) else rtol
+    # we use numpy instead of pytorch
+    # as it seems more memory efficient
+    # pytorch tends to oom on large tensors
+    if isinstance(x, torch.Tensor):
+        if x.dtype == torch.bfloat16:
+            x = x.float()
+        x = x.cpu().detach().numpy()
+    if isinstance(y, torch.Tensor):
+        if y.dtype == torch.bfloat16:
+            y = y.float()
+        y = y.cpu().detach().numpy()
+    if x.size > 1 or y.size > 1:
+        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
+        return
+    if not np.allclose(x, y, atol=atol, rtol=rtol):
+        raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
 
 
 class Benchmark:
@@ -334,27 +269,29 @@ def perf_report(benchmarks):
 
 def get_dram_gbps(backend=None, device=None):
     ''' return DRAM bandwidth in GB/s '''
-    # assert backend == CUDA
+    import torch
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    mem_clock_khz = triton.compiler.cuda_utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
-    bus_width = triton.compiler.cuda_utils.get_device_properties(device)["mem_bus_width"]
+    cuda_utils = get_cuda_utils()
+    mem_clock_khz = cuda_utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
+    bus_width = cuda_utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
     return bw_gbps
 
 
-def get_max_tensorcore_tflops(dtype: torch.dtype, backend=None, device=None, clock_rate=None):
+def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None):
+    import torch
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 
-    triton.compiler.init_cuda_utils()
-    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    cuda_utils = get_cuda_utils()
+    num_subcores = cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
     if not clock_rate:
-        clock_rate = triton.compiler.cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+        clock_rate = cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
     capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         assert dtype == torch.float16
@@ -446,15 +383,18 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
         subprocess.check_output(["nvidia-smi", "-i", "0", "-rmc"])
 
 
-def get_max_simd_tflops(dtype: torch.dtype, backend=None, device=None):
+def get_max_simd_tflops(dtype, backend=None, device=None):
+    import torch
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    num_subcores = _triton.runtime.num_sm(backend, device) * 4  # on recent GPUs
-    clock_rate = _triton.runtime.clock_rate(backend, device)  # in kHz
-    cc = _triton.runtime.cc(backend, device)
-    if cc < 80:
+
+    cuda_utils = get_cuda_utils()
+    num_subcores = cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4
+    clock_rate = cuda_utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 8:
         if dtype == torch.float32:
             ops_per_sub_core = 32  # 2*16
         elif dtype == torch.float16:

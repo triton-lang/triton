@@ -36,28 +36,29 @@ public:
   void run();
 
 private:
-  struct RegionInfo {
+  struct BlockInfo {
     using BufferIdSetT = Allocation::BufferIdSetT;
 
     BufferIdSetT syncReadBuffers;
     BufferIdSetT syncWriteBuffers;
 
-    RegionInfo() = default;
-    RegionInfo(const BufferIdSetT &syncReadBuffers,
-               const BufferIdSetT &syncWriteBuffers)
+    BlockInfo() = default;
+    BlockInfo(const BufferIdSetT &syncReadBuffers,
+              const BufferIdSetT &syncWriteBuffers)
         : syncReadBuffers(syncReadBuffers), syncWriteBuffers(syncWriteBuffers) {
     }
 
-    /// Unions two RegionInfo objects.
-    void join(const RegionInfo &other) {
+    /// Unions two BlockInfo objects.
+    BlockInfo &join(const BlockInfo &other) {
       syncReadBuffers.insert(other.syncReadBuffers.begin(),
                              other.syncReadBuffers.end());
       syncWriteBuffers.insert(other.syncWriteBuffers.begin(),
                               other.syncWriteBuffers.end());
+      return *this;
     }
 
-    /// Returns true if buffers in two RegionInfo objects are intersected.
-    bool isIntersected(const RegionInfo &other, Allocation *allocation) const {
+    /// Returns true if buffers in two BlockInfo objects are intersected.
+    bool isIntersected(const BlockInfo &other, Allocation *allocation) const {
       return /*RAW*/ isIntersected(syncWriteBuffers, other.syncReadBuffers,
                                    allocation) ||
              /*WAR*/
@@ -73,6 +74,14 @@ private:
       syncReadBuffers.clear();
       syncWriteBuffers.clear();
     }
+
+    /// Compares two BlockInfo objects.
+    bool operator==(const BlockInfo &other) const {
+      return syncReadBuffers == other.syncReadBuffers &&
+             syncWriteBuffers == other.syncWriteBuffers;
+    }
+
+    bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
   private:
     /// Returns true if buffers in two sets are intersected.
@@ -99,19 +108,19 @@ private:
   ///        op5
   ///        op6
   ///   op7
-  /// region2 and region3 started with the information of region1.
-  /// Each region is analyzed separately and keeps their own copy of the
-  /// information. At op7, we union the information of the region2 and region3
-  /// and update the information of region1.
-  void dfsOperation(Operation *operation, RegionInfo *blockInfo,
-                    OpBuilder *builder);
+  /// TODO: Explain why we don't use ForwardAnalysis:
+  void resolve(Operation *operation, OpBuilder *builder);
 
-  /// Updates the RegionInfo operation based on the operation.
-  void transfer(Operation *operation, RegionInfo *blockInfo,
-                OpBuilder *builder);
+  /// Updates the BlockInfo operation based on the operation.
+  void update(Operation *operation, BlockInfo *blockInfo, OpBuilder *builder);
+
+  /// Collects the successors of the terminator
+  void visitTerminator(Operation *operation, SmallVector<Block *> &successors);
 
 private:
   Allocation *allocation;
+  DenseMap<Block *, BlockInfo> inputBlockInfoMap;
+  DenseMap<Block *, BlockInfo> outputBlockInfoMap;
 };
 
 } // namespace mlir

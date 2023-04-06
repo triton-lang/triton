@@ -1,13 +1,44 @@
 from __future__ import annotations
 
 from enum import Enum
+from functools import wraps
 from typing import Callable, List, TypeVar
 
 import triton
-from . import builtin, semantic
+from . import semantic
 from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
+
+TRITON_MAX_TENSOR_NUMEL = 131072
+
+
+T = TypeVar("T")
+
+TRITON_BUILTIN = "__triton_builtin__"
+
+
+def builtin(fn: T) -> T:
+    """Mark a function as a builtin."""
+    assert callable(fn)
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_builder" not in kwargs or kwargs["_builder"] is None:
+            raise ValueError(
+                "Did you forget to add @triton.jit ? "
+                "(`_builder` argument must be provided outside of JIT functions.)"
+            )
+        return fn(*args, **kwargs)
+
+    setattr(wrapper, TRITON_BUILTIN, True)
+
+    return wrapper
+
+
+def is_builtin(fn) -> bool:
+    """Is this a registered triton builtin function?"""
+    return getattr(fn, TRITON_BUILTIN, False)
 
 
 def _to_tensor(x, builder):
@@ -35,10 +66,9 @@ def _to_tensor(x, builder):
 
 
 class dtype:
-    SINT_TYPES = ['int1', 'int8', 'int16', 'int32', 'int64']
-    UINT_TYPES = ['uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8', 'fp16', 'bf16', 'fp32', 'fp64']
-    CUSTOMIZED_FP_TYPES = ['fp8']
+    SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
+    UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
+    FP_TYPES = ['fp8e4', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -58,8 +88,11 @@ class dtype:
             self.int_bitwidth = int(name.split('int')[-1])
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
-            if name == 'fp8':
+            if name == 'fp8e4':
                 self.fp_mantissa_width = 3
+                self.primitive_bitwidth = 8
+            elif name == 'fp8e5':
+                self.fp_mantissa_width = 2
                 self.primitive_bitwidth = 8
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
@@ -73,11 +106,13 @@ class dtype:
             elif name == 'fp64':
                 self.fp_mantissa_width = 53
                 self.primitive_bitwidth = 64
+            else:
+                raise RuntimeError(f'Unsupported floating-point type {name}')
         elif name == 'void':
             self.primitive_bitwidth = 0
 
     def is_fp8(self):
-        return self.name == 'fp8'
+        return 'fp8' in self.name
 
     def is_fp16(self):
         return self.name == 'fp16'
@@ -120,9 +155,6 @@ class dtype:
 
     def is_floating(self):
         return self.name in dtype.FP_TYPES
-
-    def is_customized_floating(self):
-        return self.name in dtype.CUSTOMIZED_FP_TYPES
 
     def is_standard_floating(self):
         return self.name in dtype.STANDARD_FP_TYPES
@@ -179,8 +211,10 @@ class dtype:
             return builder.get_int32_ty()
         elif self.name in ('int64', 'uint64'):
             return builder.get_int64_ty()
-        elif self.name == 'fp8':
-            return builder.get_fp8_ty()
+        elif self.name == 'fp8e5':
+            return builder.get_fp8e5_ty()
+        elif self.name == 'fp8e4':
+            return builder.get_fp8e4_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
         elif self.name == 'bf16':
@@ -254,6 +288,8 @@ class block_type(dtype):
         self.numel = 1
         for s in self.shape:
             self.numel *= s
+        if self.numel > TRITON_MAX_TENSOR_NUMEL:
+            raise ValueError(f"numel ({self.numel}) exceeds triton maximum tensor numel ({TRITON_MAX_TENSOR_NUMEL})")
 
         self.name = self.__str__()
 
@@ -310,7 +346,8 @@ uint8 = dtype('uint8')
 uint16 = dtype('uint16')
 uint32 = dtype('uint32')
 uint64 = dtype('uint64')
-float8 = dtype('fp8')
+float8e5 = dtype('fp8e5')
+float8e4 = dtype('fp8e4')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')
@@ -414,6 +451,9 @@ class constexpr:
 
     def __or__(self, other):
         return constexpr(self.value | other.value)
+
+    def __xor__(self, other):
+        return constexpr(self.value ^ other.value)
 
     def logical_or(self, other):
         return constexpr(self.value or other.value)
@@ -532,9 +572,19 @@ class tensor:
         return semantic.and_(self, other, _builder)
 
     @builtin
+    def __rand__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.and_(other, self, _builder)
+
+    @builtin
     def __or__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.or_(self, other, _builder)
+
+    @builtin
+    def __ror__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.or_(other, self, _builder)
 
     @builtin
     def __xor__(self, other, _builder=None):
@@ -542,9 +592,19 @@ class tensor:
         return semantic.xor_(self, other, _builder)
 
     @builtin
+    def __rxor__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.xor_(other, self, _builder)
+
+    @builtin
     def __lshift__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.shl(self, other, _builder)
+
+    @builtin
+    def __rlshift__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.shl(other, self, _builder)
 
     @builtin
     def __rshift__(self, other, _builder=None):
@@ -553,6 +613,14 @@ class tensor:
             return semantic.ashr(self, other, _builder)
         else:
             return semantic.lshr(self, other, _builder)
+
+    @builtin
+    def __rrshift__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        if self.dtype.is_int_signed():
+            return semantic.ashr(other, self, _builder)
+        else:
+            return semantic.lshr(other, self, _builder)
 
     # comparison operators
 
@@ -702,12 +770,13 @@ def num_programs(axis, _builder=None):
 @builtin
 def arange(start, end, _builder=None):
     """
-    Returns contiguous values within the open interval [:code:`start`, :code:`end`).
+    Returns contiguous values within the left-closed and right-open interval [:code:`start`, :code:`end`). \
+    End - Start must be less than or equal to TRITON_MAX_TENSOR_NUMEL = 131072
 
     :param start: Start of the interval. Must be a power of two.
-    :type start: int
-    :param stop: End of the interval. Must be a power of two >= start.
-    :type stop: int
+    :type start: int32
+    :param end: End of the interval. Must be a power of two > start.
+    :type end: int32
     """
     start = _constexpr_to_value(start)
     end = _constexpr_to_value(end)
@@ -813,9 +882,8 @@ def view(input, shape, _builder=None):
 
 @builtin
 def reshape(input, shape, _builder=None):
-    # TODO: should be more than just a view
     shape = _shape_check_impl(shape)
-    return semantic.view(input, shape, _builder)
+    return semantic.reshape(input, shape, _builder)
 
 # -----------------------
 # Linear Algebra
@@ -823,7 +891,7 @@ def reshape(input, shape, _builder=None):
 
 
 @builtin
-def dot(input, other, allow_tf32=True, _builder=None):
+def dot(input, other, allow_tf32=True, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks.
 
@@ -835,7 +903,8 @@ def dot(input, other, allow_tf32=True, _builder=None):
     :type other: 2D tensor of scalar-type in {:code:`float16`, :code:`bfloat16`, :code:`float32`}
     """
     allow_tf32 = _constexpr_to_value(allow_tf32)
-    return semantic.dot(input, other, allow_tf32, _builder)
+    out_dtype = _constexpr_to_value(out_dtype)
+    return semantic.dot(input, other, allow_tf32, out_dtype, _builder)
 
 
 # -----------------------
@@ -844,55 +913,87 @@ def dot(input, other, allow_tf32=True, _builder=None):
 
 
 @builtin
-def load(pointer, mask=None, other=None, cache_modifier="", eviction_policy="", volatile=False, _builder=None):
+def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option="", cache_modifier="",
+         eviction_policy="", volatile=False, _builder=None):
     """
-    Return a tensor of data whose values are, elementwise, loaded from memory at location defined by :code:`pointer`.
+    Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
+        (1) `pointer` could be a single element pointer, then a scalar will be loaded
+            - `mask` and `other` must be scalar too
+            - `other` is implicitly typecast to `pointer.dtype.element_ty`
+            - `boundary_check` and `padding_option` must be empty
+        (2) `pointer` could be element-wise tensor of pointers, in which case:
+            - `mask` and `other` are implicitly broadcast to `pointer.shape`
+            - `other` is implicitly typecast to `pointer.dtype.element_ty`
+            - `boundary_check` and `padding_option` must be empty
+        (3) `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+            - `mask` and `other` must be None
+            - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access
 
-    :code:`mask` and :code:`other` are implicitly broadcast to :code:`pointer.shape`.
-
-    :code:`other` is implicitly typecast to :code:`pointer.dtype.element_ty`.
-
-    :param pointer: Pointers to the data to be loaded.
-    :type pointer: Block of dtype=triton.PointerDType
-    :param mask: if mask[idx] is false, do not load the data at address :code:`pointer[idx]`.
-    :type mask: Block of triton.int1, optional
-    :param other: if mask[idx] is false, return other[idx]
+    :param pointer: Pointer to the data to be loaded
+    :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
+    :param mask: if `mask[idx]` is false, do not load the data at address `pointer[idx]`
+        (must be `None` with block pointers)
+    :type mask: Block of `triton.int1`, optional
+    :param other: if `mask[idx]` is false, return `other[idx]`
     :type other: Block, optional
-    :param cache_modifier: changes cache option in nvidia ptx
-    'type cache_modifier: str, optional
+    :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
+    :type boundary_check: tuple of ints, optional
+    :param padding_option: should be one of {"", "zero", "nan"}, do padding while out of bound
+    :param cache_modifier: changes cache option in NVIDIA PTX
+    :type cache_modifier: str, optional
+    :param eviction_policy: changes eviction policy in NVIDIA PTX
+    :type eviction_policy: str, optional
+    :param volatile: changes volatile option in NVIDIA PTX
+    :type volatile: bool, optional
     """
-    # mask, other can be constexpr
+    # `mask` and `other` can be constexpr
     if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
     if _constexpr_to_value(other) is not None:
         other = _to_tensor(other, _builder)
+    padding_option = _constexpr_to_value(padding_option)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
-    return semantic.load(pointer, mask, other, cache_modifier, eviction_policy, volatile, _builder)
+    return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
+                         volatile, _builder)
 
 
 @builtin
-def store(pointer, value, mask=None, cache_modifier="", eviction_policy="", _builder=None):
+def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _builder=None):
     """
-    Stores :code:`value` tensor of elements in memory, element-wise, at the memory locations specified by :code:`pointer`.
+    Store a tensor of data into memory locations defined by `pointer`:
+        (1) `pointer` could be a single element pointer, then a scalar will be stored
+            - `mask` must be scalar too
+            - `boundary_check` and `padding_option` must be empty
+        (2) `pointer` could be element-wise tensor of pointers, in which case:
+            - `mask` is implicitly broadcast to `pointer.shape`
+            - `boundary_check` must be empty
+        (3) or `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+            - `mask` must be None
+            - `boundary_check` can be specified to control the behavior of out-of-bound access
+    `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
 
-    :code:`value` is implicitly broadcast to :code:`pointer.shape` and typecast to :code:`pointer.dtype.element_ty`.
-
-    :param pointer: The memory locations where the elements of :code:`value` are stored.
-    :type pointer: Block of dtype=triton.PointerDType
-    :param value: The tensor of elements to be stored.
+    :param pointer: The memory location where the elements of `value` are stored
+    :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
+    :param value: The tensor of elements to be stored
     :type value: Block
-    :param mask: If mask[idx] is false, do not store :code:`value[idx]` at :code:`pointer[idx]`.
+    :param mask: If `mask[idx]` is false, do not store `value[idx]` at `pointer[idx]`
     :type mask: Block of triton.int1, optional
+    :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
+    :type boundary_check: tuple of ints, optional
+    :param cache_modifier: changes cache option in NVIDIA PTX
+    :type cache_modifier: str, optional
+    :param eviction_policy: changes eviction policy in NVIDIA PTX
+    :type eviction_policy: str, optional
     """
-    # value can be constexpr
+    # `value` can be constexpr
     value = _to_tensor(value, _builder)
     if _constexpr_to_value(mask) is not None:
         mask = _to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
-    return semantic.store(pointer, value, mask, cache_modifier, eviction_policy, _builder)
+    return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, _builder)
 
 
 # -----------------------
@@ -992,7 +1093,7 @@ def where(condition, x, y, _builder=None):
     If you want to avoid unintended memory operations, use the :code:`mask` arguments in `triton.load` and `triton.store` instead.
 
     The shape of :code:`x` and :code:`y` are both broadcast to the shape of :code:`condition`.
-    :code:`x` and :code:`y` must have the data type.
+    :code:`x` and :code:`y` must have the same data type.
 
     :param condition: When True (nonzero), yield x, otherwise yield y.
     :type condition: Block of triton.bool
@@ -1026,7 +1127,7 @@ def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
-    Computes the element-wise {name} of :code:`x`
+    Computes the element-wise {name} of :code:`x`.
 
     :param x: the input values
     :type x: Block
@@ -1065,6 +1166,12 @@ def sin(x, _builder=None):
 @_add_math_1arg_docstr("square root")
 def sqrt(x, _builder=None):
     return semantic.sqrt(x, _builder)
+
+
+@builtin
+@_add_math_1arg_docstr("absolute value")
+def abs(x, _builder=None):
+    return semantic.abs(x, _builder)
 
 
 # -----------------------
@@ -1174,10 +1281,6 @@ def max_contiguous(input, values, _builder=None):
 # Standard library
 # -----------------------
 
-@triton.jit
-def abs(x):
-    return where(x >= 0, x, -x)
-
 
 @triton.jit
 def cdiv(x, div):
@@ -1236,7 +1339,7 @@ def softmax(x, ieee_rounding=False):
 @triton.jit
 def ravel(x):
     """
-    Returns a contiguous flattened view of :code:`x`
+    Returns a contiguous flattened view of :code:`x`.
 
     :param x: the input tensor
     :type x: Block
@@ -1294,24 +1397,83 @@ def zeros(shape, dtype):
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
 
+# -----------------------
+# Debugging functions
+# -----------------------
+
 
 @builtin
-def printf(prefix, *args, _builder=None):
+def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
+    pass
+
+
+@builtin
+def static_assert(cond, msg="", _builder=None):
+    pass
+
+
+@builtin
+def device_print(prefix, *args, _builder=None):
     import string
-    new_prefix = prefix
-    if isinstance(prefix, constexpr):
-        new_prefix = prefix.value
-    assert isinstance(new_prefix, str), f"{new_prefix} is not string"
+    prefix = _constexpr_to_value(prefix)
+    assert isinstance(prefix, str), f"{prefix} is not string"
     b_ascii = True
-    for ch in new_prefix:
+    for ch in prefix:
         if ch not in string.printable:
             b_ascii = False
             break
-    assert b_ascii, f"{new_prefix} is not an ascii string"
+    assert b_ascii, f"{prefix} is not an ascii string"
     new_args = []
     for arg in args:
         new_args.append(_to_tensor(arg, _builder))
-    return semantic.printf(new_prefix, new_args, _builder)
+    return semantic.device_print(prefix, new_args, _builder)
+
+
+@builtin
+def device_assert(cond, msg="", _builder=None):
+    msg = _constexpr_to_value(msg)
+    import inspect
+    frame = inspect.currentframe()
+    module = inspect.getmodule(frame)
+    # The triton function module doesn't have the name attribute.
+    # We use this trick to find the caller.
+    while hasattr(module, "__name__"):
+        frame = frame.f_back
+        module = inspect.getmodule(frame)
+    func_name = frame.f_code.co_name
+    file_name = frame.f_back.f_code.co_filename
+    # TODO: The line number currently indicates the line
+    # where the triton function is called but not where the
+    # device_assert is called. Need to enhance this.
+    lineno = frame.f_back.f_lineno
+    return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
+
+
+@builtin
+def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _builder=None):
+    """
+    Returns a pointer to a block in a parent tensor
+
+    :param base: The base pointer to the parent tensor
+    :param shape: The shape of the parent tensor
+    :param strides: The strides of the parent tensor
+    :param offsets: The offsets to the block
+    :param block_shape: The shape of the block
+    :param order: The order of the original data format
+    """
+    return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
+
+
+@builtin
+def advance(base: tensor, offsets, _builder=None):
+    """
+    Advance a block pointer
+
+    :param base: the block pointer to advance
+    :param offsets: the offsets to advance, a tuple by dimension
+    """
+    return semantic.advance(base, offsets, _builder)
+
 
 # -----------------------
 # Iterators

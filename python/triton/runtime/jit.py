@@ -13,12 +13,32 @@ from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, 
 import torch
 
 import triton
-from triton.utils import MockTensor
 
-try:
-    from torch._C import _cuda_getCurrentRawStream as get_cuda_stream
-except ImportError:
-    get_cuda_stream = lambda dev_idx: torch.cuda.current_stream(dev_idx).cuda_stream
+
+def get_cuda_stream(idx=None):
+    if idx is None:
+        idx = get_current_device()
+    try:
+        from torch._C import _cuda_getCurrentRawStream
+        return _cuda_getCurrentRawStream(idx)
+    except ImportError:
+        import torch
+        return torch.cuda.current_stream(idx).cuda_stream
+
+
+def get_current_device():
+    import torch
+    return torch.cuda.current_device()
+
+
+def set_current_device(idx):
+    import torch
+    torch.cuda.set_device(idx)
+
+
+def get_device_capability(idx):
+    import torch
+    return torch.cuda.get_device_capability(idx)
 
 
 T = TypeVar('T')
@@ -59,7 +79,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if func.__module__ and func.__module__.startswith('triton.'):
             return
-        assert isinstance(func, JITFunction)
+        assert isinstance(func, JITFunction), f"Function \"{func.__name__}\" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this"
         if func.hash is None:
             tree = ast.parse(func.src)
             finder = DependenciesFinder(func.__globals__, func.src)
@@ -80,8 +100,11 @@ def version_key():
     # frontend
     with open(__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
-    with open(triton.compiler.__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(*triton.__path__, 'compiler')
+    for lib in pkgutil.iter_modules([compiler_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
     # backend
     with open(triton._C.libtriton.__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
@@ -125,8 +148,6 @@ class JITFunction(KernelInterface[T]):
         elif isinstance(arg, int):
             if -2**31 <= arg and arg <= 2**31 - 1:
                 return "i32"
-            elif 2**31 <= arg and arg <= 2**32 - 1:
-                return "u32"
             elif 2**63 <= arg and arg <= 2**64 - 1:
                 return "u64"
             else:
@@ -162,33 +183,31 @@ class JITFunction(KernelInterface[T]):
 
     @staticmethod
     def _type_of(key):
-        if isinstance(key, (torch.dtype, triton.language.dtype)):
-            ty = {
-                torch.bool: 'i1',
-                torch.float16: 'fp16',
-                torch.bfloat16: 'bf16',
-                torch.float32: 'fp32',
-                torch.float64: 'fp64',
-                torch.uint8: 'u8',
-                torch.int8: 'i8',
-                torch.int16: 'i16',
-                torch.int32: 'i32',
-                torch.int64: 'i64',
-
-                triton.language.uint8: 'u8',
-                triton.language.uint16: 'u16',
-                triton.language.uint32: 'u32',
-                triton.language.uint64: 'u64',
-                triton.language.float8: 'fp8',
-                triton.language.float16: 'fp16',
-                triton.language.bfloat16: 'bf16',
-                triton.language.float32: 'fp32',
-            }[key]
-            return f'*{ty}'
+        # None are nullptr -- implicitly converted to *i8
         if key is None:
             return '*i8'
-        assert isinstance(key, str)
-        return key
+        dtype_str = str(key).split(".")[-1]
+        tys = {
+            "bool": "i1",
+            "float8e5": "fp8e5",
+            "float8e4": "fp8e4",
+            "float16": "fp16",
+            "bfloat16": "bf16",
+            "float32": "fp32",
+            "float64": "fp64",
+            "int8": "i8",
+            "int16": "i16",
+            "int32": "i32",
+            "int64": "i64",
+            "uint8": "u8",
+            "uint16": "u16",
+            "uint32": "u32",
+            "uint64": "u64",
+        }
+        # reinterpret can create triton type
+        for v in list(tys.values()):
+            tys[v] = v
+        return key if isinstance(key, str) else f"*{tys[dtype_str]}"
 
     def _make_signature(self, sig_key):
         signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
@@ -219,12 +238,36 @@ class JITFunction(KernelInterface[T]):
 
         return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(module, name), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
 
+    def _get_arg_specialization_key(self, arg) -> str:
+        arg_annotation = self.__annotations__.get(arg, None)
+        if not arg_annotation:
+            return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") \
+                        else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) \
+                        else (False,)'
+        elif arg_annotation is torch.Tensor:
+            return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)'
+        elif arg_annotation is int:
+            return f'({arg} % {JITFunction.divisibility} == 0, {arg} == 1)'
+        else:
+            return '(False,)'
+
+    def _get_arg_sig_key(self, arg) -> str:
+        arg_annotation = self.__annotations__.get(arg, None)
+        if arg_annotation is torch.Tensor:
+            return f'{arg}.dtype'
+        elif arg_annotation is bool:
+            return "i1"
+        elif arg_annotation is float:
+            return 'fp32'
+        else:
+            return f'_key_of({arg})'
+
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
         constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
         args = ', '.join(regular_args)
         # cache key for regular argument type
-        sig_keys = ', '.join([f'_key_of({arg})' for arg in regular_args])
+        sig_keys = ', '.join([self._get_arg_sig_key(arg) for arg in regular_args])
         # cache key for constexpr argument values
         constexpr_keys = ', '.join(constexpr_args)
         # cache key for argument specialization
@@ -232,18 +275,17 @@ class JITFunction(KernelInterface[T]):
         for i, arg in enumerate(regular_args):
             if i in self.do_not_specialize:
                 continue
-            specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
-                                f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
-                                f'else (False,)']
+            specializations += [self._get_arg_specialization_key(arg)]
+
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
+def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None):
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
-    key = (version_key, sig_key, constexpr_key, spec_key)
+    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_stages, self.debug)
     if not extern_libs is None:
       key = (key, tuple(extern_libs.items()))
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
@@ -253,8 +295,9 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
-    device = torch.cuda.current_device()
-    torch.cuda.set_device(device)
+    if device is None:
+        device = get_current_device()
+        set_current_device(device)
     if stream is None and not warmup:
       stream = get_cuda_stream(device)
     try:
@@ -278,7 +321,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {{i}} is not supported")
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
-        bin = triton.compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs)
+        bin = triton.compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs, debug=self.debug)
         if not warmup:
             bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
         self.cache[device][key] = bin
@@ -287,11 +330,13 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 """
         scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,
                  "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of,
-                 "cache": self.cache, "triton": triton, "torch": torch}
+                 "cache": self.cache, "triton": triton,
+                 "get_current_device": get_current_device,
+                 "set_current_device": set_current_device}
         exec(src, scope)
         return scope[self.fn.__name__]
 
-    def __init__(self, fn, version=None, do_not_specialize=None):
+    def __init__(self, fn, version=None, do_not_specialize=None, debug=None):
         self.fn = fn
         self.module = fn.__module__
         self.version = version
@@ -312,11 +357,14 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         # when called with a grid using __getitem__
         self.kernel_decorators = []
         self.kernel = None
+        self.debug = os.environ.get("TRITON_DEBUG", "0") == "1" if debug is None else debug
         # annotations
         self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
         self.__annotations__ = fn.__annotations__
         # index of constexprs
-        self.constexprs = [self.arg_names.index(ann) for ann in self.__annotations__.keys()]
+        from triton.language.core import \
+            constexpr  # import here rather than at module level due to circular import tangle
+        self.constexprs = [index for index, ty in self.annotations.items() if isinstance(ty, type) and issubclass(ty, constexpr)]
         # launcher
         self.run = self._make_launcher()
         # re-use docs of wrapped function
@@ -380,6 +428,7 @@ def jit(
     *,
     version=None,
     do_not_specialize: Optional[Iterable[int]] = None,
+    debug: Optional[bool] = None,
 ) -> Callable[[T], JITFunction[T]]:
     ...
 
@@ -389,12 +438,14 @@ def jit(
     *,
     version=None,
     do_not_specialize: Optional[Iterable[int]] = None,
+    debug: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
-    :note: When a jit'd function is called, :code:`torch.tensor` arguments are
-        implicitly converted to pointers using the :code:`.data_ptr()` method.
+    :note: When a jit'd function is called, arguments are
+        implicitly converted to pointers if they have a :code:`.data_ptr()` method
+        and a `.dtype` attribute.
 
     :note: This function will be compiled and run on the GPU. It will only have access to:
 
@@ -413,6 +464,7 @@ def jit(
             fn,
             version=version,
             do_not_specialize=do_not_specialize,
+            debug=debug,
         )
 
     if fn is not None:
@@ -420,6 +472,30 @@ def jit(
 
     else:
         return decorator
+
+# -----------------------------------------------------------------------------
+# Utilities for mocking tensors
+# -----------------------------------------------------------------------------
+
+
+class MockTensor:
+    """
+    Can be used in place of real tensors when calling:
+        kernel.warmup(MockTensor(torch.float32), ...)
+    """
+    @staticmethod
+    def wrap_dtype(arg):
+        if arg.__class__.__name__ == "dtype" and\
+           arg.__module__ == "torch":
+            return MockTensor(arg)
+        return arg
+
+    def __init__(self, dtype):
+        self.dtype = dtype
+
+    @staticmethod
+    def data_ptr():
+        return 0  # optimistically assumes multiple of 16
 
 
 class TensorWrapper:
@@ -444,7 +520,7 @@ def reinterpret(tensor, dtype):
         else:
             # Reinterpreting a wrapped tensor to a different type.
             return TensorWrapper(tensor.base, dtype)
-    elif isinstance(tensor, torch.Tensor):
+    elif hasattr(tensor, "data_ptr"):
         # A new wrapper is needed around an unwrapped tensor.
         return TensorWrapper(tensor, dtype)
     else:

@@ -1,4 +1,3 @@
-
 import triton
 import triton.language as tl
 
@@ -15,5 +14,5 @@ def kernel(X, stride_xm,
     tl.store(Zs, tl.load(Xs))
 
 
-ret = triton.compile(kernel, signature="*fp32,i32,*fp32,i32", constants={"BLOCK_M": 64, "BLOCK_N": 64}, output="ttgir")
-print(ret)
+ret = triton.compile(kernel, signature="*fp32,i32,*fp32,i32", constants={"BLOCK_M": 64, "BLOCK_N": 64})
+print(ret.asm["ttgir"])

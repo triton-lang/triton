@@ -2,10 +2,12 @@ import pytest
 import torch
 
 import triton
+import triton.ops
 
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
-def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+def test_op(Z, H, N_CTX, D_HEAD, dtype):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
@@ -21,7 +23,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     for z in range(Z):
         for h in range(H):
             p[:, :, M == 0] = float("-inf")
-    p = torch.softmax(p.float(), dim=-1).half()
+    p = torch.softmax(p.float(), dim=-1).to(dtype)
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
     ref_out.backward(dout)
@@ -37,7 +39,8 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
-    triton.testing.assert_almost_equal(ref_out, tri_out)
-    triton.testing.assert_almost_equal(ref_dv, tri_dv)
-    triton.testing.assert_almost_equal(ref_dk, tri_dk)
-    triton.testing.assert_almost_equal(ref_dq, tri_dq)
+    atol = 1e-1 if dtype == torch.bfloat16 else 1e-2
+    torch.testing.assert_allclose(ref_out, tri_out, atol=atol, rtol=0)
+    torch.testing.assert_allclose(ref_dv, tri_dv, atol=atol, rtol=0)
+    torch.testing.assert_allclose(ref_dk, tri_dk, atol=atol, rtol=0)
+    torch.testing.assert_allclose(ref_dq, tri_dq, atol=atol, rtol=0)
