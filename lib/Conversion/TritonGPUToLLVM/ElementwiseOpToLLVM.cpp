@@ -106,11 +106,39 @@ struct FpToFpOpConversion
   convertFp8E5M2x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
+#ifdef USE_ROCM
+    auto ctx = rewriter.getContext();
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    Value a0 = undef(fp8x4VecTy);
+    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
+    a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
+    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
+    a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
+    a0 = bitcast(a0, i32_ty);
+
+    Value a1 = undef(fp8x4VecTy);
+    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
+    a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
+    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
+    a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
+    a1 = bitcast(a1, i32_ty);
+
+    auto fp16x2VecTy = vec_ty(f16_ty, 2);
+    auto fp16x2Vec0 = bitcast(a0, fp16x2VecTy);
+    auto fp16x2Vec1 = bitcast(a1, fp16x2VecTy);
+
+    return { extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
+             extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
+             extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
+             extract_element(f16_ty, fp16x2Vec1, i32_val(1))
+           };
+#else
     auto *ptxAsm = "{                           \n"
                    "prmt.b32 $0, 0, $2, 0x5140; \n\t"
                    "prmt.b32 $1, 0, $2, 0x7362; \n\t"
                    "}";
     return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+#endif
   }
 
   /* ------------------ */
@@ -321,10 +349,33 @@ struct FpToFpOpConversion
   convertFp16x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
+#ifdef USE_ROCM
+    auto fp16x2VecTy = vec_ty(f16_ty, 2);
+    Value fp16x2Vec0 = undef(fp16x2VecTy);
+    Value fp16x2Vec1 = undef(fp16x2VecTy);
+    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v0, i32_val(0));
+    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v1, i32_val(1));
+    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v2, i32_val(0));
+    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v3, i32_val(1));
+    Value b0 = bitcast(fp16x2Vec0, i32_ty);
+    Value b1 = bitcast(fp16x2Vec1, i32_ty);
+
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    b0 = bitcast(b0, fp8x4VecTy); 
+    b1 = bitcast(b1, fp8x4VecTy); 
+
+    return {extract_element(i8_ty, b0, i32_val(1)),
+            extract_element(i8_ty, b0, i32_val(3)),
+            extract_element(i8_ty, b1, i32_val(1)),
+            extract_element(i8_ty, b1, i32_val(3))
+            };
+
+#else
     auto *ptxAsm = "{                                      \n"
                    "prmt.b32 $0, $1, $2, 0x7531; \n\t"
                    "}";
     return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+#endif
   }
 
   /* ------------------ */
