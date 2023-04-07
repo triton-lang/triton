@@ -13,9 +13,6 @@ T = TypeVar('T')
 
 TRITON_MAX_TENSOR_NUMEL = 131072
 
-
-T = TypeVar("T")
-
 TRITON_BUILTIN = "__triton_builtin__"
 
 

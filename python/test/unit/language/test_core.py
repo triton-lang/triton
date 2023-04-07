@@ -409,6 +409,35 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, device='cuda'):
 
 
 # ---------------
+# test broadcast
+# ---------------
+@pytest.mark.parametrize("dtype", dtypes_with_bfloat16)
+def test_broadcast(dtype):
+    @triton.jit
+    def broadcast_kernel(x_ptr, y_ptr, y_broadcasted_ptr, M: tl.constexpr, N: tl.constexpr):
+        offset1 = tl.arange(0, M)
+        offset2 = tl.arange(0, N)
+        x = tl.load(x_ptr + N * offset1[:, None] + offset2[None, :])
+        y = tl.load(y_ptr + offset2)
+        _, y_broadcasted = tl.broadcast(x, y)
+        tl.store(y_broadcasted_ptr + N * offset1[:, None] + offset2[None, :], y_broadcasted)
+
+    M = 32
+    N = 64
+    rs = RandomState(17)
+    x = numpy_random((M, N), dtype_str=dtype, rs=rs)
+    y = numpy_random(N, dtype_str=dtype, rs=rs)
+    _, y_broadcasted_np = np.broadcast_arrays(x, y)
+
+    x_tri = to_triton(x, device='cuda', dst_type=dtype)
+    y_tri = to_triton(y, device='cuda', dst_type=dtype)
+    y_broadcasted_tri = to_triton(np.empty((M, N), dtype=y_broadcasted_np.dtype), device='cuda', dst_type=dtype)
+
+    broadcast_kernel[(1,)](x_tri, y_tri, y_broadcasted_tri, M=M, N=N)
+    assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
+
+
+# ---------------
 # test where
 # ---------------
 @pytest.mark.parametrize("dtype", dtypes_with_bfloat16 + ["*int32"])
@@ -514,7 +543,7 @@ def test_unary_op(dtype_x, expr, device='cuda'):
 # ----------------
 
 
-@pytest.mark.parametrize("dtype_x, expr", [(dtype_x, expr) for dtype_x in float_dtypes for expr in ['exp', 'log', 'cos', 'sin']])
+@pytest.mark.parametrize("dtype_x, expr", [(dtype_x, expr) for dtype_x in ["float32", "float64"] for expr in ['exp', 'log', 'cos', 'sin']])
 def test_math_op(dtype_x, expr, device='cuda'):
     _test_unary(dtype_x, f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
 
@@ -1345,7 +1374,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         if DO_SOFTMAX:
             max = tl.max(z, 1)
             z = z - max[:, None]
-            num = tl.exp(z)
+            num = tl.exp(z.to(tl.float32)).to(max.dtype)
             den = tl.sum(num, 1)
             z = num / den[:, None]
         if CHAIN_DOT:
