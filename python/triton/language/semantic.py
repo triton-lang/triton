@@ -1,12 +1,16 @@
 from __future__ import annotations  # remove after python 3.11
 
-from typing import List, Optional, Tuple
+from functools import wraps
+from typing import List, Optional, Tuple, TypeVar
 
 from . import core as tl
 from triton._C.libtriton.triton import ir
 
+T = TypeVar('T')
 
 # Create custom exception that prints message "hello"
+
+
 class IncompatibleTypeErrorImpl(Exception):
     def __init__(self, type_a, type_b):
         self.type_a = type_a
@@ -1315,6 +1319,28 @@ def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
 #                               Math
 # ===----------------------------------------------------------------------===
 
+def _check_dtype(dtypes: List[str]) -> T:
+    """
+    We following libdevice's convention to check accepted data types for math functions.
+    It is not a good practice to support all data types as accelerators/GPUs don't support
+    many float16 and bfloat16 math operations.
+    We should let the users know that they are using and invoke explicit cast to convert
+    the data type to the supported one.
+    """
+    def wrapper(fn):
+        @wraps(fn)
+        def check(*args, **kwargs):
+            # concatenate args and kwargs
+            all_args = list(args) + list(kwargs.values())
+            for arg in [a for a in all_args if isinstance(a, tl.tensor)]:
+                if arg.type.scalar.name not in dtypes:
+                    raise ValueError(f"Expected dtype {dtypes} but got {arg.type.scalar.name}")
+            return fn(*args, **kwargs)
+        return check
+
+    return wrapper
+
+
 def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     x, y = binary_op_type_checking_impl(x, y, builder)
     # FIXME(Keren): not portable, should be fixed
@@ -1322,28 +1348,34 @@ def umulhi(x: tl.tensor, y: tl.tensor, builder: ir.builder) -> tl.tensor:
     return math.mulhi(x, y, _builder=builder)
 
 
+@_check_dtype(dtypes=["fp32", "fp64"])
 def floor(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     # FIXME(Keren): not portable, should be fixed
     from . import math
     return math.floor(x, _builder=builder)
 
 
+@_check_dtype(dtypes=["fp32", "fp64"])
 def exp(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_exp(x.handle), x.type)
 
 
+@_check_dtype(dtypes=["fp32", "fp64"])
 def log(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_log(x.handle), x.type)
 
 
+@_check_dtype(dtypes=["fp32", "fp64"])
 def cos(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_cos(x.handle), x.type)
 
 
+@_check_dtype(dtypes=["fp32", "fp64"])
 def sin(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_sin(x.handle), x.type)
 
 
+@_check_dtype(dtypes=["fp32", "fp64"])
 def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_sqrt(x.handle), x.type)
 
