@@ -19,9 +19,9 @@ sh scripts/amd/clean.sh
 # UNIT_TEST="python/test/unit/language/test_core_amd.py"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_empty_kernel[float32]"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op"
-# UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[float32-float32-+]"
+UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[float32-float32-+]"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[int8-float16-%]"
-UNIT_TEST="python/test/unit/language/test_elementwise.py"
+# UNIT_TEST="python/test/unit/language/test_elementwise.py"
 
 # check for backtrace
 if [ "$1" == "backtrace" ]; then

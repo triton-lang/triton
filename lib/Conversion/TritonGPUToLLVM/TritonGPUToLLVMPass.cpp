@@ -48,6 +48,7 @@ public:
     addLegalDialect<LLVM::LLVMDialect>();
     if (isROCM) {
       addLegalDialect<ROCDL::ROCDLDialect>();
+      addLegalDialect<mlir::scf::SCFDialect>();
     } else {
       addLegalDialect<NVVM::NVVMDialect>();
     }
@@ -98,11 +99,10 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // Set an attribute to indicate this function is a kernel entry.
     newFuncOp->setAttr("nvvm.kernel",
                        rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-#ifndef USE_ROCM
+
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
-#endif
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -119,6 +119,7 @@ public:
     addLegalDialect<LLVM::LLVMDialect>();
     if (isROCM) {
       addLegalDialect<ROCDL::ROCDLDialect>();
+      addLegalDialect<mlir::scf::SCFDialect>();
     } else {
       addLegalDialect<NVVM::NVVMDialect>();
     }

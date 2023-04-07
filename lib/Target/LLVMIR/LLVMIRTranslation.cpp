@@ -240,7 +240,6 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
       assert(false && "unknown extern lib: ");
     }
   }
-#endif
 
   return false;
 }
