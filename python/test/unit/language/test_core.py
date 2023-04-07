@@ -1374,7 +1374,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         if DO_SOFTMAX:
             max = tl.max(z, 1)
             z = z - max[:, None]
-            num = tl.exp(z)
+            num = tl.exp(z.to(tl.float32)).to(max.dtype)
             den = tl.sum(num, 1)
             z = num / den[:, None]
         if CHAIN_DOT:
