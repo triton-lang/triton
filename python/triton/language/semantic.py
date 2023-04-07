@@ -1328,6 +1328,7 @@ def _check_dtype(dtypes: List[str]) -> T:
     the data type to the supported one.
     """
     def wrapper(fn):
+        @wraps(fn)
         def check(*args, **kwargs):
             # concatenate args and kwargs
             all_args = list(args) + list(kwargs.values())
