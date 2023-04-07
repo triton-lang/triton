@@ -3,7 +3,7 @@ import os
 import tempfile
 
 from ...common.build import _build
-from ..cache import CacheManager
+from ..cache import get_cache_manager
 
 
 def get_hip_utils():
@@ -139,18 +139,19 @@ class HIPUtils(object):
     def __init__(self):
         src = self._generate_src()
         key = hashlib.md5(src.encode("utf-8")).hexdigest()
-        cache = CacheManager(key)
+        cache = get_cache_manager(key)
         fname = "hip_utils.so"
-        if not cache.has_file(fname):
+        cache_path = cache.get_file(fname)
+        if cache_path is None:
             with tempfile.TemporaryDirectory() as tmpdir:
                 src_path = os.path.join(tmpdir, "main.c")
                 with open(src_path, "w") as f:
                     f.write(src)
                 so = _build("hip_utils", src_path, tmpdir)
                 with open(so, "rb") as f:
-                    cache.put(f.read(), fname, binary=True)
+                    cache_path = cache.put(f.read(), fname, binary=True)
         import importlib.util
-        spec = importlib.util.spec_from_file_location("hip_utils", cache._make_path(fname))
+        spec = importlib.util.spec_from_file_location("hip_utils", cache_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
