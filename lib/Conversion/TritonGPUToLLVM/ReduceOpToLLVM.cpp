@@ -141,6 +141,10 @@ private:
 
     auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
+    if (!(srcLayout.isa<BlockedEncodingAttr>() ||
+          srcLayout.isa<MmaEncodingAttr>())) {
+      assert(false && "Unexpected srcLayout in ReduceOpConversion");
+    }
     auto srcOrd = triton::gpu::getOrder(srcLayout);
     auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto srcShape = srcTy.getShape();
@@ -193,6 +197,8 @@ private:
     for (int N = smemShape[axis] / 2; N > 0; N >>= 1)
       ints[N] = i32_val(N);
     Value axisSizePerThread = i32_val(sizePerThread[axis]);
+    Value _8 = i32_val(8);
+    Value _16 = i32_val(16);
 
     // reduce across threads
     for (auto it : accs) {
@@ -203,10 +209,12 @@ private:
         accIndex = accIndices[key];
       SmallVector<Value> writeIdx = indices[key];
 
-      Value k = writeIdx[axis];
-      writeIdx[axis] =
-          add(mul(udiv(k, i32_val(16)), i32_val(8)), urem(k, i32_val(8)));
-      // writeIdx[axis] = udiv(writeIdx[axis], axisSizePerThread);
+      if (srcLayout.isa<BlockedEncodingAttr>()) {
+        writeIdx[axis] = udiv(writeIdx[axis], axisSizePerThread);
+      } else {
+        writeIdx[axis] =
+            add(mul(udiv(writeIdx[axis], _16), _8), urem(writeIdx[axis], _8));
+      }
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
       Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
       Value indexWritePtr = gep(indexPtrTy, indexSmemBase, writeOffset);
@@ -284,6 +292,10 @@ private:
 
     auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
+    if (!(srcLayout.isa<BlockedEncodingAttr>() ||
+          srcLayout.isa<MmaEncodingAttr>())) {
+      assert(false && "Unexpected srcLayout in ReduceOpConversion");
+    }
     auto srcShape = srcTy.getShape();
     auto order = getOrder(srcLayout);
 
