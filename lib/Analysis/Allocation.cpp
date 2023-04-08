@@ -33,7 +33,7 @@ namespace triton {
 constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
-getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
+getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
   auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
