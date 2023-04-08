@@ -140,8 +140,9 @@ private:
     bool withIndex = triton::ReduceOp::withIndex(op.getRedOp());
 
     auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
-    auto srcOrd = srcLayout.getOrder();
+    auto srcLayout = srcTy.getEncoding();
+    auto srcOrd = triton::gpu::getOrder(srcLayout);
+    auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto srcShape = srcTy.getShape();
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
@@ -191,7 +192,7 @@ private:
     ints[0] = i32_val(0);
     for (int N = smemShape[axis] / 2; N > 0; N >>= 1)
       ints[N] = i32_val(N);
-    Value sizePerThread = i32_val(srcLayout.getSizePerThread()[axis]);
+    Value axisSizePerThread = i32_val(sizePerThread[axis]);
 
     // reduce across threads
     for (auto it : accs) {
@@ -202,7 +203,10 @@ private:
         accIndex = accIndices[key];
       SmallVector<Value> writeIdx = indices[key];
 
-      writeIdx[axis] = udiv(writeIdx[axis], sizePerThread);
+      Value k = writeIdx[axis];
+      writeIdx[axis] =
+          add(mul(udiv(k, i32_val(16)), i32_val(8)), urem(k, i32_val(8)));
+      // writeIdx[axis] = udiv(writeIdx[axis], axisSizePerThread);
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
       Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
       Value indexWritePtr = gep(indexPtrTy, indexSmemBase, writeOffset);
@@ -341,7 +345,14 @@ private:
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-
+    if (srcLayout.isa<MmaEncodingAttr>()) {
+      Value warpId0 = urem(urem(warpId, i32_val(warpsPerCTA[0])),
+                           i32_val(srcShape[0] / 16));
+      Value warpId1 = urem(
+          urem(udiv(warpId, i32_val(warpsPerCTA[0])), i32_val(warpsPerCTA[1])),
+          i32_val(srcShape[1] / 8));
+      multiDimWarpId = {warpId0, warpId1};
+    }
     Value laneIdAxis = multiDimLaneId[axis];
     Value warpIdAxis = multiDimWarpId[axis];
 
