@@ -27,14 +27,14 @@ The main premise of this project is the following: programming paradigms based o
     |                                                     |   :force:                                           |
     |                                                     |                                                     |
     |   #pragma parallel                                  |   #pragma parallel                                  |
-    |   for(int m = 0; i < M; m++)                        |   for(int m = 0; m < M; m += MB)                    |
+    |   for(int m = 0; m < M; m++)                        |   for(int m = 0; m < M; m += MB)                    |
     |   #pragma parallel                                  |   #pragma parallel                                  |
-    |   for(int n = 0; j < N; n++){                       |   for(int n = 0; n < N; n += NB){                   |
+    |   for(int n = 0; n < N; n++){                       |   for(int n = 0; n < N; n += NB){                   |
     |     float acc = 0;                                  |     float acc[MB, NB] = 0;                          |
     |     for(int k = 0; k < K; k++)                      |     for(int k = 0; k < K; k += KB)                  |
-    |       acc += A[i, k] * B[k, j];                     |       acc +=  A[m:m+MB, k:k+KB]                     |
+    |       acc += A[m, k] * B[k, n];                     |       acc +=  A[m:m+MB, k:k+KB]                     |
     |                                                     |             @ B[k:k+KB, n:n+NB];                    |
-    |     C[i, j] = acc;                                  |     C[m:m+MB, n:n+NB] = acc;                        |
+    |     C[m, n] = acc;                                  |     C[m:m+MB, n:n+NB] = acc;                        |
     |   }                                                 |   }                                                 |
     |                                                     |                                                     |
     +-----------------------------------------------------+-----------------------------------------------------+
