@@ -75,8 +75,6 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
 
   BlockArgument blockArg = value.dyn_cast<BlockArgument>();
 
-  auto parseFuncAttrs = [&]<class T>(T funcOp) {};
-
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
     if (auto fun = dyn_cast<func::FuncOp>(op))
