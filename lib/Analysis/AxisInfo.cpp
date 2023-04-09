@@ -46,22 +46,39 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
   auto rank = 1;
   if (TensorType ty = value.getType().dyn_cast<TensorType>())
     rank = ty.getRank();
-  auto contiHint = 1;
-  auto divHint = 1;
-  auto constHint = 1;
+
+  DimVectorT knownContiguity(rank, 1);
+  DimVectorT knownDivisibility(rank, 1);
+  DimVectorT knownConstancy(rank, 1);
+
   BlockArgument blockArg = value.dyn_cast<BlockArgument>();
+
+  auto parseFuncAttrs = [&]<class T>(T funcOp) {
+    // liast of attributes that we care about
+    SmallVector<std::pair<DimVectorT *, std::string>> retVecs;
+    retVecs.push_back({&knownContiguity, "tt.contiguity"});
+    retVecs.push_back({&knownDivisibility, "tt.divisibility"});
+    retVecs.push_back({&knownConstancy, "tt.constancy"});
+    // initialize attributes one by one
+    for (auto [vec, attrName] : retVecs) {
+      Attribute attr = funcOp.getArgAttr(blockArg.getArgNumber(), attrName);
+      if (auto int_attr = attr.dyn_cast_or_null<IntegerAttr>())
+        *vec = DimVectorT(rank, int_attr.getValue().getZExtValue());
+      if (auto dense_attr = attr.dyn_cast_or_null<DenseElementsAttr>()) {
+        auto vals = dense_attr.getValues<int>();
+        *vec = DimVectorT(vals.begin(), vals.end());
+      }
+    }
+  };
+
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
-    if (func::FuncOp fun = dyn_cast<func::FuncOp>(op)) {
-      Attribute attr =
-          fun.getArgAttr(blockArg.getArgNumber(), "tt.divisibility");
-      if (attr)
-        divHint = attr.cast<IntegerAttr>().getValue().getZExtValue();
-    } else if (auto fun = dyn_cast<LLVM::LLVMFuncOp>(op)) {
-      Attribute attr =
-          fun.getArgAttr(blockArg.getArgNumber(), "tt.divisibility");
-      if (attr)
-        divHint = attr.cast<IntegerAttr>().getValue().getZExtValue();
+    if (auto fun = dyn_cast<func::FuncOp>(op)) {
+      parseFuncAttrs(fun);
+    }
+    // llvm codegen check alignment to generate vector load/store
+    if (auto fun = dyn_cast<LLVM::LLVMFuncOp>(op)) {
+      parseFuncAttrs(fun);
     } else {
       // Derive the divisibility of the induction variable only when
       // the step and the lower bound are both constants
@@ -79,16 +96,13 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
                   step.getValue().cast<IntegerAttr>().getValue().getZExtValue();
               auto k = gcd(lowerBoundVal, stepVal);
               if (k != 0)
-                divHint = k;
+                knownDivisibility = DimVectorT(rank, k);
             }
           }
         }
       }
     }
   } else if (Operation *op = value.getDefiningOp()) {
-    DimVectorT knownContiguity(rank, 1);
-    DimVectorT knownDivisibility(rank, 1);
-    DimVectorT knownConstancy(rank, 1);
     if (Attribute attr = op->getAttr("tt.divisibility")) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownDivisibility = DimVectorT(vals.begin(), vals.end());
@@ -101,12 +115,9 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownConstancy = DimVectorT(vals.begin(), vals.end());
     }
-    return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   }
 
-  return AxisInfo(/*knownContiguity=*/DimVectorT(rank, contiHint),
-                  /*knownDivisibility=*/DimVectorT(rank, divHint),
-                  /*knownConstancy=*/DimVectorT(rank, constHint));
+  return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
 }
 
 // The gcd of both arguments for each dimension
