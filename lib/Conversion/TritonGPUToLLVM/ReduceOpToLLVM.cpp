@@ -357,14 +357,7 @@ private:
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-    if (srcLayout.isa<MmaEncodingAttr>()) {
-      Value warpId0 = urem(urem(warpId, i32_val(warpsPerCTA[0])),
-                           i32_val(srcShape[0] / 16));
-      Value warpId1 = urem(
-          urem(udiv(warpId, i32_val(warpsPerCTA[0])), i32_val(warpsPerCTA[1])),
-          i32_val(srcShape[1] / 8));
-      multiDimWarpId = {warpId0, warpId1};
-    }
+
     Value laneIdAxis = multiDimLaneId[axis];
     Value warpIdAxis = multiDimWarpId[axis];
 
