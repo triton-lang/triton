@@ -501,7 +501,7 @@ public:
 
   SmallVector<Value> emitBaseIndexForLayout(Location loc,
                                             ConversionPatternRewriter &rewriter,
-                                            const Attribute &layout,
+                                            Attribute layout,
                                             RankedTensorType type) const {
     IndexCacheKeyT key = std::make_pair(layout, type);
     auto cache = indexCacheInfo.baseIndexCache;
@@ -531,7 +531,7 @@ public:
   }
 
   SmallVector<SmallVector<unsigned>>
-  emitOffsetForLayout(const Attribute &layout, RankedTensorType type) const {
+  emitOffsetForLayout(Attribute layout, RankedTensorType type) const {
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
       return emitOffsetForBlockedLayout(blockedLayout, type);
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
@@ -548,7 +548,7 @@ public:
   // -----------------------------------------------------------------------
   SmallVector<SmallVector<Value>> emitIndices(Location loc,
                                               ConversionPatternRewriter &b,
-                                              const Attribute &layout,
+                                              Attribute layout,
                                               RankedTensorType type) const {
     IndexCacheKeyT key(layout, type);
     auto cache = indexCacheInfo.indexCache;
@@ -860,8 +860,8 @@ private:
   // Emit indices calculation within each ConversionPattern, and returns a
   // [elemsPerThread X rank] index matrix.
   SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
-      Location loc, ConversionPatternRewriter &rewriter,
-      const Attribute &layout, RankedTensorType type) const {
+      Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
+      RankedTensorType type) const {
     // step 1, delinearize threadId to get the base index
     auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, type);
     // step 2, get offset of each element

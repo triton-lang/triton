@@ -23,23 +23,23 @@ namespace gpu {
 
 unsigned getElemsPerThread(Type type);
 
-SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout);
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
 
-SmallVector<unsigned> getWarpsPerCTA(const Attribute &layout);
+SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
-SmallVector<unsigned> getSizePerThread(const Attribute &layout);
+SmallVector<unsigned> getSizePerThread(Attribute layout);
 
-SmallVector<unsigned> getContigPerThread(const Attribute &layout);
+SmallVector<unsigned> getContigPerThread(Attribute layout);
 
-SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout);
+SmallVector<unsigned> getThreadsPerCTA(Attribute layout);
 
 SmallVector<unsigned>
-getShapePerCTA(const Attribute &layout,
+getShapePerCTA(Attribute layout,
                ArrayRef<int64_t> tensorShape = ArrayRef<int64_t>());
 
-SmallVector<unsigned> getOrder(const Attribute &layout);
+SmallVector<unsigned> getOrder(Attribute layout);
 
-bool isaDistributedLayout(const Attribute &layout);
+bool isaDistributedLayout(Attribute layout);
 
 } // namespace gpu
 } // namespace triton
