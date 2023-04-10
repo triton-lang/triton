@@ -1260,11 +1260,14 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         else:
             np.testing.assert_equal(z_ref, z_tri)
 
+
 layouts = [
     BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0]),
     BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1]),
-    MmaLayout(version=(2, 0), warps_per_cta=[4,1])
+    MmaLayout(version=(2, 0), warps_per_cta=[4, 1])
 ]
+
+
 @pytest.mark.parametrize("M, N", [[128, 16]])
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("axis", [0, 1])
@@ -1351,7 +1354,7 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
     else:
         zeros = [[0] for j in range(M)]
     z = np.array(zeros).astype('float32')
-    
+
     x_tri = torch.tensor(x, device=device)
     z_tri = torch.tensor(z, device=device)
 
