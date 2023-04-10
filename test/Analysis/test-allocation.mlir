@@ -155,6 +155,65 @@ func.func @longlive(%A : !tt.ptr<f16>) {
   // CHECK-NEXT: size = 2560
 }
 
+// This example triggers graph coloring with > 1 colors.
+// CHECK-LABEL: multi_color
+func.func @multi_color(%A : !tt.ptr<f16>) {
+  // 0 CHECK: offset = 0, size = 64
+  %cst = arith.constant dense<0.000000e+00> : tensor<4x8xf16, #A_SHARED>
+  // 1 offset = 1216, size = 32
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<4x4xf16, #A_SHARED>
+  // 2 offset = 1248, size = 128
+  %cst_1 = arith.constant dense<0.000000e+00> : tensor<16x4xf16, #A_SHARED>
+  // 3 
+  %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // 4 scratch offset = 64, size = 1152
+  %0 = triton_gpu.convert_layout %cst_2 : (tensor<16x32xf16, #AL>) -> tensor<16x32xf16, #AL>
+  // 5
+  %1 = triton_gpu.convert_layout %cst : (tensor<4x8xf16, #A_SHARED>) -> tensor<4x8xf16, #AL>
+  // 6 offset = 0, size = 128
+  %cst_3 = arith.constant dense<0.000000e+00> : tensor<4x16xf16, #A_SHARED>
+  // 7
+  %2 = triton_gpu.convert_layout %cst_0 : (tensor<4x4xf16, #A_SHARED>) -> tensor<4x4xf16, #AL>
+  // 8 scratch offset = 0, size = 1152
+  %3 = triton_gpu.convert_layout %cst_2 : (tensor<16x32xf16, #AL>) -> tensor<16x32xf16, #AL>
+  // 9 offset = 0, size = 256
+  %cst_4 = arith.constant dense<0.000000e+00> : tensor<4x32xf16, #A_SHARED>
+  // 10 offset = 256, size = 64
+  %cst_5 = arith.constant dense<0.000000e+00> : tensor<4x8xf16, #A_SHARED>
+  // 11
+  %4 = triton_gpu.convert_layout %cst_5 : (tensor<4x8xf16, #A_SHARED>) -> tensor<4x8xf16, #AL>
+  // 12
+  %5 = triton_gpu.convert_layout %cst_5 : (tensor<4x8xf16, #A_SHARED>) -> tensor<4x8xf16, #AL>
+  // 13 offset = 256, size = 512
+  %cst_6 = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #A_SHARED>
+  // 14 offset = 2528, size = 128
+  %cst_7 = arith.constant dense<0.000000e+00> : tensor<2x32xf16, #A_SHARED>
+  // 15
+  %6 = triton_gpu.convert_layout %cst_0 : (tensor<4x4xf16, #A_SHARED>) -> tensor<4x4xf16, #AL>
+  // 16 offset = 256, size = 512
+  %cst_8 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // 17 offset = 256, size = 32
+  %cst_9 = arith.constant dense<0.000000e+00> : tensor<4x4xf16, #A_SHARED>
+  // 18 offset = 256, size = 512
+  %cst_10 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // 19
+  %7 = triton_gpu.convert_layout %cst_1 : (tensor<16x4xf16, #A_SHARED>) -> tensor<16x4xf16, #AL>
+  // 20
+  %8 = triton_gpu.convert_layout %cst_4 : (tensor<4x32xf16, #A_SHARED>) -> tensor<4x32xf16, #AL>
+  // 21 scratch offset = 0, size = 1152
+  %9 = triton_gpu.convert_layout %cst_2 : (tensor<16x32xf16, #AL>) -> tensor<16x32xf16, #AL>
+  // 22
+  %cst_11 = arith.constant dense<0.000000e+00> : tensor<4x4xf16, #AL>
+  // 23
+  %10 = triton_gpu.convert_layout %cst_7 : (tensor<2x32xf16, #A_SHARED>) -> tensor<2x32xf16, #AL>
+  // 24
+  %cst_12 = arith.constant dense<0.000000e+00> : tensor<4x16xf16, #AL>
+  // 25
+  %cst_13 = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #AL>
+  // size = 2656
+  return
+}
+
 // CHECK-LABEL: alloc
 func.func @alloc(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512
