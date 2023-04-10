@@ -93,6 +93,15 @@ bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
   // same
   if (isSingleValue(op->getOperand(0)))
     return false;
+  auto ptrType = op->getOperand(0).getType().cast<RankedTensorType>();
+  IntegerAttr numWarps =
+      op->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
+          "triton_gpu.num-warps");
+  if (numWarps) {
+    int sizePerThread = triton::gpu::getElemsPerThread(ptrType);
+    if (ptrType.getNumElements() < numWarps.getInt() * 32)
+      return false;
+  }
   // auto ptr = op->getOperand(0);
   //// Case 2: We assume that `evict_last` loads/stores have high hit rate
   // if (auto load = dyn_cast<triton::LoadOp>(op))
@@ -103,15 +112,17 @@ bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
   //     return false;
   // if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
   //   auto encoding = tensorTy.getEncoding();
-  //   // Case 3: Different type conversion is expensive (e.g., mma <-> block)
-  //   if (encoding.getTypeID() != targetEncoding.getTypeID())
+  //   // Case 3: Different type conversion is expensive (e.g., mma <->
+  //   block) if (encoding.getTypeID() != targetEncoding.getTypeID())
   //     return true;
   //   auto sizePerThread = triton::gpu::getSizePerThread(encoding);
-  //   auto targetSizePerThread = triton::gpu::getSizePerThread(targetEncoding);
-  //   auto order = triton::gpu::getOrder(encoding);
-  //   auto targetOrder = triton::gpu::getOrder(targetEncoding);
-  //   // Case 4: The targeEncoding may expose more vectorization opportunities
-  //   return sizePerThread[order[0]] >= targetSizePerThread[targetOrder[0]];
+  //   auto targetSizePerThread =
+  //   triton::gpu::getSizePerThread(targetEncoding); auto order =
+  //   triton::gpu::getOrder(encoding); auto targetOrder =
+  //   triton::gpu::getOrder(targetEncoding);
+  //   // Case 4: The targeEncoding may expose more vectorization
+  //   opportunities return sizePerThread[order[0]] >=
+  //   targetSizePerThread[targetOrder[0]];
   // }
   return true;
 }
