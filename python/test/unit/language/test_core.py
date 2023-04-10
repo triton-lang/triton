@@ -110,6 +110,26 @@ def check_type_supported(dtype):
         pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
 
 
+class MmaLayout:
+    def __init__(self, version, warps_per_cta):
+        self.version = version
+        self.warps_per_cta = str(warps_per_cta)
+
+    def __str__(self):
+        return f"#triton_gpu.mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}}}>"
+
+
+class BlockedLayout:
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
+        self.sz_per_thread = str(size_per_thread)
+        self.threads_per_warp = str(threads_per_warp)
+        self.warps_per_cta = str(warps_per_cta)
+        self.order = str(order)
+
+    def __str__(self):
+        return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
+
+
 @pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
 def test_empty_kernel(dtype_x, device='cuda'):
     SIZE = 128
@@ -1240,81 +1260,105 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         else:
             np.testing.assert_equal(z_ref, z_tri)
 
+layouts = [
+    BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1]),
+    MmaLayout(version=(2, 0), warps_per_cta=[4,1])
+]
+@pytest.mark.parametrize("M, N", [[128, 16]])
+@pytest.mark.parametrize("src_layout", layouts)
+@pytest.mark.parametrize("axis", [0, 1])
+def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
+    ir_axis0 = f"""
+    #blocked = #triton_gpu.blocked<{{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}}>
+    #blocked1 = #triton_gpu.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}}>
+    #src = {src_layout}
+    """ + """
+    module attributes {"triton_gpu.num-warps" = 4 : i32} {
+    func.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+        %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+        %1 = tt.expand_dims %0 {axis = 1 : i32} : (tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<128x1xi32, #blocked>
+        %2 = tt.splat %arg1 : (i32) -> tensor<128x1xi32, #blocked>
+        %3 = arith.muli %1, %2 : tensor<128x1xi32, #blocked>
+        %4 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<128x1x!tt.ptr<f32>, #blocked>
+        %5 = tt.addptr %4, %3 : tensor<128x1x!tt.ptr<f32>, #blocked>, tensor<128x1xi32, #blocked>
+        %6 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+        %7 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
+        %8 = tt.expand_dims %6 {axis = 0 : i32} : (tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>) -> tensor<1x16xi32, #blocked>
+        %9 = tt.expand_dims %7 {axis = 0 : i32} : (tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>) -> tensor<1x16xi32, #blocked1>
+        %10 = tt.broadcast %5 : (tensor<128x1x!tt.ptr<f32>, #blocked>) -> tensor<128x16x!tt.ptr<f32>, #blocked>
+        %11 = tt.broadcast %8 : (tensor<1x16xi32, #blocked>) -> tensor<128x16xi32, #blocked>
+        %12 = tt.addptr %10, %11 : tensor<128x16x!tt.ptr<f32>, #blocked>, tensor<128x16xi32, #blocked>
+        %13 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<1x16x!tt.ptr<f32>, #blocked1>
+        %14 = tt.addptr %13, %9 : tensor<1x16x!tt.ptr<f32>, #blocked1>, tensor<1x16xi32, #blocked1>
+        %15 = tt.load %12 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x16xf32, #blocked>
+        %19 = triton_gpu.convert_layout %15 : (tensor<128x16xf32, #blocked>) -> tensor<128x16xf32, #src>
+        %16 = tt.reduce %19 {axis = 0 : i32, redOp = 12 : i32} : tensor<128x16xf32, #src> -> tensor<16xf32, #triton_gpu.slice<{dim = 0, parent = #src}>>
+        %17 = triton_gpu.convert_layout %16 : (tensor<16xf32, #triton_gpu.slice<{dim = 0, parent = #src}>>) -> tensor<16xf32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
+        %18 = tt.expand_dims %17 {axis = 0 : i32} : (tensor<16xf32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>) -> tensor<1x16xf32, #blocked1>
+        tt.store %14, %18 {cache = 1 : i32, evict = 1 : i32} : tensor<1x16xf32, #blocked1>
+        return
+    }
+    }
+    """
 
-@pytest.mark.parametrize("M, N, K, num_warps, allow_tf32, in_dtype, out_dtype, axis",
-                         [(*shape_nw, allow_tf32, in_dtype, out_dtype, axis)
-                          for shape_nw in [[128, 16, 16, 4]]
-                          for allow_tf32 in [True]
-                          for in_dtype, out_dtype in [('float32', 'float32')]
-                          for axis in [0, 1]])
-def test_reduce_mma(M, N, K, num_warps, allow_tf32, in_dtype, out_dtype, axis, device='cuda'):
-    capability = torch.cuda.get_device_capability()
-    torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    ir_axis1 = f"""
+    #blocked = #triton_gpu.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}}>
+    #blocked1 = #triton_gpu.blocked<{{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}}>
+    #src = {src_layout}
+    """ + """
+    module attributes {"triton_gpu.num-warps" = 4 : i32} {
+    func.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+        %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+        %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+        %2 = tt.expand_dims %0 {axis = 1 : i32} : (tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<128x1xi32, #blocked>
+        %3 = tt.expand_dims %1 {axis = 1 : i32} : (tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>) -> tensor<128x1xi32, #blocked1>
+        %4 = tt.splat %arg1 : (i32) -> tensor<128x1xi32, #blocked1>
+        %5 = arith.muli %3, %4 : tensor<128x1xi32, #blocked1>
+        %6 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<128x1x!tt.ptr<f32>, #blocked1>
+        %7 = tt.addptr %6, %5 : tensor<128x1x!tt.ptr<f32>, #blocked1>, tensor<128x1xi32, #blocked1>
+        %8 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
+        %9 = tt.expand_dims %8 {axis = 0 : i32} : (tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>) -> tensor<1x16xi32, #blocked1>
+        %10 = tt.broadcast %7 : (tensor<128x1x!tt.ptr<f32>, #blocked1>) -> tensor<128x16x!tt.ptr<f32>, #blocked1>
+        %11 = tt.broadcast %9 : (tensor<1x16xi32, #blocked1>) -> tensor<128x16xi32, #blocked1>
+        %12 = tt.addptr %10, %11 : tensor<128x16x!tt.ptr<f32>, #blocked1>, tensor<128x16xi32, #blocked1>
+        %13 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<128x1x!tt.ptr<f32>, #blocked>
+        %14 = tt.addptr %13, %2 : tensor<128x1x!tt.ptr<f32>, #blocked>, tensor<128x1xi32, #blocked>
+        %15 = tt.load %12 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x16xf32, #blocked1>
+        %19 = triton_gpu.convert_layout %15 : (tensor<128x16xf32, #blocked1>) -> tensor<128x16xf32, #src>
+        %16 = tt.reduce %19 {axis = 1 : i32, redOp = 12 : i32} : tensor<128x16xf32, #src> -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #src}>>
+        %17 = triton_gpu.convert_layout %16 : (tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #src}>>) -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+        %18 = tt.expand_dims %17 {axis = 1 : i32} : (tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<128x1xf32, #blocked>
+        tt.store %14, %18 {cache = 1 : i32, evict = 1 : i32} : tensor<128x1xf32, #blocked>
+        return
+    }
+    }
+    """
 
-    # triton kernel
-    @triton.jit
-    def kernel(X, stride_xm, stride_xk,
-               Y, stride_yk, stride_yn,
-               W, stride_wn, stride_wl,
-               Z, stride_zm, stride_zn,
-               out_dtype: tl.constexpr,
-               BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-               ALLOW_TF32: tl.constexpr,
-               AXIS: tl.constexpr):
-        off_m = tl.arange(0, BLOCK_M)
-        off_n = tl.arange(0, BLOCK_N)
-        off_l = tl.arange(0, BLOCK_N)
-        off_k = tl.arange(0, BLOCK_K)
-        Xs = X + off_m[:, None] * stride_xm + off_k[None, :] * stride_xk
-        Ys = Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn
-        Ws = W + off_n[:, None] * stride_wn + off_l[None, :] * stride_wl
-        Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
-        x = tl.load(Xs)
-        y = tl.load(Ys)
-        z = tl.dot(x, y, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
-        max = tl.max(z, AXIS)
-        if AXIS == 1:
-            z = z - max[:, None]
-        else:
-            z = z - max[None, :]
-        min = tl.min(z, AXIS)
-        if AXIS == 1:
-            z = z - min[:, None]
-        else:
-            z = z - min[None, :]
-        w = tl.load(Ws)
-        z = tl.dot(z.to(w.dtype), w, out_dtype=out_dtype)
-        tl.store(Zs, z)
-    # input
+    ir = ir_axis0 if axis == 0 else ir_axis1
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+
     rs = RandomState(17)
-    x = rs.randint(0, 4, (M, K)).astype(in_dtype)
-    y = rs.randint(0, 4, (K, N)).astype(in_dtype)
-    w = np.ones((N, N)).astype(in_dtype)
-    z = np.zeros((M, N)).astype(in_dtype)
-    if in_dtype == 'float32' and allow_tf32:
-        x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
-        y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
-        w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
+    x = rs.randint(0, 4, (M, N)).astype('float32')
+    x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
+
+    if axis == 0:
+        zeros = [[0 for i in range(N)]]
+    else:
+        zeros = [[0] for j in range(M)]
+    z = np.array(zeros).astype('float32')
+    
     x_tri = torch.tensor(x, device=device)
-    y_tri = torch.tensor(y, device=device)
-    w_tri = torch.tensor(w, device=device)
     z_tri = torch.tensor(z, device=device)
-    out_dtype = tl.float32
 
-    pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
-                         y_tri, y_tri.stride(0), y_tri.stride(1),
-                         w_tri, w_tri.stride(0), w_tri.stride(1),
-                         z_tri, z_tri.stride(0), z_tri.stride(1),
-                         out_dtype,
-                         BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
-                         AXIS=axis,
-                         ALLOW_TF32=allow_tf32,
-                         num_warps=num_warps)
+    pgm = kernel[(1, 1, 4)](x_tri, x_tri.stride(0), z_tri)
 
-    z_ref = np.matmul(x, y)
-    z_ref = z_ref - np.max(z_ref, axis=axis, keepdims=True)
-    z_ref = z_ref - np.min(z_ref, axis=axis, keepdims=True)
-    z_ref = np.matmul(z_ref, w)
+    z_ref = np.max(x, axis=axis, keepdims=True)
+
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
@@ -2264,27 +2308,6 @@ def test_while():
 # test layout conversions
 # -----------------------
 # TODO: backend should be tested separately
-
-
-class MmaLayout:
-    def __init__(self, version, warps_per_cta):
-        self.version = version
-        self.warps_per_cta = str(warps_per_cta)
-
-    def __str__(self):
-        return f"#triton_gpu.mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}}}>"
-
-
-class BlockedLayout:
-    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
-        self.sz_per_thread = str(size_per_thread)
-        self.threads_per_warp = str(threads_per_warp)
-        self.warps_per_cta = str(warps_per_cta)
-        self.order = str(order)
-
-    def __str__(self):
-        return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
-
 
 layouts = [
     # MmaLayout(version=1, warps_per_cta=[1, 4]),

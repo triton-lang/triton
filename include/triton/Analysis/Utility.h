@@ -34,6 +34,8 @@ public:
 
   unsigned getScratchSizeInBytes();
 
+  bool isSupportedLayout();
+
 private:
   triton::ReduceOp op;
   RankedTensorType srcTy{};

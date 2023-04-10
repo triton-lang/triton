@@ -91,6 +91,19 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
   return bytes;
 }
 
+bool ReduceOpHelper::isSupportedLayout() {
+  auto srcLayout = srcTy.getEncoding();
+  if (srcLayout.isa<triton::gpu::BlockedEncodingAttr>()) {
+    return true;
+  }
+  if (auto mmaLayout = srcLayout.dyn_cast<triton::gpu::MmaEncodingAttr>()) {
+    if (mmaLayout.isAmpere()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool isSharedEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
