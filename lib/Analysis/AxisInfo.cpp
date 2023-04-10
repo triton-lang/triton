@@ -52,7 +52,7 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
   BlockArgument blockArg = value.dyn_cast<BlockArgument>();
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
-    if (func::FuncOp fun = dyn_cast<func::FuncOp>(op)) {
+    if (triton::FuncOp fun = dyn_cast<triton::FuncOp>(op)) {
       Attribute attr =
           fun.getArgAttr(blockArg.getArgNumber(), "tt.divisibility");
       if (attr)

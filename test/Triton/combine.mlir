@@ -2,7 +2,7 @@
 // RUN: triton-opt %s -split-input-file -canonicalize -triton-combine | FileCheck %s
 
 // CHECK-LABEL: @test_combine_dot_add_pattern
-func.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>, tensor<128x128xf32>) {
     // CHECK-DAG: %[[d:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
     // CHECK-DAG: %[[b:.*]] = arith.constant dense<2.000000e+00> : tensor<128x128xf32>
     // CHECK-DAG: %[[a:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf32>
@@ -24,7 +24,7 @@ func.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>, tensor<128x12
 
 
 // COM: CHECK-LABEL: @test_combine_addptr_pattern
-func.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
+tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
     %off0 = arith.constant 10 : i32
     %off1 = arith.constant 15 : i32
 
@@ -47,7 +47,7 @@ func.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<
 
 
 // CHECK-LABEL: @test_combine_select_masked_load_pattern
-func.func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1) -> (tensor<8xf32>, tensor<8xf32>) {
+tt.func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1) -> (tensor<8xf32>, tensor<8xf32>) {
     %mask = tt.broadcast %cond : (i1) -> tensor<8xi1>
     %false_val = arith.constant dense<0.0> : tensor<8xf32>
 
@@ -64,7 +64,7 @@ func.func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>,
 }
 
 // CHECK-LABEL: @test_combine_select_masked_load_fail_pattern
-func.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %dummy_load: tensor<8xf32>, %dummy_broadcast: tensor<8xi1>, %cond0: i1, %cond1: i1) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf32>) {
+tt.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %dummy_load: tensor<8xf32>, %dummy_broadcast: tensor<8xi1>, %cond0: i1, %cond1: i1) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf32>) {
     %false_val = arith.constant dense<0.0> : tensor<8xf32>
 
     // Case 1: value at the "load" position is not an "op".  Select should not be canonicalized.
@@ -86,7 +86,7 @@ func.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f
 }
 
 // CHECK-LABEL: @test_combine_broadcast_constant_pattern
-func.func @test_combine_broadcast_constant_pattern(%cst : f32) -> tensor<8x2xf32> {
+tt.func @test_combine_broadcast_constant_pattern(%cst : f32) -> tensor<8x2xf32> {
     // CHECK: %[[cst:.*]] = arith.constant dense<1.000000e+00> : tensor<8x2xf32>
     %const = arith.constant dense<1.0> : tensor<8xf32>
     %bst_out = tt.broadcast %const : (tensor<8xf32>) -> tensor<8x2xf32>
@@ -96,7 +96,7 @@ func.func @test_combine_broadcast_constant_pattern(%cst : f32) -> tensor<8x2xf32
 }
 
 // CHECK-LABEL: @test_canonicalize_masked_load_pattern
-func.func @test_canonicalize_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf32>) {
+tt.func @test_canonicalize_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf32>) {
     %true_mask = arith.constant dense<true> : tensor<8xi1>
     %false_mask = arith.constant dense<false> : tensor<8xi1>
     %other_val = arith.constant dense<0.0> : tensor<8xf32>
@@ -117,7 +117,7 @@ func.func @test_canonicalize_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>) -
 }
 
 // CHECK-LABEL: @test_canonicalize_masked_load_fail_pattern
-func.func @test_canonicalize_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %mask: tensor<8xi1>) -> (tensor<8xf32>, tensor<8xf32>) {
+tt.func @test_canonicalize_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %mask: tensor<8xi1>) -> (tensor<8xf32>, tensor<8xf32>) {
     %other_val = arith.constant dense<0.0> : tensor<8xf32>
 
     // Case: value at the "mask" position is not an "op".  Load should not be canonicalized.
@@ -130,7 +130,7 @@ func.func @test_canonicalize_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32
 }
 
 // CHECK-LABEL: @test_canonicalize_masked_store_pattern
-func.func @test_canonicalize_masked_store_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %val: tensor<8xf32>) {
+tt.func @test_canonicalize_masked_store_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %val: tensor<8xf32>) {
     %true_mask = arith.constant dense<true> : tensor<8xi1>
     %false_mask = arith.constant dense<false> : tensor<8xi1>
 
@@ -144,7 +144,7 @@ func.func @test_canonicalize_masked_store_pattern(%ptr: tensor<8x!tt.ptr<f32>>, 
 }
 
 // CHECK-LABEL: @test_canonicalize_masked_store_fail_pattern
-func.func @test_canonicalize_masked_store_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %val: tensor<8xf32>, %mask: tensor<8xi1>) {
+tt.func @test_canonicalize_masked_store_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %val: tensor<8xf32>, %mask: tensor<8xi1>) {
     // Case: value at the "mask" position is not an "op".  Store should not be canonicalized.
     // CHECK: tt.store %{{.*}}, %{{.*}}, %{{.*}} : tensor<8xf32>
     tt.store %ptr, %val, %mask : tensor<8xf32>
@@ -152,7 +152,7 @@ func.func @test_canonicalize_masked_store_fail_pattern(%ptr: tensor<8x!tt.ptr<f3
 }
 
 // CHECK-LABEL: @test_canonicalize_expand_dims
-func.func @test_canonicalize_expand_dims(%arg0: tensor<f32>) -> (tensor<1x8xf32>) {
+tt.func @test_canonicalize_expand_dims(%arg0: tensor<f32>) -> (tensor<1x8xf32>) {
     %splat = tt.splat %arg0 : (tensor<f32>) -> tensor<8xf32>
     // CHECK: %{{.*}} = tt.splat %arg0 : (tensor<f32>) -> tensor<1x8xf32>
     %ed = tt.expand_dims %splat {axis = 0 : i32} : (tensor<8xf32>) -> tensor<1x8xf32>
@@ -162,7 +162,7 @@ func.func @test_canonicalize_expand_dims(%arg0: tensor<f32>) -> (tensor<1x8xf32>
 
 
 // CHECK-LABEL: @test_canonicalize_view
-func.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>) {
+tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>) {
     %view0 = tt.view %arg0 : (tensor<8xf32>) -> tensor<2x4xf32>
     // CHECK: %{{.*}} = tt.view %arg0 : (tensor<8xf32>) -> tensor<4x2xf32>
     %view1 = tt.view %view0 : (tensor<2x4xf32>) -> tensor<4x2xf32>
@@ -179,7 +179,7 @@ func.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (
 }
 
 // CHECK-LABEL: @test_canonicalize_broadcast
-func.func @test_canonicalize_broadcast(%arg0: tensor<1x1x8xf32>, %arg1: tensor<f32>) -> (tensor<4x2x8xf32>, tensor<8x8xf32>, tensor<1x1x8xf32>) {
+tt.func @test_canonicalize_broadcast(%arg0: tensor<1x1x8xf32>, %arg1: tensor<f32>) -> (tensor<4x2x8xf32>, tensor<8x8xf32>, tensor<1x1x8xf32>) {
     %broadcast0 = tt.broadcast %arg0 : (tensor<1x1x8xf32>) -> tensor<1x2x8xf32>
     // CHECK: %{{.*}} = tt.broadcast %arg0 : (tensor<1x1x8xf32>) -> tensor<4x2x8xf32>
     %broadcast1 = tt.broadcast %broadcast0 : (tensor<1x2x8xf32>) -> tensor<4x2x8xf32>
@@ -196,7 +196,7 @@ func.func @test_canonicalize_broadcast(%arg0: tensor<1x1x8xf32>, %arg1: tensor<f
 }
 
 // CHECK-LABEL: @test_fold_views
-func.func @test_fold_views() -> (tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x128xf32>) {
+tt.func @test_fold_views() -> (tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x128xf32>) {
     %a = arith.constant dense<1.0> : tensor<1x128xf32>
 
     // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<16x8xf32>

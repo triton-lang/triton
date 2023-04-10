@@ -378,7 +378,8 @@ void init_triton_ir(py::module &&m) {
       .def("get_single_function",
            [](mlir::ModuleOp &self) -> mlir::triton::FuncOp {
              llvm::SmallVector<mlir::triton::FuncOp> funcs;
-             self.walk([&](mlir::triton::FuncOp func) { funcs.push_back(func); });
+             self.walk(
+                 [&](mlir::triton::FuncOp func) { funcs.push_back(func); });
              if (funcs.size() != 1)
                throw std::runtime_error("Expected a single function");
              return funcs[0];
@@ -400,12 +401,11 @@ void init_triton_ir(py::module &&m) {
         // initialize registry
         // note: we initialize llvm for undef
         mlir::DialectRegistry registry;
-        registry.insert<mlir::triton::TritonDialect,
-                        mlir::triton::gpu::TritonGPUDialect,
-                        mlir::math::MathDialect, mlir::arith::ArithDialect,
-                        mlir::index::IndexDialect, mlir::scf::SCFDialect,
-                        mlir::cf::ControlFlowDialect,
-                        mlir::LLVM::LLVMDialect>();
+        registry.insert<
+            mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
+            mlir::math::MathDialect, mlir::arith::ArithDialect,
+            mlir::index::IndexDialect, mlir::scf::SCFDialect,
+            mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
 
@@ -660,7 +660,7 @@ void init_triton_ir(py::module &&m) {
                    mlir::NamedAttribute(self.getStringAttr("sym_visibility"),
                                         self.getStringAttr(visibility))};
                return self.create<mlir::triton::FuncOp>(loc, funcName, funcTy,
-                                                      attrs);
+                                                        attrs);
              }
              throw std::runtime_error("invalid function type");
            })

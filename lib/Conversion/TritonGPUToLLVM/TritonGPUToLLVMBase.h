@@ -4,7 +4,6 @@
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "triton/Analysis/Allocation.h"
 
 #include "TypeConverter.h"
@@ -41,12 +40,12 @@ void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
 // TODO(Superjomn): remove the code when MLIR v15.0 is included.
 // All the rights are reserved by the LLVM community.
 
-struct FuncOpConversionBase : public ConvertOpToLLVMPattern<func::FuncOp> {
+struct FuncOpConversionBase : public ConvertOpToLLVMPattern<triton::FuncOp> {
 private:
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
   /// attributes.
-  static void filterFuncAttributes(func::FuncOp op, bool filterArgAttrs,
+  static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
                                    SmallVectorImpl<NamedAttribute> &result) {
 
     for (const auto &attr : op->getAttrs()) {
@@ -66,12 +65,12 @@ private:
   }
 
 protected:
-  using ConvertOpToLLVMPattern<func::FuncOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<triton::FuncOp>::ConvertOpToLLVMPattern;
 
   // Convert input FuncOp to LLVMFuncOp by using the LLVMTypeConverter provided
   // to this legalization pattern.
   LLVM::LLVMFuncOp
-  convertFuncOpToLLVMFuncOp(func::FuncOp funcOp,
+  convertFuncOpToLLVMFuncOp(triton::FuncOp funcOp,
                             ConversionPatternRewriter &rewriter) const {
     // Convert the original function arguments. They are converted using the
     // LLVMTypeConverter provided to this legalization pattern.
