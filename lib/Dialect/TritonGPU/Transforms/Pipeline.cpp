@@ -194,10 +194,13 @@ LogicalResult LoopPipeliner::initialize() {
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.getPtr();
       unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
+
       if (auto mask = loadOp.getMask())
         vec = std::min<unsigned>(vec, axisInfoAnalysis->getMaskAlignment(mask));
+
+      auto lattice = axisInfoAnalysis->getLatticeElement(ptr)->getValue();
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-      if (!tensorTy)
+      if (!tensorTy || tensorTy.getRank() < 2)
         continue;
       auto ty = tensorTy.getElementType()
                     .cast<triton::PointerType>()
