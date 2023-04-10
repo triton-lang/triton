@@ -885,8 +885,8 @@ def test_load_store_same_ptr():
         assert torch.all(x == 2)
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4]) # TODO: support tl.float8e5
-@pytest.mark.parametrize("out_dtype", [torch.float16]) # TODO: support torch.float32
+@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5]) 
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32]) 
 def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     """Tests that converting an f8 to f16 and back to f8 doesn't change its value"""
     check_type_supported(out_dtype)
