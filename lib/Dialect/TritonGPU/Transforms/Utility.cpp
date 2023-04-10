@@ -123,7 +123,7 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
     return expensiveLoadOrStore(op, targetEncoding);
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
-          triton::AtomicCASOp, triton::DotOp>(op))
+          triton::AtomicCASOp, triton::DotOp, triton::ReduceOp>(op))
     return true;
   if (isa<scf::YieldOp, scf::ForOp, scf::IfOp, scf::WhileOp, scf::ConditionOp>(
           op))
