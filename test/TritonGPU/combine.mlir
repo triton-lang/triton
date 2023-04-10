@@ -56,8 +56,8 @@ func.func @remat(%arg0: i32) -> tensor<1024xi32, #layout1> {
 }
 
 // Always rematerialize single value loads
-// CHECK-LABEL: remat_fast_load1
-func.func @remat_fast_load1(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+// CHECK-LABEL: remat_single_value
+func.func @remat_single_value(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %0 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<1x!tt.ptr<i32>, #layout1>
   %1 = tt.load %0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1xi32, #layout1>
   // CHECK-NOT: triton_gpu.convert_layout
@@ -68,21 +68,19 @@ func.func @remat_fast_load1(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
 }
 
 
-// Always rematerialize high hit-rate loads
-// CHECK-LABEL: remat_fast_load2
-func.func @remat_fast_load2(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+func.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %0 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<16x!tt.ptr<i32>, #layout1>
-  %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #layout0>
-  %2 = tt.addptr %0, %1 : tensor<16x!tt.ptr<i32>, #layout1>
+  %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #layout1>
+  %2 = tt.addptr %0, %1 : tensor<16x!tt.ptr<i32>, #layout1>, tensor<16xi32, #layout1>
   %3 = tt.load %2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16xi32, #layout1>
   // CHECK-NOT: triton_gpu.convert_layout
   %4 = triton_gpu.convert_layout %3 : (tensor<16xi32, #layout1>) -> tensor<16xi32, #layout0>
   %5 = triton_gpu.convert_layout %2 : (tensor<16x!tt.ptr<i32>, #layout1>) -> tensor<16x!tt.ptr<i32>, #layout0>
-  tt.store %5, %4 : tensor<1xi32, #layout0>
+  tt.store %5, %4 : tensor<16xi32, #layout0>
   return
 }
-
-
+}
 
 // CHECK-LABEL: if
 func.func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
