@@ -32,7 +32,7 @@ tt.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64)
   %7 = tt.ptr_to_int %tensor_ptr_1d : tensor<16x!tt.ptr<f32>> -> tensor<16xi64>
   // CHECK: tensor<16xf32> to tensor<16xf16>
   %8 = arith.truncf %tensor_f32_1d : tensor<16xf32> to tensor<16xf16>
-  return
+  tt.return
 }
 
 tt.func @addptr_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_i32: i32) {
@@ -51,7 +51,7 @@ tt.func @addptr_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_i32: i32) {
   %tensor_i32_1d = tt.splat %scalar_i32 : (i32) -> tensor<16xi32>
   // CHECK: tensor<16x!tt.ptr<f32>>
   %2 = tt.addptr %tensor_ptr_1d, %tensor_i32_1d : tensor<16x!tt.ptr<f32>>, tensor<16xi32>
-  return
+  tt.return
 }
 
 tt.func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %mask : i1) {
@@ -73,7 +73,7 @@ tt.func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   tt.store %ptr, %b, %mask : f32
   // CHECK: tt.store %{{.*}}, %[[L2]], %{{.*}} {cache = 1 : i32, evict = 1 : i32} : f32
   tt.store %ptr, %c, %mask : f32
-  return
+  tt.return
 }
 
 tt.func @reduce_ops_infer(%ptr: !tt.ptr<f32>, %v : tensor<1x2x4xf32>) {
@@ -98,7 +98,7 @@ tt.func @reduce_ops_infer(%ptr: !tt.ptr<f32>, %v : tensor<1x2x4xf32>) {
   tt.store %ptr1x2, %c : tensor<1x2xf32>
   tt.store %ptr1, %e : tensor<1xf32>
   tt.store %ptr, %g : f32
-  return
+  tt.return
 }
 
 tt.func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
@@ -128,5 +128,5 @@ tt.func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
   tt.store %ptr32x32, %r2 : tensor<32x32xf32>
   tt.store %ptr128x128, %r3 : tensor<128x128xf32>
   tt.store %ptr1x1, %r4 : tensor<1x1xf32>
-  return
+  tt.return
 }

@@ -79,5 +79,5 @@ tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, 
   %53 = tt.broadcast %51 : (tensor<1x32xi1>) -> tensor<128x32xi1>
   %54 = arith.andi %52, %53 : tensor<128x32xi1>
   tt.store %45, %30, %54 {cache = 1 : i32, evict = 1 : i32} : tensor<128x32xf16>
-  return
+  tt.return
 }

@@ -164,7 +164,7 @@ void populateStdPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
   // Rewrite rule
   patterns.add<StdSelectPattern>(typeConverter, context);
   target.addLegalOp<triton::ReturnOp>(); // this is ok because all functions are
-                                       // inlined by the frontend
+                                         // inlined by the frontend
 }
 
 void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,

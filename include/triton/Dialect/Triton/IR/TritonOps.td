@@ -676,13 +676,6 @@ def FuncOp : TT_Op<"func", [AffineScope, AutomaticAllocationScope, CallableOpInt
     ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
 
     //===------------------------------------------------------------------===//
-    // OpAsmOpInterface Methods
-    //===------------------------------------------------------------------===//
-
-    /// Allow the dialect prefix to be omitted.
-    static StringRef getDefaultDialect() { return "tt"; }
-
-    //===------------------------------------------------------------------===//
     // SymbolOpInterface Methods
     //===------------------------------------------------------------------===//
 

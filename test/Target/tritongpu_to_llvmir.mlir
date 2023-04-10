@@ -10,7 +10,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 tt.func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
 
-  return
+  tt.return
 }
 
 }

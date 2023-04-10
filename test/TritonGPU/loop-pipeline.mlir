@@ -87,7 +87,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     scf.yield %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
   }
-  return %loop#2: tensor<128x128xf32, #C>
+  tt.return %loop#2: tensor<128x128xf32, #C>
 }
 
 // CHECK: tt.func @matmul_loop_nested
@@ -161,7 +161,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 
     scf.yield %loop2#2 : tensor<128x128xf32, #C>
   }
-  return %loop1#0 : tensor<128x128xf32, #C>
+  tt.return %loop1#0 : tensor<128x128xf32, #C>
 }
 
 
@@ -221,7 +221,7 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     scf.yield %next_b_ptr, %c : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
   }
-  return %loop#1 : tensor<128x128xf32, #C>
+  tt.return %loop#1 : tensor<128x128xf32, #C>
 }
 
 // CHECK: tt.func @lut_bmm
@@ -276,7 +276,7 @@ tt.func @lut_bmm(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {t
   %24 = arith.cmpi eq, %23, %c0_i64 : i64
   cf.cond_br %24, ^bb1, ^bb2
 ^bb1:  // pred: ^bb0
-  return
+  tt.return
 ^bb2:  // pred: ^bb0
   %25 = arith.muli %arg1, %0 : i32
   %26 = tt.addptr %arg0, %25 : !tt.ptr<f16>, i32
@@ -349,5 +349,5 @@ tt.func @lut_bmm(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {t
   %80 = arith.truncf %79#0 : tensor<16x16xf32, #mma> to tensor<16x16xf16, #mma>
   %81 = triton_gpu.convert_layout %80 : (tensor<16x16xf16, #mma>) -> tensor<16x16xf16, #blocked>
   tt.store %72, %81 {cache = 1 : i32, evict = 1 : i32} : tensor<16x16xf16, #blocked>
-  return
+  tt.return
 }
