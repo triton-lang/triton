@@ -134,7 +134,7 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
-    const Attribute &targetEncoding) {
+    Attribute targetEncoding) {
   // DFS
   std::vector<std::pair<Operation *, Attribute>> queue;
   queue.emplace_back(initOp, targetEncoding);

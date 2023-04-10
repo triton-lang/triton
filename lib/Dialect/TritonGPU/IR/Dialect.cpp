@@ -48,7 +48,7 @@ unsigned getElemsPerThread(Type type) {
                            tensorType.getElementType());
 }
 
-SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout) {
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getThreadsPerWarp().begin(),
                                  blockedLayout.getThreadsPerWarp().end());
@@ -63,7 +63,7 @@ SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout) {
   return {};
 }
 
-SmallVector<unsigned> getWarpsPerCTA(const Attribute &layout) {
+SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getWarpsPerCTA().begin(),
                                  blockedLayout.getWarpsPerCTA().end());
@@ -76,7 +76,7 @@ SmallVector<unsigned> getWarpsPerCTA(const Attribute &layout) {
   return {};
 }
 
-SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
+SmallVector<unsigned> getSizePerThread(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
@@ -120,7 +120,7 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
   }
 }
 
-SmallVector<unsigned> getContigPerThread(const Attribute &layout) {
+SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};
@@ -129,7 +129,7 @@ SmallVector<unsigned> getContigPerThread(const Attribute &layout) {
   }
 }
 
-SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
+SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
   SmallVector<unsigned> threads;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
@@ -148,7 +148,7 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
   return threads;
 }
 
-SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
+SmallVector<unsigned> getShapePerCTA(Attribute layout,
                                      ArrayRef<int64_t> tensorShape) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
@@ -202,7 +202,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
   return shape;
 }
 
-SmallVector<unsigned> getOrder(const Attribute &layout) {
+SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
                                  blockedLayout.getOrder().end());
@@ -232,7 +232,7 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
   }
 };
 
-bool isaDistributedLayout(const Attribute &layout) {
+bool isaDistributedLayout(Attribute layout) {
   return layout.isa<BlockedEncodingAttr>() || layout.isa<MmaEncodingAttr>() ||
          layout.isa<SliceEncodingAttr>();
 }
@@ -241,7 +241,7 @@ bool isaDistributedLayout(const Attribute &layout) {
 } // namespace triton
 } // namespace mlir
 
-static LogicalResult parseIntAttrValue(AsmParser &parser, const Attribute &attr,
+static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
                                        unsigned &value, StringRef desc) {
   auto intAttr = attr.dyn_cast<IntegerAttr>();
   if (!intAttr) {
