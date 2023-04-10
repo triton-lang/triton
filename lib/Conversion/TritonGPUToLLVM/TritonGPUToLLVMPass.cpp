@@ -51,7 +51,6 @@ public:
     } else {
       addLegalDialect<NVVM::NVVMDialect>();
     }
-    addIllegalOp<mlir::func::FuncOp>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
