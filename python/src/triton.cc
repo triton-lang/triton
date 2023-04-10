@@ -135,6 +135,7 @@ void init_triton_ir(py::module &&m) {
         // we load LLVM because the frontend uses LLVM.undef for
         // some placeholders
         self.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+        self.getOrLoadDialect<mlir::tensor::TensorDialect>();
       });
   // .def(py::init([](){
   //   mlir::MLIRContext context;
