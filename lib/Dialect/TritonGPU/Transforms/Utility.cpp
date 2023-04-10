@@ -89,10 +89,12 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 }
 
 bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
-  // Case 1: A size 1 tensor is not expensive since all threads will load the
+  // Case 1a: A size 1 tensor is not expensive since all threads will load the
   // same
   if (isSingleValue(op->getOperand(0)))
     return false;
+  // Case 1b: Tensor of pointers has more threads than elements
+  // we can presume a high hit-rate that makes it cheap to load
   auto ptrType = op->getOperand(0).getType().cast<RankedTensorType>();
   IntegerAttr numWarps =
       op->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
