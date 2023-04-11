@@ -158,6 +158,9 @@ private:
         writeIdx[axis] = udiv(index[axis], axisSizePerThread);
       }
     }
+    if (mmaLayout && !mmaLayout.isAmpere()) {
+      llvm::report_fatal_error("Unsupported layout");
+    }
   }
 
   // Use shared memory for reduction within warps and across warps
