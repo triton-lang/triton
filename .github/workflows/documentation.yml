@@ -28,6 +28,7 @@ jobs:
       - name: Build docs
         run: |
           git fetch origin main
+          git checkout main
           cd docs
           sphinx-multiversion . _build/html/
 
