@@ -87,6 +87,8 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
+    if (computeCapability < 70)
+      return failure();
     auto dotOp = cast<triton::DotOp>(op);
     // TODO: Check data-types and SM compatibility
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
