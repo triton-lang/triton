@@ -79,7 +79,7 @@ protected:
     TypeConverter::SignatureConversion result(funcOp.getNumArguments());
     auto llvmType = getTypeConverter()->convertFunctionSignature(
         funcOp.getFunctionType(), varargsAttr && varargsAttr.getValue(),
-        result);
+        /*useBarePtrCallConv=*/false, result);
     if (!llvmType)
       return nullptr;
 
