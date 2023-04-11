@@ -19,15 +19,16 @@ def Triton_Dialect : Dialect {
       * Math:
         * exp, sin, cos, log, ...
       * StructuredControlFlow:
-        * ForOp, IfOp, WhileOp, YieldOp, ConditionOp
+        * for, if, while, yield, condition
+      * ControlFlow:
+        * br, cond_br
   }];
 
   let dependentDialects = [
     "arith::ArithDialect",
     "math::MathDialect",
     "scf::SCFDialect",
-    "cf::ControlFlowDialect",
-    "func::FuncDialect"
+    "cf::ControlFlowDialect"
   ];
 
   let extraClassDeclaration = [{

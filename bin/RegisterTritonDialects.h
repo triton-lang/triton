@@ -32,7 +32,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
-                  mlir::triton::gpu::TritonGPUDialect, mlir::func::FuncDialect,
-                  mlir::math::MathDialect, mlir::arith::ArithDialect,
-                  mlir::scf::SCFDialect, mlir::gpu::GPUDialect>();
+                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+                  mlir::gpu::GPUDialect>();
 }

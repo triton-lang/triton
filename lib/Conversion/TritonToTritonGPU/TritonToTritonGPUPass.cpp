@@ -163,8 +163,8 @@ void populateStdPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   // Rewrite rule
   patterns.add<StdSelectPattern>(typeConverter, context);
-  target.addLegalOp<func::ReturnOp>(); // this is ok because all functions are
-                                       // inlined by the frontend
+  target.addLegalOp<triton::ReturnOp>(); // this is ok because all functions are
+                                         // inlined by the frontend
 }
 
 void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
@@ -721,15 +721,15 @@ public:
   }
 };
 
-class FuncOpPattern : public OpConversionPattern<func::FuncOp> {
+class FuncOpPattern : public OpConversionPattern<triton::FuncOp> {
 public:
-  using OpConversionPattern<func::FuncOp>::OpConversionPattern;
+  using OpConversionPattern<triton::FuncOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(func::FuncOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::FuncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto converter = getTypeConverter();
-    auto newOp = rewriter.replaceOpWithNewOp<func::FuncOp>(
+    auto newOp = rewriter.replaceOpWithNewOp<triton::FuncOp>(
         op, op.getName(), op.getFunctionType());
     addNamedAttrs(newOp, adaptor.getAttributes());
     rewriter.inlineRegionBefore(op.getBody(), newOp.getBody(),
