@@ -19,7 +19,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 // CHECK: [[store_val:%.*]] = triton_gpu.convert_layout {{.*}} -> tensor<64x64xf32, [[col_layout]]>
 // CHECK: [[store_mask:%.*]] = triton_gpu.convert_layout {{.*}} -> tensor<64x64xi1, [[col_layout]]>
 // CHECK: tt.store [[store_ptr]], [[store_val]], [[store_mask]]
-func.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+tt.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                 %arg1: i32 {tt.divisibility = 16 : i32},
                 %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32},
                 %arg3: i32 {tt.divisibility = 16 : i32}) {
@@ -47,7 +47,7 @@ func.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
   %18 = tt.addptr %15, %17 : tensor<64x64x!tt.ptr<f32>, #blocked1>, tensor<64x64xi32, #blocked1>
   %19 = tt.load %10, %cst, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x64xf32, #blocked1>
   tt.store %18, %19, %cst : tensor<64x64xf32, #blocked1>
-  return
+  tt.return
 }
 
 }
