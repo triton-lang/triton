@@ -2256,7 +2256,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
     %14 = tt.addptr %3, %12 : tensor<128x128x!tt.ptr<f16>, #dst>, tensor<128x128xi32, #dst>
     tt.store %14, %13 : tensor<128x128xf16, #dst>
-    return
+    tt.return
   }
 }
 """
