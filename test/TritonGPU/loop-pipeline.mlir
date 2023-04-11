@@ -11,7 +11,7 @@
 #A = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
 #B = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
-// CHECK: func.func @matmul_loop
+// CHECK: tt.func @matmul_loop
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -47,7 +47,7 @@
 // CHECK-DAG: %[[NEXT_PIPELINE_IDX:.*]] = arith.addi %[[PIPELINE_IDX]], %[[CONSTANT_1]]
 // CHECK-DAG: %[[NEXT_LOOP_IDX:.*]] = arith.addi %[[LOOP_IDX]], %[[CONSTANT_1]]
 // CHECK:   scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]], {{.*}}, {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
-func.func @matmul_loop(%lb : index, %ub : index, %step : index,
+tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
   // A ptrs
@@ -88,10 +88,10 @@ func.func @matmul_loop(%lb : index, %ub : index, %step : index,
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     scf.yield %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
   }
-  return %loop#2: tensor<128x128xf32, #C>
+  tt.return %loop#2: tensor<128x128xf32, #C>
 }
 
-// CHECK: func.func @matmul_loop_nested
+// CHECK: tt.func @matmul_loop_nested
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -120,7 +120,7 @@ func.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[NEXT_PIPELINE_IDX:.*]] = arith.addi %[[PIPELINE_IDX]], %[[CONSTANT_1]]
 // CHECK-DAG: %[[NEXT_LOOP_IDX:.*]] = arith.addi %[[LOOP_IDX]], %[[CONSTANT_1]]
 // CHECK:     scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]], {{.*}}, {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
-func.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
+tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                          %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                          %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C>{
 
@@ -162,11 +162,11 @@ func.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 
     scf.yield %loop2#2 : tensor<128x128xf32, #C>
   }
-  return %loop1#0 : tensor<128x128xf32, #C>
+  tt.return %loop1#0 : tensor<128x128xf32, #C>
 }
 
 
-// CHECK: func.func @matmul_loop_single_pipeline
+// CHECK: tt.func @matmul_loop_single_pipeline
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -187,7 +187,7 @@ func.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[NEXT_PIPELINE_IDX:.*]] = arith.addi %[[PIPELINE_IDX]], %[[CONSTANT_1]]
 // CHECK-DAG: %[[NEXT_LOOP_IDX:.*]] = arith.addi %[[LOOP_IDX]], %[[CONSTANT_1]]
 // CHECK:   scf.yield {{.*}}, {{.*}}, %[[NEXT_B_BUFFER]], %[[NEXT_B]], {{.*}}, {{.*}}, %[[NEXT_PIPELINE_IDX]], %[[NEXT_LOOP_IDX]]
-func.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
+tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
                                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
   // A ptrs
@@ -222,10 +222,10 @@ func.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     scf.yield %next_b_ptr, %c : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
   }
-  return %loop#1 : tensor<128x128xf32, #C>
+  tt.return %loop#1 : tensor<128x128xf32, #C>
 }
 
-// CHECK: func.func @lut_bmm_scalar
+// CHECK: tt.func @lut_bmm_scalar
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
@@ -239,7 +239,7 @@ func.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_1]]
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {num = 2 : i32}
-func.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
+tt.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %75: !tt.ptr<i64>,
@@ -265,10 +265,10 @@ func.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
     %92 = tt.addptr %arg21, %c1_i32 : !tt.ptr<i64>, i32
     scf.yield %90, %91, %92 : tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #AL>, !tt.ptr<i64>
   }
-  return %79#0 : tensor<16x16xf32, #C>
+  tt.return %79#0 : tensor<16x16xf32, #C>
 }
 
-// CHECK: func.func @lut_bmm_vector
+// CHECK: tt.func @lut_bmm_vector
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
@@ -283,7 +283,7 @@ func.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_1]]
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {num = 2 : i32}
-func.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
+tt.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %75: tensor<16x!tt.ptr<i64>, #BLs1>,
@@ -311,5 +311,5 @@ func.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, 
     %92 = tt.addptr %arg21, %c1_i32_splat : tensor<16x!tt.ptr<i64>, #BLs1>, tensor<16xi32, #BLs1>
     scf.yield %90, %91, %92 : tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #AL>, tensor<16x!tt.ptr<i64>, #BLs1>
   }
-  return %79#0 : tensor<16x16xf32, #C>
+  tt.return %79#0 : tensor<16x16xf32, #C>
 }
