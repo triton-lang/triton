@@ -22,11 +22,9 @@ jobs:
           rm -r /tmp/triton-docs
         continue-on-error: true
 
-      - name: Checkout branch
-        uses: actions/checkout@v2
-
       - name: Build docs
         run: |
+          pip uninstall -y triton
           git fetch origin main
           git checkout main
           cd docs
