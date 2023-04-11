@@ -2238,7 +2238,7 @@ def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
 #dst = {dst_layout}
 """ + """
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-  func.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<128> : tensor<128x1xi32, #src>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>
     %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #src}>>
@@ -2256,7 +2256,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
     %14 = tt.addptr %3, %12 : tensor<128x128x!tt.ptr<f16>, #dst>, tensor<128x128xi32, #dst>
     tt.store %14, %13 : tensor<128x128xf16, #dst>
-    return
+    tt.return
   }
 }
 """

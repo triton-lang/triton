@@ -7,7 +7,7 @@ using namespace mlir;
 namespace {
 
 struct TestAxisInfoPass
-    : public PassWrapper<TestAxisInfoPass, OperationPass<func::FuncOp>> {
+    : public PassWrapper<TestAxisInfoPass, OperationPass<triton::FuncOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAxisInfoPass);
 

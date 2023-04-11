@@ -9,11 +9,11 @@ using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
-struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
-  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
+struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
+  using ConvertOpToLLVMPattern<triton::ReturnOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     unsigned numArguments = op.getNumOperands();
 
