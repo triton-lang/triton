@@ -77,7 +77,7 @@ protected:
     auto varargsAttr = funcOp->getAttrOfType<BoolAttr>("func.varargs");
     TypeConverter::SignatureConversion result(funcOp.getNumArguments());
     auto llvmType = getTypeConverter()->convertFunctionSignature(
-        funcOp.getFunctionType(), varargsAttr && varargsAttr.getValue(),
+        funcOp.getFunctionType(), varargsAttr && varargsAttr.getValue(), false,
         result);
     if (!llvmType)
       return nullptr;
