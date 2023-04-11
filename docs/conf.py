@@ -86,8 +86,8 @@ extensions = [
 autosummary_generate = True
 
 # versioning config
-smv_tag_whitelist = r'^(v1.1.2)$'
-smv_branch_whitelist = r'^master$'
+smv_tag_whitelist = r'^(v2.1.0)$'
+smv_branch_whitelist = r'^main$'
 smv_remote_whitelist = None
 smv_released_pattern = r'^tags/.*$'
 smv_outputdir_format = '{ref.name}'

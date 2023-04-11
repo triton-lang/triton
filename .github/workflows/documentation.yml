@@ -24,7 +24,6 @@ jobs:
 
       - name: Build docs
         run: |
-          pip uninstall -y triton
           git fetch origin main
           git checkout main
           cd docs
