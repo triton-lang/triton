@@ -6,11 +6,15 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "mlir/IR/OpBase.td"
+include "mlir/IR/FunctionInterfaces.td" // FunctionOpInterface
+include "mlir/IR/SymbolInterfaces.td" // SymbolUserOpInterface
+include "mlir/IR/OpAsmInterface.td" // OpAsmOpInterface
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
+include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 
 //
 // Op Base
@@ -20,7 +24,7 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 }
 
 //
-// CastOps
+// Cast Ops
 //
 // Use cast ops in arith:
 //   bitcast
@@ -93,7 +97,6 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
 //
 // Pointer Arith Ops
 //
-
 def TT_AddPtrOp : TT_Op<"addptr",
                      [Pure,
                       SameOperandsAndResultShape,
@@ -209,7 +212,7 @@ def TT_StoreOp : TT_Op<"store",
 }
 
 //
-// Atomic Op
+// Atomic Ops
 //
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
                                           SameOperandsAndResultEncoding,
@@ -255,7 +258,6 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
 
     let results = (outs TT_Type:$result);
 }
-
 
 //
 // Shape Manipulation Ops
@@ -408,7 +410,7 @@ def TT_ReduceOp : TT_Op<"reduce", [Pure,
 }
 
 //
-// External elementwise op
+// External Elementwise op
 //
 def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [Pure, Elementwise, SameOperandsAndResultShape,
                                               SameOperandsAndResultEncoding,
@@ -449,7 +451,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 }
 
 //
-// Make PrintOp
+// Print Op
 //
 def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
   Arguments<(ins StrAttr:$prefix, Variadic<AnyTypeOf<[TT_Type]>>:$args)> {
@@ -464,7 +466,7 @@ def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
 }
 
 //
-// Make AssertOp
+// Assert Op
 //
 def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
   let summary = "Device-side assert, as in CUDA for correctness checking";
@@ -477,7 +479,7 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite]>]> {
 }
 
 //
-// Make a Tensor Pointer
+// Make Tensor Pointer Op
 //
 def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
                                [Pure,
@@ -516,6 +518,201 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
         "ArrayRef<int32_t>":$order
     )>
   ];
+}
+
+// The following ops, including `call`, `func`, and `return` are copied and modified from
+// https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Func/IR/FuncOps.td
+// We could revert it back once MLIR has a better inliner interface.
+//
+// Function Ops
+//
+def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "call operation";
+  let description = [{
+    The `tt.call` operation represents a direct call to a function that is
+    within the same symbol scope as the call. The operands and result types of
+    the call must match the specified function type. The callee is encoded as a
+    symbol reference attribute named "callee".
+
+    Example:
+
+    ```mlir
+    %2 = tt.call @my_add(%0, %1) : (f32, f32) -> f32
+    ```
+  }];
+
+  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$operands);
+  let results = (outs Variadic<AnyType>);
+
+  let builders = [
+    OpBuilder<(ins "FuncOp":$callee, CArg<"ValueRange", "{}">:$operands), [{
+      $_state.addOperands(operands);
+      $_state.addAttribute("callee", SymbolRefAttr::get(callee));
+      $_state.addTypes(callee.getFunctionType().getResults());
+    }]>,
+    OpBuilder<(ins "SymbolRefAttr":$callee, "TypeRange":$results,
+      CArg<"ValueRange", "{}">:$operands), [{
+      $_state.addOperands(operands);
+      $_state.addAttribute("callee", callee);
+      $_state.addTypes(results);
+    }]>,
+    OpBuilder<(ins "StringAttr":$callee, "TypeRange":$results,
+      CArg<"ValueRange", "{}">:$operands), [{
+      build($_builder, $_state, SymbolRefAttr::get(callee), results, operands);
+    }]>,
+    OpBuilder<(ins "StringRef":$callee, "TypeRange":$results,
+      CArg<"ValueRange", "{}">:$operands), [{
+      build($_builder, $_state, StringAttr::get($_builder.getContext(), callee),
+            results, operands);
+    }]>];
+
+  let extraClassDeclaration = [{
+    FunctionType getCalleeType() {
+      return FunctionType::get(getContext(), getOperandTypes(), getResultTypes());
+    }
+
+    /// Get the argument operands to the called function.
+    operand_range getArgOperands() {
+      return {arg_operand_begin(), arg_operand_end()};
+    }
+
+    operand_iterator arg_operand_begin() { return operand_begin(); }
+    operand_iterator arg_operand_end() { return operand_end(); }
+
+    /// Return the callee of this operation.
+    CallInterfaceCallable getCallableForCallee() {
+      return (*this)->getAttrOfType<SymbolRefAttr>("callee");
+    }
+  }];
+
+  let assemblyFormat = [{
+    $callee `(` $operands `)` attr-dict `:` functional-type($operands, results)
+  }];
+}
+
+def FuncOp : TT_Op<"func", [AffineScope, AutomaticAllocationScope, CallableOpInterface, FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface]> {
+  let summary = "An operation with a name containing a single `SSACFG` region";
+  let description = [{
+    Operations within the function cannot implicitly capture values defined
+    outside of the function, i.e. Functions are `IsolatedFromAbove`. All
+    external references must use function arguments or attributes that establish
+    a symbolic connection (e.g. symbols referenced by name via a string
+    attribute like SymbolRefAttr). An external function declaration (used when
+    referring to a function declared in some other module) has no body. While
+    the MLIR textual form provides a nice inline syntax for function arguments,
+    they are internally represented as “block arguments” to the first block in
+    the region.
+
+    Only dialect attribute names may be specified in the attribute dictionaries
+    for function arguments, results, or the function itself.
+
+    Example:
+
+    ```mlir
+    // External function definitions.
+    tt.func @abort()
+    tt.func @scribble(i32, i64, memref<? x 128 x f32, #layout_map0>) -> f64
+
+    // A function that returns its argument twice:
+    tt.func @count(%x: i64) -> (i64, i64)
+      attributes {fruit: "banana"} {
+      return %x, %x: i64, i64
+    }
+
+    // A function with an argument attribute
+    tt.func @example_fn_arg(%x: i32 {swift.self = unit})
+
+    // A function with a result attribute
+    tt.func @example_fn_result() -> (f64 {dialectName.attrName = 0 : i64})
+
+    // A function with an attribute
+    tt.func @example_fn_attr() attributes {dialectName.attrName = false}
+    ```
+  }];
+
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       TypeAttrOf<FunctionType>:$function_type,
+                       OptionalAttr<StrAttr>:$sym_visibility,
+                       OptionalAttr<DictArrayAttr>:$arg_attrs,
+                       OptionalAttr<DictArrayAttr>:$res_attrs);
+  let regions = (region AnyRegion:$body);
+
+  let builders = [OpBuilder<(ins
+    "StringRef":$name, "FunctionType":$type,
+    CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs,
+    CArg<"ArrayRef<DictionaryAttr>", "{}">:$argAttrs)
+  >];
+  let extraClassDeclaration = [{
+    //===------------------------------------------------------------------===//
+    // CallableOpInterface
+    //===------------------------------------------------------------------===//
+
+    /// Returns the region on the current operation that is callable. This may
+    /// return null in the case of an external callable object, e.g. an external
+    /// function.
+    ::mlir::Region *getCallableRegion() { return isExternal() ? nullptr : &getBody(); }
+
+    /// Returns the results types that the callable region produces when
+    /// executed.
+    ArrayRef<Type> getCallableResults() { return getFunctionType().getResults(); }
+
+    /// Returns the argument attributes for all callable region arguments or
+    /// null if there are none.
+    ::mlir::ArrayAttr getCallableArgAttrs() {
+      return getArgAttrs().value_or(nullptr);
+    }
+
+    /// Returns the result attributes for all callable region results or
+    /// null if there are none.
+    ::mlir::ArrayAttr getCallableResAttrs() {
+      return getResAttrs().value_or(nullptr);
+    }
+
+    //===------------------------------------------------------------------===//
+    // FunctionOpInterface Methods
+    //===------------------------------------------------------------------===//
+
+    /// Returns the argument types of this function.
+    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+
+    /// Returns the result types of this function.
+    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
+
+    //===------------------------------------------------------------------===//
+    // SymbolOpInterface Methods
+    //===------------------------------------------------------------------===//
+
+    bool isDeclaration() { return isExternal(); }
+  }];
+  let hasCustomAssemblyFormat = 1;
+}
+
+def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable, */ReturnLike, Terminator]> {
+  let summary = "Function return operation";
+  let description = [{
+    The `tt.return` operation represents a return operation within a function.
+    The operation takes variable number of operands and produces no results.
+    The operand number and types must match the signature of the function
+    that contains the operation.
+
+    Example:
+
+    ```mlir
+    tt.func @foo() : (i32, f8) {
+      ...
+      tt.return %0, %1 : i32, f8
+    }
+    ```
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$operands);
+
+  let builders = [OpBuilder<(ins), [{
+    build($_builder, $_state, std::nullopt);
+  }]>];
+
+  let assemblyFormat = "attr-dict ($operands^ `:` type($operands))?";
+  let hasVerifier = 1;
 }
 
 #endif // Triton_OPS
