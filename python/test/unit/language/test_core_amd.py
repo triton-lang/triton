@@ -1470,15 +1470,15 @@ def test_masked_load_shared_memory(dtype, device='cuda'):
         in2_offsets = K_offsets[:, None] * in2_stride + N_offsets[None, :]
 
         # Load inputs.
-        x = tl.load(in1_ptr + in_offsets, mask=in_offsets < in_numel)
-        w = tl.load(in2_ptr + in2_offsets, mask=in2_offsets < in2_numel)
+        x = tl.load(in1_ptr + in_offsets, mask=in_offsets < M * K)
+        w = tl.load(in2_ptr + in2_offsets, mask=in2_offsets < K * N)
 
         # Without a dot product the memory doesn't get promoted to shared.
-        o = tl.dot(x, w)
+        o = tl.dot(x, w, out_dtype=tl.float32)
 
         # Store output
         output_offsets = M_offsets[:, None] * out_stride + N_offsets[None, :]
-        tl.store(output_ptr + output_offsets, o, mask=output_offsets < in2_numel)
+        tl.store(output_ptr + output_offsets, o, mask=output_offsets < M * N)
 
     pgm = _kernel[(1,)](in1, in2, out,
                         in1.stride()[0],

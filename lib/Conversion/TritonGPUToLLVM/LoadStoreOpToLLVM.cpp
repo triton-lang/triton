@@ -124,6 +124,7 @@ struct LoadOpConversion
       const size_t wordNElems = width / valueElemNBits;
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
+
 #ifdef USE_ROCM
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
@@ -376,6 +377,7 @@ struct StoreOpConversion
           if (elem.getType().isInteger(1))
             elem = sext(i8_ty, elem);
           elem = bitcast(elem, valueElemTy);
+
           llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
         }
         llWord = bitcast(llWord, valArgTy);
