@@ -199,7 +199,7 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %cst_12 = arith.constant dense<0.000000e+00> : tensor<4x16xf16, #AL>
   %cst_13 = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #AL>
   // CHECK-NEXT: size = 2656
-  return
+  tt.return
 }
 
 // CHECK-LABEL: alloc
