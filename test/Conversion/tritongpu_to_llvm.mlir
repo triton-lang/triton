@@ -1,4 +1,4 @@
-// RUN: (triton-opt %s -split-input-file --convert-triton-gpu-to-llvm --mlir-pass-pipeline-crash-reproducer=%t 2>/dev/null; true) | FileCheck --check-prefixes=CHECK,GCN %s
+// RUN: not triton-opt %s -split-input-file --convert-triton-gpu-to-llvm --mlir-pass-pipeline-crash-reproducer=%t 2>/dev/null | FileCheck --check-prefixes=CHECK,GCN %s
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<f16, 1>)
@@ -1136,8 +1136,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // PTX-LABEL: convert_dot
-  // This test is disabled for GCN target, because it is PTX specific
-  // GCN-NOT: convert_dot
+  // This test is not relevant to GCN target, because it is PTX specific
   tt.func @convert_dot(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
     %AA = triton_gpu.convert_layout %A : (tensor<16x16xf16, #blocked0>) -> tensor<16x16xf16, #shared0>
     %BB = triton_gpu.convert_layout %B : (tensor<16x16xf16, #blocked0>) -> tensor<16x16xf16, #shared0>
@@ -1173,17 +1172,17 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #mma = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [2, 2]}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
-  // CHECK: llvm.mlir.global external @global_smem() {addr_space = 3 : i32} : !llvm.array<0 x i8>
-  // CHECK-LABEL: convert_layout_mmav2_block
+  // PTX: llvm.mlir.global external @global_smem() {addr_space = 3 : i32} : !llvm.array<0 x i8>
+  // PTX-LABEL: convert_layout_mmav2_block
+  // This test is not relevant to GCN target, because it is PTX specific
   tt.func @convert_layout_mmav2_blocked(%arg0: tensor<32x16xf32, #mma>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // PTX: llvm.store
+    // PTX-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // PTX: llvm.store
+    // PTX-SAME: !llvm.ptr<vector<2xf32>, 3>
     // PTX: nvvm.barrier0
-    // GCN: rocdl.barrier
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // PTX: llvm.load
+    // PTX-SAME: !llvm.ptr<vector<4xf32>, 3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<32x16xf32, #mma>) -> tensor<32x16xf32, #blocked0>
     tt.return
   }
@@ -1194,21 +1193,21 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #mma = #triton_gpu.mma<{versionMajor = 1, versionMinor = 3, warpsPerCTA = [2, 2]}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
-  // CHECK: llvm.mlir.global external @global_smem() {addr_space = 3 : i32} : !llvm.array<0 x i8>
-  // CHECK-LABEL: convert_layout_mmav1_block
+  // PTX: llvm.mlir.global external @global_smem() {addr_space = 3 : i32} : !llvm.array<0 x i8>
+  // PTX-LABEL: convert_layout_mmav1_block
+  // This test is not relevant to GCN target, because it is PTX specific
   tt.func @convert_layout_mmav1_blocked(%arg0: tensor<32x64xf32, #mma>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
-    // CHECK: llvm.store
-    // CHECK-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // PTX: llvm.store
+    // PTX-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // PTX: llvm.store
+    // PTX-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // PTX: llvm.store
+    // PTX-SAME: !llvm.ptr<vector<2xf32>, 3>
+    // PTX: llvm.store
+    // PTX-SAME: !llvm.ptr<vector<2xf32>, 3>
     // PTX: nvvm.barrier0
-    // GCN: rocdl.barrier
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<vector<4xf32>, 3>
+    // PTX: llvm.load
+    // PTX-SAME: !llvm.ptr<vector<4xf32>, 3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<32x64xf32, #mma>) -> tensor<32x64xf32, #blocked>
     tt.return
   }
@@ -1284,7 +1283,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // PTX-LABEL: matmul_kernel_dot_operand_layout
   // This test is disabled for GCN target, because it is PTX specific
-  // GCN-NOT: matmul_kernel_dot_operand_layout
+  // This test is not relevant to GCN target, because it is PTX specific
   tt.func @matmul_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
     %a:tensor<128x32xf16, #shared>, %b:tensor<32x256xf16, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
@@ -1312,8 +1311,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma, isMMAv1Row=true}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // PTX-LABEL: matmul884_kernel_dot_operand_layout
-  // This test is disabled for GCN target, because it is PTX specific
-  // GCN-NOT: matmul884_kernel_dot_operand_layout
+  // This test is not relevant to GCN target, because it is PTX specific
   tt.func @matmul884_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:tensor<32x64xf16, #shared0>, %b:tensor<64x64xf16, #shared1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #mma>
@@ -1361,8 +1359,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // PTX-LABEL: matmul_tf32dot
-  // This test is disabled for GCN target, because it is PTX specific
-  // GCN-NOT: matmul_tf32dot
+  // This test is not relevant to GCN target, because it is PTX specific
   tt.func @matmul_tf32dot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:tensor<32x16xf32, #shared>, %b:tensor<16x32xf32, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>

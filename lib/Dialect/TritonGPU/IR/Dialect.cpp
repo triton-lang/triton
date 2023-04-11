@@ -128,7 +128,7 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
 #ifdef USE_ROCM
-      if (mmaLayout.isMI200()) {
+      if (parentMmaLayout.isMI200()) {
         auto parentShapePerCTA = getShapePerCTA(parentLayout);
         auto opIdx = dotLayout.getOpIdx();
         if (opIdx == 0) {
@@ -247,7 +247,7 @@ SmallVector<unsigned> getShapePerCTA(Attribute layout,
       auto parentShapePerCTA = getShapePerCTA(parentLayout, tensorShape);
       auto opIdx = dotLayout.getOpIdx();
 #ifdef USE_ROCM
-      if (mmaLayout.isMI200()) {
+      if (parentMmaLayout.isMI200()) {
         if (opIdx == 0) {
           return {parentShapePerCTA[0], 32};
         } else if (opIdx == 1) {
