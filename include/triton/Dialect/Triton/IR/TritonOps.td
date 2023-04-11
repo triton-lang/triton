@@ -520,6 +520,9 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
   ];
 }
 
+// The following ops, including `call`, `func`, and `return` are copied and modified from
+// https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Func/IR/FuncOps.td
+// We could revert it back once MLIR has a better inliner interface.
 //
 // Function Ops
 //

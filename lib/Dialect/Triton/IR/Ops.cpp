@@ -518,6 +518,10 @@ void MakeTensorPtrOp::build(::mlir::OpBuilder &builder,
                builder.getDenseI32ArrayAttr(order));
 }
 
+// The following ops, including `call`, `func`, and `return` are copied and
+// modified from
+// https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/Func/IR/FuncOps.cpp
+// We could revert it back once MLIR has a better inliner interface.
 //-- FuncOp --
 void triton::FuncOp::build(OpBuilder &builder, OperationState &state,
                            StringRef name, FunctionType type,
