@@ -157,7 +157,7 @@ tt.func @longlive(%A : !tt.ptr<f16>) {
 
 // This example triggers graph coloring with > 1 colors.
 // CHECK-LABEL: multi_color
-func.func @multi_color(%A : !tt.ptr<f16>) {
+tt.func @multi_color(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 64
   %cst = arith.constant dense<0.000000e+00> : tensor<4x8xf16, #A_SHARED>
   // CHECK-NEXT: offset = 1216, size = 32

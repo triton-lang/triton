@@ -225,7 +225,7 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
   tt.return %loop#1 : tensor<128x128xf32, #C>
 }
 
-// CHECK: func.func @lut_bmm_scalar
+// CHECK: tt.func @lut_bmm_scalar
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
@@ -239,7 +239,7 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_1]]
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {num = 2 : i32}
-func.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
+tt.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %75: !tt.ptr<i64>,
@@ -268,7 +268,7 @@ func.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
   tt.return %79#0 : tensor<16x16xf32, #C>
 }
 
-// CHECK: func.func @lut_bmm_vector
+// CHECK: tt.func @lut_bmm_vector
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
 // CHECK: triton_gpu.insert_slice_async
@@ -283,7 +283,7 @@ func.func @lut_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_1]]
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_0]]
 // CHECK: triton_gpu.async_wait {num = 2 : i32}
-func.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
+tt.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt.constancy=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
                    %75: tensor<16x!tt.ptr<i64>, #BLs1>,
