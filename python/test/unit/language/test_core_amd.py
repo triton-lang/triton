@@ -783,7 +783,7 @@ def test_atomic_cas():
     data = torch.zeros((128,), device='cuda', dtype=torch.float32)
     ref = torch.full((128,), 64.0)
     serialized_add[(64,)](data, Lock)
-    triton.testing.assert_almost_equal(data, ref)
+    np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
 
 
 # ---------------
@@ -1161,8 +1161,8 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
     # numpy result
     z_ref = x.transpose(*perm)
     # compare
-    triton.testing.assert_almost_equal(z_tri, z_ref)
-    triton.testing.assert_almost_equal(z_tri_contiguous, z_ref)
+    np.testing.assert_allclose(to_numpy(z_tri), z_ref)
+    np.testing.assert_allclose(to_numpy(z_tri_contiguous), z_ref)
     if torch.version.hip is None:
         # parse ptx to make sure ld/st are vectorized
         ptx = pgm.asm['ptx']
@@ -1403,7 +1403,7 @@ def test_arange(start, device='cuda'):
         tl.store(z + off, val)
     _kernel[(1,)](z_tri, START=start, END=start + BLOCK, BLOCK=BLOCK)
     z_ref = torch.arange(start, BLOCK + start, dtype=torch.int32, device=device)
-    triton.testing.assert_almost_equal(z_tri, z_ref)
+    np.testing.assert_allclose(to_numpy(z_tri), to_numpy(z_ref))
 
 # ---------------
 # test load
@@ -1439,7 +1439,7 @@ def test_masked_load(dtype_str, size, size_diff, device='cuda'):
     kernel[(1,)](input, output, input_size, output_size)
 
     reference_out = torch.cat((input, torch.ones((size_diff,), dtype=dtype, device=device)))
-    triton.testing.allclose(output, reference_out)
+    torch.testing.assert_allclose(output, reference_out)
 
 # Testing masked loads with an intermate copy to shared memory run.
 
@@ -1490,7 +1490,7 @@ def test_masked_load_shared_memory(dtype, device='cuda'):
                         M=M, N=N, K=K)
 
     reference_out = torch.matmul(in1, in2)
-    triton.testing.allclose(out, reference_out)
+    torch.testing.assert_allclose(out, reference_out, atol=1e-2, rtol=0)
 
 
 # ---------------
