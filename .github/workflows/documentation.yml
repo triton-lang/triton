@@ -8,7 +8,7 @@ jobs:
 
   Build-Documentation:
 
-    runs-on: [self-hosted]
+    runs-on: [V100]
 
     steps:
       - name: Checkout branch
