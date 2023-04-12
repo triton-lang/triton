@@ -18,7 +18,7 @@ def nvsmi(attrs):
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
-             percentiles=(0.5, 0.2, 0.8),
+             quantiles=None,
              fast_flush=False,
              return_mode="min"):
     assert return_mode in ["min", "max", "mean", "median"]
@@ -35,8 +35,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     :type rep: int
     :param grad_to_none: Reset the gradient of the provided tensor to None
     :type grad_to_none: torch.tensor, optional
-    :param percentiles: Performance percentile to return in addition to the median.
-    :type percentiles: list[float]
+    :param quantiles: Performance percentile to return in addition to the median.
+    :type quantiles: list[float]
     :param fast_flush: Use faster kernel to flush L2 between measurements
     :type fast_flush: bool
     """
@@ -84,10 +84,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     # Record clocks
     torch.cuda.synchronize()
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
-    if percentiles is not None:
-        percentiles = torch.quantile(times, torch.tensor(percentiles)).tolist()
-        return tuple(percentiles)
-    return getattr(torch, return_mode)(times.item())
+    if quantiles is not None:
+        return torch.quantile(times, torch.tensor(quantiles)).tolist()
+    return getattr(torch, return_mode)(times).item()
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=''):

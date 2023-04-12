@@ -341,7 +341,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
     if provider == "flash":
         lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
@@ -353,7 +353,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
 
 
