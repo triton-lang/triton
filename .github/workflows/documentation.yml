@@ -12,10 +12,10 @@ jobs:
 
     steps:
 
-      - name: Checkout main
+      - name: Checkout gh-pages
         uses: actions/checkout@v2
         with:
-          ref: 'main'
+          ref: 'gh-pages'
 
       - name: Clear docs
         run: |
@@ -24,6 +24,8 @@ jobs:
 
       - name: Build docs
         run: |
+          # tmp
+          git checkout keren/fix-docs
           cd docs
           sphinx-multiversion . _build/html/
 
