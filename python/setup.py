@@ -227,7 +227,7 @@ setup(
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",
-        "triton/runtime/driver",
+        "triton/runtime/backends",
         "triton/tools",
     ],
     install_requires=[
