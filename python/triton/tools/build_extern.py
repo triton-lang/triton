@@ -288,12 +288,18 @@ class Libdevice(ExternLibrary):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
         #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core, extern\n"
+        import_str += "from ..compiler.make_launcher import is_hip\n"
         import_str += "import os\n"
-        header_str = "LOCAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"..\", \"third_party\", \"cuda\", \"lib\", \"libdevice.10.bc\")\n"
+
+        header_str = ""
+        header_str += "if is_hip():\n"
+        header_str += "    LOCAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"cuda2gcn.bc\")\n"
+        header_str += "else:\n"
+        header_str += "    LOCAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"..\", \"third_party\", \"cuda\", \"lib\", \"libdevice.10.bc\")\n"
         header_str += "LIBDEVICE_PATH = os.getenv(\"TRITON_LIBDEVICE_PATH\", LOCAL_PATH)\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
-            func_str += "@language.extern\n"
+            func_str += "@extern.extern\n"
             func_name_str = f"def {symbols[0].op_name}("
             for arg_name in symbols[0].arg_names:
                 func_name_str += f"{arg_name}, "
