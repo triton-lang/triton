@@ -50,7 +50,7 @@ def setup(app):
 
         def wrapped(obj, **kwargs):
             import triton
-            if isinstance(obj, triton.code_gen.JITFunction):
+            if isinstance(obj, triton.runtime.JITFunction):
                 obj = obj.fn
             return old(obj)
 
@@ -60,7 +60,7 @@ def setup(app):
 
     def documenter(app, obj, parent):
         import triton
-        if isinstance(obj, triton.code_gen.JITFunction):
+        if isinstance(obj, triton.runtime.JITFunction):
             obj = obj.fn
         return old_documenter(app, obj, parent)
 

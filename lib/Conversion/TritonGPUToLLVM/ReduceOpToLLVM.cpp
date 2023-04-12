@@ -78,17 +78,63 @@ private:
     return srcValues;
   }
 
+  // Calculates the write index in the shared memory where we would be writing
+  // the within-thread accumulations before we start doing across-threads
+  // accumulations. `index` is the index of the within-thread accumulations in
+  // the full tensor, whereas `writeIdx` is the mapped-to index in the shared
+  // memory
+  void getWriteIndexBasic(ConversionPatternRewriter &rewriter, Location loc,
+                          Attribute layout, SmallVector<Value> &index,
+                          SmallVector<Value> &writeIdx,
+                          std::map<int, Value> &ints, unsigned axis) const {
+    writeIdx = index;
+    auto sizePerThread = triton::gpu::getSizePerThread(layout);
+    Value axisSizePerThread = ints[sizePerThread[axis]];
+    Value _8 = ints[8];
+    Value _16 = ints[16];
+    if (layout.isa<BlockedEncodingAttr>()) {
+      // A single thread owns axisSizePerThread contiguous values
+      // on the reduction axis. After within thread reduction,
+      // we would have a single accumulation every `axisSizePerThread`
+      // contiguous values in the original tensor, so we would need
+      // to map every `axisSizePerThread` to 1 value in smem as:
+      // writeIdx[axis] = index[axis] / axisSizePerThread
+      writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+    }
+    auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>();
+    if (mmaLayout && mmaLayout.isAmpere()) {
+      if (axis == 0) {
+        // Because warpTileSize = [16, 8] and threadsPerWarp = [8, 4], each 8
+        // rows in smem would correspond to a warp. The mapping
+        // is: (warp_index) x 8 + (row index within warp)
+        writeIdx[axis] =
+            add(mul(udiv(index[axis], _16), _8), urem(index[axis], _8));
+      } else {
+        // Same as BlockedEncodingAttr case
+        writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+      }
+    }
+    if (mmaLayout && !mmaLayout.isAmpere()) {
+      llvm::report_fatal_error("Unsupported layout");
+    }
+  }
+
   // Use shared memory for reduction within warps and across warps
   LogicalResult
   matchAndRewriteBasic(triton::ReduceOp op, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
+    ReduceOpHelper helper(op);
     Location loc = op.getLoc();
     unsigned axis = op.getAxis();
 
-    ReduceOpHelper helper(op);
     auto srcTys = op.getInputTypes();
-    auto srcLayout = helper.getSrcLayout().cast<BlockedEncodingAttr>();
-    auto srcOrd = srcLayout.getOrder();
+    auto srcLayout = helper.getSrcLayout();
+    if (!helper.isSupportedLayout()) {
+      assert(false && "Unexpected srcLayout in ReduceOpConversion");
+    }
+    // The order of the axes for the the threads within the warp
+    auto srcOrd = triton::gpu::getOrder(srcLayout);
+    auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto srcShape = helper.getSrcShape();
 
     SmallVector<Type> elemPtrTys(srcTys.size());
@@ -113,13 +159,18 @@ private:
     }
 
     unsigned srcElems = getElemsPerThread(srcTys[0]);
+    // Emits indices of the original tensor that each thread
+    // would own
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);
     auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
 
-    // Assumes offsets don't actually depend on type
+    // Emits offsets (the offset from the base index)
+    // of the original tensor that each thread would own
+    // NOTE: Assumes offsets don't actually depend on type
     SmallVector<SmallVector<unsigned>> offset =
         emitOffsetForLayout(srcLayout, srcTys[0]);
 
+    // Keep track of accumulations and their indices
     std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
     std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
 
@@ -140,41 +191,61 @@ private:
     ints[0] = i32_val(0);
     for (int N = smemShape[axis] / 2; N > 0; N >>= 1)
       ints[N] = i32_val(N);
-    Value sizePerThread = i32_val(srcLayout.getSizePerThread()[axis]);
+    ints[sizePerThread[axis]] = i32_val(sizePerThread[axis]);
+    ints[8] = i32_val(8);
+    ints[16] = i32_val(16);
 
     // reduce across threads
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       auto &acc = it.second;
-      SmallVector<Value> writeIdx = indices[key];
+      // get the writeIdx at which to write in smem
+      SmallVector<Value> writeIdx;
+      getWriteIndexBasic(rewriter, loc, srcLayout, indices[key], writeIdx, ints,
+                         axis);
 
-      writeIdx[axis] = udiv(writeIdx[axis], sizePerThread);
+      // calculate the offset in smem for that writeIdx
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
       SmallVector<Value> writePtrs(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        // Store the within-thread accumulated value into shared memory
         writePtrs[i] = gep(elemPtrTys[i], smemBases[i], writeOffset);
         store(acc[i], writePtrs[i]);
       }
 
       SmallVector<Value> readIdx(writeIdx.size(), ints[0]);
+      // Perform parallel reduction with sequential addressing
+      // E.g. We reduce `smemShape[axis]` elements into `smemShape[axis]/2`
+      // elements using `smemShape[axis]/2` threads where each thread
+      // would accumalte values that are `smemShape[axis]/2` apart
+      // to avoid bank conflicts. Then we repeat with `smemShape[axis]/4`
+      // threads, .. etc.
       for (int N = smemShape[axis] / 2; N > 0; N >>= 1) {
+        // The readIdx will be N elements away on the reduction axis
         readIdx[axis] = ints[N];
+        // If the writeIdx is greater or equal to N, do nothing
         Value readMask = icmp_slt(writeIdx[axis], ints[N]);
+        // Calculate the readOffset, if readMask is False, readOffset=0
+        // meaning we reduce the value at writeIdx with itself
         Value readOffset = select(
             readMask, linearize(rewriter, loc, readIdx, smemShape, srcOrd),
             ints[0]);
         SmallVector<Value> readPtrs(op.getNumOperands());
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          // The readPtr is readOffset away from writePtr
           readPtrs[i] = gep(elemPtrTys[i], writePtrs[i], readOffset);
         }
 
         barrier();
+        // Combine accumulator value from another thread
         SmallVector<Value> cur(op.getNumOperands());
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
           cur[i] = load(readPtrs[i]);
         }
         accumulate(rewriter, *combineOp, acc, cur, false);
+
         barrier();
+        // Publish our new accumulator value to shared memory
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
           store(acc[i], writePtrs[i]);
         }
@@ -222,14 +293,16 @@ private:
   // exchange across warps
   LogicalResult matchAndRewriteFast(triton::ReduceOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
-
+    ReduceOpHelper helper(op);
     Location loc = op->getLoc();
     unsigned axis = adaptor.getAxis();
 
-    ReduceOpHelper helper(op);
     auto srcTys = op.getInputTypes();
-    auto srcLayout = helper.getSrcLayout().cast<BlockedEncodingAttr>();
-    auto srcOrd = srcLayout.getOrder();
+    auto srcLayout = helper.getSrcLayout();
+    if (!helper.isSupportedLayout()) {
+      assert(false && "Unexpected srcLayout in ReduceOpConversion");
+    }
+    auto srcOrd = triton::gpu::getOrder(srcLayout);
     auto srcShape = helper.getSrcShape();
 
     SmallVector<Type> elemPtrTys(srcTys.size());

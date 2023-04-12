@@ -47,6 +47,8 @@ public:
 
   unsigned getScratchSizeInBytes();
 
+  bool isSupportedLayout();
+
 private:
   Operation *op;
   ArrayRef<int64_t> srcShape;
@@ -104,8 +106,7 @@ template <typename T> T highestPowOf2Divisor(T n) {
 
 bool isSingleValue(Value value);
 
-bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
-                        triton::gpu::DotOperandEncodingAttr &dotOperandLayout);
+bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 
 /// Multi-root DAG topological sort.
 /// Performs a topological sort of the Operation in the `toSort` SetVector.

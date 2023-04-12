@@ -568,11 +568,7 @@ private:
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto dstTy = op.getResult().getType().cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding();
-    auto dstLayout = dstTy.getEncoding();
-    auto srcMmaLayout = srcLayout.cast<MmaEncodingAttr>();
-    auto dstDotLayout = dstLayout.cast<DotOperandEncodingAttr>();
-    if (isMmaToDotShortcut(srcMmaLayout, dstDotLayout)) {
+    if (isMmaToDotShortcut(srcTy, dstTy)) {
       // get source values
       auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
                                                        rewriter, srcTy);
