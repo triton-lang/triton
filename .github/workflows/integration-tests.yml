@@ -72,7 +72,7 @@ jobs:
         run: |
           cd python
           python3 -m pip install cmake==3.24
-          python3 -m pip install -vvv '.[tests]'
+          python3 -m pip install -vvv --no-build-isolation '.[tests]'
 
       - name: Install Triton on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
@@ -80,7 +80,7 @@ jobs:
           cd python
           python3 -m pip install cmake==3.24
           python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
-          python3 -m pip install -vvv '.[tests]'
+          python3 -m pip install -vvv --no-build-isolation '.[tests]'
 
       - name: Run lit tests
         if: ${{ env.BACKEND != 'ROCM'}}
