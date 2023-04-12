@@ -1428,10 +1428,6 @@ def get_variant_golden(a, b):
     return c_padded[:SIZE_M, :SIZE_N]
 
 @pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K', [
-    # Non-forloop
-#    [64, 32, 64, 4, 64, 32, 64],
-#    [128, 64, 128, 4, 128, 64, 128],
-    # K-Forloop
     [64, 32, 128, 4, 64, 32, 64],
 ])
 def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K):
