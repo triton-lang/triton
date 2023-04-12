@@ -18,7 +18,7 @@ def nvsmi(attrs):
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
-             quantiles=(0.5, 0.2, 0.8),
+             quantiles=None,
              fast_flush=False,
              return_mode="min"):
     assert return_mode in ["min", "max", "mean", "median"]
