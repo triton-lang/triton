@@ -87,7 +87,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     if percentiles is not None:
         percentiles = torch.quantile(times, torch.tensor(percentiles)).tolist()
         return tuple(percentiles)
-    return getattr(torch, return_mode)(times.item())
+    return getattr(torch, return_mode)(times).item()
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=''):
