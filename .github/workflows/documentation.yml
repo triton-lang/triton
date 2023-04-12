@@ -11,8 +11,10 @@ jobs:
     runs-on: [self-hosted, V100]
 
     steps:
-      - name: Checkout
+      - name: Checkout keren/fix-doc
         uses: actions/checkout@v2
+        with:
+          ref: keren/fix-doc
 
       - name: Clear docs
         run: |
