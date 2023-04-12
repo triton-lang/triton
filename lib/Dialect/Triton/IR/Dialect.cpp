@@ -22,21 +22,23 @@ using namespace mlir::triton;
 namespace {
 struct TritonInlinerInterface : public DialectInlinerInterface {
   using DialectInlinerInterface::DialectInlinerInterface;
+
   bool isLegalToInline(Operation *call, Operation *callable,
                        bool wouldBeCloned) const final {
     auto funcOp = dyn_cast<triton::FuncOp>(callable); 
     if (!funcOp)
       return true;
-    // Get the noinline attribute.
     auto noinline = funcOp->getAttrOfType<BoolAttr>("noinline");
     if (noinline)
       return false;
     return true;
   }
+
   bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned,
                        IRMapping &valueMapping) const final {
     return true;
   }
+
   bool isLegalToInline(Operation *, Region *, bool wouldBeCloned,
                        IRMapping &) const final {
     return true;
