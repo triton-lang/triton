@@ -190,8 +190,6 @@ private:
     }
     // The order of the axes for the the threads within the warp
     auto srcOrd = triton::gpu::getOrder(srcLayout);
-    // The elements owned by each thread, e.g. [2, 2] means that each thread
-    // in a warp would own 2x2 elements of the original tensor
     auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto srcShape = srcTy.getShape();
 
@@ -199,11 +197,10 @@ private:
     auto llvmIndexTy = getTypeConverter()->getIndexType();
     auto elemPtrTy = LLVM::LLVMPointerType::get(llvmElemTy, 3);
     auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
-    // The shared memory base address
+
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     smemBase = bitcast(smemBase, elemPtrTy);
 
-    // The shape of the shared memory
     auto smemShape = helper.getScratchConfigBasic();
     unsigned elems = product<unsigned>(smemShape);
     Value indexSmemBase = gep(elemPtrTy, smemBase, i32_val(elems));
