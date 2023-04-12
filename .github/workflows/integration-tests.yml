@@ -111,7 +111,7 @@ jobs:
         if: ${{ env.BACKEND != 'ROCM'}}
         run: |
           cd python
-          cd "build/$(ls build)"
+          cd "build/$(ls build | grep -i temp)"
           ctest
 
       - name: Regression tests
