@@ -1,0 +1,52 @@
+name: Documentation
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+
+  Build-Documentation:
+
+    runs-on: [self-hosted, V100]
+
+    steps:
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v2
+        with:
+          ref: 'gh-pages'
+
+      - name: Clear docs
+        run: |
+          rm -r /tmp/triton-docs
+        continue-on-error: true
+
+      - name: Checkout branch
+        uses: actions/checkout@v2
+
+      - name: Build docs
+        run: |
+          git fetch origin main
+          cd docs
+          sphinx-multiversion . _build/html/
+
+      - name: Publish docs
+        run: |
+          git branch
+          # update docs
+          mkdir /tmp/triton-docs;
+          mv docs/_build/html/* /tmp/triton-docs/
+          git checkout gh-pages
+          cp -r CNAME /tmp/triton-docs/
+          cp -r index.html /tmp/triton-docs/
+          cp -r .nojekyll /tmp/triton-docs/
+          rm -r *
+          cp -r /tmp/triton-docs/* .
+          git add .
+          git commit -am "[GH-PAGES] Updated website"
+          # publish docs
+          eval `ssh-agent -s`
+          DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
+          git remote set-url origin git@github.com:openai/triton.git
+          git push

@@ -4,7 +4,6 @@
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "triton/Analysis/Allocation.h"
 
 #include "TypeConverter.h"
@@ -41,12 +40,12 @@ void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
 // TODO(Superjomn): remove the code when MLIR v15.0 is included.
 // All the rights are reserved by the LLVM community.
 
-struct FuncOpConversionBase : public ConvertOpToLLVMPattern<func::FuncOp> {
+struct FuncOpConversionBase : public ConvertOpToLLVMPattern<triton::FuncOp> {
 private:
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
   /// attributes.
-  static void filterFuncAttributes(func::FuncOp op, bool filterArgAttrs,
+  static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
                                    SmallVectorImpl<NamedAttribute> &result) {
 
     for (const auto &attr : op->getAttrs()) {
@@ -66,19 +65,19 @@ private:
   }
 
 protected:
-  using ConvertOpToLLVMPattern<func::FuncOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<triton::FuncOp>::ConvertOpToLLVMPattern;
 
   // Convert input FuncOp to LLVMFuncOp by using the LLVMTypeConverter provided
   // to this legalization pattern.
   LLVM::LLVMFuncOp
-  convertFuncOpToLLVMFuncOp(func::FuncOp funcOp,
+  convertFuncOpToLLVMFuncOp(triton::FuncOp funcOp,
                             ConversionPatternRewriter &rewriter) const {
     // Convert the original function arguments. They are converted using the
     // LLVMTypeConverter provided to this legalization pattern.
     auto varargsAttr = funcOp->getAttrOfType<BoolAttr>("func.varargs");
     TypeConverter::SignatureConversion result(funcOp.getNumArguments());
     auto llvmType = getTypeConverter()->convertFunctionSignature(
-        funcOp.getFunctionType(), varargsAttr && varargsAttr.getValue(),
+        funcOp.getFunctionType(), varargsAttr && varargsAttr.getValue(), false,
         result);
     if (!llvmType)
       return nullptr;
@@ -502,7 +501,7 @@ public:
 
   SmallVector<Value> emitBaseIndexForLayout(Location loc,
                                             ConversionPatternRewriter &rewriter,
-                                            const Attribute &layout,
+                                            Attribute layout,
                                             RankedTensorType type) const {
     IndexCacheKeyT key = std::make_pair(layout, type);
     auto cache = indexCacheInfo.baseIndexCache;
@@ -532,7 +531,7 @@ public:
   }
 
   SmallVector<SmallVector<unsigned>>
-  emitOffsetForLayout(const Attribute &layout, RankedTensorType type) const {
+  emitOffsetForLayout(Attribute layout, RankedTensorType type) const {
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
       return emitOffsetForBlockedLayout(blockedLayout, type);
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
@@ -549,7 +548,7 @@ public:
   // -----------------------------------------------------------------------
   SmallVector<SmallVector<Value>> emitIndices(Location loc,
                                               ConversionPatternRewriter &b,
-                                              const Attribute &layout,
+                                              Attribute layout,
                                               RankedTensorType type) const {
     IndexCacheKeyT key(layout, type);
     auto cache = indexCacheInfo.indexCache;
@@ -861,8 +860,8 @@ private:
   // Emit indices calculation within each ConversionPattern, and returns a
   // [elemsPerThread X rank] index matrix.
   SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
-      Location loc, ConversionPatternRewriter &rewriter,
-      const Attribute &layout, RankedTensorType type) const {
+      Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
+      RankedTensorType type) const {
     // step 1, delinearize threadId to get the base index
     auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, type);
     // step 2, get offset of each element

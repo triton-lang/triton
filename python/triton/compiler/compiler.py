@@ -17,7 +17,7 @@ import triton
 import triton._C.libtriton.triton as _triton
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
-from ..runtime.cache import CacheManager
+from ..runtime.cache import get_cache_manager
 from ..runtime.driver import get_cuda_utils, get_hip_utils
 from ..tools.disasm import extract
 from .code_generator import ast_to_ttir
@@ -267,14 +267,14 @@ def make_hash(fn, **kwargs):
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
 
 
-# - ^\s*func\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
+# - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
 # - (public\s+)? : optionally match the keyword public and any following whitespace
 # - (@\w+) : match an @ symbol followed by one or more word characters
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-mlir_prototype_pattern = r'^\s*func\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+mlir_prototype_pattern = r'^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
     "ttir": mlir_prototype_pattern,
@@ -410,7 +410,7 @@ def compile(fn, **kwargs):
     # cache manager
     so_path = make_stub(name, signature, constants)
     # create cache manager
-    fn_cache_manager = CacheManager(make_hash(fn, **kwargs))
+    fn_cache_manager = get_cache_manager(make_hash(fn, **kwargs))
     # determine name and extension type of provided function
     if isinstance(fn, triton.runtime.JITFunction):
         name, ext = fn.__name__, "ast"
@@ -419,14 +419,22 @@ def compile(fn, **kwargs):
 
     # load metadata if any
     metadata = None
-    if fn_cache_manager.has_file(f'{name}.json'):
-        with open(fn_cache_manager._make_path(f"{name}.json")) as f:
+    metadata_filename = f"{name}.json"
+
+    # The group is addressed by the metadata
+    metadata_group = fn_cache_manager.get_group(
+        metadata_filename
+    ) or {}
+
+    metadata_path = metadata_group.get(metadata_filename)
+
+    if metadata_path is not None:
+        with open(metadata_path) as f:
             metadata = json.load(f)
     else:
         metadata = {"num_warps": num_warps,
                     "num_stages": num_stages,
                     "constants": _get_jsonable_constants(constants),
-                    "ctime": dict(),
                     "debug": debug}
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
@@ -437,25 +445,30 @@ def compile(fn, **kwargs):
     module = fn
     # run compilation pipeline  and populate metadata
     for ir, (parse, compile_kernel) in list(stages.items())[first_stage:]:
-        path = fn_cache_manager._make_path(f"{name}.{ir}")
+        ir_filename = f"{name}.{ir}"
+
         if ir == ext:
             next_module = parse(fn)
-        elif os.path.exists(path) and\
-                ir in metadata["ctime"] and\
-                os.path.getctime(path) == metadata["ctime"][ir]:
-            if ir == "amdgcn":
-                next_module = (parse(path), parse(fn_cache_manager._make_path(f"{name}.hsaco_path")))
-            else:
-                next_module = parse(path)
         else:
-            next_module = compile_kernel(module)
-            if ir == "amdgcn":
-                fn_cache_manager.put(next_module[0], f"{name}.{ir}")
-                fn_cache_manager.put(next_module[1], f"{name}.hsaco_path")
+            path = metadata_group.get(ir_filename)
+            if path is None:
+                next_module = compile_kernel(module)
+                if ir == "amdgcn":
+                    extra_file_name = f"{name}.hsaco_path"
+                    metadata_group[ir_filename] = fn_cache_manager.put(next_module[0], ir_filename)
+                    metadata_group[extra_file_name] = fn_cache_manager.put(next_module[1], extra_file_name)
+                else:
+                    metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
+                    fn_cache_manager.put(next_module, ir_filename)
             else:
-                fn_cache_manager.put(next_module, f"{name}.{ir}")
-        if os.path.exists(path):
-            metadata["ctime"][ir] = os.path.getctime(path)
+                if ir == "amdgcn":
+                    extra_file_name = f"{name}.hsaco_path"
+                    hasco_path = metadata_group.get(extra_file_name)
+                    assert hasco_path is not None, "Expected to have hsaco_path in metadata when we have the amdgcn"
+                    next_module = (parse(path), parse(hasco_path))
+                else:
+                    next_module = parse(path)
+
         if ir == "cubin":
             asm[ir] = next_module
         elif ir == "amdgcn":
@@ -470,8 +483,11 @@ def compile(fn, **kwargs):
             metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
             asm["hsaco_path"] = next_module[1]
         module = next_module
-    # write-back metadata
-    fn_cache_manager.put(json.dumps(metadata), f"{name}.json", binary=False)
+    # write-back metadata, if it didn't come from the cache
+    if metadata_path is None:
+        metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata), metadata_filename, binary=False)
+        fn_cache_manager.put_group(metadata_filename, metadata_group)
+
     # return handle to compiled kernel
     return CompiledKernel(fn, so_path, metadata, asm)
 

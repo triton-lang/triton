@@ -208,7 +208,7 @@ void init_triton_ir(py::module &&m) {
                std::string attrName = name + "_arg" + std::to_string(id);
                mlir::Block *owner = arg.getOwner();
                if (owner->isEntryBlock() &&
-                   !mlir::isa<mlir::func::FuncOp>(owner->getParentOp())) {
+                   !mlir::isa<mlir::triton::FuncOp>(owner->getParentOp())) {
                  owner->getParentOp()->setAttr(attrName, attr);
                }
              }
@@ -361,7 +361,7 @@ void init_triton_ir(py::module &&m) {
              return str;
            })
       .def("push_back",
-           [](mlir::ModuleOp &self, mlir::func::FuncOp &funcOp) -> void {
+           [](mlir::ModuleOp &self, mlir::triton::FuncOp &funcOp) -> void {
              self.push_back(funcOp);
            })
       .def("has_function",
@@ -372,13 +372,14 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_function",
            [](mlir::ModuleOp &self,
-              std::string &funcName) -> mlir::func::FuncOp {
-             return self.lookupSymbol<mlir::func::FuncOp>(funcName);
+              std::string &funcName) -> mlir::triton::FuncOp {
+             return self.lookupSymbol<mlir::triton::FuncOp>(funcName);
            })
       .def("get_single_function",
-           [](mlir::ModuleOp &self) -> mlir::func::FuncOp {
-             llvm::SmallVector<mlir::func::FuncOp> funcs;
-             self.walk([&](mlir::func::FuncOp func) { funcs.push_back(func); });
+           [](mlir::ModuleOp &self) -> mlir::triton::FuncOp {
+             llvm::SmallVector<mlir::triton::FuncOp> funcs;
+             self.walk(
+                 [&](mlir::triton::FuncOp func) { funcs.push_back(func); });
              if (funcs.size() != 1)
                throw std::runtime_error("Expected a single function");
              return funcs[0];
@@ -400,12 +401,11 @@ void init_triton_ir(py::module &&m) {
         // initialize registry
         // note: we initialize llvm for undef
         mlir::DialectRegistry registry;
-        registry.insert<mlir::triton::TritonDialect,
-                        mlir::triton::gpu::TritonGPUDialect,
-                        mlir::math::MathDialect, mlir::arith::ArithDialect,
-                        mlir::index::IndexDialect, mlir::func::FuncDialect,
-                        mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect,
-                        mlir::LLVM::LLVMDialect>();
+        registry.insert<
+            mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
+            mlir::math::MathDialect, mlir::arith::ArithDialect,
+            mlir::index::IndexDialect, mlir::scf::SCFDialect,
+            mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
 
@@ -423,30 +423,30 @@ void init_triton_ir(py::module &&m) {
       },
       ret::take_ownership);
 
-  py::class_<mlir::func::FuncOp, mlir::OpState>(m, "function")
+  py::class_<mlir::triton::FuncOp, mlir::OpState>(m, "function")
       // .def_property_readonly("attrs", &ir::function::attrs)
       // .def("add_attr", &ir::function::add_attr);
       .def("args",
-           [](mlir::func::FuncOp &self, unsigned idx) -> mlir::BlockArgument {
+           [](mlir::triton::FuncOp &self, unsigned idx) -> mlir::BlockArgument {
              return self.getArgument(idx);
            })
       .def(
           "add_entry_block",
-          [](mlir::func::FuncOp &self) -> mlir::Block * {
+          [](mlir::triton::FuncOp &self) -> mlir::Block * {
             return self.addEntryBlock();
           },
           ret::reference)
       .def(
           "set_arg_attr",
-          [](mlir::func::FuncOp &self, int arg_no, const std::string &name,
+          [](mlir::triton::FuncOp &self, int arg_no, const std::string &name,
              int val) {
             // set arg attributes "name" to value "val"
             auto attrTy = mlir::IntegerType::get(self.getContext(), 32);
             self.setArgAttr(arg_no, name, mlir::IntegerAttr::get(attrTy, val));
           },
           ret::reference)
-      .def_property_readonly("type", &mlir::func::FuncOp::getFunctionType)
-      .def("reset_type", &mlir::func::FuncOp::setType);
+      .def_property_readonly("type", &mlir::triton::FuncOp::getFunctionType)
+      .def("reset_type", &mlir::triton::FuncOp::setType);
 
   py::class_<mlir::OpBuilder::InsertPoint>(m, "InsertPoint");
 
@@ -463,13 +463,13 @@ void init_triton_ir(py::module &&m) {
       .def("ret",
            [](mlir::OpBuilder &self, std::vector<mlir::Value> &vals) -> void {
              auto loc = self.getUnknownLoc();
-             self.create<mlir::func::ReturnOp>(loc, vals);
+             self.create<mlir::triton::ReturnOp>(loc, vals);
            })
       .def("call",
-           [](mlir::OpBuilder &self, mlir::func::FuncOp &func,
+           [](mlir::OpBuilder &self, mlir::triton::FuncOp &func,
               std::vector<mlir::Value> &args) -> mlir::OpState {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::func::CallOp>(loc, func, args);
+             return self.create<mlir::triton::CallOp>(loc, func, args);
            })
       // insertion block/point
       .def("set_insertion_point_to_start",
@@ -651,16 +651,16 @@ void init_triton_ir(py::module &&m) {
       .def("get_or_insert_function",
            [](mlir::OpBuilder &self, mlir::ModuleOp &module,
               std::string &funcName, mlir::Type &funcType,
-              std::string &visibility) -> mlir::func::FuncOp {
+              std::string &visibility) -> mlir::triton::FuncOp {
              if (mlir::Operation *funcOperation = module.lookupSymbol(funcName))
-               return llvm::dyn_cast<mlir::func::FuncOp>(funcOperation);
+               return llvm::dyn_cast<mlir::triton::FuncOp>(funcOperation);
              auto loc = self.getUnknownLoc();
              if (auto funcTy = funcType.dyn_cast<mlir::FunctionType>()) {
                llvm::SmallVector<mlir::NamedAttribute> attrs = {
                    mlir::NamedAttribute(self.getStringAttr("sym_visibility"),
                                         self.getStringAttr(visibility))};
-               return self.create<mlir::func::FuncOp>(loc, funcName, funcTy,
-                                                      attrs);
+               return self.create<mlir::triton::FuncOp>(loc, funcName, funcTy,
+                                                        attrs);
              }
              throw std::runtime_error("invalid function type");
            })
