@@ -22,7 +22,6 @@ jobs:
       - name: Build docs
         run: |
           cd docs
-          pip install sphinx-multiversion sphinx_rtd_theme sphinx_gallery cmake matplotlib pytest torch
           sphinx-multiversion . _build/html/
 
       - name: Update docs
