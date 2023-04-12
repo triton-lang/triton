@@ -8,13 +8,11 @@ jobs:
 
   Build-Documentation:
 
-    runs-on: [self-hosted, V100]
+    runs-on: [self-hosted]
 
     steps:
-      - name: Checkout keren/fix-doc
+      - name: Checkout branch
         uses: actions/checkout@v2
-        with:
-          ref: keren/fix-doc
 
       - name: Clear docs
         run: |
