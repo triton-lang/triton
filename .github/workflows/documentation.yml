@@ -24,16 +24,13 @@ jobs:
 
       - name: Build docs
         run: |
-          git fetch origin main
-          git checkout main
           cd docs
           sphinx-multiversion . _build/html/
 
       - name: Publish docs
         run: |
-          git branch
           # update docs
-          mkdir /tmp/triton-docs;
+          mkdir /tmp/triton-docs
           mv docs/_build/html/* /tmp/triton-docs/
           git checkout gh-pages
           cp -r CNAME /tmp/triton-docs/
