@@ -12,10 +12,10 @@ jobs:
 
     steps:
 
-      - name: Checkout gh-pages
+      - name: Checkout main
         uses: actions/checkout@v2
         with:
-          ref: 'gh-pages'
+          ref: 'main'
 
       - name: Clear docs
         run: |
@@ -44,4 +44,4 @@ jobs:
           eval `ssh-agent -s`
           DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
           git remote set-url origin git@github.com:openai/triton.git
-          git push
+          git push origin gh-pages
