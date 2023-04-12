@@ -11,6 +11,8 @@ jobs:
     runs-on: [self-hosted, V100]
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v2
 
       - name: Clear docs
         run: |
@@ -22,9 +24,8 @@ jobs:
           cd docs
           sphinx-multiversion . _build/html/
 
-      - name: Publish docs
+      - name: Update docs
         run: |
-          # update docs
           mkdir /tmp/triton-docs
           mv docs/_build/html/* /tmp/triton-docs/
           git checkout gh-pages
@@ -35,7 +36,8 @@ jobs:
           cp -r /tmp/triton-docs/* .
           git add .
           git commit -am "[GH-PAGES] Updated website"
-          # publish docs
+
+      - name: Publish docs
           eval `ssh-agent -s`
           DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
           git remote set-url origin git@github.com:openai/triton.git
