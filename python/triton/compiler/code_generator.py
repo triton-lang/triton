@@ -227,7 +227,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit(init_node)
         # initialize function
         visibility = "public" if self.is_kernel else "private"
-        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility)
+        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility, self.noinline)
         self.module.push_back(fn)
         entry = fn.add_entry_block()
         arg_values = []
@@ -749,7 +749,6 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Assert(self, node) -> Any:
         if not self.debug:
             return
-        print("AA")
         test = self.visit(node.test)
         msg = self.visit(node.msg)
         # Convert assert to triton's device_assert which happens on the device
@@ -786,7 +785,7 @@ class CodeGenerator(ast.NodeVisitor):
             if not self.module.has_function(fn_name):
                 prototype = language.function_type([], arg_types)
                 gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=self.debug)
+                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=fn.debug, noinline=fn.noinline)
                 generator.visit(fn.parse())
                 callee_ret_type = generator.last_ret_type
                 self.function_ret_types[fn_name] = callee_ret_type
