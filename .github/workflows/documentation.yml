@@ -23,9 +23,6 @@ jobs:
       - name: Build docs
         run: |
           cd docs
-          git clone https://github.com/NVIDIA/apex
-          cd apex
-          python3 -m pip install -v --force-reinstall --disable-pip-version-check --no-cache-dir ./
           sphinx-multiversion . _build/html/
 
       - name: Update docs
