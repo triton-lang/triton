@@ -38,6 +38,7 @@ jobs:
           git commit -am "[GH-PAGES] Updated website"
 
       - name: Publish docs
+        run: |
           eval `ssh-agent -s`
           DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
           git remote set-url origin git@github.com:openai/triton.git
