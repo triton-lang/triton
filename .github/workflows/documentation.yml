@@ -12,11 +12,6 @@ jobs:
 
     steps:
 
-      - name: Checkout gh-pages
-        uses: actions/checkout@v2
-        with:
-          ref: 'gh-pages'
-
       - name: Clear docs
         run: |
           rm -r /tmp/triton-docs
@@ -24,8 +19,6 @@ jobs:
 
       - name: Build docs
         run: |
-          # tmp
-          git checkout keren/fix-doc
           cd docs
           sphinx-multiversion . _build/html/
 
