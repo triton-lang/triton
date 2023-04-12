@@ -25,7 +25,7 @@ jobs:
           cd docs
           git clone https://github.com/NVIDIA/apex
           cd apex
-          python3 -m pip install --force-reinstall -v --disable-pip-version-check --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./
+          python3 -m pip install -v --force-reinstall --disable-pip-version-check --no-cache-dir
           sphinx-multiversion . _build/html/
 
       - name: Update docs
