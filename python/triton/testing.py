@@ -19,8 +19,8 @@ def nvsmi(attrs):
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
              quantiles=None,
-             fast_flush=False,
-             return_mode="min"):
+             fast_flush=True,
+             return_mode="mean"):
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
     """
@@ -85,7 +85,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     torch.cuda.synchronize()
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
     if quantiles is not None:
-        return torch.quantile(times, torch.tensor(quantiles)).tolist()
+        ret = torch.quantile(times, torch.tensor(quantiles)).tolist()
+        if len(ret) == 1:
+            ret = ret[0]
+        return ret
     return getattr(torch, return_mode)(times).item()
 
 
