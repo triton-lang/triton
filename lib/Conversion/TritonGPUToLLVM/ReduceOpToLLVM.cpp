@@ -131,17 +131,54 @@ private:
     }
   }
 
+  void getWriteIndexBasic(ConversionPatternRewriter &rewriter, Location loc,
+                          Attribute layout, SmallVector<Value> &index,
+                          SmallVector<Value> &writeIdx,
+                          std::map<int, Value> &ints, unsigned axis) const {
+    writeIdx = index;
+    auto sizePerThread = triton::gpu::getSizePerThread(layout);
+    Value axisSizePerThread = ints[sizePerThread[axis]];
+    Value _8 = ints[8];
+    Value _16 = ints[16];
+    if (layout.isa<BlockedEncodingAttr>()) {
+      writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+    }
+    auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>();
+    if (mmaLayout && mmaLayout.isAmpere()) {
+      if (axis == 0) {
+        // Because warpTileSize = [16, 8] and threadsPerWarp = [8, 4], each 8
+        // rows in smem would correspond to a warp. The mapping
+        // is: (warp_index) x 8 + (row index within warp)
+        writeIdx[axis] =
+            add(mul(udiv(index[axis], _16), _8), urem(index[axis], _8));
+      } else {
+        // A single thread owns axisSizePerThread contiguous values
+        // on the reduction axis, so after within thread reduction,
+        // writeIdx[axis] = index[axis] / axisSizePerThread
+        writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+      }
+    }
+    if (mmaLayout && !mmaLayout.isAmpere()) {
+      llvm::report_fatal_error("Unsupported layout");
+    }
+  }
+
   // Use shared memory for reduction within warps and across warps
   LogicalResult
   matchAndRewriteBasic(triton::ReduceOp op, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
+    ReduceOpHelper helper(op);
     Location loc = op->getLoc();
     unsigned axis = op.getAxis();
     bool withIndex = triton::ReduceOp::withIndex(op.getRedOp());
 
     auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
-    auto srcOrd = srcLayout.getOrder();
+    auto srcLayout = srcTy.getEncoding();
+    if (!helper.isSupportedLayout()) {
+      assert(false && "Unexpected srcLayout in ReduceOpConversion");
+    }
+    auto srcOrd = triton::gpu::getOrder(srcLayout);
+    auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto srcShape = srcTy.getShape();
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
@@ -151,7 +188,6 @@ private:
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     smemBase = bitcast(smemBase, elemPtrTy);
 
-    ReduceOpHelper helper(op);
     auto smemShape = helper.getScratchConfigBasic();
     unsigned elems = product<unsigned>(smemShape);
     Value indexSmemBase = gep(elemPtrTy, smemBase, i32_val(elems));
@@ -191,7 +227,9 @@ private:
     ints[0] = i32_val(0);
     for (int N = smemShape[axis] / 2; N > 0; N >>= 1)
       ints[N] = i32_val(N);
-    Value sizePerThread = i32_val(srcLayout.getSizePerThread()[axis]);
+    ints[sizePerThread[axis]] = i32_val(sizePerThread[axis]);
+    ints[8] = i32_val(8);
+    ints[16] = i32_val(16);
 
     // reduce across threads
     for (auto it : accs) {
@@ -200,9 +238,9 @@ private:
       Value accIndex;
       if (withIndex)
         accIndex = accIndices[key];
-      SmallVector<Value> writeIdx = indices[key];
-
-      writeIdx[axis] = udiv(writeIdx[axis], sizePerThread);
+      SmallVector<Value> writeIdx;
+      getWriteIndexBasic(rewriter, loc, srcLayout, indices[key], writeIdx, ints,
+                         axis);
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
       Value writePtr = gep(elemPtrTy, smemBase, writeOffset);
       Value indexWritePtr = gep(indexPtrTy, indexSmemBase, writeOffset);
@@ -274,12 +312,16 @@ private:
   // exchange across warps
   LogicalResult matchAndRewriteFast(triton::ReduceOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
+    ReduceOpHelper helper(op);
     Location loc = op->getLoc();
     unsigned axis = adaptor.getAxis();
     bool withIndex = triton::ReduceOp::withIndex(op.getRedOp());
 
     auto srcTy = op.getOperand().getType().cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding();
+    if (!helper.isSupportedLayout()) {
+      assert(false && "Unexpected srcLayout in ReduceOpConversion");
+    }
     auto srcShape = srcTy.getShape();
     auto order = getOrder(srcLayout);
 
@@ -293,7 +335,6 @@ private:
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     smemBase = bitcast(smemBase, elemPtrTy);
 
-    ReduceOpHelper helper(op);
     auto smemShapes = helper.getScratchConfigsFast();
     unsigned elems = product<unsigned>(smemShapes[0]);
     unsigned maxElems = std::max(elems, product<unsigned>(smemShapes[1]));

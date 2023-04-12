@@ -91,6 +91,19 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
   return bytes;
 }
 
+bool ReduceOpHelper::isSupportedLayout() {
+  auto srcLayout = srcTy.getEncoding();
+  if (srcLayout.isa<triton::gpu::BlockedEncodingAttr>()) {
+    return true;
+  }
+  if (auto mmaLayout = srcLayout.dyn_cast<triton::gpu::MmaEncodingAttr>()) {
+    if (mmaLayout.isAmpere()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool isSharedEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
@@ -157,14 +170,18 @@ std::string getValueOperandName(Value value, AsmState &state) {
   return opName;
 }
 
-bool isMmaToDotShortcut(triton::gpu::MmaEncodingAttr &mmaLayout,
-                        triton::gpu::DotOperandEncodingAttr &dotOperandLayout) {
+bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   // dot_op<opIdx=0, parent=#mma> = #mma
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
+  auto srcLayout = srcTy.getEncoding();
+  auto dstLayout = dstTy.getEncoding();
+  auto mmaLayout = srcLayout.cast<triton::gpu::MmaEncodingAttr>();
+  auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
   return mmaLayout.getVersionMajor() == 2 &&
          mmaLayout.getWarpsPerCTA()[1] == 1 &&
          dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getParent() == mmaLayout;
+         dotOperandLayout.getParent() == mmaLayout &&
+         !srcTy.getElementType().isF32();
 }
 
 bool isSingleValue(Value value) {
