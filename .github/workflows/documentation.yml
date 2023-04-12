@@ -8,7 +8,8 @@ jobs:
 
   Build-Documentation:
 
-    runs-on: [self-hosted, V100]
+    # TODO: It's temporarily built on A100 only because tutorials fail on V100
+    runs-on: [self-hosted, A100]
 
     steps:
       - name: Checkout branch
