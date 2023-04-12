@@ -9,7 +9,7 @@ jobs:
   Build-Documentation:
 
     # TODO: It's temporarily built on A100 only because tutorials fail on V100
-    runs-on: [self-hosted, A100]
+    runs-on: [self-hosted, V100]
 
     steps:
       - name: Checkout branch
@@ -23,8 +23,7 @@ jobs:
       - name: Build docs
         run: |
           cd docs
-          python3 -m pip install sphinx-multiversion sphinx_rtd_theme sphinx_gallery cmake matplotlib pytest torch cmake
-          /home/phil/.local/bin/sphinx-multiversion . _build/html/
+          sphinx-multiversion . _build/html/
 
       - name: Update docs
         run: |
