@@ -25,7 +25,7 @@ jobs:
       - name: Build docs
         run: |
           # tmp
-          git checkout keren/fix-docs
+          git checkout keren/fix-doc
           cd docs
           sphinx-multiversion . _build/html/
 
