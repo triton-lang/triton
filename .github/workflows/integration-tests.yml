@@ -89,7 +89,7 @@ jobs:
         run: |
           python3 -m pip install lit
           cd python
-          LIT_TEST_DIR="build/(ls build | grep -i temp)/test"
+          LIT_TEST_DIR="build/$(ls build | grep -i temp)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
             echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
           fi
