@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
-  TRITON_USE_ASSERT_ENABLED_LLVM: 'TRUE'
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
 
 jobs:
   Runner-Preparation:
@@ -89,9 +89,9 @@ jobs:
         run: |
           python3 -m pip install lit
           cd python
-          LIT_TEST_DIR="build/$(ls build)/test"
+          LIT_TEST_DIR="build/(ls build | grep -i temp)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Not found '${LIT_TEST_DIR}'.  Did you change an installation method?" ; exit -1
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
           fi
           lit -v "${LIT_TEST_DIR}"
 
