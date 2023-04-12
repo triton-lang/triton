@@ -2,7 +2,6 @@
 # Import order is significant here.
 
 from . import math
-from . import cuda
 from .core import (
     abs,
     advance,
@@ -121,7 +120,6 @@ __all__ = [
     "cdiv",
     "constexpr",
     "cos",
-    "cuda",
     "debug_barrier",
     "device_assert",
     "device_print",
