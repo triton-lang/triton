@@ -95,6 +95,15 @@ jobs:
           fi
           lit -v "${LIT_TEST_DIR}"
 
+      - name: Regression tests
+        if: ${{ contains(matrix.runner, 'A100') }}
+        run: |
+          cd python/test/regression
+          sudo nvidia-smi -i 0 -pm 1
+          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+          python3 -m pytest -vs .
+          sudo nvidia-smi -i 0 -rgc
+
       - name: Run python tests on CUDA
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
@@ -113,12 +122,3 @@ jobs:
           cd python
           cd "build/$(ls build | grep -i temp)"
           ctest
-
-      - name: Regression tests
-        if: ${{ contains(matrix.runner, 'A100') }}
-        run: |
-          cd python/test/regression
-          sudo nvidia-smi -i 0 -pm 1
-          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          python3 -m pytest -vs .
-          sudo nvidia-smi -i 0 -rgc
