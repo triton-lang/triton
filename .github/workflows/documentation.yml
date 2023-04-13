@@ -27,7 +27,8 @@ jobs:
       - name: Build docs
         run: |
           cd docs
-          alias cmake="python3 -m cmake"
+          cmake_path=$(python -c "import cmake; print(cmake.CMAKE_BIN_DIR + '/cmake')")
+          alias cmake="$cmake_path"
           python3 -m sphinx_multiversion . _build/html/
 
       - name: Update docs
