@@ -111,8 +111,7 @@ def early_config_prune(configs, named_args):
         BLOCK_M, BLOCK_N, BLOCK_K, num_stages = \
             kw['BLOCK_M'], kw['BLOCK_N'], kw['BLOCK_K'], config.num_stages
 
-        # TODO: move to `cuda_utils` submodule
-        max_shared_memory = driver.utils.cuda_utils.get_device_properties(device)["max_shared_mem"]
+        max_shared_memory = driver.utils.get_device_properties(device)["max_shared_mem"]
         required_shared_memory = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
         if required_shared_memory <= max_shared_memory:
             pruned_configs.append(config)
