@@ -5,15 +5,15 @@ on:
     - cron: "0 0 * * *"
 
 jobs:
-
   Build-Documentation:
-
     # TODO: It's temporarily built on A100 only because tutorials fail on V100
     runs-on: [self-hosted, V100]
 
     steps:
       - name: Checkout branch
         uses: actions/checkout@v2
+        with:
+          token: ${{ secrets.CI_PAT }}
 
       - name: Clear docs
         run: |
@@ -40,7 +40,4 @@ jobs:
 
       - name: Publish docs
         run: |
-          eval `ssh-agent -s`
-          DISPLAY=:0 SSH_ASKPASS=~/.ssh/give_pass.sh ssh-add ${{ secrets.SSH_KEY }} <<< ${{ secrets.SSH_PASS }}
-          git remote set-url origin git@github.com:openai/triton.git
           git push origin gh-pages
