@@ -20,16 +20,17 @@ jobs:
           rm -r /tmp/triton-docs
         continue-on-error: true
 
-      - name: List branches and tags
+      - name: Install Dependencies
         run: |
-          git branch -a
-          git tag
+          pip3 install sphinx-multiversion
+
+      - name: Fetch dependent branches
+        run: |
+          git fetch origin main:main
 
       - name: Build docs
         run: |
           cd docs
-          pip3 install sphinx-multiversion
-          git fetch origin main:main
           python3 -m sphinx_multiversion . _build/html/
 
       - name: Update docs
