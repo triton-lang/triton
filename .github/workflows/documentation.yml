@@ -27,7 +27,7 @@ jobs:
       - name: Build docs
         run: |
           cd docs
-          export PATH=$(python -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
+          export PATH=$(python3 -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
           echo "Modified PATH: $PATH"
           which cmake
           cmake --version
