@@ -525,7 +525,7 @@ class CompiledKernel:
             return
         device = triton.runtime.jit.get_current_device()
         bin_path = {
-            driver.HIP: "hsaco",
+            driver.HIP: "hsaco_path",
             driver.CUDA: "cubin"
         }[driver.backend]
         max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
