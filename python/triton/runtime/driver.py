@@ -127,8 +127,10 @@ def create_driver():
     import torch
     if torch.version.hip is not None:
         return HIPDriver()
-    else:
+    elif torch.cuda.is_available():
         return CudaDriver()
+    else:
+        return None
 
 
 driver = create_driver()
