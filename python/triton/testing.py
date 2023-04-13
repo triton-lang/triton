@@ -5,7 +5,6 @@ import sys
 from contextlib import contextmanager
 
 import triton._C.libtriton.triton as _triton
-from .runtime import driver
 
 
 def nvsmi(attrs):
@@ -275,6 +274,8 @@ def perf_report(benchmarks):
 def get_dram_gbps(backend=None, device=None):
     ''' return DRAM bandwidth in GB/s '''
     import torch
+
+    from .runtime import driver
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
@@ -287,6 +288,8 @@ def get_dram_gbps(backend=None, device=None):
 
 def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None):
     import torch
+
+    from .runtime import driver
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
@@ -388,6 +391,8 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
 
 def get_max_simd_tflops(dtype, backend=None, device=None):
     import torch
+
+    from .runtime import driver
     if not backend:
         backend = _triton.runtime.backend.CUDA
     if not device:
