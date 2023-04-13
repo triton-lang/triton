@@ -13,6 +13,7 @@ jobs:
         uses: actions/checkout@v2
         with:
           token: ${{ secrets.CI_PAT }}
+          fetch-depth: 0
 
       - name: Clear docs
         run: |
