@@ -29,6 +29,7 @@ jobs:
         run: |
           cd docs
           pip3 install sphinx-multiversion
+          git fetch origin main:main
           python3 -m sphinx_multiversion . _build/html/
 
       - name: Update docs
