@@ -149,11 +149,9 @@ import torch
 import triton
 import triton.language as tl
 
-# %
-# :code:`triton.jit`'ed functions can be auto-tuned by using the :code:`triton.autotune`
-# decorator, which consumes:
-#   - A list of :code:`triton.Config` objects that define different configurations of
-#       meta-parameters (e.g., :code:`BLOCK_SIZE_M`) and compilation options (e.g., :code:`num_warps`) to try
+# `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
+#   - A list of `triton.Config` objects that define different configurations of
+#       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
 #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
 
