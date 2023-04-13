@@ -96,9 +96,13 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    argmax
+    argmin
     max
     min
+    reduction
     sum
+    xor_sum
 
 
 Atomic Ops
