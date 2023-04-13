@@ -25,9 +25,9 @@ jobs:
           pip3 install tabulate
           pip3 install cmake
 
-      - name: Fetch dependent branches
-        run: |
-          git fetch origin main:main
+      #- name: Fetch dependent branches
+      #  run: |
+      #    git fetch origin main:main
 
       - name: Build docs
         run: |
