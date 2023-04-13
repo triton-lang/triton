@@ -118,6 +118,19 @@ class HIPDriver(DriverBase):
         self.backend = self.HIP
         self.libdevice_path = self.get_libdevice_path()
 
+
+class UnsupportedDriver(DriverBase):
+
+    def __new__(cls):
+        if not hasattr(cls, 'instance'):
+            cls.instance = super(UnsupportedDriver, cls).__new__(cls)
+        return cls.instance
+
+    def __init__(self):
+        self.utils = None
+        self.backend = None
+        self.libdevice_path = ''
+
 # -----------------------------
 # Driver
 # -----------------------------
@@ -130,7 +143,7 @@ def create_driver():
     elif torch.cuda.is_available():
         return CudaDriver()
     else:
-        return None
+        return UnsupportedDriver
 
 
 driver = create_driver()
