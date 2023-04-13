@@ -117,8 +117,11 @@ SmallVector<unsigned> getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
 
 class AllocationAnalysis {
 public:
-  AllocationAnalysis(Operation *operation, Allocation *allocation)
-      : operation(operation), allocation(allocation) {
+  AllocationAnalysis(Operation *operation,
+                     Allocation::FuncAllocMapT *funcAllocMap,
+                     Allocation *allocation)
+      : operation(operation), funcAllocMap(funcAllocMap),
+        allocation(allocation) {
     run();
   }
 
@@ -218,6 +221,10 @@ private:
       auto bytes = elemTy.isa<triton::PointerType>()
                        ? elems * kPtrBitWidth / 8
                        : elems * elemTy.getIntOrFloatBitWidth() / 8;
+      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+    } else if (auto funcOp = dyn_cast<triton::FuncOp>(op)) {
+      auto funcAlloc = &(*funcAllocMap)[funcOp];
+      auto bytes = funcAlloc->getSharedMemorySize();
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     }
   }
@@ -499,11 +506,15 @@ private:
 
 private:
   Operation *operation;
+  Allocation::FuncAllocMapT *funcAllocMap;
   Allocation *allocation;
   BufferRangeMapT bufferRange;
 };
+
 } // namespace triton
 
-void Allocation::run() { triton::AllocationAnalysis(getOperation(), this); }
+void Allocation::run(FuncAllocMapT &funcAllocMap) {
+  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+}
 
 } // namespace mlir

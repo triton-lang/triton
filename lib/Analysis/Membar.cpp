@@ -10,15 +10,17 @@
 namespace mlir {
 
 void MembarAnalysis::run() {
-  auto *operation = allocation->getOperation();
-  OpBuilder builder(operation);
-  resolve(operation, &builder);
+  auto moduleOp = moduleAllocation->getModuleOp();
+  moduleOp.walk([&](triton::FuncOp funcOp) {
+    OpBuilder builder(funcOp.getContext());
+    resolve(funcOp, &builder);
+  });
 }
 
-void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
+void MembarAnalysis::resolve(triton::FuncOp funcOp, OpBuilder *builder) {
   // Initialize the blockList
   std::deque<Block *> blockList;
-  operation->walk<WalkOrder::PreOrder>([&](Block *block) {
+  funcOp.walk<WalkOrder::PreOrder>([&](Block *block) {
     for (auto &op : block->getOperations()) {
       // Check if the operation belongs to scf dialect, if so, we need to
       // throw an error
@@ -33,6 +35,7 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
       blockList.emplace_back(block);
   });
 
+  auto *allocation = moduleAllocation->getAllocation(funcOp);
   // A fixed point algorithm
   while (!blockList.empty()) {
     auto *block = blockList.front();
@@ -44,7 +47,7 @@ void MembarAnalysis::resolve(Operation *operation, OpBuilder *builder) {
       if (op.hasTrait<OpTrait::IsTerminator>()) {
         visitTerminator(&op, successors);
       } else {
-        update(&op, &inputBlockInfo, builder);
+        update(&op, &inputBlockInfo, builder, allocation);
       }
     }
     // Get the reference because we want to update if it changed
@@ -78,7 +81,7 @@ void MembarAnalysis::visitTerminator(Operation *op,
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                            OpBuilder *builder) {
+                            OpBuilder *builder, Allocation *allocation) {
   if (isa<triton::gpu::ExtractSliceOp>(op) ||
       isa<triton::gpu::AllocTensorOp>(op) || isa<triton::TransOp>(op)) {
     // alloc is an allocation op without memory write.

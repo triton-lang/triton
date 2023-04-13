@@ -6,7 +6,7 @@ using namespace mlir;
 namespace {
 
 struct TestAllocationPass
-    : public PassWrapper<TestAllocationPass, OperationPass<triton::FuncOp>> {
+    : public PassWrapper<TestAllocationPass, OperationPass<ModuleOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAllocationPass);
 
@@ -21,26 +21,29 @@ struct TestAllocationPass
     // Convert to std::string can remove quotes from opName
     auto opName = SymbolTable::getSymbolName(operation).getValue().str();
     os << opName << "\n";
-    Allocation allocation(operation);
-    operation->walk([&](Operation *op) {
-      auto scratchBufferId = allocation.getBufferId(op);
-      if (scratchBufferId != Allocation::InvalidBufferId) {
-        size_t offset = allocation.getOffset(scratchBufferId);
-        size_t size = allocation.getAllocatedSize(scratchBufferId);
-        os << "scratch offset = " << offset << ", size = " << size << "\n";
-      }
-      if (op->getNumResults() < 1)
-        return;
-      for (Value result : op->getResults()) {
-        auto bufferId = allocation.getBufferId(result);
-        if (bufferId != Allocation::InvalidBufferId) {
-          size_t offset = allocation.getOffset(bufferId);
-          size_t size = allocation.getAllocatedSize(bufferId);
-          os << "offset = " << offset << ", size = " << size << "\n";
+    ModuleAllocation moduleAllocation(operation->getParentOfType<ModuleOp>());
+    operation->walk([&](triton::FuncOp funcOp) {
+      auto *allocation = moduleAllocation.getFuncInstance(funcOp);
+      funcOp.walk([&](Operation *op) {
+        auto scratchBufferId = allocation->getBufferId(op);
+        if (scratchBufferId != Allocation::InvalidBufferId) {
+          size_t offset = allocation->getOffset(scratchBufferId);
+          size_t size = allocation->getAllocatedSize(scratchBufferId);
+          os << "scratch offset = " << offset << ", size = " << size << "\n";
         }
-      }
+        if (op->getNumResults() < 1)
+          return;
+        for (Value result : op->getResults()) {
+          auto bufferId = allocation->getBufferId(result);
+          if (bufferId != Allocation::InvalidBufferId) {
+            size_t offset = allocation->getOffset(bufferId);
+            size_t size = allocation->getAllocatedSize(bufferId);
+            os << "offset = " << offset << ", size = " << size << "\n";
+          }
+        }
+      });
+      os << "size = " << allocation->getSharedMemorySize() << "\n";
     });
-    os << "size = " << allocation.getSharedMemorySize() << "\n";
   }
 };
 

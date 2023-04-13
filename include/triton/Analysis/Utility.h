@@ -108,6 +108,81 @@ multiRootGetSlice(Operation *op, TransitiveFilter backwardFilter = nullptr,
 // Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
+template <typename T> class CallGraph {
+public:
+  using FuncMapT = DenseMap<triton::FuncOp, T>;
+  CallGraph(ModuleOp moduleOp) : moduleOp(moduleOp) { build(); }
+
+  template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
+            WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
+            typename UpdateEdgeFn, typename UpdateNodeFn>
+  void apply(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
+    DenseSet<Operation *> visited;
+    for (auto root : roots) {
+      visited.insert(root);
+      applyImpl<UpdateEdgeOrder, UpdateNodeOrder>(root, visited, updateEdgeFn,
+                                                  updateNodeFn);
+      visited.erase(root);
+    }
+  }
+
+  DenseMap<triton::FuncOp, T> getFuncInstanceMap() { return funcMap; }
+
+  ModuleOp getModuleOp() const { return moduleOp; }
+
+private:
+  void build() {
+    SymbolTableCollection symbolTable;
+    DenseMap<Operation *, Operation *> parentMap;
+    moduleOp.walk([&](triton::CallOp callOp) {
+      auto parent = callOp->getParentOfType<triton::FuncOp>();
+      CallOpInterface callable = dyn_cast<CallOpInterface>(callOp);
+      Operation callee = callable.resolveCallable(symbolTable);
+      callGraph[parent].insert({callOp, callee});
+      parentMap[callOp] = parent;
+    });
+    for (const auto [op, parent] : parentMap) {
+      if (parent == nullptr) {
+        roots.push_back(op);
+      }
+    }
+  }
+
+  template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
+            WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
+            typename UpdateEdgeFn, typename UpdateNodeFn>
+  void applyImpl(Operation *op, DenseSet<Operation *> &visited,
+                 UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
+    if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {
+      updateNodeFn(op, funcMap);
+    }
+    for (const auto [callOp, callee] : callGraph[op]) {
+      if (visited.count(callOp)) {
+        llvm::report_fatal_error("Cycle detected in call graph");
+      }
+      visited.insert(callOp);
+      if constexpr (UpdateEdgeOrder == WalkOrder::PreOrder) {
+        updateEdgeFn(callOp, callee);
+      }
+      updateEdgeFn(callOp, callee);
+      if constexpr (UpdateEdgeOrder == WalkOrder::PostOrder) {
+        updateEdgeFn(callOp, callee);
+      }
+      applyImpl(callee, visited);
+      visited.erase(callOp);
+    }
+    if constexpr (UpdateNodeOrder == WalkOrder::PostOrder) {
+      updateNodeFn(op, funcMap);
+    }
+  }
+
+  ModuleOp moduleOp;
+  DenseMap<Operation *, SmallVector<std::pair<Operation *, Operation *>>>
+      callGraph;
+  FuncMapT funcMap;
+  SmallVector<Operation *> roots;
+};
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

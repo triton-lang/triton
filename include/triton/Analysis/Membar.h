@@ -29,7 +29,8 @@ public:
   /// The following circumstances are not considered yet:
   /// - Double buffers
   /// - N buffers
-  MembarAnalysis(Allocation *allocation) : allocation(allocation) {}
+  MembarAnalysis(ModuleAllocation *moduleAllocation)
+      : moduleAllocation(moduleAllocation) {}
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
@@ -109,16 +110,17 @@ private:
   ///        op6
   ///   op7
   /// TODO: Explain why we don't use ForwardAnalysis:
-  void resolve(Operation *operation, OpBuilder *builder);
+  void resolve(triton::FuncOp funcOp, OpBuilder *builder);
 
   /// Updates the BlockInfo operation based on the operation.
-  void update(Operation *operation, BlockInfo *blockInfo, OpBuilder *builder);
+  void update(Operation *operation, BlockInfo *blockInfo, OpBuilder *builder,
+              Allocation *allocation);
 
   /// Collects the successors of the terminator
   void visitTerminator(Operation *operation, SmallVector<Block *> &successors);
 
 private:
-  Allocation *allocation;
+  ModuleAllocation *moduleAllocation;
   DenseMap<Block *, BlockInfo> inputBlockInfoMap;
   DenseMap<Block *, BlockInfo> outputBlockInfoMap;
 };

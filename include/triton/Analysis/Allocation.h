@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_ALLOCATION_H
 #define TRITON_ANALYSIS_ALLOCATION_H
 
+#include "triton/Analysis/Utility.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
@@ -54,13 +55,17 @@ public:
   /// A unique identifier for shared memory buffers
   using BufferId = size_t;
   using BufferIdSetT = DenseSet<BufferId>;
+  using FuncAllocMapT = DenseMap<triton::FuncOp, Allocation>;
 
   static constexpr BufferId InvalidBufferId =
       std::numeric_limits<BufferId>::max();
 
   /// Creates a new Allocation analysis that computes the shared memory
   /// information for all associated shared memory values.
-  Allocation(Operation *operation) : operation(operation) { run(); }
+  Allocation(Operation *operation, FuncAllocMapT &funcAllocMap)
+      : operation(operation) {
+    run(funcAllocMap);
+  }
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
@@ -159,7 +164,7 @@ private:
   /// BufferId -> Buffer
   using BufferSetT = std::map<BufferId, BufferT>;
   /// Runs allocation analysis on the given top-level operation.
-  void run();
+  void run(FuncAllocMapT &funcAllocMap);
 
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
@@ -186,6 +191,21 @@ private:
   size_t sharedMemorySize = 0;
 
   friend class triton::AllocationAnalysis;
+};
+
+class ModuleAllocation {
+public:
+  ModuleAllocation(ModuleOp moduleOp) : callGraphAllocation(moduleOp) {
+    callGraphAllocation.apply<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        [&](triton::CallOp callOp, triton::FuncOp funcOp) {},
+        [&](triton::FuncOp funcOp,
+            CallGraph<Allocation>::FuncMapT &funcAllocMap) {
+          funcAllocMap.try_emplace(funcOp, funcOp, funcAllocMap);
+        });
+  }
+
+private:
+  CallGraph<Allocation> callGraphAllocation;
 };
 
 template <typename T> Interval(T, T) -> Interval<T>;

@@ -286,6 +286,7 @@ public:
   AxisInfoAnalysis(DataFlowSolver &solver);
   using dataflow::SparseDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
+  using FuncAxisInfoMapT = DenseMap<triton::FuncOp, AxisInfo>;
 
   void visitOperation(Operation *op,
                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
@@ -297,6 +298,67 @@ public:
 
   unsigned getMaskAlignment(Value mask);
 };
+
+class AxisInfoAnalysisSolver {
+public:
+  AxisInfoAnalysisSolver(ModuleOp moduleOp) : callGraphSolver(moduleOp) {
+    callGraphSolver.apply<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        [&](triton::CallOp callOp, triton::FuncOp funcOp) {
+          update(callOp, funcOp);
+        },
+        [&](triton::FuncOp funcOp,
+            CallGraph<AxisInfoAnalysis>::FuncMapT &funcAnalysisMap) {
+          initialize(funcOp, funcAnalysisMap);
+        });
+  }
+
+private:
+  void initialize(triton::FuncOp funcOp,
+                  CallGraph<AxisInfoAnalysis>::FuncMapT &funcAnalysisMap) {
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
+    solver->initializeAndRun(funcOp);
+    funcOp.walk([&](triton::CallOp callOp) {
+      for (auto operand : callOp.getOperands()) {
+        auto info = analysis->getLatticeElement(operand)->getValue();
+        operandAxisInfo[operand] = info;
+      }
+    });
+  }
+
+  void update(triton::CallOp callOp, triton::FuncOp funcOp) {
+    auto args = funcOp->getOperands();
+    for (auto entry : llvm::enumerate(callOp.getOperands())) {
+      auto index = entry.index();
+      auto value = entry.value();
+      auto &info = operandAxisInfo[value];
+      auto curContiguity =
+          funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.contiguity");
+      auto curDivisibility =
+          funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.divisibility");
+      auto curConstancy =
+          funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.constancy");
+      // Only accepts scalar arguments
+      auto contiguity =
+          IntegerAttr::get(IntegerType::get(funcOp.getContext(), 64),
+                           gcd(info.getContiguity(0), curContiguity.getInt()));
+      auto divisibility = IntegerAttr::get(
+          IntegerType::get(funcOp.getContext(), 64),
+          gcd(info.getDivisibility(0), curDivisibility.getInt()));
+      auto constancy =
+          IntegerAttr::get(IntegerType::get(funcOp.getContext(), 64),
+                           gcd(info.getConstancy(0), curConstancy.getInt()));
+      funcOp.setArgAttr(index, "tt.contiguity", contiguity);
+      funcOp.setArgAttr(index, "tt.divisibility", divisibility);
+      funcOp.setArgAttr(index, "tt.constancy", constancy);
+    }
+  }
+
+  DenseMap<Value, AxisInfo> operandAxisInfo;
+  CallGraph<AxisInfoAnalysis> callGraphSolver;
+};
+
+typedef CallGraph<AxisInfoAnalysis> ModuleAxisInfo;
 
 } // namespace mlir
 
