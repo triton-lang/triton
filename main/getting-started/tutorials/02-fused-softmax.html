@@ -1,98 +1,51 @@
-
-
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" >
 <head>
-  <meta charset="utf-8" />
-  
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  
   <title>Fused Softmax &mdash; Triton  documentation</title>
-  
-
-  
-  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-binder.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-dataframe.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-rendered-html.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/css/custom.css" type="text/css" />
-
-  
-  
-
-  
-  
-
-  
-
-  
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-binder.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-dataframe.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-rendered-html.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/custom.css" type="text/css" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
   
-    
-      <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-        <script src="../../_static/jquery.js"></script>
-        <script src="../../_static/underscore.js"></script>
         <script src="../../_static/doctools.js"></script>
+        <script src="../../_static/sphinx_highlight.js"></script>
         <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    
-    <script type="text/javascript" src="../../_static/js/theme.js"></script>
-
-    
+    <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Matrix Multiplication" href="03-matrix-multiplication.html" />
     <link rel="prev" title="Vector Addition" href="01-vector-add.html" /> 
 </head>
 
-<body class="wy-body-for-nav">
-
-   
+<body class="wy-body-for-nav"> 
   <div class="wy-grid-for-nav">
-    
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-          
 
           
-            <a href="../../index.html" class="icon icon-home"> Triton
           
-
-          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
           </a>
-
-          
-            
-            
-          
-
-          
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
 </div>
-
-          
-        </div>
-
-        
-        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
-          
-            
-            
-              
-            
-            
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
@@ -124,88 +77,46 @@
 <li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
 </ul>
 
-            
-          
         </div>
-        
       </div>
     </nav>
 
-    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
-
-      
-      <nav class="wy-nav-top" aria-label="top navigation">
-        
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
           <a href="../../index.html">Triton</a>
-        
       </nav>
 
-
       <div class="wy-nav-content">
-        
         <div class="rst-content">
-        
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<div role="navigation" aria-label="breadcrumbs navigation">
-
+          <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-    
-      <li><a href="../../index.html" class="icon icon-home"></a> &raquo;</li>
-        
-          <li><a href="index.html">Tutorials</a> &raquo;</li>
-        
-      <li>Fused Softmax</li>
-    
-    
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Fused Softmax</li>
       <li class="wy-breadcrumbs-aside">
-        
-          
             <a href="../../_sources/getting-started/tutorials/02-fused-softmax.rst.txt" rel="nofollow"> View page source</a>
-          
-        
       </li>
-    
   </ul>
-
-  
   <hr/>
 </div>
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
-            
+             
   <div class="sphx-glr-download-link-note admonition note">
 <p class="admonition-title">Note</p>
-<p>Click <a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-02-fused-softmax-py"><span class="std std-ref">here</span></a>
+<p><a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-02-fused-softmax-py"><span class="std std-ref">Go to the end</span></a>
 to download the full example code</p>
 </div>
-<div class="sphx-glr-example-title section" id="fused-softmax">
-<span id="sphx-glr-getting-started-tutorials-02-fused-softmax-py"></span><h1>Fused Softmax<a class="headerlink" href="#fused-softmax" title="Permalink to this headline">¶</a></h1>
+<section class="sphx-glr-example-title" id="fused-softmax">
+<span id="sphx-glr-getting-started-tutorials-02-fused-softmax-py"></span><h1>Fused Softmax<a class="headerlink" href="#fused-softmax" title="Permalink to this heading">¶</a></h1>
 <p>In this tutorial, you will write a fused softmax operation that is significantly faster
 than PyTorch’s native op for a particular class of matrices: those whose rows can fit in
 the GPU’s SRAM.</p>
 <p>In doing so, you will learn about:
 - The benefits of kernel fusion for bandwidth-bound operations.
 - Reduction operators in Triton.</p>
-<div class="section" id="motivations">
-<h2>Motivations<a class="headerlink" href="#motivations" title="Permalink to this headline">¶</a></h2>
+<section id="motivations">
+<h2>Motivations<a class="headerlink" href="#motivations" title="Permalink to this heading">¶</a></h2>
 <p>Custom GPU kernels for elementwise additions are educationally valuable but won’t get you very far in practice.
 Let us consider instead the case of a simple (numerically stabilized) softmax operation:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
@@ -216,7 +127,7 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
 
 <span class="nd">@torch</span><span class="o">.</span><span class="n">jit</span><span class="o">.</span><span class="n">script</span>
 <span class="k">def</span> <span class="nf">naive_softmax</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
-    <span class="sd">&quot;&quot;&quot;Compute row-wise softmax of X using native pytorch</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute row-wise softmax of X using native pytorch</span>
 
 <span class="sd">    We subtract the maximum element in order to avoid overflows. Softmax is invariant to</span>
 <span class="sd">    this shift.</span>
@@ -243,9 +154,9 @@ Doing so would require reading and writing back only <span class="math notransla
 expect a theoretical speed-up of ~4x (i.e., <span class="math notranslate nohighlight">\((8MN + 4M) / 2MN\)</span>).
 The <cite>torch.jit.script</cite> flags aims to perform this kind of “kernel fusion” automatically
 but, as we will see later, it is still far from ideal.</p>
-</div>
-<div class="section" id="compute-kernel">
-<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="compute-kernel">
+<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Permalink to this heading">¶</a></h2>
 <p>Our softmax kernel works as follows: each program loads a row of the input matrix X,
 normalizes it and writes back the result to the output Y.</p>
 <p>Note that one important limitation of Triton is that each block must have a
@@ -308,9 +219,9 @@ memory operations properly if we want to handle any possible input shapes:</p>
     <span class="k">return</span> <span class="n">y</span>
 </pre></div>
 </div>
-</div>
-<div class="section" id="unit-test">
-<h2>Unit Test<a class="headerlink" href="#unit-test" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="unit-test">
+<h2>Unit Test<a class="headerlink" href="#unit-test" title="Permalink to this heading">¶</a></h2>
 <p>We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
@@ -320,15 +231,14 @@ This will allow us to verify that our padding mechanism works.</p>
 <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">),</span> <span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-script-out">Out:</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>[1024] 0
 [1024] 0
 </pre></div>
 </div>
 <p>As expected, the results are identical.</p>
-</div>
-<div class="section" id="benchmark">
-<h2>Benchmark<a class="headerlink" href="#benchmark" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="benchmark">
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Permalink to this heading">¶</a></h2>
 <p>Here we will benchmark our operation as a function of the number of columns in the input matrix – assuming 4096 rows.
 We will then compare its performance against (1) <code class="code docutils literal notranslate"><span class="pre">torch.softmax</span></code> and (2) the <code class="code docutils literal notranslate"><span class="pre">naive_softmax</span></code> defined above.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span>
@@ -370,9 +280,7 @@ We will then compare its performance against (1) <code class="code docutils lite
 <span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<img alt="02 fused softmax" class="sphx-glr-single-img" src="../../_images/sphx_glr_02-fused-softmax_001.png" />
-<p class="sphx-glr-script-out">Out:</p>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>[256] 0
+<img src="../../_images/sphx_glr_02-fused-softmax_001.png" srcset="../../_images/sphx_glr_02-fused-softmax_001.png" alt="02 fused softmax" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>[256] 0
 [256] 0
 [512] 0
 [512] 0
@@ -387,18 +295,18 @@ We will then compare its performance against (1) <code class="code docutils lite
 [16384] 0
 [16384] 0
 softmax-performance:
-          N      Triton  Torch (native)  Torch (jit)
-0     256.0  512.000001      546.133347   204.800005
-1     384.0  614.400016      646.736871   236.307695
-2     512.0  655.360017      630.153853   248.242422
-3     640.0  706.206879      620.606056   256.000006
-4     768.0  722.823517      646.736871   261.446801
-..      ...         ...             ...          ...
-93  12160.0  814.058574      409.599993   324.537101
-94  12288.0  814.111783      416.984084   324.703544
-95  12416.0  804.275339      414.730681   324.071772
-96  12544.0  804.424824      415.536223   324.239096
-97  12672.0  804.571435      415.050158   324.403207
+          N       Triton  Torch (native)  Torch (jit)
+0     256.0   682.666643      682.666643   256.000001
+1     384.0   877.714274      819.200021   323.368435
+2     512.0   910.222190      910.222190   372.363633
+3     640.0   975.238103      930.909084   409.600010
+4     768.0  1068.521715     1023.999964   423.724127
+..      ...          ...             ...          ...
+93  12160.0  1594.754129     1069.010969   590.470399
+94  12288.0  1598.438956     1016.061996   589.971483
+95  12416.0  1582.916395     1029.305700   587.739623
+96  12544.0  1580.346374     1013.656595   589.439056
+97  12672.0  1584.000004     1006.213368   589.395349
 
 [98 rows x 4 columns]
 </pre></div>
@@ -411,8 +319,8 @@ Note however that the PyTorch <cite>softmax</cite> operation is more general and
 </ul>
 </dd>
 </dl>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  20.451 seconds)</p>
-<div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  17.871 seconds)</p>
+<div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>
 </div>
@@ -421,42 +329,32 @@ Note however that the PyTorch <cite>softmax</cite> operation is more general and
 </div>
 </div>
 <p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
-</div>
-</div>
+</section>
+</section>
 
 
            </div>
-           
           </div>
-          <footer>
-    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-        <a href="03-matrix-multiplication.html" class="btn btn-neutral float-right" title="Matrix Multiplication" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="01-vector-add.html" class="btn btn-neutral float-left" title="Vector Addition" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="03-matrix-multiplication.html" class="btn btn-neutral float-right" title="Matrix Multiplication" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
 
   <div role="contentinfo">
-    <p>
-        &#169; Copyright 2020, Philippe Tillet.
-
-    </p>
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
   </div>
-    
-    
-    
-    Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
-    
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
     <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
-    
-    provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
 
 </footer>
         </div>
       </div>
-
     </section>
-
   </div>
   
 <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
@@ -471,18 +369,11 @@ Note however that the PyTorch <cite>softmax</cite> operation is more general and
             <dd><a href="02-fused-softmax.html">main</a></dd>
         </dl>
     </div>
-</div>
-
-  <script type="text/javascript">
+</div><script>
       jQuery(function () {
           SphinxRtdTheme.Navigation.enable(true);
       });
-  </script>
-
-  
-  
-    
-   
+  </script> 
 
 </body>
 </html>

@@ -10,7 +10,7 @@
     .. note::
         :class: sphx-glr-download-link-note
 
-        Click :ref:`here <sphx_glr_download_getting-started_tutorials_02-fused-softmax.py>`
+        :ref:`Go to the end <sphx_glr_download_getting-started_tutorials_02-fused-softmax.py>`
         to download the full example code
 
 .. rst-class:: sphx-glr-example-title
@@ -212,8 +212,6 @@ This will allow us to verify that our padding mechanism works.
 
 .. rst-class:: sphx-glr-script-out
 
- Out:
-
  .. code-block:: none
 
     [1024] 0
@@ -281,14 +279,13 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
 
 
 
-.. image:: /getting-started/tutorials/images/sphx_glr_02-fused-softmax_001.png
-    :alt: 02 fused softmax
-    :class: sphx-glr-single-img
+.. image-sg:: /getting-started/tutorials/images/sphx_glr_02-fused-softmax_001.png
+   :alt: 02 fused softmax
+   :srcset: /getting-started/tutorials/images/sphx_glr_02-fused-softmax_001.png
+   :class: sphx-glr-single-img
 
 
 .. rst-class:: sphx-glr-script-out
-
- Out:
 
  .. code-block:: none
 
@@ -307,18 +304,18 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
     [16384] 0
     [16384] 0
     softmax-performance:
-              N      Triton  Torch (native)  Torch (jit)
-    0     256.0  512.000001      546.133347   204.800005
-    1     384.0  614.400016      646.736871   236.307695
-    2     512.0  655.360017      630.153853   248.242422
-    3     640.0  706.206879      620.606056   256.000006
-    4     768.0  722.823517      646.736871   261.446801
-    ..      ...         ...             ...          ...
-    93  12160.0  814.058574      409.599993   324.537101
-    94  12288.0  814.111783      416.984084   324.703544
-    95  12416.0  804.275339      414.730681   324.071772
-    96  12544.0  804.424824      415.536223   324.239096
-    97  12672.0  804.571435      415.050158   324.403207
+              N       Triton  Torch (native)  Torch (jit)
+    0     256.0   682.666643      682.666643   256.000001
+    1     384.0   877.714274      819.200021   323.368435
+    2     512.0   910.222190      910.222190   372.363633
+    3     640.0   975.238103      930.909084   409.600010
+    4     768.0  1068.521715     1023.999964   423.724127
+    ..      ...          ...             ...          ...
+    93  12160.0  1594.754129     1069.010969   590.470399
+    94  12288.0  1598.438956     1016.061996   589.971483
+    95  12416.0  1582.916395     1029.305700   587.739623
+    96  12544.0  1580.346374     1013.656595   589.439056
+    97  12672.0  1584.000004     1006.213368   589.395349
 
     [98 rows x 4 columns]
 
@@ -335,28 +332,25 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 1 minutes  20.451 seconds)
+   **Total running time of the script:** ( 1 minutes  17.871 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:
 
+.. only:: html
 
-.. only :: html
-
- .. container:: sphx-glr-footer
-    :class: sphx-glr-footer-example
+  .. container:: sphx-glr-footer sphx-glr-footer-example
 
 
 
-  .. container:: sphx-glr-download sphx-glr-download-python
 
-     :download:`Download Python source code: 02-fused-softmax.py <02-fused-softmax.py>`
+    .. container:: sphx-glr-download sphx-glr-download-python
 
+      :download:`Download Python source code: 02-fused-softmax.py <02-fused-softmax.py>`
 
+    .. container:: sphx-glr-download sphx-glr-download-jupyter
 
-  .. container:: sphx-glr-download sphx-glr-download-jupyter
-
-     :download:`Download Jupyter notebook: 02-fused-softmax.ipynb <02-fused-softmax.ipynb>`
+      :download:`Download Jupyter notebook: 02-fused-softmax.ipynb <02-fused-softmax.ipynb>`
 
 
 .. only:: html

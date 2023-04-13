@@ -1,97 +1,50 @@
-
-
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" >
 <head>
-  <meta charset="utf-8" />
-  
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  
   <title>Matrix Multiplication &mdash; Triton  documentation</title>
-  
-
-  
-  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-binder.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-dataframe.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-rendered-html.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/css/custom.css" type="text/css" />
-
-  
-  
-
-  
-  
-
-  
-
-  
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-binder.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-dataframe.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-rendered-html.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/custom.css" type="text/css" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
   
-    
-      <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-        <script src="../../_static/jquery.js"></script>
-        <script src="../../_static/underscore.js"></script>
         <script src="../../_static/doctools.js"></script>
-    
-    <script type="text/javascript" src="../../_static/js/theme.js"></script>
-
-    
+        <script src="../../_static/sphinx_highlight.js"></script>
+    <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Low-Memory Dropout" href="04-low-memory-dropout.html" />
     <link rel="prev" title="Fused Softmax" href="02-fused-softmax.html" /> 
 </head>
 
-<body class="wy-body-for-nav">
-
-   
+<body class="wy-body-for-nav"> 
   <div class="wy-grid-for-nav">
-    
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-          
 
           
-            <a href="../../index.html" class="icon icon-home"> Triton
           
-
-          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
           </a>
-
-          
-            
-            
-          
-
-          
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
 </div>
-
-          
-        </div>
-
-        
-        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
-          
-            
-            
-              
-            
-            
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
@@ -131,80 +84,38 @@
 <li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
 </ul>
 
-            
-          
         </div>
-        
       </div>
     </nav>
 
-    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
-
-      
-      <nav class="wy-nav-top" aria-label="top navigation">
-        
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
           <a href="../../index.html">Triton</a>
-        
       </nav>
 
-
       <div class="wy-nav-content">
-        
         <div class="rst-content">
-        
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<div role="navigation" aria-label="breadcrumbs navigation">
-
+          <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-    
-      <li><a href="../../index.html" class="icon icon-home"></a> &raquo;</li>
-        
-          <li><a href="index.html">Tutorials</a> &raquo;</li>
-        
-      <li>Matrix Multiplication</li>
-    
-    
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Matrix Multiplication</li>
       <li class="wy-breadcrumbs-aside">
-        
-          
             <a href="../../_sources/getting-started/tutorials/03-matrix-multiplication.rst.txt" rel="nofollow"> View page source</a>
-          
-        
       </li>
-    
   </ul>
-
-  
   <hr/>
 </div>
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
-            
+             
   <div class="sphx-glr-download-link-note admonition note">
 <p class="admonition-title">Note</p>
-<p>Click <a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py"><span class="std std-ref">here</span></a>
+<p><a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py"><span class="std std-ref">Go to the end</span></a>
 to download the full example code</p>
 </div>
-<div class="sphx-glr-example-title section" id="matrix-multiplication">
-<span id="sphx-glr-getting-started-tutorials-03-matrix-multiplication-py"></span><h1>Matrix Multiplication<a class="headerlink" href="#matrix-multiplication" title="Permalink to this headline">¶</a></h1>
+<section class="sphx-glr-example-title" id="matrix-multiplication">
+<span id="sphx-glr-getting-started-tutorials-03-matrix-multiplication-py"></span><h1>Matrix Multiplication<a class="headerlink" href="#matrix-multiplication" title="Permalink to this heading">¶</a></h1>
 <p>In this tutorial, you will write a 25-lines high-performance FP16 matrix multiplication
 kernel that achieves performance on par with cuBLAS.</p>
 <p>In doing so, you will learn about:
@@ -212,8 +123,8 @@ kernel that achieves performance on par with cuBLAS.</p>
 - Multi-dimensional pointer arithmetic
 - Program re-ordering for improved L2 cache hit rate
 - Automatic performance tuning</p>
-<div class="section" id="motivations">
-<h2>Motivations<a class="headerlink" href="#motivations" title="Permalink to this headline">¶</a></h2>
+<section id="motivations">
+<h2>Motivations<a class="headerlink" href="#motivations" title="Permalink to this heading">¶</a></h2>
 <p>Matrix multiplications are a key building block of most modern high-performance computing systems.
 They are notoriously hard to optimize, hence their implementation is generally done by
 hardware vendors themselves as part of so-called “kernel libraries” (e.g., cuBLAS).
@@ -238,15 +149,15 @@ algorithm to multiply a (M, K) by a (K, N) matrix:</p>
 </div>
 </div></blockquote>
 <p>where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.</p>
-</div>
-<div class="section" id="compute-kernel">
-<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="compute-kernel">
+<h2>Compute Kernel<a class="headerlink" href="#compute-kernel" title="Permalink to this heading">¶</a></h2>
 <p>The above algorithm is, actually, fairly straightforward to implement in Triton.
 The main difficulty comes from the computation of the memory locations at which blocks
 of <code class="code docutils literal notranslate"><span class="pre">A</span></code> and <code class="code docutils literal notranslate"><span class="pre">B</span></code> must be read in the inner loop. For that, we need
 multi-dimensional pointer arithmetic.</p>
-<div class="section" id="pointer-arithmetic">
-<h3>Pointer Arithmetic<a class="headerlink" href="#pointer-arithmetic" title="Permalink to this headline">¶</a></h3>
+<section id="pointer-arithmetic">
+<h3>Pointer Arithmetic<a class="headerlink" href="#pointer-arithmetic" title="Permalink to this heading">¶</a></h3>
 <p>For a row-major 2D tensor <code class="code docutils literal notranslate"><span class="pre">X</span></code>, the memory location of <code class="code docutils literal notranslate"><span class="pre">X[i,</span> <span class="pre">j]</span></code> is given b
 y <code class="code docutils literal notranslate"><span class="pre">&amp;X[i,</span> <span class="pre">j]</span> <span class="pre">=</span> <span class="pre">X</span> <span class="pre">+</span> <span class="pre">i*stride_xi</span> <span class="pre">+</span> <span class="pre">j*stride_xj</span></code>.
 Therefore, blocks of pointers for <code class="code docutils literal notranslate"><span class="pre">A[m</span> <span class="pre">:</span> <span class="pre">m+BLOCK_SIZE_M,</span> <span class="pre">k:k+BLOCK_SIZE_K]</span></code> and
@@ -274,9 +185,9 @@ Therefore, blocks of pointers for <code class="code docutils literal notranslate
 </pre></div>
 </div>
 </div></blockquote>
-</div>
-<div class="section" id="l2-cache-optimizations">
-<h3>L2 Cache Optimizations<a class="headerlink" href="#l2-cache-optimizations" title="Permalink to this headline">¶</a></h3>
+</section>
+<section id="l2-cache-optimizations">
+<h3>L2 Cache Optimizations<a class="headerlink" href="#l2-cache-optimizations" title="Permalink to this heading">¶</a></h3>
 <p>As mentioned above, each program instance computes a <code class="code docutils literal notranslate"><span class="pre">[BLOCK_SIZE_M,</span> <span class="pre">BLOCK_SIZE_N]</span></code>
 block of <code class="code docutils literal notranslate"><span class="pre">C</span></code>.
 It is important to remember that the order in which these blocks are computed does
@@ -327,10 +238,10 @@ ordering, we only need to load 54 blocks.</p>
 </div></blockquote>
 <p>In practice, this can improve the performance of our matrix multiplication kernel by
 more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</p>
-</div>
-</div>
-<div class="section" id="final-result">
-<h2>Final Result<a class="headerlink" href="#final-result" title="Permalink to this headline">¶</a></h2>
+</section>
+</section>
+<section id="final-result">
+<h2>Final Result<a class="headerlink" href="#final-result" title="Permalink to this heading">¶</a></h2>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
 
 <span class="kn">import</span> <span class="nn">triton</span>
@@ -375,7 +286,7 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
     <span class="n">GROUP_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">ACTIVATION</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
 <span class="p">):</span>
-    <span class="sd">&quot;&quot;&quot;Kernel for computing the matmul C = A x B.</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Kernel for computing the matmul C = A x B.</span>
 <span class="sd">    A has shape (M, K), B has shape (K, N) and C has shape (M, N)</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="c1"># -----------------------------------------------------------</span>
@@ -474,9 +385,9 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
     <span class="k">return</span> <span class="n">c</span>
 </pre></div>
 </div>
-</div>
-<div class="section" id="unit-test">
-<h2>Unit Test<a class="headerlink" href="#unit-test" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="unit-test">
+<h2>Unit Test<a class="headerlink" href="#unit-test" title="Permalink to this heading">¶</a></h2>
 <p>We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
@@ -491,31 +402,30 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
     <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;❌ Triton and Torch differ&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-script-out">Out:</p>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>triton_output=tensor([[  1.1045, -36.9688,  31.4688,  ..., -11.3984,  24.4531, -32.3438],
-        [  6.3555, -19.6094,  34.0938,  ...,  -5.8945,   5.2891,   6.8867],
-        [-32.0625,   5.9492,  15.3984,  ..., -21.3906, -23.9844, -10.1328],
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>triton_output=tensor([[-10.9531,  -4.7109,  15.6953,  ..., -28.4062,   4.3320, -26.4219],
+        [ 26.8438,  10.0469,  -5.4297,  ..., -11.2969,  -8.5312,  30.7500],
+        [-13.2578,  15.8516,  18.0781,  ..., -21.7656,  -8.6406,  10.2031],
         ...,
-        [ -5.7031,   7.4492,   8.2656,  ..., -10.6953, -40.0000,  17.7500],
-        [ 25.5000,  24.3281,  -8.4688,  ..., -18.9375,  32.5312, -29.9219],
-        [ -5.3477,   4.9844,  11.8906,  ...,   5.5898,   6.4023, -17.3125]],
+        [ 40.2812,  18.6094, -25.6094,  ...,  -2.7598,  -3.2441,  41.0000],
+        [ -6.1211, -16.8281,   4.4844,  ..., -21.0312,  24.7031,  15.0234],
+        [-17.0938, -19.0000,  -0.3831,  ...,  21.5469, -30.2344, -13.2188]],
        device=&#39;cuda:0&#39;, dtype=torch.float16)
-torch_output=tensor([[  1.1045, -36.9688,  31.4688,  ..., -11.3906,  24.4531, -32.3438],
-        [  6.3516, -19.6094,  34.0938,  ...,  -5.8906,   5.2812,   6.8828],
-        [-32.0625,   5.9531,  15.3984,  ..., -21.4062, -23.9844, -10.1328],
+torch_output=tensor([[-10.9531,  -4.7109,  15.6953,  ..., -28.4062,   4.3320, -26.4219],
+        [ 26.8438,  10.0469,  -5.4297,  ..., -11.2969,  -8.5312,  30.7500],
+        [-13.2578,  15.8516,  18.0781,  ..., -21.7656,  -8.6406,  10.2031],
         ...,
-        [ -5.7070,   7.4492,   8.2656,  ..., -10.6953, -40.0000,  17.7500],
-        [ 25.5000,  24.3438,  -8.4609,  ..., -18.9375,  32.5312, -29.9219],
-        [ -5.3477,   4.9805,  11.8828,  ...,   5.5859,   6.4023, -17.3125]],
+        [ 40.2812,  18.6094, -25.6094,  ...,  -2.7598,  -3.2441,  41.0000],
+        [ -6.1211, -16.8281,   4.4844,  ..., -21.0312,  24.7031,  15.0234],
+        [-17.0938, -19.0000,  -0.3831,  ...,  21.5469, -30.2344, -13.2188]],
        device=&#39;cuda:0&#39;, dtype=torch.float16)
-❌ Triton and Torch differ
+✅ Triton and Torch match
 </pre></div>
 </div>
-</div>
-<div class="section" id="benchmark">
-<h2>Benchmark<a class="headerlink" href="#benchmark" title="Permalink to this headline">¶</a></h2>
-<div class="section" id="square-matrix-performance">
-<h3>Square Matrix Performance<a class="headerlink" href="#square-matrix-performance" title="Permalink to this headline">¶</a></h3>
+</section>
+<section id="benchmark">
+<h2>Benchmark<a class="headerlink" href="#benchmark" title="Permalink to this heading">¶</a></h2>
+<section id="square-matrix-performance">
+<h3>Square Matrix Performance<a class="headerlink" href="#square-matrix-performance" title="Permalink to this heading">¶</a></h3>
 <p>We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span>
     <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
@@ -550,45 +460,43 @@ torch_output=tensor([[  1.1045, -36.9688,  31.4688,  ..., -11.3906,  24.4531, -3
 <span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<img alt="03 matrix multiplication" class="sphx-glr-single-img" src="../../_images/sphx_glr_03-matrix-multiplication_001.png" />
-<p class="sphx-glr-script-out">Out:</p>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>matmul-performance:
-         M     cuBLAS     Triton
-0    256.0   3.276800   2.520615
-1    384.0   6.505412   6.912000
-2    512.0  13.797053  12.483048
-3    640.0  21.333333  19.692308
-4    768.0  31.597714  25.278171
-5    896.0  37.971025  27.017846
-6   1024.0  48.770977  35.544948
-7   1152.0  43.911529  28.437943
-8   1280.0  49.951220  29.257142
-9   1408.0  62.664092  35.866949
-10  1536.0  77.778988  42.896290
-11  1664.0  60.803457  34.879506
-12  1792.0  70.246402  40.284674
-13  1920.0  66.782607  45.473686
-14  2048.0  72.005219  40.820478
-15  2176.0  81.472263  45.120288
-16  2304.0  66.540034  41.257120
-17  2432.0  70.061008  45.682053
-18  2560.0  76.204654  49.799392
-19  2688.0  79.524227  46.830933
-20  2816.0  79.443003  44.054757
-21  2944.0  77.868802  48.150757
-22  3072.0  78.643199  46.222941
-23  3200.0  78.527610  49.844237
-24  3328.0  78.765096  48.381246
-25  3456.0  77.446270  47.147116
-26  3584.0  80.786517  50.457573
-27  3712.0  78.720344  49.186282
-28  3840.0  78.489708  47.648428
-29  3968.0  82.060480  47.937116
-30  4096.0  82.090354  51.861566
+<img src="../../_images/sphx_glr_03-matrix-multiplication_001.png" srcset="../../_images/sphx_glr_03-matrix-multiplication_001.png" alt="03 matrix multiplication" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>matmul-performance:
+         M      cuBLAS      Triton
+0    256.0    4.096000    4.096000
+1    384.0   11.059200   12.288000
+2    512.0   26.214401   23.831273
+3    640.0   42.666665   39.384616
+4    768.0   63.195428   58.982401
+5    896.0   78.051553   82.642822
+6   1024.0  104.857603   99.864382
+7   1152.0  135.726544  129.825388
+8   1280.0  157.538463  163.840004
+9   1408.0  155.765024  132.970149
+10  1536.0  181.484314  157.286398
+11  1664.0  179.978245  179.978245
+12  1792.0  172.914215  208.137481
+13  1920.0  203.294114  168.585369
+14  2048.0  197.379013  192.841562
+15  2176.0  189.845737  209.621326
+16  2304.0  227.503545  229.691080
+17  2432.0  202.848105  200.674737
+18  2560.0  224.438347  218.453323
+19  2688.0  196.544332  197.567993
+20  2816.0  209.683695  209.683695
+21  2944.0  218.579083  224.486628
+22  3072.0  205.902197  208.173173
+23  3200.0  212.624590  219.931269
+24  3328.0  205.103410  206.871539
+25  3456.0  213.850319  216.724640
+26  3584.0  218.241246  211.068989
+27  3712.0  207.686788  215.295995
+28  3840.0  207.879708  211.659322
+29  3968.0  209.663117  216.738793
+30  4096.0  218.952244  214.748370
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  40.402 seconds)</p>
-<div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  36.561 seconds)</p>
+<div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d5fee5b55a64e47f1b5724ec39adf171/03-matrix-multiplication.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">03-matrix-multiplication.py</span></code></a></p>
 </div>
@@ -597,43 +505,33 @@ torch_output=tensor([[  1.1045, -36.9688,  31.4688,  ..., -11.3906,  24.4531, -3
 </div>
 </div>
 <p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
-</div>
-</div>
-</div>
+</section>
+</section>
+</section>
 
 
            </div>
-           
           </div>
-          <footer>
-    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-        <a href="04-low-memory-dropout.html" class="btn btn-neutral float-right" title="Low-Memory Dropout" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="02-fused-softmax.html" class="btn btn-neutral float-left" title="Fused Softmax" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="04-low-memory-dropout.html" class="btn btn-neutral float-right" title="Low-Memory Dropout" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
 
   <div role="contentinfo">
-    <p>
-        &#169; Copyright 2020, Philippe Tillet.
-
-    </p>
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
   </div>
-    
-    
-    
-    Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
-    
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
     <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
-    
-    provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
 
 </footer>
         </div>
       </div>
-
     </section>
-
   </div>
   
 <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
@@ -648,18 +546,11 @@ torch_output=tensor([[  1.1045, -36.9688,  31.4688,  ..., -11.3906,  24.4531, -3
             <dd><a href="03-matrix-multiplication.html">main</a></dd>
         </dl>
     </div>
-</div>
-
-  <script type="text/javascript">
+</div><script>
       jQuery(function () {
           SphinxRtdTheme.Navigation.enable(true);
       });
-  </script>
-
-  
-  
-    
-   
+  </script> 
 
 </body>
 </html>

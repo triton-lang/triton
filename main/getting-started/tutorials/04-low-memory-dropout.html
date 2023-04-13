@@ -1,98 +1,51 @@
-
-
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" >
 <head>
-  <meta charset="utf-8" />
-  
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  
   <title>Low-Memory Dropout &mdash; Triton  documentation</title>
-  
-
-  
-  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-binder.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-dataframe.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/gallery-rendered-html.css" type="text/css" />
-  <link rel="stylesheet" href="../../_static/css/custom.css" type="text/css" />
-
-  
-  
-
-  
-  
-
-  
-
-  
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-binder.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-dataframe.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/sg_gallery-rendered-html.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/custom.css" type="text/css" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
   
-    
-      <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
         <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
-        <script src="../../_static/jquery.js"></script>
-        <script src="../../_static/underscore.js"></script>
         <script src="../../_static/doctools.js"></script>
+        <script src="../../_static/sphinx_highlight.js"></script>
         <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-    
-    <script type="text/javascript" src="../../_static/js/theme.js"></script>
-
-    
+    <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Layer Normalization" href="05-layer-norm.html" />
     <link rel="prev" title="Matrix Multiplication" href="03-matrix-multiplication.html" /> 
 </head>
 
-<body class="wy-body-for-nav">
-
-   
+<body class="wy-body-for-nav"> 
   <div class="wy-grid-for-nav">
-    
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-          
 
           
-            <a href="../../index.html" class="icon icon-home"> Triton
           
-
-          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
           </a>
-
-          
-            
-            
-          
-
-          
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
 </div>
-
-          
-        </div>
-
-        
-        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
-          
-            
-            
-              
-            
-            
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
@@ -124,88 +77,46 @@
 <li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
 </ul>
 
-            
-          
         </div>
-        
       </div>
     </nav>
 
-    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
-
-      
-      <nav class="wy-nav-top" aria-label="top navigation">
-        
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
           <a href="../../index.html">Triton</a>
-        
       </nav>
 
-
       <div class="wy-nav-content">
-        
         <div class="rst-content">
-        
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<div role="navigation" aria-label="breadcrumbs navigation">
-
+          <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-    
-      <li><a href="../../index.html" class="icon icon-home"></a> &raquo;</li>
-        
-          <li><a href="index.html">Tutorials</a> &raquo;</li>
-        
-      <li>Low-Memory Dropout</li>
-    
-    
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Low-Memory Dropout</li>
       <li class="wy-breadcrumbs-aside">
-        
-          
             <a href="../../_sources/getting-started/tutorials/04-low-memory-dropout.rst.txt" rel="nofollow"> View page source</a>
-          
-        
       </li>
-    
   </ul>
-
-  
   <hr/>
 </div>
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
-            
+             
   <div class="sphx-glr-download-link-note admonition note">
 <p class="admonition-title">Note</p>
-<p>Click <a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py"><span class="std std-ref">here</span></a>
+<p><a class="reference internal" href="#sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py"><span class="std std-ref">Go to the end</span></a>
 to download the full example code</p>
 </div>
-<div class="sphx-glr-example-title section" id="low-memory-dropout">
-<span id="sphx-glr-getting-started-tutorials-04-low-memory-dropout-py"></span><h1>Low-Memory Dropout<a class="headerlink" href="#low-memory-dropout" title="Permalink to this headline">¶</a></h1>
+<section class="sphx-glr-example-title" id="low-memory-dropout">
+<span id="sphx-glr-getting-started-tutorials-04-low-memory-dropout-py"></span><h1>Low-Memory Dropout<a class="headerlink" href="#low-memory-dropout" title="Permalink to this heading">¶</a></h1>
 <p>In this tutorial, you will write a memory-efficient implementation of dropout whose state
 will be composed of a single int32 seed. This differs from more traditional implementations of dropout,
 whose state is generally composed of a bit mask tensor of the same shape as the input.</p>
 <p>In doing so, you will learn about:
 - The limitations of naive implementations of Dropout with PyTorch
 - Parallel pseudo-random number generation in Triton</p>
-<div class="section" id="baseline">
-<h2>Baseline<a class="headerlink" href="#baseline" title="Permalink to this headline">¶</a></h2>
+<section id="baseline">
+<h2>Baseline<a class="headerlink" href="#baseline" title="Permalink to this heading">¶</a></h2>
 <p>The <em>dropout</em> operator was first introduced in <a class="reference internal" href="#srivastava2014" id="id1"><span>[SRIVASTAVA2014]</span></a> as a way to improve the performance
 of deep neural networks in low-data regime (i.e. regularization).</p>
 <p>It takes a vector as input and produces a vector of the same shape as output. Each scalar in the
@@ -268,7 +179,6 @@ keeps the norm consistent regardless of the dropout probability.</p>
 <span class="p">]))</span>
 </pre></div>
 </div>
-<p class="sphx-glr-script-out">Out:</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>---------  -------  ---------  --------  --------  --------  --------  --------  --------  ---------  ---------
 input      1.541    -0.293429  -2.17879  0.568431  -1.08452  -1.3986   0.403347  0.838026  -0.719258  -0.403344
 keep mask  1         1          0        1          0         1        1         0          0          0
@@ -276,9 +186,9 @@ output     3.08199  -0.586858   0        1.13686    0        -2.79719  0.806694 
 ---------  -------  ---------  --------  --------  --------  --------  --------  --------  ---------  ---------
 </pre></div>
 </div>
-</div>
-<div class="section" id="seeded-dropout">
-<h2>Seeded dropout<a class="headerlink" href="#seeded-dropout" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="seeded-dropout">
+<h2>Seeded dropout<a class="headerlink" href="#seeded-dropout" title="Permalink to this heading">¶</a></h2>
 <p>The above implementation of dropout works fine, but it can be a bit awkward to deal with. Firstly
 we need to store the dropout mask for backpropagation. Secondly, dropout state management can get
 very tricky when using recompute/checkpointing (e.g. see all the notes about <cite>preserve_rng_state</cite> in
@@ -341,7 +251,6 @@ other <a class="reference internal" href="../../python-api/triton.language.html#
 <span class="p">]))</span>
 </pre></div>
 </div>
-<p class="sphx-glr-script-out">Out:</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>-------------------  ---------  --------  --------  -------  --------  --------  ---------  ---------  ---------  ---------
 input                -0.952835  0.371721  0.408716  1.42142  0.149397  -0.67086  -0.214186  -0.431969  -0.707878  -0.106434
 output (seed = 123)   0         0.743443  0         0        0         -1.34172   0          0         -1.41576   -0.212868
@@ -353,27 +262,29 @@ output (seed = 512)   0         0         0.817432  2.84284  0         -1.34172 
 <p>Et Voilà! We have a triton kernel that applies the same dropout mask provided the seed is the same!
 If you’d like explore further applications of pseudorandomness in GPU programming, we encourage you
 to explore the <cite>triton/language/random</cite> folder!</p>
-</div>
-<div class="section" id="exercises">
-<h2>Exercises<a class="headerlink" href="#exercises" title="Permalink to this headline">¶</a></h2>
+</section>
+<section id="exercises">
+<h2>Exercises<a class="headerlink" href="#exercises" title="Permalink to this heading">¶</a></h2>
 <ol class="arabic simple">
 <li><p>Extend the kernel to operate over a matrix and use a vector of seeds - one per row.</p></li>
 <li><p>Add support for striding.</p></li>
 <li><p>(challenge) Implement a kernel for sparse Johnson-Lindenstrauss transform which generates the projection matrix one the fly each time using a seed.</p></li>
 </ol>
+</section>
+<section id="references">
+<h2>References<a class="headerlink" href="#references" title="Permalink to this heading">¶</a></h2>
+<div role="list" class="citation-list">
+<div class="citation" id="salmon2011" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id2">SALMON2011</a><span class="fn-bracket">]</span></span>
+<p>John K. Salmon, Mark A. Moraes, Ron O. Dror, and David E. Shaw, “Parallel Random Numbers: As Easy as 1, 2, 3”, 2011</p>
 </div>
-<div class="section" id="references">
-<h2>References<a class="headerlink" href="#references" title="Permalink to this headline">¶</a></h2>
-<dl class="citation">
-<dt class="label" id="salmon2011"><span class="brackets"><a class="fn-backref" href="#id2">SALMON2011</a></span></dt>
-<dd><p>John K. Salmon, Mark A. Moraes, Ron O. Dror, and David E. Shaw, “Parallel Random Numbers: As Easy as 1, 2, 3”, 2011</p>
-</dd>
-<dt class="label" id="srivastava2014"><span class="brackets"><a class="fn-backref" href="#id1">SRIVASTAVA2014</a></span></dt>
-<dd><p>Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov, “Dropout: A Simple Way to Prevent Neural Networks from Overfitting”, JMLR 2014</p>
-</dd>
-</dl>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  1.211 seconds)</p>
-<div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py">
+<div class="citation" id="srivastava2014" role="doc-biblioentry">
+<span class="label"><span class="fn-bracket">[</span><a role="doc-backlink" href="#id1">SRIVASTAVA2014</a><span class="fn-bracket">]</span></span>
+<p>Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov, “Dropout: A Simple Way to Prevent Neural Networks from Overfitting”, JMLR 2014</p>
+</div>
+</div>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  1.029 seconds)</p>
+<div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/c9aed78977a4c05741d675a38dde3d7d/04-low-memory-dropout.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">04-low-memory-dropout.py</span></code></a></p>
 </div>
@@ -382,42 +293,32 @@ to explore the <cite>triton/language/random</cite> folder!</p>
 </div>
 </div>
 <p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
-</div>
-</div>
+</section>
+</section>
 
 
            </div>
-           
           </div>
-          <footer>
-    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-        <a href="05-layer-norm.html" class="btn btn-neutral float-right" title="Layer Normalization" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="03-matrix-multiplication.html" class="btn btn-neutral float-left" title="Matrix Multiplication" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="05-layer-norm.html" class="btn btn-neutral float-right" title="Layer Normalization" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
 
   <div role="contentinfo">
-    <p>
-        &#169; Copyright 2020, Philippe Tillet.
-
-    </p>
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
   </div>
-    
-    
-    
-    Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
-    
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
     <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
-    
-    provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
 
 </footer>
         </div>
       </div>
-
     </section>
-
   </div>
   
 <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
@@ -432,18 +333,11 @@ to explore the <cite>triton/language/random</cite> folder!</p>
             <dd><a href="04-low-memory-dropout.html">main</a></dd>
         </dl>
     </div>
-</div>
-
-  <script type="text/javascript">
+</div><script>
       jQuery(function () {
           SphinxRtdTheme.Navigation.enable(true);
       });
-  </script>
-
-  
-  
-    
-   
+  </script> 
 
 </body>
 </html>

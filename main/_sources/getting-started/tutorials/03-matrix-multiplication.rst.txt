@@ -10,7 +10,7 @@
     .. note::
         :class: sphx-glr-download-link-note
 
-        Click :ref:`here <sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py>`
+        :ref:`Go to the end <sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py>`
         to download the full example code
 
 .. rst-class:: sphx-glr-example-title
@@ -363,27 +363,25 @@ We can test our custom matrix multiplication operation against a native torch im
 
 .. rst-class:: sphx-glr-script-out
 
- Out:
-
  .. code-block:: none
 
-    triton_output=tensor([[  1.1045, -36.9688,  31.4688,  ..., -11.3984,  24.4531, -32.3438],
-            [  6.3555, -19.6094,  34.0938,  ...,  -5.8945,   5.2891,   6.8867],
-            [-32.0625,   5.9492,  15.3984,  ..., -21.3906, -23.9844, -10.1328],
+    triton_output=tensor([[-10.9531,  -4.7109,  15.6953,  ..., -28.4062,   4.3320, -26.4219],
+            [ 26.8438,  10.0469,  -5.4297,  ..., -11.2969,  -8.5312,  30.7500],
+            [-13.2578,  15.8516,  18.0781,  ..., -21.7656,  -8.6406,  10.2031],
             ...,
-            [ -5.7031,   7.4492,   8.2656,  ..., -10.6953, -40.0000,  17.7500],
-            [ 25.5000,  24.3281,  -8.4688,  ..., -18.9375,  32.5312, -29.9219],
-            [ -5.3477,   4.9844,  11.8906,  ...,   5.5898,   6.4023, -17.3125]],
+            [ 40.2812,  18.6094, -25.6094,  ...,  -2.7598,  -3.2441,  41.0000],
+            [ -6.1211, -16.8281,   4.4844,  ..., -21.0312,  24.7031,  15.0234],
+            [-17.0938, -19.0000,  -0.3831,  ...,  21.5469, -30.2344, -13.2188]],
            device='cuda:0', dtype=torch.float16)
-    torch_output=tensor([[  1.1045, -36.9688,  31.4688,  ..., -11.3906,  24.4531, -32.3438],
-            [  6.3516, -19.6094,  34.0938,  ...,  -5.8906,   5.2812,   6.8828],
-            [-32.0625,   5.9531,  15.3984,  ..., -21.4062, -23.9844, -10.1328],
+    torch_output=tensor([[-10.9531,  -4.7109,  15.6953,  ..., -28.4062,   4.3320, -26.4219],
+            [ 26.8438,  10.0469,  -5.4297,  ..., -11.2969,  -8.5312,  30.7500],
+            [-13.2578,  15.8516,  18.0781,  ..., -21.7656,  -8.6406,  10.2031],
             ...,
-            [ -5.7070,   7.4492,   8.2656,  ..., -10.6953, -40.0000,  17.7500],
-            [ 25.5000,  24.3438,  -8.4609,  ..., -18.9375,  32.5312, -29.9219],
-            [ -5.3477,   4.9805,  11.8828,  ...,   5.5859,   6.4023, -17.3125]],
+            [ 40.2812,  18.6094, -25.6094,  ...,  -2.7598,  -3.2441,  41.0000],
+            [ -6.1211, -16.8281,   4.4844,  ..., -21.0312,  24.7031,  15.0234],
+            [-17.0938, -19.0000,  -0.3831,  ...,  21.5469, -30.2344, -13.2188]],
            device='cuda:0', dtype=torch.float16)
-    ❌ Triton and Torch differ
+    ✅ Triton and Torch match
 
 
 
@@ -438,50 +436,49 @@ We can now compare the performance of our kernel against that of cuBLAS. Here we
 
 
 
-.. image:: /getting-started/tutorials/images/sphx_glr_03-matrix-multiplication_001.png
-    :alt: 03 matrix multiplication
-    :class: sphx-glr-single-img
+.. image-sg:: /getting-started/tutorials/images/sphx_glr_03-matrix-multiplication_001.png
+   :alt: 03 matrix multiplication
+   :srcset: /getting-started/tutorials/images/sphx_glr_03-matrix-multiplication_001.png
+   :class: sphx-glr-single-img
 
 
 .. rst-class:: sphx-glr-script-out
 
- Out:
-
  .. code-block:: none
 
     matmul-performance:
-             M     cuBLAS     Triton
-    0    256.0   3.276800   2.520615
-    1    384.0   6.505412   6.912000
-    2    512.0  13.797053  12.483048
-    3    640.0  21.333333  19.692308
-    4    768.0  31.597714  25.278171
-    5    896.0  37.971025  27.017846
-    6   1024.0  48.770977  35.544948
-    7   1152.0  43.911529  28.437943
-    8   1280.0  49.951220  29.257142
-    9   1408.0  62.664092  35.866949
-    10  1536.0  77.778988  42.896290
-    11  1664.0  60.803457  34.879506
-    12  1792.0  70.246402  40.284674
-    13  1920.0  66.782607  45.473686
-    14  2048.0  72.005219  40.820478
-    15  2176.0  81.472263  45.120288
-    16  2304.0  66.540034  41.257120
-    17  2432.0  70.061008  45.682053
-    18  2560.0  76.204654  49.799392
-    19  2688.0  79.524227  46.830933
-    20  2816.0  79.443003  44.054757
-    21  2944.0  77.868802  48.150757
-    22  3072.0  78.643199  46.222941
-    23  3200.0  78.527610  49.844237
-    24  3328.0  78.765096  48.381246
-    25  3456.0  77.446270  47.147116
-    26  3584.0  80.786517  50.457573
-    27  3712.0  78.720344  49.186282
-    28  3840.0  78.489708  47.648428
-    29  3968.0  82.060480  47.937116
-    30  4096.0  82.090354  51.861566
+             M      cuBLAS      Triton
+    0    256.0    4.096000    4.096000
+    1    384.0   11.059200   12.288000
+    2    512.0   26.214401   23.831273
+    3    640.0   42.666665   39.384616
+    4    768.0   63.195428   58.982401
+    5    896.0   78.051553   82.642822
+    6   1024.0  104.857603   99.864382
+    7   1152.0  135.726544  129.825388
+    8   1280.0  157.538463  163.840004
+    9   1408.0  155.765024  132.970149
+    10  1536.0  181.484314  157.286398
+    11  1664.0  179.978245  179.978245
+    12  1792.0  172.914215  208.137481
+    13  1920.0  203.294114  168.585369
+    14  2048.0  197.379013  192.841562
+    15  2176.0  189.845737  209.621326
+    16  2304.0  227.503545  229.691080
+    17  2432.0  202.848105  200.674737
+    18  2560.0  224.438347  218.453323
+    19  2688.0  196.544332  197.567993
+    20  2816.0  209.683695  209.683695
+    21  2944.0  218.579083  224.486628
+    22  3072.0  205.902197  208.173173
+    23  3200.0  212.624590  219.931269
+    24  3328.0  205.103410  206.871539
+    25  3456.0  213.850319  216.724640
+    26  3584.0  218.241246  211.068989
+    27  3712.0  207.686788  215.295995
+    28  3840.0  207.879708  211.659322
+    29  3968.0  209.663117  216.738793
+    30  4096.0  218.952244  214.748370
 
 
 
@@ -489,28 +486,25 @@ We can now compare the performance of our kernel against that of cuBLAS. Here we
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 1 minutes  40.402 seconds)
+   **Total running time of the script:** ( 1 minutes  36.561 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:
 
+.. only:: html
 
-.. only :: html
-
- .. container:: sphx-glr-footer
-    :class: sphx-glr-footer-example
+  .. container:: sphx-glr-footer sphx-glr-footer-example
 
 
 
-  .. container:: sphx-glr-download sphx-glr-download-python
 
-     :download:`Download Python source code: 03-matrix-multiplication.py <03-matrix-multiplication.py>`
+    .. container:: sphx-glr-download sphx-glr-download-python
 
+      :download:`Download Python source code: 03-matrix-multiplication.py <03-matrix-multiplication.py>`
 
+    .. container:: sphx-glr-download sphx-glr-download-jupyter
 
-  .. container:: sphx-glr-download sphx-glr-download-jupyter
-
-     :download:`Download Jupyter notebook: 03-matrix-multiplication.ipynb <03-matrix-multiplication.ipynb>`
+      :download:`Download Jupyter notebook: 03-matrix-multiplication.ipynb <03-matrix-multiplication.ipynb>`
 
 
 .. only:: html

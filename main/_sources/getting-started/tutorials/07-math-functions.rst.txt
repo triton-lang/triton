@@ -10,7 +10,7 @@
     .. note::
         :class: sphx-glr-download-link-note
 
-        Click :ref:`here <sphx_glr_download_getting-started_tutorials_07-math-functions.py>`
+        :ref:`Go to the end <sphx_glr_download_getting-started_tutorials_07-math-functions.py>`
         to download the full example code
 
 .. rst-class:: sphx-glr-example-title
@@ -100,8 +100,6 @@ We can use the default libdevice library path encoded in `triton/language/math.p
 
 .. rst-class:: sphx-glr-script-out
 
- Out:
-
  .. code-block:: none
 
     tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
@@ -137,8 +135,6 @@ We can also customize the libdevice library path by passing the path to the `lib
 
 .. rst-class:: sphx-glr-script-out
 
- Out:
-
  .. code-block:: none
 
     tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
@@ -151,28 +147,25 @@ We can also customize the libdevice library path by passing the path to the `lib
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  0.444 seconds)
+   **Total running time of the script:** ( 0 minutes  0.373 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_07-math-functions.py:
 
+.. only:: html
 
-.. only :: html
-
- .. container:: sphx-glr-footer
-    :class: sphx-glr-footer-example
+  .. container:: sphx-glr-footer sphx-glr-footer-example
 
 
 
-  .. container:: sphx-glr-download sphx-glr-download-python
 
-     :download:`Download Python source code: 07-math-functions.py <07-math-functions.py>`
+    .. container:: sphx-glr-download sphx-glr-download-python
 
+      :download:`Download Python source code: 07-math-functions.py <07-math-functions.py>`
 
+    .. container:: sphx-glr-download sphx-glr-download-jupyter
 
-  .. container:: sphx-glr-download sphx-glr-download-jupyter
-
-     :download:`Download Jupyter notebook: 07-math-functions.ipynb <07-math-functions.ipynb>`
+      :download:`Download Jupyter notebook: 07-math-functions.ipynb <07-math-functions.ipynb>`
 
 
 .. only:: html
