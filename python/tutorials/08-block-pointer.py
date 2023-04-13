@@ -11,17 +11,18 @@ Note that this feature is still experimental and may change in the future.
 # Motivations
 # -----------
 # In the previous matrix multiplication tutorial, we constructed blocks of values by de-referencing blocks of pointers,
-# i.e., `load(block<pointer_type<element_type>>) -> block<element_type>`, which involved loading blocks of elements from
-# memory. This approach allowed for flexibility in using hardware-managed cache and implementing complex data
-# structures, such as tensors of trees or unstructured look-up tables.
+# i.e., :code:`load(block<pointer_type<element_type>>) -> block<element_type>`, which involved loading blocks of
+# elements from memory. This approach allowed for flexibility in using hardware-managed cache and implementing complex
+# data structures, such as tensors of trees or unstructured look-up tables.
 #
 # However, the drawback of this approach is that it relies heavily on complex optimization passes by the compiler to
 # optimize memory access patterns. This can result in brittle code that may suffer from performance degradation when the
 # optimizer fails to perform adequately. Additionally, as memory controllers specialize to accommodate dense spatial
 # data structures commonly used in machine learning workloads, this problem is likely to worsen.
 #
-# To address this issue, we will use block pointers `pointer_type<block<element_type>>` and load them into
-# `block<element_type>`, in which way gives better friendliness for the compiler to optimize memory access patterns.
+# To address this issue, we will use block pointers :code:`pointer_type<block<element_type>>` and load them into
+# :code:`block<element_type>`, in which way gives better friendliness for the compiler to optimize memory access
+# patterns.
 #
 # Let's start with the previous matrix multiplication example and demonstrate how to rewrite it to utilize block pointer
 # semantics.
@@ -29,17 +30,17 @@ Note that this feature is still experimental and may change in the future.
 # %%
 # Make a Block Pointer
 # --------------------
-# A block pointer pointers to a block in a parent tensor and is constructed by `make_block_ptr` function,
+# A block pointer pointers to a block in a parent tensor and is constructed by :code:`make_block_ptr` function,
 # which takes the following information as arguments:
-# - `base`: the base pointer to the parent tensor;
-# - `shape`: the shape of the parent tensor;
-# - `strides`: the strides of the parent tensor, which means how much to increase the pointer by when moving by 1 element in a specific axis;
-# - `offsets`: the offsets of the block;
-# - `block_shape`: the shape of the block;
-# - `order`: the order of the block, which means how the block is laid out in memory.
+# - :code:`base`: the base pointer to the parent tensor;
+# - :code:`shape`: the shape of the parent tensor;
+# - :code:`strides`: the strides of the parent tensor, which means how much to increase the pointer by when moving by 1 element in a specific axis;
+# - :code:`offsets`: the offsets of the block;
+# - :code:`block_shape`: the shape of the block;
+# - :code:`order`: the order of the block, which means how the block is laid out in memory.
 #
-# For example, to a block pointer to a `BLOCK_SIZE_M`x`BLOCK_SIZE_K` block in a row-major 2D matrix A by offsets
-# `(pid_m * BLOCK_SIZE_M, 0)` and strides `(stride_am, stride_ak)`, we can use the following code
+# For example, to a block pointer to a :code:`BLOCK_SIZE_M`x:code:`BLOCK_SIZE_K` block in a row-major 2D matrix A by
+# offsets :code:`(pid_m * BLOCK_SIZE_M, 0)` and strides :code:`(stride_am, stride_ak)`, we can use the following code
 # (exactly the same as the previous matrix multiplication tutorial):
 #
 # .. code-block:: python
@@ -48,34 +49,34 @@ Note that this feature is still experimental and may change in the future.
 #                                     offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
 #                                     order=(1, 0))
 #
-# Note that the `order` argument is set to `(1, 0)`, which means the second axis is the inner dimension in terms of
-# storage, and the first axis is the outer dimension. This information may sound redundant, but it is necessary for
-# some hardware backends to optimize for better performance.
+# Note that the :code:`order` argument is set to :code:`(1, 0)`, which means the second axis is the inner dimension in
+# terms of storage, and the first axis is the outer dimension. This information may sound redundant, but it is necessary
+# for some hardware backends to optimize for better performance.
 
 # %%
 # Load/Store a Block Pointer
 # --------------------------
-# To load/store a block pointer, we can use `load/store` function, which takes a block pointer as an argument,
+# To load/store a block pointer, we can use :code:`load/store` function, which takes a block pointer as an argument,
 # de-references it, and loads/stores a block. You may mask some values in the block, here we have an extra argument
-# `boundary_check` to specify whether to check the boundary of each axis for the block pointer. With check on and
-# out-of-bound values will be masked according to the `padding_option` argument (load only), which can be
-# `zero` or `nan`. Temporarily, we do not support other values due to some hardware limitations. In this mode of block
-# pointer load/store does not support `mask` or `other` arguments in the legacy mode.
+# :code:`boundary_check` to specify whether to check the boundary of each axis for the block pointer. With check on and
+# out-of-bound values will be masked according to the :code:`padding_option` argument (load only), which can be
+# :code:`zero` or :code:`nan`. Temporarily, we do not support other values due to some hardware limitations. In this
+# mode of block pointer load/store does not support :code:`mask` or :code:`other` arguments in the legacy mode.
 #
-# So to load a block in A, we can simply write `a = tl.load(a_block_ptr, boundary_check=(0, 1))`. Boundary check may
-# cost extra performance, so if you can guarantee that the block pointer is always in-bound in some axis, you can turn
-# off the check by not passing the index into the `boundary_check` argument. For example, if we know that `M` is a
-# multiple of `BLOCK_SIZE_M`, we can write `a = tl.load(a_block_ptr, boundary_check=(1, ))`.
+# So to load a block in A, we can simply write :code:`a = tl.load(a_block_ptr, boundary_check=(0, 1))`. Boundary check
+# may cost extra performance, so if you can guarantee that the block pointer is always in-bound in some axis, you can
+# turn off the check by not passing the index into the :code:`boundary_check` argument. For example, if we know that
+# :code:`M` is a multiple of :code:`BLOCK_SIZE_M`, we can write :code:`a = tl.load(a_block_ptr, boundary_check=(1, ))`.
 
 # %%
 # Advance a Block Pointer
 # -----------------------
-# To advance a block pointer, we can use `advance` function, which takes a block pointer and the increment for each axis
-# as arguments and returns a new block pointer with the same shape and strides as the original one,
+# To advance a block pointer, we can use :code:`advance` function, which takes a block pointer and the increment for
+# each axis as arguments and returns a new block pointer with the same shape and strides as the original one,
 # but with the offsets advanced by the specified amount.
 #
-# For example, to advance the block pointer by `BLOCK_SIZE_K` in the second axis
-# (no need to multiply with stride), we can write `a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))`.
+# For example, to advance the block pointer by :code:`BLOCK_SIZE_K` in the second axis
+# (no need to multiply with stride), we can write :code:`a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))`.
 
 # %%
 # Final Result

@@ -150,10 +150,10 @@ import triton
 import triton.language as tl
 
 # %
-# :code:`triton.jit`'ed functions can be auto-tuned by using the `triton.autotune`
+# :code:`triton.jit`'ed functions can be auto-tuned by using the :code:`triton.autotune`
 # decorator, which consumes:
 #   - A list of :code:`triton.Config` objects that define different configurations of
-#       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
+#       meta-parameters (e.g., :code:`BLOCK_SIZE_M`) and compilation options (e.g., :code:`num_warps`) to try
 #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
 
@@ -323,7 +323,7 @@ else:
             8192
         ],  # Different possible values for `x_name`
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
-        # Possible values for `line_arg``
+        # Possible values for `line_arg`
         line_vals=['cublas', 'triton'],
         # Label name for the lines
         line_names=["cuBLAS", "Triton"],
