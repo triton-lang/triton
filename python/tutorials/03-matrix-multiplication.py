@@ -110,24 +110,24 @@ You will specifically learn about:
 #
 #  .. code-block:: python
 #
-#    # program ID
+#    # Program ID
 #    pid = tl.program_id(axis=0)
-#    # number of program ids along the M axis
+#    # Number of program ids along the M axis
 #    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-#    # number of programs ids along the N axis
+#    # Number of programs ids along the N axis
 #    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-#    # number of programs in group
+#    # Number of programs in group
 #    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-#    # id of the group this program is in
+#    # Id of the group this program is in
 #    group_id = pid // num_pid_in_group
-#    # row-id of the first program in the group
+#    # Row-id of the first program in the group
 #    first_pid_m = group_id * GROUP_SIZE_M
-#    # if `num_pid_m` isn't divisible by `GROUP_SIZE_M`, the last group is smaller
+#    # If `num_pid_m` isn't divisible by `GROUP_SIZE_M`, the last group is smaller
 #    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-#    # *within groups*, programs are ordered in a column-major order
-#    # row-id of the program in the *launch grid*
+#    # *Within groups*, programs are ordered in a column-major order
+#    # Row-id of the program in the *launch grid*
 #    pid_m = first_pid_m + (pid % group_size_m)
-#    # col-id of the program in the *launch grid*
+#    # Col-id of the program in the *launch grid*
 #    pid_n = (pid % num_pid_in_group) // group_size_m
 #
 # For example, in the following matmul where each matrix is 9 blocks by 9 blocks,
@@ -265,9 +265,9 @@ def leaky_relu(x):
 
 def matmul(a, b, activation=""):
     # Check constraints.
-    assert a.shape[1] == b.shape[0], "incompatible dimensions"
-    assert a.is_contiguous(), "matrix A must be contiguous"
-    assert b.is_contiguous(), "matrix B must be contiguous"
+    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+    assert a.is_contiguous(), "Matrix A must be contiguous"
+    assert b.is_contiguous(), "Matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
     # Allocates output.
@@ -282,7 +282,7 @@ def matmul(a, b, activation=""):
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        ACTIVATION=activation,
+        ACTIVATION=activation
     )
     return c
 
@@ -294,7 +294,7 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.randn((1, 512), device='cuda', dtype=torch.float16)
+a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)

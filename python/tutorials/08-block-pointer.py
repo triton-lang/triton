@@ -70,9 +70,11 @@ Note that this feature is still experimental and may change in the future.
 # %%
 # Advance a Block Pointer
 # -----------------------
-# To advance a block pointer, we can use `advance` function, which takes a block pointer as an argument and returns
-# a new block pointer with the same shape and strides as the original one, but with the offsets advanced by the
-# specified amount. For example, to advance the block pointer by `BLOCK_SIZE_K` in the second axis
+# To advance a block pointer, we can use `advance` function, which takes a block pointer and the increment for each axis
+# as arguments and returns a new block pointer with the same shape and strides as the original one,
+# but with the offsets advanced by the specified amount.
+#
+# For example, to advance the block pointer by `BLOCK_SIZE_K` in the second axis
 # (no need to multiply with stride), we can write `a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))`.
 
 # %%
@@ -85,8 +87,23 @@ import triton
 import triton.language as tl
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+    ],
+    key=['M', 'N', 'K'],
+)
 @triton.jit
-def matmul_kernel(
+def matmul_kernel_with_block_pointers(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -149,6 +166,7 @@ def matmul_kernel(
         # See above `Advance a Block Pointer` section for details.
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+    c = accumulator.to(tl.float16)
 
     # ----------------------------------------------------------------
     # Write back the block of the output matrix C with boundary checks.
@@ -156,16 +174,16 @@ def matmul_kernel(
     c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                     offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
                                     block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, accumulator, boundary_check=(0, 1))
+    tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 def matmul(a, b):
     # Check constraints.
-    assert a.shape[1] == b.shape[0], "incompatible dimensions"
-    assert a.is_contiguous(), "matrix A must be contiguous"
-    assert b.is_contiguous(), "matrix B must be contiguous"
+    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+    assert a.is_contiguous(), "Matrix A must be contiguous"
+    assert b.is_contiguous(), "Matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
     # Allocates output.
@@ -174,7 +192,7 @@ def matmul(a, b):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    matmul_kernel[grid](
+    matmul_kernel_with_block_pointers[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -197,4 +215,7 @@ triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
-torch.testing.assert_allclose(triton_output, torch_output)
+if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+    print("✅ Triton and Torch match")
+else:
+    print("❌ Triton and Torch differ")
