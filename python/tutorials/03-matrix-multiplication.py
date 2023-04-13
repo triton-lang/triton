@@ -1,8 +1,8 @@
 """
 Matrix Multiplication
 =====================
-In this tutorial, you will write a 25-lines high-performance FP16 matrix multiplication
-kernel that achieves performance on par with cuBLAS.
+In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
+performance on parallel with cuBLAS.
 
 You will specifically learn about:
 - Block-level matrix multiplications
@@ -63,12 +63,16 @@ You will specifically learn about:
 #    &A[m : m+BLOCK_SIZE_M, k:k+BLOCK_SIZE_K] =  a_ptr + (m : m+BLOCK_SIZE_M)[:, None]*A.stride(0) + (k : k+BLOCK_SIZE_K)[None, :]*A.stride(1);
 #    &B[k : k+BLOCK_SIZE_K, n:n+BLOCK_SIZE_N] =  b_ptr + (k : k+BLOCK_SIZE_K)[:, None]*B.stride(0) + (n : n+BLOCK_SIZE_N)[None, :]*B.stride(1);
 #
-# Which means that pointers for blocks of A and B can be initialized (i.e., :code:`k=0`) in Triton as:
+# Which means that pointers for blocks of A and B can be initialized (i.e., :code:`k=0`) in Triton as the following
+# code. Also note that we need an extra modulo to handle the case where :code:`M` is not a multiple of
+# :code:`BLOCK_SIZE_M` or :code:`N` is not a multiple of :code:`BLOCK_SIZE_N`, in which case we can pad the data with
+# some useless values, which will not contribute to the results. For the :code:`K` dimension, we will handle that later
+# using masking load semantics.
 #
 #  .. code-block:: python
 #
-#    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-#    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+#    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+#    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
 #    offs_k = tl.arange(0, BLOCK_SIZE_K)
 #    a_ptrs = a_ptr + (offs_am[:, None]*stride_am + offs_k [None, :]*stride_ak)
 #    b_ptrs = b_ptr + (offs_k [:, None]*stride_bk + offs_bn[None, :]*stride_bn)
@@ -210,8 +214,8 @@ def matmul_kernel(
     # a_ptrs is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
     # b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
@@ -222,19 +226,17 @@ def matmul_kernel(
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in range(0, K, BLOCK_SIZE_K):
-        # Note that for simplicity, we don't apply a mask here.
-        # This means that if K is not a multiple of BLOCK_SIZE_K,
-        # this will access out-of-bounds memory and produce an
-        # error or (worse!) incorrect results.
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        # Load the next block of A and B, generate a mask by checking the K dimension
+        # If it is out of bounds, set it to 0
+        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
         # We accumulate along the K dimension
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # you can fuse arbitrary activation functions here
+    # You can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
     if ACTIVATION == "leaky_relu":
         accumulator = leaky_relu(accumulator)
@@ -249,7 +251,7 @@ def matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
+# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
 @triton.jit
 def leaky_relu(x):
     x = x + 1
@@ -262,16 +264,13 @@ def leaky_relu(x):
 
 
 def matmul(a, b, activation=""):
-    # checks constraints
+    # Checks constraints
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.is_contiguous(), "matrix A must be contiguous"
     assert b.is_contiguous(), "matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
-    assert (
-        K % 32 == 0
-    ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
-    # allocates output
+    # Allocates output
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
@@ -313,24 +312,25 @@ else:
 # Square Matrix Performance
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-# We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
+# We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices,
+# but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
+        x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
         x_vals=[
             8192
-        ],  # different possible values for `x_name`
-        line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg``
+        ],  # Different possible values for `x_name`
+        line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
+        # Possible values for `line_arg``
         line_vals=['cublas', 'triton'],
-        # label name for the lines
+        # Label name for the lines
         line_names=["cuBLAS", "Triton"],
-        # line styles
+        # Line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel="TFLOPS",  # label name for the y-axis
-        plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
+        ylabel="TFLOPS",  # Label name for the y-axis
+        plot_name="matmul-performance",  # Name for the plot. Used also as a file name for saving the plot.
         args={},
     )
 )
