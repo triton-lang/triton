@@ -22,6 +22,7 @@ jobs:
       - name: Build docs
         run: |
           cd docs
+          pip3 install sphinx-multiversion
           sphinx-multiversion . _build/html/
 
       - name: Update docs
