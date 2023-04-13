@@ -143,7 +143,7 @@ def create_driver():
     elif torch.cuda.is_available():
         return CudaDriver()
     else:
-        return UnsupportedDriver
+        return UnsupportedDriver()
 
 
 driver = create_driver()
