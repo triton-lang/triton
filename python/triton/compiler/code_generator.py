@@ -1,4 +1,5 @@
 import ast
+import inspect
 import re
 import sys
 import warnings
@@ -755,6 +756,43 @@ class CodeGenerator(ast.NodeVisitor):
         # Convert assert to triton's device_assert which happens on the device
         return language.core.device_assert(test, msg, _builder=self.builder)
 
+    def call_JitFunction(self, fn: JITFunction, args, kwargs):
+        args = inspect.getcallargs(fn.fn, *args, **kwargs)
+        args = [args[name] for name in fn.arg_names]
+        args = [arg if _is_triton_tensor(arg)
+                else constexpr(arg) for arg in args]
+        # generate function def
+        attributes = dict()
+        constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
+        constants = {i: args[i] for i in constexprs}
+        # generate call
+        args = [None if i in constexprs else arg for i, arg in enumerate(args)]
+        arg_vals = [arg.handle for arg in args if arg is not None]
+        arg_types = [arg.type for arg in args if arg is not None]
+        fn_name = mangle_fn(fn.__name__, arg_types, constants)
+        # generate function def if necessary
+        if not self.module.has_function(fn_name):
+            prototype = language.function_type([], arg_types)
+            gscope = sys.modules[fn.fn.__module__].__dict__
+            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=self.debug)
+            generator.visit(fn.parse())
+            callee_ret_type = generator.last_ret_type
+            self.function_ret_types[fn_name] = callee_ret_type
+        else:
+            callee_ret_type = self.function_ret_types[fn_name]
+        symbol = self.module.get_function(fn_name)
+        call_op = self.builder.call(symbol, arg_vals)
+        if call_op.get_num_results() == 0 or callee_ret_type is None:
+            return None
+        elif call_op.get_num_results() == 1:
+            return tensor(call_op.get_result(0), callee_ret_type)
+        else:
+            # should return a tuple of tl.tensor
+            results = []
+            for i in range(call_op.get_num_results()):
+                results.append(tensor(call_op.get_result(i), callee_ret_type[i]))
+            return tuple(results)
+
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
 
@@ -768,44 +806,13 @@ class CodeGenerator(ast.NodeVisitor):
             if not self.debug:
                 return
         if isinstance(fn, JITFunction):
-            from inspect import getcallargs
-            args = getcallargs(fn.fn, *args, **kws)
-            args = [args[name] for name in fn.arg_names]
-            args = [arg if _is_triton_tensor(arg)
-                    else constexpr(arg) for arg in args]
-            # generate function def
-            attributes = dict()
-            constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
-            constants = {i: args[i] for i in constexprs}
-            # generate call
-            args = [None if i in constexprs else arg for i, arg in enumerate(args)]
-            arg_vals = [arg.handle for arg in args if arg is not None]
-            arg_types = [arg.type for arg in args if arg is not None]
-            fn_name = mangle_fn(fn.__name__, arg_types, constants)
-            # generate function def if necessary
-            if not self.module.has_function(fn_name):
-                prototype = language.function_type([], arg_types)
-                gscope = sys.modules[fn.fn.__module__].__dict__
-                generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=self.debug)
-                generator.visit(fn.parse())
-                callee_ret_type = generator.last_ret_type
-                self.function_ret_types[fn_name] = callee_ret_type
-            else:
-                callee_ret_type = self.function_ret_types[fn_name]
-            symbol = self.module.get_function(fn_name)
-            call_op = self.builder.call(symbol, arg_vals)
-            if call_op.get_num_results() == 0 or callee_ret_type is None:
-                return None
-            elif call_op.get_num_results() == 1:
-                return tensor(call_op.get_result(0), callee_ret_type)
-            else:
-                # should return a tuple of tl.tensor
-                results = []
-                for i in range(call_op.get_num_results()):
-                    results.append(tensor(call_op.get_result(i), callee_ret_type[i]))
-                return tuple(results)
+            return self.call_JitFunction(fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_tensor(fn.__self__)) or language.core.is_builtin(fn):
-            return fn(*args, _builder=self.builder, **kws)
+            extra_kwargs = dict(_builder=self.builder)
+            sig = inspect.signature(fn)
+            if '_generator' in sig.parameters:
+                extra_kwargs['_generator'] = self
+            return fn(*args, **extra_kwargs, **kws)
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         return fn(*args, **kws)

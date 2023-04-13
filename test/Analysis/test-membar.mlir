@@ -79,7 +79,11 @@ tt.func @scratch() {
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
   %1 = triton_gpu.convert_layout %0 : (tensor<32x16xf16, #A_SHARED>) -> tensor<32x16xf16, #AL>
-  %2 = tt.reduce %1 {redOp = 1 : i32, axis = 0 : i32} : tensor<32x16xf16, #AL> -> tensor<16xf16, #sliceAd0>
+  %2 = "tt.reduce" (%1) ({
+  ^bb0(%arg1: f16, %arg2: f16):
+    %add = arith.addf %arg1, %arg2 : f16
+    tt.reduce.return %add : f16
+  }) {axis = 0 : i32} : (tensor<32x16xf16, #AL>) -> tensor<16xf16, #sliceAd0>
   tt.return
 }
 

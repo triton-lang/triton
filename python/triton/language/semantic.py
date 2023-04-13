@@ -1,7 +1,7 @@
 from __future__ import annotations  # remove after python 3.11
 
 from functools import wraps
-from typing import List, Optional, Tuple, TypeVar
+from typing import List, Optional, Sequence, Tuple, TypeVar
 
 from . import core as tl
 from triton._C.libtriton.triton import ir
@@ -1228,91 +1228,36 @@ def where(condition: tl.tensor,
     return tl.tensor(builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
 
 # ===----------------------------------------------------------------------===//
-#                               Reductions
+#                               Reduction
 # ===----------------------------------------------------------------------===
 
 
-def reduce_impl(input: tl.tensor, axis: int, builder: ir.builder, name: str,
-                FLOAT_OP: ir.REDUCE_OP, INT_OP: ir.REDUCE_OP) -> tl.tensor:
-    scalar_ty = input.type.scalar
-    out_scalar_ty = scalar_ty
-    # input is extended to 32-bits if necessary
-    # this increases numerical accuracy and can be done pretty much for free
-    # on GPUs
-    if scalar_ty.is_int() and scalar_ty.int_bitwidth <= 32:
-        input = cast(input, tl.int32, builder)
-        out_scalar_ty = tl.int32
+def reduction(
+    inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
+) -> Tuple[tl.tensor, ...]:
+    # get result shape
+    shape = inputs[0].type.shape
+    print(shape, axis)
+    ret_shape = [s for i, s in enumerate(shape) if i != axis]
+    for t in inputs:
+        assert t.type.shape == shape
 
-    # hardware doesn't support FMAX, FMIN, CMP for bfloat16
-    if scalar_ty is tl.bfloat16:
-        input = cast(input, tl.float32, builder)
-        out_scalar_ty = tl.float32
+    def wrap_tensor(x, scalar_ty):
+        if ret_shape:
+            res_ty = tl.block_type(scalar_ty, ret_shape)
+        else:
+            # 0d-tensor -> scalar
+            res_ty = scalar_ty
+        return tl.tensor(x, res_ty)
 
-    # choose the right unsigned operation
-    if scalar_ty.is_int_unsigned():
-        int_op_to_unit = {
-            ir.REDUCE_OP.MIN: ir.REDUCE_OP.UMIN,
-            ir.REDUCE_OP.MAX: ir.REDUCE_OP.UMAX,
-            ir.REDUCE_OP.ARGMIN: ir.REDUCE_OP.ARGUMIN,
-            ir.REDUCE_OP.ARGMAX: ir.REDUCE_OP.ARGUMAX,
-        }
-        if INT_OP in int_op_to_unit:
-            INT_OP = int_op_to_unit[INT_OP]
+    reduce_op = builder.create_reduce([t.handle for t in inputs], axis)
+    region_builder_fn(reduce_op)
+    reduce_op.verify()
 
-    # If we are doing an argmin or argmax we want to use an int32 output type
-    if FLOAT_OP is ir.REDUCE_OP.ARGFMAX or INT_OP is ir.REDUCE_OP.ARGMAX:
-        out_scalar_ty = tl.int32
-    elif FLOAT_OP is ir.REDUCE_OP.ARGFMIN or INT_OP is ir.REDUCE_OP.ARGMIN:
-        out_scalar_ty = tl.int32
-
-    # get result type
-    shape = input.type.shape
-
-    rank = len(shape)
-    assert 0 <= axis < rank, f"axis (v={axis}) is out of range, should be within [0, {rank})"
-
-    ret_shape = []
-    for i, s in enumerate(shape):
-        if i != axis:
-            ret_shape.append(s)
-    if ret_shape:
-        res_ty = tl.block_type(out_scalar_ty, ret_shape)
-    else:
-        # 0d-tensor -> scalar
-        res_ty = out_scalar_ty
-
-    if scalar_ty.is_floating():
-        return tl.tensor(builder.create_reduce(input.handle, FLOAT_OP, axis), res_ty)
-    elif scalar_ty.is_int():
-        return tl.tensor(builder.create_reduce(input.handle, INT_OP, axis), res_ty)
-    assert False
-
-
-def min(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    return reduce_impl(input, axis, builder, "min", ir.REDUCE_OP.FMIN, ir.REDUCE_OP.MIN)
-
-
-def argmin(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    return reduce_impl(input, axis, builder, "argmin", ir.REDUCE_OP.ARGFMIN, ir.REDUCE_OP.ARGMIN)
-
-
-def max(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    return reduce_impl(input, axis, builder, "max", ir.REDUCE_OP.FMAX, ir.REDUCE_OP.MAX)
-
-
-def argmax(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    return reduce_impl(input, axis, builder, "argmax", ir.REDUCE_OP.ARGFMAX, ir.REDUCE_OP.ARGMAX)
-
-
-def sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.FADD, ir.REDUCE_OP.ADD)
-
-
-def xor_sum(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    scalar_ty = input.type.scalar
-    if not scalar_ty.is_int():
-        raise ValueError("xor_sum only supported for integers")
-    return reduce_impl(input, axis, builder, "sum", ir.REDUCE_OP.XOR, ir.REDUCE_OP.XOR)
+    return tuple(
+        wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar)
+        for i in range(len(inputs))
+    )
 
 
 # ===----------------------------------------------------------------------===

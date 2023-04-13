@@ -12,13 +12,26 @@ namespace mlir {
 
 class ReduceOpHelper {
 public:
-  explicit ReduceOpHelper(triton::ReduceOp op) : op(op) {
-    srcTy = op.getOperand().getType().cast<RankedTensorType>();
+  explicit ReduceOpHelper(triton::ReduceOp rop)
+      : op(rop.getOperation()), axis(rop.getAxis()) {
+    auto firstTy = rop.getOperands()[0].getType().cast<RankedTensorType>();
+    srcShape = firstTy.getShape();
+    srcEncoding = firstTy.getEncoding();
+    srcElementTypes = rop.getElementTypes();
+
+    for (const auto &t : rop.getInputTypes()) {
+      if (t.getShape() != srcShape) {
+        rop.emitError() << "shape mismatch";
+      }
+      if (t.getEncoding() != srcEncoding) {
+        rop.emitError() << "encoding mismatch";
+      }
+    }
   }
 
-  ArrayRef<int64_t> getSrcShape() { return srcTy.getShape(); }
+  ArrayRef<int64_t> getSrcShape() { return srcShape; }
 
-  Attribute getSrcLayout() { return srcTy.getEncoding(); }
+  Attribute getSrcLayout() { return srcEncoding; }
 
   bool isFastReduction();
 
@@ -37,8 +50,11 @@ public:
   bool isSupportedLayout();
 
 private:
-  triton::ReduceOp op;
-  RankedTensorType srcTy{};
+  Operation *op;
+  ArrayRef<int64_t> srcShape;
+  Attribute srcEncoding;
+  SmallVector<Type> srcElementTypes;
+  int axis;
 };
 
 bool isSharedEncoding(Value value);

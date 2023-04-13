@@ -388,26 +388,34 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 //
 // Reduce Op
 //
-def TT_ReduceOp : TT_Op<"reduce", [Pure,
-                                   DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-    let summary = "reduce";
-
-    let arguments = (ins TT_RedOpAttr:$redOp, TT_Tensor:$operand, I32Attr:$axis);
-
-    let results = (outs TT_Type:$result);
-
+def TT_ReduceOp: TT_Op<"reduce",
+                       [Pure,
+                        SameOperandsEncoding,
+                        SingleBlock,
+                        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+    let summary = "Reduction using generic combination algorithm";
+    let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
+    let results = (outs Variadic<TT_Type>:$result);
+    let regions = (region SizedRegion<1>:$combineOp);
     let builders = [
-        OpBuilder<(ins "triton::RedOp":$redOp, "Value":$operand, "int":$axis)>,
+        OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
     ];
-
-    let assemblyFormat = "$operand attr-dict `:` type($operand) `->` type($result)";
-
+    let hasVerifier = 1;
+    let hasRegionVerifier = 1;
     let extraClassDeclaration = [{
-        // This member function is marked static because we need to call it before the ReduceOp
-        // is constructed, see the implementation of create_reduce in triton.cc.
-        static bool withIndex(mlir::triton::RedOp redOp);
+      llvm::SmallVector<RankedTensorType> getInputTypes();
+      llvm::SmallVector<Type> getElementTypes();
+      unsigned getNumOperands();
     }];
 }
+
+def TT_ReduceReturnOp: TT_Op<"reduce.return",
+                             [HasParent<"ReduceOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for reduce operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "$result attr-dict `:` type($result)";
+}
+
 
 //
 // External Elementwise op

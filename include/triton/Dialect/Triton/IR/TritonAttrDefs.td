@@ -34,30 +34,6 @@ def TT_PaddingOptionAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
-// reduction
-def TT_RedOpAttr : I32EnumAttr<
-    /*name*/"RedOp", /*summary*/"",
-    /*case*/
-    [
-        I32EnumAttrCase</*sym*/"ADD", 1, /*str*/"add">,
-        I32EnumAttrCase<"FADD", 2, "fadd">,
-        I32EnumAttrCase<"MIN", 3, "min">,
-        I32EnumAttrCase<"MAX", 4, "max">,
-        I32EnumAttrCase<"UMIN", 5, "umin">,
-        I32EnumAttrCase<"UMAX", 6, "umax">,
-        I32EnumAttrCase<"ARGMIN", 7, "argmin">,
-        I32EnumAttrCase<"ARGMAX", 8, "argmax">,
-        I32EnumAttrCase<"ARGUMIN", 9, "argumin">,
-        I32EnumAttrCase<"ARGUMAX", 10, "argumax">,
-        I32EnumAttrCase<"FMIN", 11, "fmin">,
-        I32EnumAttrCase<"FMAX", 12, "fmax">,
-        I32EnumAttrCase<"ARGFMIN", 13, "argfmin">,
-        I32EnumAttrCase<"ARGFMAX", 14, "argfmax">,
-        I32EnumAttrCase<"XOR", 15, "xor">
-    ]> {
-    let cppNamespace = "::mlir::triton";
-}
-
 // atomic
 def TT_AtomicRMWAttr : I32EnumAttr<
     "RMWOp", "",
