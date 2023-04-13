@@ -6,7 +6,7 @@ on:
 
 jobs:
   Build-Documentation:
-    runs-on: [self-hosted, V100]
+    runs-on: [self-hosted, A100]
 
     steps:
       - name: Checkout branch
