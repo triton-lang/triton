@@ -99,11 +99,11 @@ def test_matmul(M, N, K, dtype_str):
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench(fn, warmup=100, rep=300)
+    ms = triton.testing.do_bench(fn, return_mode="min", warmup=100, rep=300)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
-    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, return_mode="min", atol=0.01, rtol=0.05)
+    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
 
 
 #######################
