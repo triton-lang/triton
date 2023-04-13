@@ -74,7 +74,10 @@ void MembarAnalysis::visitTerminator(Operation *op,
     return;
   }
   // Otherwise, it could be a return op
-  assert(isa<triton::ReturnOp>(op) && "Unknown terminator");
+  if (isa<triton::ReduceReturnOp>(op) || isa<triton::ReturnOp>(op)) {
+    return;
+  }
+  llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
