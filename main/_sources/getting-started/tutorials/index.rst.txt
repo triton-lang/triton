@@ -106,6 +106,23 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="This is a Triton implementation of the Flash Attention algorithm (see: Dao et al., https://arxi...">
+
+.. only:: html
+
+  .. image:: /getting-started/tutorials/images/thumb/sphx_glr_06-fused-attention_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Fused Attention</div>
+    </div>
+
+
+.. raw:: html
+
     <div class="sphx-glr-thumbcontainer" tooltip="Libdevice (`tl.math`) function">
 
 .. only:: html
@@ -134,6 +151,7 @@ To install the dependencies for the tutorials:
    /getting-started/tutorials/03-matrix-multiplication
    /getting-started/tutorials/04-low-memory-dropout
    /getting-started/tutorials/05-layer-norm
+   /getting-started/tutorials/06-fused-attention
    /getting-started/tutorials/07-math-functions
 
 

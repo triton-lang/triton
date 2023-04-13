@@ -23,7 +23,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Libdevice (tl.math) function" href="07-math-functions.html" />
+    <link rel="next" title="Fused Attention" href="06-fused-attention.html" />
     <link rel="prev" title="Low-Memory Dropout" href="04-low-memory-dropout.html" /> 
 </head>
 
@@ -61,6 +61,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#references">References</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
 <li class="toctree-l2"><a class="reference internal" href="07-math-functions.html">Libdevice (<cite>tl.math</cite>) function</a></li>
 </ul>
 </li>
@@ -467,7 +468,7 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 [16384] 0
 layer-norm-backward:
           N      Triton       Torch
-0    1024.0  245.760006  356.173905
+0    1024.0  236.307695  356.173905
 1    1536.0  361.411771  400.695643
 2    2048.0  455.111110  438.857137
 3    2560.0  534.260858  469.007657
@@ -475,27 +476,27 @@ layer-norm-backward:
 5    3584.0  688.127967  443.381459
 6    4096.0  744.727267  436.906674
 7    4608.0  704.407633  437.122520
-8    5120.0  758.518534  443.610086
-9    5632.0  804.571435  459.755106
-10   6144.0  842.605744  466.632925
-11   6656.0  882.563556  471.221251
-12   7168.0  919.957230  452.715775
+8    5120.0  763.229797  443.610086
+9    5632.0  809.389194  459.755106
+10   6144.0  842.605744  465.160886
+11   6656.0  882.563556  472.615367
+12   7168.0  917.503992  452.715775
 13   7680.0  950.103127  443.076928
-14   8192.0  987.979890  464.794337
+14   8192.0  983.040025  464.794337
 15   8704.0  663.161879  459.112087
 16   9216.0  686.906817  466.632911
-17   9728.0  713.981680  472.615406
+17   9728.0  711.804890  472.615406
 18  10240.0  731.428577  468.114302
-19  10752.0  758.964709  467.478250
+19  10752.0  761.203560  467.478250
 20  11264.0  781.317950  470.149555
-21  11776.0  802.909085  472.615374
-22  12288.0  826.084006  471.859211
-23  12800.0  830.270283  472.615383
-24  13312.0  847.448300  478.275433
-25  13824.0  852.894616  478.063409
+21  11776.0  802.909085  471.826361
+22  12288.0  828.404485  471.105436
+23  12800.0  832.520355  471.889394
+24  13312.0  847.448300  477.560558
+25  13824.0  848.531950  478.753261
 26  14336.0  851.643583  477.203871
-27  14848.0  854.561145  477.044187
-28  15360.0  863.325544  476.279061
+27  14848.0  852.516725  477.683661
+28  15360.0  865.352086  476.279061
 29  15872.0  867.717548  479.758191
 </pre></div>
 </div>
@@ -508,7 +509,7 @@ layer-norm-backward:
 <p>Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, “Layer Normalization”, Arxiv 2016</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  38.887 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  39.183 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-05-layer-norm-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/935c0dd0fbeb4b2e69588471cbb2d4b2/05-layer-norm.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">05-layer-norm.py</span></code></a></p>
@@ -526,7 +527,7 @@ layer-norm-backward:
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="04-low-memory-dropout.html" class="btn btn-neutral float-left" title="Low-Memory Dropout" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="07-math-functions.html" class="btn btn-neutral float-right" title="Libdevice (tl.math) function" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="06-fused-attention.html" class="btn btn-neutral float-right" title="Fused Attention" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
