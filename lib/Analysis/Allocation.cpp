@@ -59,10 +59,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute dstLayout = dstTy.getEncoding();
 
   // MmaToDotShortcut doesn't use shared mem
-  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>())
-    if (auto dotOperandLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>())
-      if (isMmaToDotShortcut(mmaLayout, dotOperandLayout))
-        return {};
+  if (srcLayout.isa<MmaEncodingAttr>() &&
+      dstLayout.isa<DotOperandEncodingAttr>())
+    if (isMmaToDotShortcut(srcTy, dstTy))
+      return {};
 
   assert(srcLayout && dstLayout &&
          "Unexpected layout in getScratchConfigForCvtLayout()");
