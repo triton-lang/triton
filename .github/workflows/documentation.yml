@@ -20,6 +20,11 @@ jobs:
           rm -r /tmp/triton-docs
         continue-on-error: true
 
+      - name: Install dependent packages
+        run: |
+          pip3 install tabulate
+          pip3 install cmake
+
       - name: Fetch dependent branches
         run: |
           git fetch origin main:main
@@ -28,9 +33,6 @@ jobs:
         run: |
           cd docs
           export PATH=$(python3 -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
-          echo "Modified PATH: $PATH"
-          which cmake
-          cmake --version
           python3 -m sphinx_multiversion . _build/html/
 
       - name: Update docs
