@@ -1,6 +1,6 @@
 """
 Block Pointer (Experimental)
-=====================
+============================
 This tutorial will guide you through writing a matrix multiplication algorithm that utilizes block pointer semantics.
 These semantics are more friendly for Triton to optimize and can result in better performance on specific hardware.
 Note that this feature is still experimental and may change in the future.
