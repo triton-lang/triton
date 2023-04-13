@@ -27,6 +27,7 @@ jobs:
       - name: Build docs
         run: |
           cd docs
+          alias cmake="python3 -m cmake"
           python3 -m sphinx_multiversion . _build/html/
 
       - name: Update docs
