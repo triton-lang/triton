@@ -20,11 +20,6 @@ jobs:
           rm -r /tmp/triton-docs
         continue-on-error: true
 
-      - name: Install Dependencies
-        run: |
-          pip3 install sphinx-multiversion
-          pip3 install cmake
-
       - name: Fetch dependent branches
         run: |
           git fetch origin main:main
