@@ -32,10 +32,6 @@
 #include "triton/rocm/hsa/hsa.h"
 #include "triton/rocm/hsa/hsa_ext_amd.h"
 
-inline bool _isROCM = false;
-inline void setROCM() { _isROCM = true; }
-inline bool isROCM() { return _isROCM; }
-
 // This structure holds agent information acquired through hsa info related
 // calls, and is later used for reference when displaying the information.
 struct agent_info_t {

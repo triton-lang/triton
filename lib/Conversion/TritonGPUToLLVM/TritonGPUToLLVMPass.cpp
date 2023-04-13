@@ -19,7 +19,6 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"

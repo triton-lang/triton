@@ -1655,9 +1655,6 @@ void init_triton_translation(py::module &m) {
   });
 
   m.def(
-      "set_rocm", []() { setROCM(); }, ret::take_ownership);
-
-  m.def(
       "get_arch_info",
       []() {
         return std::get<0>(getArchInfo());
