@@ -23,7 +23,7 @@ jobs:
         run: |
           cd docs
           pip3 install sphinx-multiversion
-          sphinx-multiversion . _build/html/
+          python3 -m sphinx_multiversion . _build/html/
 
       - name: Update docs
         run: |
