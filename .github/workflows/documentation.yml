@@ -28,6 +28,9 @@ jobs:
         run: |
           cd docs
           export PATH=$(python -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
+          echo "Modified PATH: $PATH"
+          which cmake
+          cmake --version
           python3 -m sphinx_multiversion . _build/html/
 
       - name: Update docs
