@@ -72,10 +72,10 @@ if __name__ == '__main__':
         # triton-ir -> triton-gpu-ir
         # use compute_capability == 80
         module = tc.ttir_to_ttgir(module, num_warps=args.num_warps)  # num_stages=3, compute_capability=80)
-        module = tc.optimize_ttgir(module, num_stages=3, arch=80)
+        module = tc.optimize_ttgir(module, num_stages=3, arch=args.gfx)
         # triton-gpu-ir -> llvm-ir
         # use compute_capability == 80
-        module = tc.ttgir_to_llir(module, extern_libs=None, arch=80)
+        module = tc.ttgir_to_llir(module, extern_libs=None, arch=args.gfx)
         # llvm-ir -> amdgcn asm, hsaco binary
         module, hsaco_path = tc.llir_to_amdgcn_and_hsaco(module, arch_name, arch_triple, arch_features)
 

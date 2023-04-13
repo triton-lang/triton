@@ -21,6 +21,7 @@ sh scripts/amd/clean.sh
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[float32-float32-+]"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[int8-float16-%]"
 UNIT_TEST="python/test/unit/language/test_core.py::test_masked_load_shared_memory[dtype0]"
+# UNIT_TEST="python/test/unit/language/test_core_amd.py::test_masked_load_shared_memory[dtype1]"
 # UNIT_TEST="python/test/unit/language/test_elementwise.py"
 
 # check for backtrace
@@ -40,4 +41,4 @@ else
 	pytest --capture=tee-sys -rfs --verbose "$UNIT_TEST" 2>&1 | tee $LOG_DIR/unit_test.log
 fi
 
-bash scripts/amd/cache_print.sh  2>&1 |tee $LOG_DIR/cache.log
+# bash scripts/amd/cache_print.sh  2>&1 |tee $LOG_DIR/cache.log

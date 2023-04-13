@@ -330,8 +330,11 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     llvm::errs() << "Pass execution failed";
     return nullptr;
   }
-
-  auto llvmIR = translateLLVMToLLVMIR(llvmContext, module, isROCM);
+#ifdef USE_ROCM
+  auto llvmIR = translateLLVMToLLVMIR(llvmContext, module, true);
+#else
+  auto llvmIR = translateLLVMToLLVMIR(llvmContext, module, false);
+#endif
   if (!llvmIR) {
     llvm::errs() << "Translate to LLVM IR failed";
     return nullptr;
