@@ -37,7 +37,7 @@ def asin_kernel(
 
 # %%
 #  Using the default libdevice library path
-# --------------------------
+# -----------------------------------------
 # We can use the default libdevice library path encoded in `triton/language/math.py`
 
 

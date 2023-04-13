@@ -134,6 +134,7 @@ You will specifically learn about:
 # we can see that if we compute the output in row-major ordering, we need to load 90
 # blocks into SRAM to compute the first 9 output blocks, but if we do it in grouped
 # ordering, we only need to load 54 blocks.
+#
 #   .. image:: grouped_vs_row_major_ordering.png
 #
 # In practice, this can improve the performance of our matrix multiplication kernel by
@@ -154,8 +155,6 @@ import triton.language as tl
 #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
 #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
-
-
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
@@ -318,7 +317,7 @@ else:
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
         x_vals=[
-            8192
+            128 * i for i in range(2, 33)
         ],  # Different possible values for `x_name`
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
         # Possible values for `line_arg`
