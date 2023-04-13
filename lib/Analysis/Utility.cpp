@@ -10,49 +10,38 @@
 namespace mlir {
 
 bool ReduceOpHelper::isFastReduction() {
-  auto srcLayout = srcTy.getEncoding();
-  auto axis = op.getAxis();
-  return axis == triton::gpu::getOrder(srcLayout)[0];
+  return axis == triton::gpu::getOrder(getSrcLayout())[0];
 }
 
 unsigned ReduceOpHelper::getInterWarpSize() {
-  auto srcLayout = srcTy.getEncoding();
-  auto srcShape = srcTy.getShape();
-  auto axis = op.getAxis();
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSize();
   return std::min(srcReduceDimSize / sizeIntraWarps,
-                  triton::gpu::getWarpsPerCTA(srcLayout)[axis]);
+                  triton::gpu::getWarpsPerCTA(getSrcLayout())[axis]);
 }
 
 unsigned ReduceOpHelper::getIntraWarpSize() {
-  auto srcLayout = srcTy.getEncoding();
-  auto srcShape = srcTy.getShape();
-  auto axis = op.getAxis();
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   return std::min(srcReduceDimSize,
-                  triton::gpu::getThreadsPerWarp(srcLayout)[axis]);
+                  triton::gpu::getThreadsPerWarp(getSrcLayout())[axis]);
 }
 
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
-  auto srcLayout = srcTy.getEncoding();
-  auto axis = op.getAxis();
+  auto srcLayout = getSrcLayout();
   return triton::gpu::getThreadsPerWarp(srcLayout)[axis] *
          triton::gpu::getWarpsPerCTA(srcLayout)[axis];
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
-  auto axis = op.getAxis();
   auto smemShape = convertType<unsigned>(getSrcShape());
   smemShape[axis] = std::min(smemShape[axis], getThreadsReductionAxis());
   return smemShape;
 }
 
 SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
-  auto axis = op.getAxis();
   SmallVector<SmallVector<unsigned>> smemShapes(3);
 
-  auto argLayout = srcTy.getEncoding();
+  auto argLayout = getSrcLayout();
   auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
   if (argLayoutMma && argLayoutMma.getVersionMajor() == 2 &&
       triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
@@ -64,7 +53,7 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
 
   /// FIXME(Qingyi): This size is actually larger than required.
   /// shared memory block1:
-  auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+  auto mod = op->getParentOfType<ModuleOp>();
   unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
   smemShapes[1].push_back(numWarps * 32);
 
@@ -82,17 +71,15 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     elems = product<unsigned>(smemShape);
   }
 
-  auto tensorType = op.getOperand().getType().cast<RankedTensorType>();
-  unsigned bytes = elems * tensorType.getElementTypeBitWidth() / 8;
-
-  if (triton::ReduceOp::withIndex(op.getRedOp()))
-    bytes += elems * sizeof(int32_t);
-
-  return bytes;
+  unsigned bytesPerElem = 0;
+  for (const auto &ty : srcElementTypes) {
+    bytesPerElem += ty.getIntOrFloatBitWidth() / 8;
+  }
+  return bytesPerElem * elems;
 }
 
 bool ReduceOpHelper::isSupportedLayout() {
-  auto srcLayout = srcTy.getEncoding();
+  auto srcLayout = getSrcLayout();
   if (srcLayout.isa<triton::gpu::BlockedEncodingAttr>()) {
     return true;
   }

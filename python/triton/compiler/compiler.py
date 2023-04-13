@@ -15,10 +15,10 @@ import torch
 
 import triton
 import triton._C.libtriton.triton as _triton
+from ..runtime import driver
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
-from ..runtime.driver import get_cuda_utils, get_hip_utils
 from ..tools.disasm import extract
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
@@ -519,24 +519,19 @@ class CompiledKernel:
         self.metadata = metadata
         self.cu_module = None
         self.cu_function = None
-        self.is_hip = "amdgcn" in asm
 
     def _init_handles(self):
         if self.cu_module is not None:
             return
         device = triton.runtime.jit.get_current_device()
-        if self.is_hip:
-            hip_utils = get_hip_utils()
-            max_shared = hip_utils.get_device_properties(device)["max_shared_mem"]
-            if self.shared > max_shared:
-                raise OutOfResources(self.shared, max_shared, "shared memory")
-            mod, func, n_regs, n_spills = hip_utils.load_binary(self.metadata["name"], self.asm["hsaco_path"], self.shared, device)
-        else:
-            cuda_utils = get_cuda_utils()
-            max_shared = cuda_utils.get_device_properties(device)["max_shared_mem"]
-            if self.shared > max_shared:
-                raise OutOfResources(self.shared, max_shared, "shared memory")
-            mod, func, n_regs, n_spills = cuda_utils.load_binary(self.metadata["name"], self.asm["cubin"], self.shared, device)
+        bin_path = {
+            driver.HIP: "hsaco_path",
+            driver.CUDA: "cubin"
+        }[driver.backend]
+        max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
+        if self.shared > max_shared:
+            raise OutOfResources(self.shared, max_shared, "shared memory")
+        mod, func, n_regs, n_spills = driver.utils.load_binary(self.metadata["name"], self.asm[bin_path], self.shared, device)
 
         self.n_spills = n_spills
         self.n_regs = n_regs
