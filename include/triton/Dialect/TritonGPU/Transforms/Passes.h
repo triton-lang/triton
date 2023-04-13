@@ -25,8 +25,6 @@ std::unique_ptr<Pass> createTritonGPUVerifier();
 
 std::unique_ptr<Pass> createTritonGPUOptimizeDotOperandsPass();
 
-std::unique_ptr<Pass> createTritonGPUUpdateMmaForVoltaPass();
-
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
