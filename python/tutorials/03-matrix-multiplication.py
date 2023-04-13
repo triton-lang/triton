@@ -28,16 +28,16 @@ You will specifically learn about:
 #
 #  .. code-block:: python
 #
-#    # do in parallel
+#    # Do in parallel
 #    for m in range(0, M, BLOCK_SIZE_M):
-#      # do in parallel
+#      # Do in parallel
 #      for n in range(0, N, BLOCK_SIZE_N):
 #        acc = zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=float32)
 #        for k in range(0, K, BLOCK_SIZE_K):
 #          a = A[m : m+BLOCK_SIZE_M, k : k+BLOCK_SIZE_K]
 #          b = B[k : k+BLOCK_SIZE_K, n : n+BLOCK_SIZE_N]
 #          acc += dot(a, b)
-#        C[m : m+BLOCK_SIZE_M, n : n+BLOCK_SIZE_N] = acc;
+#        C[m : m+BLOCK_SIZE_M, n : n+BLOCK_SIZE_N] = acc
 #
 # where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.
 
@@ -153,8 +153,8 @@ import triton.language as tl
 # :code:`triton.jit`'ed functions can be auto-tuned by using the `triton.autotune`
 # decorator, which consumes:
 #   - A list of :code:`triton.Config` objects that define different configurations of
-#       meta-parameters (e.g., BLOCK_SIZE_M) and compilation options (e.g., num_warps) to try
-#   - An autotuning *key* whose change in values will trigger evaluation of all the
+#       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
+#   - An auto-tuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
 
 
@@ -180,8 +180,8 @@ def matmul_kernel(
     # Matrix dimensions
     M, N, K,
     # The stride variables represent how much to increase the ptr by when moving by 1
-    # element in a particular dimension. E.g. stride_am is how much to increase a_ptr
-    # by to get the element one row down (A has M rows)
+    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+    # by to get the element one row down (A has M rows).
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
@@ -195,8 +195,8 @@ def matmul_kernel(
     """
     # -----------------------------------------------------------
     # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse
-    # See above `L2 Cache Optimizations` section for details
+    # This is done in a grouped ordering to promote L2 data reuse.
+    # See above `L2 Cache Optimizations` section for details.
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -211,8 +211,8 @@ def matmul_kernel(
     # Create pointers for the first blocks of A and B.
     # We will advance this pointer as we move in the K direction
     # and accumulate
-    # a_ptrs is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
-    # b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
+    # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
+    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
@@ -221,19 +221,19 @@ def matmul_kernel(
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     # -----------------------------------------------------------
-    # Iterate to compute a block of the C matrix
+    # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
-    # `accumulator` will be converted back to fp16 after the loop
+    # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        # Load the next block of A and B, generate a mask by checking the K dimension
-        # If it is out of bounds, set it to 0
+        # Load the next block of A and B, generate a mask by checking the K dimension.
+        # If it is out of bounds, set it to 0.
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-        # We accumulate along the K dimension
+        # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
-        # Advance the ptrs to the next K block
+        # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
@@ -243,7 +243,7 @@ def matmul_kernel(
     c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
-    # Write back the block of the output matrix C
+    # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -251,7 +251,7 @@ def matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
+# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
 @triton.jit
 def leaky_relu(x):
     x = x + 1
@@ -259,18 +259,18 @@ def leaky_relu(x):
 
 
 # %%
-# We can now create a convenience wrapper function that only takes two input tensors
-# and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
+# We can now create a convenience wrapper function that only takes two input tensors,
+# and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
 
 def matmul(a, b, activation=""):
-    # Checks constraints
+    # Check constraints.
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.is_contiguous(), "matrix A must be contiguous"
     assert b.is_contiguous(), "matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
-    # Allocates output
+    # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
@@ -291,7 +291,7 @@ def matmul(a, b, activation=""):
 # Unit Test
 # ---------
 #
-# We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
+# We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
 a = torch.randn((1, 512), device='cuda', dtype=torch.float16)
@@ -330,7 +330,7 @@ else:
         # Line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel="TFLOPS",  # Label name for the y-axis
-        plot_name="matmul-performance",  # Name for the plot. Used also as a file name for saving the plot.
+        plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
         args={},
     )
 )

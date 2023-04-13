@@ -3,6 +3,7 @@ Block Pointer (Experimental)
 =====================
 This tutorial will guide you through writing a matrix multiplication algorithm that utilizes block pointer semantics.
 These semantics are more friendly for Triton to optimize and can result in better performance on specific hardware.
+Note that this feature is still experimental and may change in the future.
 
 """
 
@@ -28,8 +29,51 @@ These semantics are more friendly for Triton to optimize and can result in bette
 # %%
 # Make a Block Pointer
 # --------------------
+# A block pointer pointers to a block in a parent tensor and is constructed by `make_block_ptr` function,
+# which takes the following information as arguments:
+# - `base`: the base pointer to the parent tensor;
+# - `shape`: the shape of the parent tensor;
+# - `strides`: the strides of the parent tensor, which means how much to increase the pointer by when moving by 1 element in a specific axis;
+# - `offsets`: the offsets of the block;
+# - `block_shape`: the shape of the block;
+# - `order`: the order of the block, which means how the block is laid out in memory.
 #
+# For example, to a block pointer to a `BLOCK_SIZE_M`x`BLOCK_SIZE_K` block in a row-major 2D matrix A by offsets
+# `(pid_m * BLOCK_SIZE_M, 0)` and strides `(stride_am, stride_ak)`, we can use the following code
+# (exactly the same as the previous matrix multiplication tutorial):
 #
+# .. code-block:: python
+#
+#     a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
+#                                     offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
+#                                     order=(1, 0))
+#
+# Note that the `order` argument is set to `(1, 0)`, which means the second axis is the inner dimension in terms of
+# storage, and the first axis is the outer dimension. This information may sound redundant, but it is necessary for
+# some hardware backends to optimize for better performance.
+
+# %%
+# Load/Store a Block Pointer
+# --------------------------
+# To load/store a block pointer, we can use `load/store` function, which takes a block pointer as an argument,
+# de-references it, and loads/stores a block. You may mask some values in the block, here we have an extra argument
+# `boundary_check` to specify whether to check the boundary of each axis for the block pointer. With check on and
+# out-of-bound values will be masked according to the `padding_option` argument (load only), which can be
+# `zero` or `nan`. Temporarily, we do not support other values due to some hardware limitations. In this mode of block
+# pointer load/store does not support `mask` or `other` arguments in the legacy mode.
+#
+# So to load a block in A, we can simply write `a = tl.load(a_block_ptr, boundary_check=(0, 1))`. Boundary check may
+# cost extra performance, so if you can guarantee that the block pointer is always in-bound in some axis, you can turn
+# off the check by not passing the index into the `boundary_check` argument. For example, if we know that `M` is a
+# multiple of `BLOCK_SIZE_M`, we can write `a = tl.load(a_block_ptr, boundary_check=(1, ))`.
+
+# %%
+# Advance a Block Pointer
+# -----------------------
+# To advance a block pointer, we can use `advance` function, which takes a block pointer as an argument and returns
+# a new block pointer with the same shape and strides as the original one, but with the offsets advanced by the
+# specified amount. For example, to advance the block pointer by `BLOCK_SIZE_K` in the second axis
+# (no need to multiply with stride), we can write `a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))`.
 
 # %%
 # Final Result
@@ -48,23 +92,22 @@ def matmul_kernel(
         # Matrix dimensions
         M, N, K,
         # The stride variables represent how much to increase the ptr by when moving by 1
-        # element in a particular dimension. E.g. stride_am is how much to increase a_ptr
-        # by to get the element one row down (A has M rows)
+        # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+        # by to get the element one row down (A has M rows).
         stride_am, stride_ak,
         stride_bk, stride_bn,
         stride_cm, stride_cn,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-        GROUP_SIZE_M: tl.constexpr,
-        ACTIVATION: tl.constexpr,
+        GROUP_SIZE_M: tl.constexpr
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
     # -----------------------------------------------------------
     # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse
-    # See above `L2 Cache Optimizations` section for details
+    # This is done in a grouped ordering to promote L2 data reuse.
+    # See the matrix multiplication tutorial for details.
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -76,10 +119,9 @@ def matmul_kernel(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     # ----------------------------------------------------------
-    # Create block pointers for the first blocks of A and B
-    # We will advance this pointer as we move in the K direction
-    # and accumulate
-    # See above `Make a Block Pointer` section for details
+    # Create block pointers for the first blocks of A and B.
+    # We will advance this pointer as we move in the K direction and accumulate.
+    # See above `Make a Block Pointer` section for details.
     a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
                                     offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
                                     order=(1, 0))
@@ -88,59 +130,45 @@ def matmul_kernel(
                                     order=(1, 0))
 
     # -----------------------------------------------------------
-    # Iterate to compute a block of the C matrix
-    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
+    # Iterate to compute a block of the C matrix.
+    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block.
     # of fp32 values for higher accuracy.
-    # `accumulator` will be converted back to fp16 after the loop
+    # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, K, BLOCK_SIZE_K):
-        # Load with boundary checks, no need to calculate the mask manually
+        # Load with boundary checks, no need to calculate the mask manually.
         # For better performance, you may remove some axis from the boundary
         # check, if you can guarantee that the access is always in-bound in
         # that axis.
-        # See above `Load/Store a Block Pointer` section for details
-        a = tl.load(a_block_ptr, boundary_check=(1, ))
-        b = tl.load(b_block_ptr, boundary_check=(0, ))
-        # We accumulate along the K dimension
+        # See above `Load/Store a Block Pointer` section for details.
+        a = tl.load(a_block_ptr, boundary_check=(0, 1))
+        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+        # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
-        # Advance the block pointer to the next K block
-        # See above `Advance a Block Pointer` section for details
+        # Advance the block pointer to the next K block.
+        # See above `Advance a Block Pointer` section for details.
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
-    # you can fuse arbitrary activation functions here
-    # while the accumulator is still in FP32!
-    if ACTIVATION:
-        accumulator = ACTIVATION(accumulator)
-    c = accumulator.to(tl.float16)
 
     # ----------------------------------------------------------------
-    # Write back the block of the output matrix C with boundary checks
-    # See above `Load/Store a Block Pointer` section for details
+    # Write back the block of the output matrix C with boundary checks.
+    # See above `Load/Store a Block Pointer` section for details.
     c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                     offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
                                     block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, c, boundary_check=(0, 1))
+    tl.store(c_block_ptr, accumulator, boundary_check=(0, 1))
 
 
-# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
-@triton.jit
-def leaky_relu(x):
-    return tl.where(x >= 0, x, 0.01 * x)
-
-
-# We can now create a convenience wrapper function that only takes two input tensors
-# and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
-def matmul(a, b, activation=None):
-    # checks constraints
+# We can now create a convenience wrapper function that only takes two input tensors,
+# and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
+def matmul(a, b):
+    # Check constraints.
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.is_contiguous(), "matrix A must be contiguous"
     assert b.is_contiguous(), "matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
-    assert (
-            K % 32 == 0
-    ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
-    # allocates output
+    # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
@@ -152,7 +180,6 @@ def matmul(a, b, activation=None):
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        ACTIVATION=activation,
     )
     return c
 
@@ -166,7 +193,7 @@ def matmul(a, b, activation=None):
 torch.manual_seed(0)
 a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b, activation=None)
+triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
