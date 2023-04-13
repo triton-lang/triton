@@ -6,7 +6,6 @@ on:
 
 jobs:
   Build-Documentation:
-    # TODO: It's temporarily built on A100 only because tutorials fail on V100
     runs-on: [self-hosted, V100]
 
     steps:
