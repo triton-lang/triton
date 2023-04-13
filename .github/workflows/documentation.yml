@@ -20,6 +20,11 @@ jobs:
           rm -r /tmp/triton-docs
         continue-on-error: true
 
+      - name: List branches and tags
+        run: |
+          git branch -a
+          git tag
+
       - name: Build docs
         run: |
           cd docs
