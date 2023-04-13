@@ -301,8 +301,10 @@ triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
-torch.testing.assert_allclose(triton_output, torch_output)
-
+if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+    print("✅ Triton and Torch match")
+else:
+    print("❌ Triton and Torch differ")
 
 # %%
 # Benchmark
@@ -335,10 +337,11 @@ torch.testing.assert_allclose(triton_output, torch_output)
 def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 

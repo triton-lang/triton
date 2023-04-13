@@ -2,7 +2,7 @@
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
 
-[![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/openai/triton/actions/workflows/wheels.yml)
+[![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/openai/triton/actions/workflows/wheels.yml)
 
 
 **`Documentation`** |
@@ -52,7 +52,7 @@ Version 2.0 is out! New features include:
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features. For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
+Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/openai/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
 If you’re interested in joining our team and working on Triton & GPU kernels, [we’re hiring](https://openai.com/jobs/#acceleration)!
 

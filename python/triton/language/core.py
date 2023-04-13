@@ -1,15 +1,42 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from enum import Enum
+from functools import wraps
 from typing import Callable, List, TypeVar
 
 import triton
-from . import builtin, semantic
+from . import semantic
 from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
 TRITON_MAX_TENSOR_NUMEL = 131072
+
+TRITON_BUILTIN = "__triton_builtin__"
+
+
+def builtin(fn: T) -> T:
+    """Mark a function as a builtin."""
+    assert callable(fn)
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_builder" not in kwargs or kwargs["_builder"] is None:
+            raise ValueError(
+                "Did you forget to add @triton.jit ? "
+                "(`_builder` argument must be provided outside of JIT functions.)"
+            )
+        return fn(*args, **kwargs)
+
+    setattr(wrapper, TRITON_BUILTIN, True)
+
+    return wrapper
+
+
+def is_builtin(fn) -> bool:
+    """Is this a registered triton builtin function?"""
+    return getattr(fn, TRITON_BUILTIN, False)
 
 
 def _to_tensor(x, builder):
@@ -1164,46 +1191,167 @@ def _add_reduction_docstr(name: str) -> Callable[[T], T]:
     return _decorator
 
 
+@contextmanager
+def _insertion_guard(builder):
+    ip = builder.get_insertion_point()
+    yield
+    builder.restore_insertion_point(ip)
+
+
 @builtin
+def reduction(input, axis, combine_fn, _builder=None, _generator=None):
+    """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
+
+    :param input: the input tensor, or tuple of tensors
+    :param axis: the dimension along which the reduction should be done
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+
+    """
+    if isinstance(input, tensor):
+        return reduction((input,), axis, combine_fn,
+                         _builder=_builder, _generator=_generator)[0]
+
+    def make_combine_region(reduce_op):
+        in_scalar_tys = [t.type.scalar for t in input]
+        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
+
+        region = reduce_op.get_region(0)
+        with _insertion_guard(_builder):
+            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
+            block = _builder.create_block_with_parent(region, param_types)
+            args = [tensor(block.arg(i), ty)
+                    for i, ty in enumerate(prototype.param_types)]
+            results = _generator.call_JitFunction(combine_fn, args, kwargs={})
+            if isinstance(results, tensor):
+                handles = [results.handle]
+            else:
+                handles = [r.handle for r in results]
+            _builder.create_reduce_ret(*handles)
+
+    axis = _constexpr_to_value(axis)
+    return semantic.reduction(input, axis, make_combine_region, _builder)
+
+
+@builtin
+def _promote_reduction_input(t, _builder=None):
+    scalar_ty = t.type.scalar
+    # input is extended to 32-bits if necessary
+    # this increases numerical accuracy and can be done pretty much for free
+    # on GPUs
+    if scalar_ty.is_int() and scalar_ty.int_bitwidth < 32:
+        return t.to(int32, _builder=_builder)
+
+    # hardware doesn't support FMAX, FMIN, CMP for bfloat16
+    if scalar_ty is bfloat16:
+        return t.to(float32, _builder=_builder)
+
+    return t
+
+
+@builtin
+def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
+    axis = _constexpr_to_value(axis)
+    n = input.shape[axis]
+    index = arange(0, n, _builder=_builder)
+
+    if len(input.shape) > 1:
+        # Broadcast index across the non-reduced axes
+        expand_dims_index = [None] * len(input.shape)
+        expand_dims_index[axis] = slice(None)
+        index = index.__getitem__(expand_dims_index, _builder=_builder)
+        index = broadcast_to(index, input.shape, _builder=_builder)
+
+    rvalue, rindices = reduction((input, index), axis, combine_fn,
+                                 _builder=_builder, _generator=_generator)
+    return rindices
+
+
+@triton.jit
+def _max_combine(a, b):
+    return maximum(a, b)
+
+
+@triton.jit
 @_add_reduction_docstr("maximum")
-def max(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.max(input, axis, _builder)
+def max(input, axis):
+    input = _promote_reduction_input(input)
+    return reduction(input, axis, _max_combine)
 
 
-@builtin
+@triton.jit
+def _argmax_combine(value1, index1, value2, index2):
+    gt = value1 > value2
+    lt = value1 < value2
+    index_min = minimum(index1, index2)
+    index_ret = where(gt, index1, where(lt, index2, index_min))
+    value_ret = maximum(value1, value2)
+    return value_ret, index_ret
+
+
+@triton.jit
 @_add_reduction_docstr("maximum index")
-def argmax(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.argmax(input, axis, _builder)
+def argmax(input, axis):
+    input = _promote_reduction_input(input)
+    return _argreduce(input, axis, _argmax_combine)
 
 
-@builtin
+@triton.jit
+def _min_combine(a, b):
+    # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
+    return minimum(a, b)
+
+
+@triton.jit
 @_add_reduction_docstr("minimum")
-def min(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.min(input, axis, _builder)
+def min(input, axis):
+    input = _promote_reduction_input(input)
+    return reduction(input, axis, _min_combine)
 
 
-@builtin
+@triton.jit
+def _argmin_combine(value1, index1, value2, index2):
+    lt = value1 < value2
+    gt = value1 > value2
+    index_min = minimum(index1, index2)
+    index_ret = where(lt, index1, where(gt, index2, index_min))
+    value_ret = minimum(value1, value2)
+    return value_ret, index_ret
+
+
+@triton.jit
 @_add_reduction_docstr("minimum index")
-def argmin(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.argmin(input, axis, _builder)
+def argmin(input, axis):
+    input = _promote_reduction_input(input)
+    return _argreduce(input, axis, _argmin_combine)
 
 
-@builtin
+@triton.jit
+def _sum_combine(a, b):
+    return a + b
+
+
+@triton.jit
 @_add_reduction_docstr("sum")
-def sum(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.sum(input, axis, _builder)
+def sum(input, axis):
+    input = _promote_reduction_input(input)
+    return reduction(input, axis, _sum_combine)
+
+
+@triton.jit
+def _xor_combine(a, b):
+    return a ^ b
 
 
 @builtin
 @_add_reduction_docstr("xor sum")
-def xor_sum(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.xor_sum(input, axis, _builder)
+def xor_sum(input, axis, _builder=None, _generator=None):
+    scalar_ty = input.type.scalar
+    if not scalar_ty.is_int():
+        raise ValueError("xor_sum only supported for integers")
+
+    input = _promote_reduction_input(input, _builder=_builder)
+    return reduction(input, axis, _xor_combine,
+                     _builder=_builder, _generator=_generator)
 
 
 # -----------------------

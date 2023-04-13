@@ -12,5 +12,4 @@ add_mlir_dialect_library(TritonIR
   MLIRIR
   MLIRArithDialect
   MLIRSCFDialect
-  MLIRFuncDialect
 )

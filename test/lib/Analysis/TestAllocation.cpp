@@ -6,7 +6,7 @@ using namespace mlir;
 namespace {
 
 struct TestAllocationPass
-    : public PassWrapper<TestAllocationPass, OperationPass<func::FuncOp>> {
+    : public PassWrapper<TestAllocationPass, OperationPass<triton::FuncOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAllocationPass);
 

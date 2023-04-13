@@ -17,21 +17,21 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, option, analysis) {
-  addConversion([&](triton::PointerType type) -> llvm::Optional<Type> {
+  addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
   });
-  addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
+  addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type);
   });
   // Internally store float8 as int8
-  addConversion([&](mlir::Float8E4M3FNType type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
-  addConversion([&](mlir::Float8E5M2Type type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::Float8E5M2Type type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
   // Internally store bfloat16 as int16
-  addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
+  addConversion([&](BFloat16Type type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 16);
   });
 }
@@ -46,15 +46,30 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
 Value TritonGPUToLLVMTypeConverter::packLLElements(
     Location loc, ValueRange resultVals, ConversionPatternRewriter &rewriter,
     Type type) {
-  auto structType = this->convertType(type);
-  if (!structType.isa<LLVM::LLVMStructType>()) {
+  auto structType = this->convertType(type).dyn_cast<LLVM::LLVMStructType>();
+  if (!structType) {
+    assert(resultVals.size() == 1);
     return *resultVals.begin();
   }
 
+  auto elementTypes = structType.getBody();
+  if (elementTypes.size() != resultVals.size()) {
+    emitError(loc) << " size mismatch when packing elements for LLVM struct"
+                   << " expected " << elementTypes.size() << " but got "
+                   << resultVals.size();
+  }
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
-  // llvm::outs() << structType << "\n";
   for (const auto &v : llvm::enumerate(resultVals)) {
-    assert(v.value() && "can not insert null values");
+    if (!v.value()) {
+      emitError(loc)
+          << "cannot insert null values into struct, but tried to insert"
+          << v.value();
+    }
+    if (v.value().getType() != elementTypes[v.index()]) {
+      emitError(loc) << "invalid element type in packLLEElements. Expected "
+                     << elementTypes[v.index()] << " but got "
+                     << v.value().getType();
+    }
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;

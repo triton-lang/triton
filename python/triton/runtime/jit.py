@@ -10,8 +10,9 @@ import textwrap
 from collections import defaultdict, namedtuple
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
 
+import torch
+
 import triton
-from triton.utils import MockTensor
 
 
 def get_cuda_stream(idx=None):
@@ -78,7 +79,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if func.__module__ and func.__module__.startswith('triton.'):
             return
-        assert isinstance(func, JITFunction)
+        assert isinstance(func, JITFunction), f"Function \"{func.__name__}\" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this"
         if func.hash is None:
             tree = ast.parse(func.src)
             finder = DependenciesFinder(func.__globals__, func.src)
@@ -99,8 +100,11 @@ def version_key():
     # frontend
     with open(__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
-    with open(triton.compiler.__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(*triton.__path__, 'compiler')
+    for lib in pkgutil.iter_modules([compiler_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
     # backend
     with open(triton._C.libtriton.__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
@@ -234,12 +238,36 @@ class JITFunction(KernelInterface[T]):
 
         return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(module, name), compile={"key": key, **kwargs}, is_manual_warmup=False, already_compiled=False)
 
+    def _get_arg_specialization_key(self, arg) -> str:
+        arg_annotation = self.__annotations__.get(arg, None)
+        if not arg_annotation:
+            return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") \
+                        else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) \
+                        else (False,)'
+        elif arg_annotation is torch.Tensor:
+            return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)'
+        elif arg_annotation is int:
+            return f'({arg} % {JITFunction.divisibility} == 0, {arg} == 1)'
+        else:
+            return '(False,)'
+
+    def _get_arg_sig_key(self, arg) -> str:
+        arg_annotation = self.__annotations__.get(arg, None)
+        if arg_annotation is torch.Tensor:
+            return f'{arg}.dtype'
+        elif arg_annotation is bool:
+            return "i1"
+        elif arg_annotation is float:
+            return 'fp32'
+        else:
+            return f'_key_of({arg})'
+
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
         constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
         args = ', '.join(regular_args)
         # cache key for regular argument type
-        sig_keys = ', '.join([f'_key_of({arg})' for arg in regular_args])
+        sig_keys = ', '.join([self._get_arg_sig_key(arg) for arg in regular_args])
         # cache key for constexpr argument values
         constexpr_keys = ', '.join(constexpr_args)
         # cache key for argument specialization
@@ -247,14 +275,13 @@ class JITFunction(KernelInterface[T]):
         for i, arg in enumerate(regular_args):
             if i in self.do_not_specialize:
                 continue
-            specializations += [f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") '
-                                f'else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) '
-                                f'else (False,)']
+            specializations += [self._get_arg_specialization_key(arg)]
+
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False):
+def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None):
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
@@ -268,8 +295,9 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
-    device = get_current_device()
-    set_current_device(device)
+    if device is None:
+        device = get_current_device()
+        set_current_device(device)
     if stream is None and not warmup:
       stream = get_cuda_stream(device)
     try:
@@ -445,6 +473,30 @@ def jit(
     else:
         return decorator
 
+# -----------------------------------------------------------------------------
+# Utilities for mocking tensors
+# -----------------------------------------------------------------------------
+
+
+class MockTensor:
+    """
+    Can be used in place of real tensors when calling:
+        kernel.warmup(MockTensor(torch.float32), ...)
+    """
+    @staticmethod
+    def wrap_dtype(arg):
+        if arg.__class__.__name__ == "dtype" and\
+           arg.__module__ == "torch":
+            return MockTensor(arg)
+        return arg
+
+    def __init__(self, dtype):
+        self.dtype = dtype
+
+    @staticmethod
+    def data_ptr():
+        return 0  # optimistically assumes multiple of 16
+
 
 class TensorWrapper:
     def __init__(self, base, dtype):
@@ -472,4 +524,4 @@ def reinterpret(tensor, dtype):
         # A new wrapper is needed around an unwrapped tensor.
         return TensorWrapper(tensor, dtype)
     else:
-        raise TypeError(f'Cannot reinterpret a {type(tensor)}. Does not contain `data_ptr` method.')
+        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')

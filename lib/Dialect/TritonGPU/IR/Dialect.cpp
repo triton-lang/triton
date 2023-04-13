@@ -16,30 +16,6 @@ using namespace mlir::triton::gpu;
 namespace mlir {
 namespace triton {
 
-// Type inference
-static Type getI1SameShape(Type type) {
-  auto i1Type = IntegerType::get(type.getContext(), 1);
-  if (auto tensorType = type.dyn_cast<RankedTensorType>())
-    return RankedTensorType::get(tensorType.getShape(), i1Type,
-                                 tensorType.getEncoding());
-  return Type();
-}
-
-static Type getPointeeType(Type type) {
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
-    // Tensor of pointers
-    auto shape = tensorType.getShape();
-    auto ptrType = tensorType.getElementType().dyn_cast<PointerType>();
-    Type pointeeType = ptrType.getPointeeType();
-    return RankedTensorType::get(shape, pointeeType, tensorType.getEncoding());
-  } else if (auto ptrType = type.dyn_cast<PointerType>()) {
-    // scalar pointer
-    Type pointeeType = ptrType.getPointeeType();
-    return pointeeType;
-  }
-  return Type();
-}
-
 namespace gpu {
 
 // TODO: Inheritance of layout attributes
@@ -72,7 +48,7 @@ unsigned getElemsPerThread(Type type) {
                            tensorType.getElementType());
 }
 
-SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout) {
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getThreadsPerWarp().begin(),
                                  blockedLayout.getThreadsPerWarp().end());
@@ -87,7 +63,7 @@ SmallVector<unsigned> getThreadsPerWarp(const Attribute &layout) {
   return {};
 }
 
-SmallVector<unsigned> getWarpsPerCTA(const Attribute &layout) {
+SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getWarpsPerCTA().begin(),
                                  blockedLayout.getWarpsPerCTA().end());
@@ -100,7 +76,7 @@ SmallVector<unsigned> getWarpsPerCTA(const Attribute &layout) {
   return {};
 }
 
-SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
+SmallVector<unsigned> getSizePerThread(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
@@ -144,7 +120,7 @@ SmallVector<unsigned> getSizePerThread(const Attribute &layout) {
   }
 }
 
-SmallVector<unsigned> getContigPerThread(const Attribute &layout) {
+SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};
@@ -153,7 +129,7 @@ SmallVector<unsigned> getContigPerThread(const Attribute &layout) {
   }
 }
 
-SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
+SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
   SmallVector<unsigned> threads;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     for (int d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
@@ -172,7 +148,7 @@ SmallVector<unsigned> getThreadsPerCTA(const Attribute &layout) {
   return threads;
 }
 
-SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
+SmallVector<unsigned> getShapePerCTA(Attribute layout,
                                      ArrayRef<int64_t> tensorShape) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
@@ -226,7 +202,7 @@ SmallVector<unsigned> getShapePerCTA(const Attribute &layout,
   return shape;
 }
 
-SmallVector<unsigned> getOrder(const Attribute &layout) {
+SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
                                  blockedLayout.getOrder().end());
@@ -256,7 +232,7 @@ SmallVector<unsigned> getOrder(const Attribute &layout) {
   }
 };
 
-bool isaDistributedLayout(const Attribute &layout) {
+bool isaDistributedLayout(Attribute layout) {
   return layout.isa<BlockedEncodingAttr>() || layout.isa<MmaEncodingAttr>() ||
          layout.isa<SliceEncodingAttr>();
 }
@@ -265,7 +241,7 @@ bool isaDistributedLayout(const Attribute &layout) {
 } // namespace triton
 } // namespace mlir
 
-static LogicalResult parseIntAttrValue(AsmParser &parser, const Attribute &attr,
+static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
                                        unsigned &value, StringRef desc) {
   auto intAttr = attr.dyn_cast<IntegerAttr>();
   if (!intAttr) {
@@ -420,11 +396,11 @@ DotOperandEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
   assert(mmaParent.isAmpere());
   if (getOpIdx() == 0)
     return {std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0])),
-            shape[1] / shapePerWarp[2]};
+            std::max<int64_t>(1, shape[1] / shapePerWarp[2])};
   else {
     assert(getOpIdx() == 1);
     return {
-        shape[0] / shapePerWarp[2],
+        std::max<int64_t>(1, shape[0] / shapePerWarp[2]),
         std::max<int64_t>(1, shape[1] / (shapePerWarp[1] * warpsPerCTA[1]))};
   }
 }
@@ -921,7 +897,7 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
                             Attribute &resultEncoding,
-                            Optional<Location> location) const override {
+                            std::optional<Location> location) const override {
     auto sliceEncoding = operandEncoding.dyn_cast<SliceEncodingAttr>();
     if (!sliceEncoding)
       return emitOptionalError(
@@ -933,9 +909,10 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
-                                   Attribute retEncoding,
-                                   Optional<Location> location) const override {
+  LogicalResult
+  inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
+                     Attribute retEncoding,
+                     std::optional<Location> location) const override {
     if (auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
       if (opIdx != dotOpEnc.getOpIdx())
         return emitOptionalError(location, "Wrong opIdx");

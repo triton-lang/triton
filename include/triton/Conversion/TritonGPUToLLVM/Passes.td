@@ -25,7 +25,10 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
     let options = [
         Option<"computeCapability", "compute-capability",
                "int32_t", /*default*/"80",
-               "device compute capability">
+               "device compute capability">,
+        Option<"isROCM", "is-rocm",
+               "bool", /*default*/"false",
+               "compile for ROCM-compatible LLVM">,
     ];
 }
 

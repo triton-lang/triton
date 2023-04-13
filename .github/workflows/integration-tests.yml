@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
-  TRITON_USE_ASSERT_ENABLED_LLVM: 'TRUE'
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
 
 jobs:
   Runner-Preparation:
@@ -71,25 +71,27 @@ jobs:
         if: ${{ env.BACKEND != 'ROCM'}}
         run: |
           cd python
+          python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
-          python3 -m pip install -vvv -e '.[tests]'
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Install Triton on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python
+          python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
           python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
-          python3 -m pip install -vvv -e '.[tests]'
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
         if: ${{ env.BACKEND != 'ROCM'}}
         run: |
           python3 -m pip install lit
           cd python
-          LIT_TEST_DIR="build/$(ls build)/test"
+          LIT_TEST_DIR="build/$(ls build | grep -i temp)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Not found '${LIT_TEST_DIR}'.  Did you change an installation method?" ; exit -1
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
           fi
           lit -v "${LIT_TEST_DIR}"
 
@@ -99,18 +101,18 @@ jobs:
           cd python/test/unit
           python3 -m pytest
 
+      - name: Run CXX unittests
+        if: ${{ env.BACKEND != 'ROCM'}}
+        run: |
+          cd python
+          cd "build/$(ls build | grep -i temp)"
+          ctest
+
       - name: Run python tests on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python/test/unit/language
           python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
-
-      - name: Run CXX unittests
-        if: ${{ env.BACKEND != 'ROCM'}}
-        run: |
-          cd python
-          cd "build/$(ls build)"
-          ctest
 
       - name: Regression tests
         if: ${{ contains(matrix.runner, 'A100') }}

@@ -311,10 +311,10 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
     y_ref.backward(dy, retain_graph=True)
     dx_ref, dw_ref, db_ref = [_.grad.clone() for _ in [x, weight, bias]]
     # compare
-    triton.testing.assert_almost_equal(y_tri, y_ref)
-    triton.testing.assert_almost_equal(dx_tri, dx_ref)
-    triton.testing.assert_almost_equal(db_tri, db_ref, decimal=1)
-    triton.testing.assert_almost_equal(dw_tri, dw_ref, decimal=1)
+    assert torch.allclose(y_tri, y_ref, atol=1e-2, rtol=0)
+    assert torch.allclose(dx_tri, dx_ref, atol=1e-2, rtol=0)
+    assert torch.allclose(db_tri, db_ref, atol=1e-2, rtol=0)
+    assert torch.allclose(dw_tri, dw_ref, atol=1e-2, rtol=0)
 
 
 @triton.testing.perf_report(
@@ -339,6 +339,7 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     x = -2.3 + 0.5 * torch.randn(x_shape, dtype=dtype, device='cuda')
     dy = .1 * torch.randn_like(x)
     x.requires_grad_(True)
+    quantiles = [0.5, 0.2, 0.8]
     # utility functions
     if provider == 'triton':
         y_fwd = lambda: layer_norm(x, w_shape, weight, bias, eps)
@@ -350,13 +351,13 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     # forward pass
     if mode == 'forward':
         gbps = lambda ms: 2 * x.numel() * x.element_size() / ms * 1e-6
-        ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, rep=500)
+        ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles, rep=500)
     # backward pass
     if mode == 'backward':
         gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6
         y = y_fwd()
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True),
-                                                     grad_to_none=[x], rep=500)
+                                                     quantiles=quantiles, grad_to_none=[x], rep=500)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 

@@ -1,49 +1,14 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/FunctionImplementation.h"
+#include "mlir/IR/FunctionInterfaces.h"
 #include "mlir/IR/OperationSupport.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
 namespace mlir {
 namespace triton {
-
-// Type inference
-static Type getI1SameShape(Type type) {
-  auto i1Type = IntegerType::get(type.getContext(), 1);
-  if (auto tensorType = type.dyn_cast<RankedTensorType>())
-    return RankedTensorType::get(tensorType.getShape(), i1Type,
-                                 tensorType.getEncoding());
-  return i1Type;
-}
-
-static Type getI32SameShape(Type type) {
-  auto i32Type = IntegerType::get(type.getContext(), 32);
-  if (auto tensorType = type.dyn_cast<RankedTensorType>())
-    return RankedTensorType::get(tensorType.getShape(), i32Type,
-                                 tensorType.getEncoding());
-  return i32Type;
-}
-
-static Type getPointerTypeSameShape(Type type) {
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
-    Type elementType = tensorType.getElementType();
-    auto shape = tensorType.getShape();
-    PointerType ptrType = PointerType::get(elementType, 1);
-    return RankedTensorType::get(shape, ptrType, tensorType.getEncoding());
-  } else {
-    return PointerType::get(type, 1);
-  }
-}
-
-static Type getPointerType(Type type) { return PointerType::get(type, 1); }
-
-static Type getElementTypeOfTensorPointerType(Type type) {
-  if (auto ptrType = type.dyn_cast<PointerType>())
-    if (auto tensorType = ptrType.getPointeeType().dyn_cast<RankedTensorType>())
-      return tensorType.getElementType();
-  return {};
-}
 
 // Parser & printer for assembly forms
 ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
@@ -294,7 +259,7 @@ void StoreOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
 
 //-- TransOp --
 mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
@@ -321,7 +286,7 @@ mlir::LogicalResult mlir::triton::TransOp::inferReturnTypes(
 
 //-- DotOp --
 mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the accumulator
@@ -345,21 +310,10 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
 }
 
 //-- ReduceOp --
-mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
-  // infer shape
-  Value arg = operands[0];
-  auto argTy = arg.getType().cast<RankedTensorType>();
-  auto argEltTy = argTy.getElementType();
-  auto i32Ty = IntegerType::get(argEltTy.getContext(), 32);
-  auto redOp =
-      attributes.get("redOp").cast<mlir::triton::RedOpAttr>().getValue();
-  bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
-  auto retEltTy = withIndex ? i32Ty : argEltTy;
+static mlir::LogicalResult
+inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
+                       int axis, SmallVectorImpl<Type> &inferredReturnTypes) {
   auto retShape = argTy.getShape().vec();
-  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
   retShape.erase(retShape.begin() + axis);
   if (retShape.empty()) {
     // 0d-tensor -> scalar
@@ -387,14 +341,113 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
   return mlir::success();
 }
 
-bool mlir::triton::ReduceOp::withIndex(mlir::triton::RedOp redOp) {
-  return redOp == mlir::triton::RedOp::ARGMIN ||
-         redOp == mlir::triton::RedOp::ARGMAX ||
-         redOp == mlir::triton::RedOp::ARGUMIN ||
-         redOp == mlir::triton::RedOp::ARGUMAX ||
-         redOp == mlir::triton::RedOp::ARGFMIN ||
-         redOp == mlir::triton::RedOp::ARGFMAX;
+void ReduceOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                     mlir::ValueRange operands, int axis) {
+  SmallVector<Type> inferredReturnTypes;
+  for (unsigned i = 0; i < operands.size(); ++i) {
+    auto argTy = operands[i].getType().cast<RankedTensorType>();
+    auto retEltTy = argTy.getElementType();
+    (void)inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
+  }
+
+  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
 }
+
+mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  for (auto arg : operands) {
+    auto argTy = arg.getType().cast<RankedTensorType>();
+    auto retEltTy = argTy.getElementType();
+    int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+    if (inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes)
+            .failed()) {
+      return failure();
+    }
+  }
+  return success();
+}
+
+mlir::LogicalResult mlir::triton::ReduceOp::verify() {
+  if (this->getOperands().size() < 1) {
+    return this->emitOpError() << "must have at least 1 operand";
+  }
+  for (const auto &operand : this->getOperands()) {
+    if (!dyn_cast<RankedTensorType>(operand.getType())) {
+      return this->emitOpError() << "operands must be RankedTensorType";
+    }
+  }
+  return success();
+}
+
+mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
+  auto argElementTypes = this->getElementTypes();
+  const auto &operands = this->getOperands();
+  const auto numArgs = 2 * operands.size();
+  auto &block = *this->getBody();
+  if (block.getNumArguments() != numArgs) {
+    return this->emitOpError() << "nested block must take " << numArgs
+                               << " arguments, but given block with "
+                               << block.getNumArguments() << " arguments";
+  }
+  unsigned i = 0;
+  const auto &blockArgTypes = block.getArgumentTypes();
+  for (unsigned i = 0; i < numArgs; ++i) {
+    const auto &blockArgTy = blockArgTypes[i];
+    const auto &argElemTy = argElementTypes[i % operands.size()];
+    if (blockArgTy != argElemTy) {
+      return this->emitOpError()
+             << "type mismatch on combine operation. Expected argument " << i
+             << " to have type " << argElemTy << " but got " << blockArgTy;
+    }
+  }
+
+  auto terminator =
+      dyn_cast<mlir::triton::ReduceReturnOp>(block.getTerminator());
+  if (!terminator) {
+    return this->emitOpError()
+           << "combine operation must be terminated "
+           << "with a ReduceReturnOp but got " << block.getTerminator();
+  }
+  const auto &combineResults = terminator->getOperands();
+  if (combineResults.size() != operands.size()) {
+    return this->emitOpError()
+           << "expected combine operation to return " << operands.size()
+           << " values but got " << combineResults.size();
+  }
+  for (unsigned i = 0; i < combineResults.size(); ++i) {
+    const auto &resultTy = combineResults[i].getType();
+    const auto &argElemTy = argElementTypes[i];
+    if (resultTy != argElemTy) {
+      return this->emitOpError()
+             << "type mismatch on combine operation. Expected argument " << i
+             << " to have type " << argElemTy << " but got " << resultTy;
+    }
+  }
+  return mlir::success();
+}
+
+llvm::SmallVector<mlir::RankedTensorType> ReduceOp::getInputTypes() {
+  llvm::SmallVector<RankedTensorType> srcTys;
+  srcTys.reserve(this->getNumOperands());
+  for (const auto &ty : this->getOperands().getTypes()) {
+    srcTys.push_back(ty.cast<RankedTensorType>());
+  }
+  return srcTys;
+}
+
+llvm::SmallVector<Type> ReduceOp::getElementTypes() {
+  llvm::SmallVector<Type> srcElemTys;
+  srcElemTys.reserve(this->getNumOperands());
+  for (const auto &op : this->getOperands()) {
+    srcElemTys.push_back(
+        op.getType().cast<RankedTensorType>().getElementType());
+  }
+  return srcElemTys;
+}
+
+unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
@@ -408,7 +461,7 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
 
 //-- ExpandDimsOp --
 mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
-    MLIRContext *context, Optional<Location> loc, ValueRange operands,
+    MLIRContext *context, std::optional<Location> loc, ValueRange operands,
     DictionaryAttr attributes, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // infer shape
@@ -551,6 +604,106 @@ void MakeTensorPtrOp::build(::mlir::OpBuilder &builder,
 
   return build(builder, state, result, base, shape, strides, offsets,
                builder.getDenseI32ArrayAttr(order));
+}
+
+// The following ops, including `call`, `func`, and `return` are copied and
+// modified from
+// https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/Func/IR/FuncOps.cpp
+// We could revert it back once MLIR has a better inliner interface.
+//-- FuncOp --
+void triton::FuncOp::build(OpBuilder &builder, OperationState &state,
+                           StringRef name, FunctionType type,
+                           ArrayRef<NamedAttribute> attrs,
+                           ArrayRef<DictionaryAttr> argAttrs) {
+  state.addAttribute(SymbolTable::getSymbolAttrName(),
+                     builder.getStringAttr(name));
+  state.addAttribute(getFunctionTypeAttrName(state.name), TypeAttr::get(type));
+  state.attributes.append(attrs.begin(), attrs.end());
+  state.addRegion();
+
+  if (argAttrs.empty())
+    return;
+  assert(type.getNumInputs() == argAttrs.size());
+  function_interface_impl::addArgAndResultAttrs(
+      builder, state, argAttrs, /*resultAttrs=*/std::nullopt,
+      getArgAttrsAttrName(state.name), getResAttrsAttrName(state.name));
+}
+
+ParseResult triton::FuncOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto buildFuncType =
+      [](Builder &builder, ArrayRef<Type> argTypes, ArrayRef<Type> results,
+         function_interface_impl::VariadicFlag,
+         std::string &) { return builder.getFunctionType(argTypes, results); };
+
+  return function_interface_impl::parseFunctionOp(
+      parser, result, /*allowVariadic=*/false,
+      getFunctionTypeAttrName(result.name), buildFuncType,
+      getArgAttrsAttrName(result.name), getResAttrsAttrName(result.name));
+}
+
+void triton::FuncOp::print(OpAsmPrinter &printer) {
+  function_interface_impl::printFunctionOp(
+      printer, *this, /*isVariadic=*/false, getFunctionTypeAttrName(),
+      getArgAttrsAttrName(), getResAttrsAttrName());
+}
+
+// -- CallOp --
+LogicalResult
+triton::CallOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
+  // Check that the callee attribute was specified.
+  auto fnAttr = (*this)->getAttrOfType<FlatSymbolRefAttr>("callee");
+  if (!fnAttr)
+    return emitOpError("requires a 'callee' symbol reference attribute");
+  FuncOp fn = symbolTable.lookupNearestSymbolFrom<FuncOp>(*this, fnAttr);
+  if (!fn)
+    return emitOpError() << "'" << fnAttr.getValue()
+                         << "' does not reference a valid function";
+
+  // Verify that the operand and result types match the callee.
+  auto fnType = fn.getFunctionType();
+  if (fnType.getNumInputs() != getNumOperands())
+    return emitOpError("incorrect number of operands for callee");
+
+  for (unsigned i = 0, e = fnType.getNumInputs(); i != e; ++i)
+    if (getOperand(i).getType() != fnType.getInput(i))
+      return emitOpError("operand type mismatch: expected operand type ")
+             << fnType.getInput(i) << ", but provided "
+             << getOperand(i).getType() << " for operand number " << i;
+
+  if (fnType.getNumResults() != getNumResults())
+    return emitOpError("incorrect number of results for callee");
+
+  for (unsigned i = 0, e = fnType.getNumResults(); i != e; ++i)
+    if (getResult(i).getType() != fnType.getResult(i)) {
+      auto diag = emitOpError("result type mismatch at index ") << i;
+      diag.attachNote() << "      op result types: " << getResultTypes();
+      diag.attachNote() << "function result types: " << fnType.getResults();
+      return diag;
+    }
+
+  return success();
+}
+
+// -- ReturnOp --
+LogicalResult triton::ReturnOp::verify() {
+  auto function = cast<triton::FuncOp>((*this)->getParentOp());
+
+  // The operand number and types must match the function signature.
+  const auto &results = function.getFunctionType().getResults();
+  if (getNumOperands() != results.size())
+    return emitOpError("has ")
+           << getNumOperands() << " operands, but enclosing function (@"
+           << function.getName() << ") returns " << results.size();
+
+  for (unsigned i = 0, e = results.size(); i != e; ++i)
+    if (getOperand(i).getType() != results[i])
+      return emitError() << "type of return operand " << i << " ("
+                         << getOperand(i).getType()
+                         << ") doesn't match function result type ("
+                         << results[i] << ")"
+                         << " in function @" << function.getName();
+
+  return success();
 }
 
 } // namespace triton

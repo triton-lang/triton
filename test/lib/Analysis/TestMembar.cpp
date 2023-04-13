@@ -11,7 +11,7 @@ using namespace mlir;
 namespace {
 
 struct TestMembarPass
-    : public PassWrapper<TestMembarPass, OperationPass<func::FuncOp>> {
+    : public PassWrapper<TestMembarPass, OperationPass<triton::FuncOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestMembarPass);
 
