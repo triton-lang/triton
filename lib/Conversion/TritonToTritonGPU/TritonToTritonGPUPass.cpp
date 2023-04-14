@@ -68,13 +68,15 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = getTypeConverter()->convertType(op.getType());
     auto value = adaptor.getValue().dyn_cast<DenseElementsAttr>();
-    assert(value);
-    if (value.getElementType().isInteger(1) && value.isSplat())
-      // Workaround until https://reviews.llvm.org/D133743 is included.
-      value = DenseElementsAttr::get(retType, value.getSplatValue<bool>());
-    else
-      // This is a hack. We just want to add encoding
-      value = value.reshape(retType);
+    if (dyn_cast<RankedTensorType>(retType)) {
+      assert(value);
+      if (value.getElementType().isInteger(1) && value.isSplat())
+        // Workaround until https://reviews.llvm.org/D133743 is included.
+        value = DenseElementsAttr::get(retType, value.getSplatValue<bool>());
+      else
+        // This is a hack. We just want to add encoding
+        value = value.reshape(retType);
+    }
     addNamedAttrs(
         rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, retType, value),
         adaptor.getAttributes());
@@ -469,10 +471,28 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<triton::ReduceOp>(
-            op, adaptor.getRedOp(), adaptor.getOperand(), adaptor.getAxis()),
-        adaptor.getAttributes());
+    auto newReduce = rewriter.create<triton::ReduceOp>(
+        op.getLoc(), adaptor.getOperands(), adaptor.getAxis());
+    addNamedAttrs(newReduce, adaptor.getAttributes());
+
+    auto &newCombineOp = newReduce.getCombineOp();
+    rewriter.inlineRegionBefore(op.getCombineOp(), newCombineOp,
+                                newCombineOp.end());
+    rewriter.replaceOp(op, newReduce.getResult());
+    return success();
+  }
+};
+
+struct TritonReduceReturnPattern
+    : public OpConversionPattern<triton::ReduceReturnOp> {
+  using OpConversionPattern<triton::ReduceReturnOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ReduceReturnOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ReduceReturnOp>(
+                      op, adaptor.getResult()),
+                  adaptor.getAttributes());
     return success();
   }
 };
@@ -517,10 +537,11 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
           TritonGenericPattern<triton::PtrToIntOp>,
           TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
           TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-          TritonReducePattern, TritonTransPattern, TritonExpandDimsPattern,
-          TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
-          TritonStorePattern, TritonExtElemwisePattern, TritonPrintPattern,
-          TritonAssertPattern, TritonAtomicRMWPattern>(typeConverter, context);
+          TritonReducePattern, TritonReduceReturnPattern, TritonTransPattern,
+          TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,
+          TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern,
+          TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern>(
+          typeConverter, context);
 }
 
 //

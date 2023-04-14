@@ -95,23 +95,6 @@ void init_triton_ir(py::module &&m) {
       .value("EVICT_LAST", mlir::triton::EvictionPolicy::EVICT_LAST)
       .export_values();
 
-  py::enum_<mlir::triton::RedOp>(m, "REDUCE_OP")
-      .value("ADD", mlir::triton::RedOp::ADD)
-      .value("FADD", mlir::triton::RedOp::FADD)
-      .value("MIN", mlir::triton::RedOp::MIN)
-      .value("MAX", mlir::triton::RedOp::MAX)
-      .value("UMIN", mlir::triton::RedOp::UMIN)
-      .value("UMAX", mlir::triton::RedOp::UMAX)
-      .value("ARGMIN", mlir::triton::RedOp::ARGMIN)
-      .value("ARGMAX", mlir::triton::RedOp::ARGMAX)
-      .value("ARGUMIN", mlir::triton::RedOp::ARGUMIN)
-      .value("ARGUMAX", mlir::triton::RedOp::ARGUMAX)
-      .value("FMIN", mlir::triton::RedOp::FMIN)
-      .value("FMAX", mlir::triton::RedOp::FMAX)
-      .value("ARGFMIN", mlir::triton::RedOp::ARGFMIN)
-      .value("ARGFMAX", mlir::triton::RedOp::ARGFMAX)
-      .value("XOR", mlir::triton::RedOp::XOR);
-
   py::enum_<mlir::triton::RMWOp>(m, "ATOMIC_OP")
       .value("ADD", mlir::triton::RMWOp::ADD)
       .value("FADD", mlir::triton::RMWOp::FADD)
@@ -1351,21 +1334,20 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::math::AbsIOp>(loc, val);
            })
       .def("create_reduce",
-           [](mlir::OpBuilder &self, mlir::Value &operand,
-              mlir::triton::RedOp redOp, int axis) -> mlir::Value {
+           [](mlir::OpBuilder &self, std::vector<mlir::Value> operands,
+              int axis) -> mlir::OpState {
              auto loc = self.getUnknownLoc();
-             auto inputTensorType =
-                 operand.getType().dyn_cast<mlir::RankedTensorType>();
-             std::vector<int64_t> shape = inputTensorType.getShape();
-             shape.erase(shape.begin() + axis);
-             bool withIndex = mlir::triton::ReduceOp::withIndex(redOp);
-             mlir::Type resType = withIndex ? self.getI32Type()
-                                            : inputTensorType.getElementType();
-             if (!shape.empty()) {
-               resType = mlir::RankedTensorType::get(shape, resType);
+             return self.create<mlir::triton::ReduceOp>(loc, operands, axis);
+           })
+      .def("create_reduce_ret",
+           [](mlir::OpBuilder &self, py::args args) -> mlir::OpState {
+             auto loc = self.getUnknownLoc();
+             llvm::SmallVector<mlir::Value> return_values;
+             for (const auto &arg : args) {
+               return_values.push_back(py::cast<mlir::Value>(arg));
              }
-             return self.create<mlir::triton::ReduceOp>(loc, resType, redOp,
-                                                        operand, axis);
+             return self.create<mlir::triton::ReduceReturnOp>(loc,
+                                                              return_values);
            })
       .def("create_ptr_to_int",
            [](mlir::OpBuilder &self, mlir::Value &val,
