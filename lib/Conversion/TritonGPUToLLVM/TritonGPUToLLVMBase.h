@@ -184,14 +184,19 @@ public:
       : converter(&typeConverter) {}
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, const Allocation *allocation,
-      Value smem)
-      : converter(&typeConverter), allocation(allocation), smem(smem) {}
+      TritonGPUToLLVMTypeConverter &typeConverter,
+      IndexCacheInfo indexCacheInfo)
+      : converter(&typeConverter), indexCacheInfo(indexCacheInfo) {}
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, const Allocation *allocation,
+      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
+      Value smem)
+      : converter(&typeConverter), allocation(&allocation), smem(smem) {}
+
+  explicit ConvertTritonGPUOpToLLVMPatternBase(
+      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
       Value smem, IndexCacheInfo indexCacheInfo)
-      : converter(&typeConverter), allocation(allocation), smem(smem),
+      : converter(&typeConverter), allocation(&allocation), smem(smem),
         indexCacheInfo(indexCacheInfo) {}
 
   TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
@@ -228,9 +233,16 @@ public:
                             T value) const {
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
-    auto bufferId = allocation->getBufferId(value);
+    triton::FuncOp funcOp;
+    if constexpr (std::is_pointer_v<T>)
+      funcOp = value->template getParentOfType<triton::FuncOp>();
+    else
+      funcOp =
+          value.getParentRegion()->template getParentOfType<triton::FuncOp>();
+    auto *funcAllocation = allocation->getAllocation(funcOp);
+    auto bufferId = funcAllocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
-    size_t offset = allocation->getOffset(bufferId);
+    size_t offset = funcAllocation->getOffset(bufferId);
     Value offVal = i32_val(offset);
     Value base = gep(ptrTy, smem, offVal);
     return base;
@@ -901,7 +913,7 @@ private:
 
 protected:
   TritonGPUToLLVMTypeConverter *converter;
-  const Allocation *allocation;
+  ModuleAllocation *allocation;
   Value smem;
   IndexCacheInfo indexCacheInfo;
 };
@@ -919,13 +931,19 @@ public:
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter, const Allocation *allocation,
+      TritonGPUToLLVMTypeConverter &typeConverter,
+      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, indexCacheInfo) {}
+
+  explicit ConvertTritonGPUOpToLLVMPattern(
+      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
       Value smem, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, smem) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter, const Allocation *allocation,
+      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
       Value smem, IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, smem,

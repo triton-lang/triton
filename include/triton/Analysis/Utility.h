@@ -110,53 +110,60 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 template <typename T> class CallGraph {
 public:
-  using FuncMapT = DenseMap<triton::FuncOp, T>;
+  using FuncDataMapT = DenseMap<triton::FuncOp, T>;
   CallGraph(ModuleOp moduleOp) : moduleOp(moduleOp) { build(); }
 
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
             WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
             typename UpdateEdgeFn, typename UpdateNodeFn>
   void apply(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
-    DenseSet<Operation *> visited;
+    DenseSet<triton::CallOp> visited;
     for (auto root : roots) {
-      visited.insert(root);
-      applyImpl<UpdateEdgeOrder, UpdateNodeOrder>(root, visited, updateEdgeFn,
-                                                  updateNodeFn);
-      visited.erase(root);
+      doApply<UpdateEdgeOrder, UpdateNodeOrder>(root, visited, updateEdgeFn,
+                                                updateNodeFn);
     }
   }
 
-  DenseMap<triton::FuncOp, T> getFuncInstanceMap() { return funcMap; }
+  T *getFuncData(triton::FuncOp funcOp) {
+    if (funcMap.count(funcOp)) {
+      return &funcMap[funcOp];
+    }
+    return nullptr;
+  }
 
   ModuleOp getModuleOp() const { return moduleOp; }
+
+  SmallVector<triton::FuncOp> getRoots() const { return roots; }
 
 private:
   void build() {
     SymbolTableCollection symbolTable;
     DenseMap<Operation *, Operation *> parentMap;
-    moduleOp.walk([&](triton::CallOp callOp) {
-      auto parent = callOp->getParentOfType<triton::FuncOp>();
-      CallOpInterface callable = dyn_cast<CallOpInterface>(callOp);
-      Operation callee = callable.resolveCallable(symbolTable);
-      callGraph[parent].insert({callOp, callee});
-      parentMap[callOp] = parent;
-    });
-    for (const auto [op, parent] : parentMap) {
-      if (parent == nullptr) {
-        roots.push_back(op);
+    moduleOp.walk([&](Operation *op) {
+      auto parent = op->getParentOfType<triton::FuncOp>();
+      if (auto callOpInterface = dyn_cast<CallOpInterface>(op)) {
+        auto callOp = cast<triton::CallOp>(op);
+        auto *callee = callOpInterface.resolveCallable(&symbolTable);
+        auto funcOp = dyn_cast_or_null<triton::FuncOp>(callee);
+        if (funcOp)
+          callGraph[parent].emplace_back(
+              std::pair<triton::CallOp, triton::FuncOp>(callOp, funcOp));
       }
-    }
+      parentMap[op] = parent;
+      if (parent == op)
+        roots.push_back(parent);
+    });
   }
 
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
             WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
             typename UpdateEdgeFn, typename UpdateNodeFn>
-  void applyImpl(Operation *op, DenseSet<Operation *> &visited,
-                 UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
+  void doApply(triton::FuncOp funcOp, DenseSet<triton::CallOp> &visited,
+               UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
     if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {
-      updateNodeFn(op, funcMap);
+      updateNodeFn(funcOp, funcMap);
     }
-    for (const auto [callOp, callee] : callGraph[op]) {
+    for (auto [callOp, callee] : callGraph[funcOp]) {
       if (visited.count(callOp)) {
         llvm::report_fatal_error("Cycle detected in call graph");
       }
@@ -168,19 +175,20 @@ private:
       if constexpr (UpdateEdgeOrder == WalkOrder::PostOrder) {
         updateEdgeFn(callOp, callee);
       }
-      applyImpl(callee, visited);
+      doApply(callee, visited, updateEdgeFn, updateNodeFn);
       visited.erase(callOp);
     }
     if constexpr (UpdateNodeOrder == WalkOrder::PostOrder) {
-      updateNodeFn(op, funcMap);
+      updateNodeFn(funcOp, funcMap);
     }
   }
 
   ModuleOp moduleOp;
-  DenseMap<Operation *, SmallVector<std::pair<Operation *, Operation *>>>
+  DenseMap<triton::FuncOp,
+           SmallVector<std::pair<triton::CallOp, triton::FuncOp>>>
       callGraph;
-  FuncMapT funcMap;
-  SmallVector<Operation *> roots;
+  FuncDataMapT funcMap;
+  SmallVector<triton::FuncOp> roots;
 };
 
 } // namespace mlir

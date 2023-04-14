@@ -25,7 +25,7 @@ struct TritonInlinerInterface : public DialectInlinerInterface {
 
   bool isLegalToInline(Operation *call, Operation *callable,
                        bool wouldBeCloned) const final {
-    auto funcOp = dyn_cast<triton::FuncOp>(callable); 
+    auto funcOp = dyn_cast<triton::FuncOp>(callable);
     if (!funcOp)
       return true;
     auto noinline = funcOp->getAttrOfType<BoolAttr>("noinline");

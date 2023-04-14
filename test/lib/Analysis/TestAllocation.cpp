@@ -23,7 +23,7 @@ struct TestAllocationPass
     os << opName << "\n";
     ModuleAllocation moduleAllocation(operation->getParentOfType<ModuleOp>());
     operation->walk([&](triton::FuncOp funcOp) {
-      auto *allocation = moduleAllocation.getFuncInstance(funcOp);
+      auto *allocation = moduleAllocation.getAllocation(funcOp);
       funcOp.walk([&](Operation *op) {
         auto scratchBufferId = allocation->getBufferId(op);
         if (scratchBufferId != Allocation::InvalidBufferId) {

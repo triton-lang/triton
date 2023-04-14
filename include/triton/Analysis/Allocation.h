@@ -55,17 +55,18 @@ public:
   /// A unique identifier for shared memory buffers
   using BufferId = size_t;
   using BufferIdSetT = DenseSet<BufferId>;
-  using FuncAllocMapT = DenseMap<triton::FuncOp, Allocation>;
+  using FuncAllocMapT = CallGraph<Allocation>::FuncDataMapT;
 
   static constexpr BufferId InvalidBufferId =
       std::numeric_limits<BufferId>::max();
 
+  Allocation() = default;
   /// Creates a new Allocation analysis that computes the shared memory
   /// information for all associated shared memory values.
-  Allocation(Operation *operation, FuncAllocMapT &funcAllocMap)
-      : operation(operation) {
-    run(funcAllocMap);
-  }
+  Allocation(Operation *operation) : operation(operation) {}
+
+  /// Runs allocation analysis on the given top-level operation.
+  void run(FuncAllocMapT &funcAllocMap);
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
@@ -163,8 +164,6 @@ private:
   using AliasBufferMapT = llvm::MapVector<Value, llvm::SetVector<BufferT *>>;
   /// BufferId -> Buffer
   using BufferSetT = std::map<BufferId, BufferT>;
-  /// Runs allocation analysis on the given top-level operation.
-  void run(FuncAllocMapT &funcAllocMap);
 
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
@@ -183,7 +182,7 @@ private:
   }
 
 private:
-  Operation *operation;
+  Operation *operation = nullptr;
   OpScratchMapT opScratch;
   ValueBufferMapT valueBuffer;
   AliasBufferMapT aliasBuffer;
@@ -199,10 +198,26 @@ public:
     callGraphAllocation.apply<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         [&](triton::CallOp callOp, triton::FuncOp funcOp) {},
         [&](triton::FuncOp funcOp,
-            CallGraph<Allocation>::FuncMapT &funcAllocMap) {
-          funcAllocMap.try_emplace(funcOp, funcOp, funcAllocMap);
+            CallGraph<Allocation>::FuncDataMapT &funcAllocMap) {
+          funcAllocMap.try_emplace(funcOp, funcOp);
+          funcAllocMap[funcOp].run(funcAllocMap);
         });
   }
+
+  size_t getSharedMemorySize() {
+    size_t size = 0;
+    for (auto funcOp : callGraphAllocation.getRoots()) {
+      auto *alloc = callGraphAllocation.getFuncData(funcOp);
+      size += alloc->getSharedMemorySize();
+    }
+    return size;
+  }
+
+  Allocation *getAllocation(triton::FuncOp funcOp) {
+    return callGraphAllocation.getFuncData(funcOp);
+  }
+
+  ModuleOp getModuleOp() { return callGraphAllocation.getModuleOp(); }
 
 private:
   CallGraph<Allocation> callGraphAllocation;

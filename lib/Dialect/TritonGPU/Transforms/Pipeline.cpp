@@ -182,23 +182,18 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 LogicalResult LoopPipeliner::initialize() {
   Block *loop = forOp.getBody();
 
-  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
-  if (failed(solver->initializeAndRun(forOp->getParentOfType<ModuleOp>()))) {
-    return failure();
-  }
+  ModuleAxisInfoAnalysis axisInfoAnalysis(forOp->getParentOfType<ModuleOp>());
 
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> validLoads;
   for (Operation &op : *loop)
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.getPtr();
-      unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
+      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
 
       if (auto mask = loadOp.getMask())
-        vec = std::min<unsigned>(vec, axisInfoAnalysis->getMaskAlignment(mask));
+        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
-      auto lattice = axisInfoAnalysis->getLatticeElement(ptr)->getValue();
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
       if (!tensorTy || tensorTy.getRank() < 2)
         continue;

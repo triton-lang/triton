@@ -345,8 +345,7 @@ struct MakeRangeOpConversion
       ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(
-            converter, /*Allocation*/ nullptr, Value{}, indexCacheInfo,
-            benefit) {}
+            converter, indexCacheInfo, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
@@ -613,18 +612,17 @@ void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
 
 void populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
+    ModuleAllocation &moduleAllocation, Value smem,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
-  patterns.add<AllocTensorOpConversion>(typeConverter, allocation, smem,
+  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation, smem,
                                         benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
 
-  patterns.add<ExtractSliceOpConversion>(typeConverter, allocation, smem,
+  patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation, smem,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);

@@ -907,7 +907,7 @@ void AxisInfoAnalysis::visitOperation(
     propagateIfChanged(result, result->join(curr));
 }
 
-unsigned AxisInfoAnalysis::getPtrContiguity(Value ptr) {
+unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;
@@ -926,18 +926,17 @@ unsigned AxisInfoAnalysis::getPtrContiguity(Value ptr) {
   return contigPerThread;
 }
 
-unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
+unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;
-  dataflow::Lattice<AxisInfo> *latticeElement = getLatticeElement(ptr);
-  if (!latticeElement)
+  auto *axisInfo = getAxisInfo(ptr);
+  if (!axisInfo)
     return 1;
-  auto axisInfo = latticeElement->getValue();
   auto layout = tensorTy.getEncoding();
   auto order = triton::gpu::getOrder(layout);
-  auto maxMultipleBytes = axisInfo.getDivisibility(order[0]);
-  auto maxContig = axisInfo.getContiguity(order[0]);
+  auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
+  auto maxContig = axisInfo->getContiguity(order[0]);
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
@@ -945,17 +944,69 @@ unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
   return alignment;
 }
 
-unsigned AxisInfoAnalysis::getMaskAlignment(Value mask) {
+unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto tensorTy = mask.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;
-  dataflow::Lattice<AxisInfo> *latticeElement = getLatticeElement(mask);
-  if (!latticeElement)
+  auto *axisInfo = getAxisInfo(mask);
+  if (!axisInfo)
     return 1;
-  auto maskAxis = latticeElement->getValue();
   auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
-  auto alignment = std::max<unsigned>(maskAxis.getConstancy(maskOrder[0]), 1);
+  auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   return alignment;
+}
+
+void ModuleAxisInfoAnalysis::initialize(
+    triton::FuncOp funcOp,
+    CallGraph<AxisInfoAnalysis>::FuncDataMapT &funcAnalysisMap) {
+  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
+  if (failed(solver->initializeAndRun(funcOp)))
+    return;
+  funcOp.walk([&](Operation *op) {
+    for (auto value : op->getResults()) {
+      auto axisInfo = analysis->getLatticeElement(value)->getValue();
+      AxisInfo curAxisInfo;
+      if (axisInfoMap.count(value)) {
+        curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap[value]);
+      } else {
+        auto contiguity = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
+        auto divisibility = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
+        auto constancy = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
+        curAxisInfo = AxisInfo(contiguity, divisibility, constancy, 0);
+      }
+      axisInfoMap[value] = curAxisInfo;
+    }
+  });
+}
+
+void ModuleAxisInfoAnalysis::update(triton::CallOp callOp,
+                                    triton::FuncOp funcOp) {
+  auto args = funcOp->getOperands();
+  for (auto entry : llvm::enumerate(callOp.getOperands())) {
+    auto index = entry.index();
+    auto value = entry.value();
+    auto &info = axisInfoMap[value];
+    // Only accepts scalar arguments
+    auto curContiguity =
+        funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.contiguity");
+    auto curDivisibility =
+        funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.divisibility");
+    auto curConstancy =
+        funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.constancy");
+    auto contiguity =
+        IntegerAttr::get(IntegerType::get(funcOp.getContext(), 64),
+                         gcd(info.getContiguity(0), curContiguity.getInt()));
+    auto divisibility = IntegerAttr::get(
+        IntegerType::get(funcOp.getContext(), 64),
+        gcd(info.getDivisibility(0), curDivisibility.getInt()));
+    auto constancy =
+        IntegerAttr::get(IntegerType::get(funcOp.getContext(), 64),
+                         gcd(info.getConstancy(0), curConstancy.getInt()));
+    funcOp.setArgAttr(index, "tt.contiguity", contiguity);
+    funcOp.setArgAttr(index, "tt.divisibility", divisibility);
+    funcOp.setArgAttr(index, "tt.constancy", constancy);
+  }
 }
 
 } // namespace mlir

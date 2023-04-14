@@ -150,7 +150,7 @@ public:
       return signalPassFailure();
 
     /* allocate shared memory and set barrier */
-    Allocation allocation(mod);
+    ModuleAllocation allocation(mod);
     MembarAnalysis membarPass(&allocation);
     membarPass.run();
 
@@ -170,10 +170,7 @@ public:
         return signalPassFailure();
     }
 
-    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
-    if (failed(solver->initializeAndRun(mod)))
-      return signalPassFailure();
+    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     initSharedMemory(allocation.getSharedMemorySize(), typeConverter);
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
@@ -185,21 +182,19 @@ public:
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
         &baseIndexCache, &indexCache, &indexInsertPoint};
-    auto populatePatterns1 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, numWarps, *axisInfoAnalysis,
-                   &allocation, smem, indexCacheInfo, /*benefit*/ 1);
-    };
-    auto populatePatterns2 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, numWarps, *axisInfoAnalysis,
-                   &allocation, smem, /*benefit*/ 1);
-    };
-    populatePatterns1(populateTritonGPUToLLVMPatterns);
-    populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
-    populatePatterns2(populateDotOpToLLVMPatterns);
-    populatePatterns2(populateElementwiseOpToLLVMPatterns);
-    populatePatterns1(populateLoadStoreOpToLLVMPatterns);
-    populatePatterns1(populateReduceOpToLLVMPatterns);
-    populatePatterns2(populateViewOpToLLVMPatterns);
+    populateTritonGPUToLLVMPatterns(typeConverter, patterns, allocation, smem,
+                                    indexCacheInfo, /*benefit=*/1);
+    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, allocation,
+                                          smem, indexCacheInfo, /*benefit=*/1);
+    populateDotOpToLLVMPatterns(typeConverter, patterns, allocation, smem,
+                                /*benefit=*/1);
+    populateElementwiseOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
+    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
+                                      allocation, smem, indexCacheInfo,
+                                      /*benefit=*/1);
+    populateReduceOpToLLVMPatterns(typeConverter, patterns, allocation, smem,
+                                   indexCacheInfo, /*benefit=*/1);
+    populateViewOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
 
     // Native lowering patterns
     if (isROCM) {
@@ -308,10 +303,7 @@ private:
   }
 
   LogicalResult decomposeInsertSliceAsyncOp(ModuleOp mod) const {
-    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
-    if (failed(solver->initializeAndRun(mod)))
-      return failure();
+    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
     // have thorough analysis on async wait. Currently, we decompose
@@ -345,7 +337,7 @@ private:
       auto resSharedLayout =
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
-      unsigned inVec = axisInfoAnalysis->getPtrContiguity(src);
+      unsigned inVec = axisInfoAnalysis.getPtrContiguity(src);
       unsigned outVec = resSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       auto maxBitWidth =
