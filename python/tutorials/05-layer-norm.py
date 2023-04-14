@@ -5,8 +5,11 @@ In this tutorial, you will write a high-performance layer normalization
 kernel that runs faster than the PyTorch implementation.
 
 In doing so, you will learn about:
-- Implementing backward pass in Triton
-- Implementing parallel reduction in Triton
+
+* Implementing backward pass in Triton.
+
+* Implementing parallel reduction in Triton.
+
 """
 
 # %%
