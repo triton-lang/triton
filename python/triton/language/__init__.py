@@ -2,6 +2,16 @@
 # Import order is significant here.
 
 from . import math
+from . import extra
+from .standard import (
+    cdiv,
+    sigmoid,
+    softmax,
+    ravel,
+    swizzle2d,
+    zeros,
+    zeros_like,
+)
 from .core import (
     abs,
     advance,
@@ -21,7 +31,6 @@ from .core import (
     broadcast,
     broadcast_to,
     cat,
-    cdiv,
     constexpr,
     cos,
     debug_barrier,
@@ -56,18 +65,14 @@ from .core import (
     pi32_t,
     pointer_type,
     program_id,
-    ravel,
     reduce,
     reshape,
-    sigmoid,
     sin,
-    softmax,
     sqrt,
     static_assert,
     static_print,
     store,
     sum,
-    swizzle2d,
     static_range,
     tensor,
     trans,
@@ -81,8 +86,6 @@ from .core import (
     void,
     where,
     xor_sum,
-    zeros,
-    zeros_like,
 )
 from .random import (
     pair_uniform_to_normal,
@@ -127,6 +130,7 @@ __all__ = [
     "dot",
     "dtype",
     "exp",
+    "extra",
     "fdiv",
     "float16",
     "float32",

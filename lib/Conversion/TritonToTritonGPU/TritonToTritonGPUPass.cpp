@@ -411,14 +411,16 @@ struct TritonAtomicRMWPattern
   }
 };
 
-struct TritonExtElemwisePattern
-    : public OpConversionPattern<triton::ExtElemwiseOp> {
-  using OpConversionPattern<triton::ExtElemwiseOp>::OpConversionPattern;
+template <class T>
+struct TritonExternElementwisePattern : public OpConversionPattern<T> {
+  using OpConversionPattern<T>::OpConversionPattern;
+  using OpConversionPattern<T>::typeConverter;
+  typedef typename OpConversionPattern<T>::OpAdaptor OpAdaptor;
 
   LogicalResult
-  matchAndRewrite(triton::ExtElemwiseOp op, OpAdaptor adaptor,
+  matchAndRewrite(T op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExtElemwiseOp>(
+    addNamedAttrs(rewriter.replaceOpWithNewOp<T>(
                       op, typeConverter->convertType(op.getType()),
                       adaptor.getArgs(), adaptor.getLibname(),
                       adaptor.getLibpath(), adaptor.getSymbol()),
@@ -539,7 +541,9 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
           TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
           TritonReducePattern, TritonReduceReturnPattern, TritonTransPattern,
           TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,
-          TritonLoadPattern, TritonStorePattern, TritonExtElemwisePattern,
+          TritonLoadPattern, TritonStorePattern,
+          TritonExternElementwisePattern<triton::PureExternElementwiseOp>,
+          TritonExternElementwisePattern<triton::ImpureExternElementwiseOp>,
           TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern>(
           typeConverter, context);
 }

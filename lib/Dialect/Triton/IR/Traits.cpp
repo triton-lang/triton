@@ -40,6 +40,9 @@ OpTrait::impl::verifySameOperandsEncoding(Operation *op,
 
 LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
     Operation *op, bool allowTensorPointerType) {
+  if (op->getNumOperands() == 0)
+    return success();
+
   if (failed(verifyAtLeastNOperands(op, 1)) ||
       failed(verifyAtLeastNResults(op, 1)))
     return failure();
