@@ -1355,7 +1355,7 @@ def test_generic_reduction(device='cuda'):
         mean = x
         m2 = tl.zeros_like(x)
         weight = tl.full(x.shape, 1, x.dtype)
-        (mean, m2, weight) = tl.reduction((mean, m2, weight), 0, _welford_combine)
+        (mean, m2, weight) = tl.reduce((mean, m2, weight), 0, _welford_combine)
         tl.store(out_mean, mean)
         tl.store(out_var, m2 / weight)
 

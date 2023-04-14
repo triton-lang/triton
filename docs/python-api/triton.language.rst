@@ -100,7 +100,7 @@ Reduction Ops
     argmin
     max
     min
-    reduction
+    reduce
     sum
     xor_sum
 
