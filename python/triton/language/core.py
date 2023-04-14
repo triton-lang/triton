@@ -1255,9 +1255,10 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
     index = arange(0, n, _builder=_builder)
 
     if len(input.shape) > 1:
-        new_shape = [constexpr(1)] * len(input.shape)
-        new_shape[axis] = constexpr(n)
-        index = view(index, new_shape, _builder=_builder)
+        # Broadcast index across the non-reduced axes
+        expand_dims_index = [None] * len(input.shape)
+        expand_dims_index[axis] = slice(None)
+        index = index.__getitem__(expand_dims_index, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
 
     rvalue, rindices = reduce((input, index), axis, combine_fn,
