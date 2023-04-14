@@ -2285,7 +2285,7 @@ def test_globaltimer():
     @triton.jit
     def kernel(Out1, Out2):
         start = tl.extra.cuda.globaltimer()
-        for i in range(10):
+        for i in range(100):
             tl.store(Out1, tl.load(Out1) + 1)
         end = tl.extra.cuda.globaltimer()
         tl.store(Out2, end - start)
