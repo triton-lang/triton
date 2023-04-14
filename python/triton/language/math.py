@@ -7,6 +7,13 @@ LIBDEVICE_PATH = os.getenv("TRITON_LIBDEVICE_PATH", driver.libdevice_path)
 
 
 @extern.extern
+def globaltimer(_builder=None):
+    return extern.elementwise("special_registers", os.path.join(driver.extern_path, "special_registers.bc"), [],
+                              {tuple(): ("get_globaltimer", core.dtype("int64")),
+                               }, _builder)
+
+
+@extern.extern
 def clz(arg0, _builder=None):
     return extern.elementwise("libdevice", LIBDEVICE_PATH, [arg0, ],
                               {(core.dtype("int32"),): ("__nv_clz", core.dtype("int32")),

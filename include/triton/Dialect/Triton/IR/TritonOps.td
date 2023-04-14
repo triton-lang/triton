@@ -420,7 +420,7 @@ def TT_ReduceReturnOp: TT_Op<"reduce.return",
 //
 // External Elementwise op
 //
-def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [Pure, Elementwise, SameOperandsAndResultShape,
+def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [Pure, ElementwiseOrNoArg,
                                               SameOperandsAndResultEncoding,
                                               SameVariadicOperandSize]> {
     let summary = "ext_elemwise";
