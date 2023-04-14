@@ -5,10 +5,15 @@ In this tutorial, you will write a very short high-performance FP16 matrix multi
 performance on parallel with cuBLAS.
 
 You will specifically learn about:
-- Block-level matrix multiplications
-- Multi-dimensional pointer arithmetic
-- Program re-ordering for improved L2 cache hit rate
-- Automatic performance tuning
+
+* Block-level matrix multiplications.
+
+* Multi-dimensional pointer arithmetics.
+
+* Program re-ordering for improved L2 cache hit rate.
+
+* Automatic performance tuning.
+
 """
 
 # %%
