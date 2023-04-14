@@ -49,7 +49,6 @@ def add_kernel(
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
     output = x + y
-    output = output * 0 + tl.extra.cuda.globaltimer()
     # Write x + y back to DRAM.
     tl.store(output_ptr + offsets, output, mask=mask)
 
