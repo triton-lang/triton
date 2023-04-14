@@ -224,6 +224,7 @@ setup(
         "triton/common",
         "triton/compiler",
         "triton/language",
+        "triton/language/exta",
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",
