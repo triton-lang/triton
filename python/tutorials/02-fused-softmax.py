@@ -7,8 +7,11 @@ than PyTorch's native op for a particular class of matrices: those whose rows ca
 the GPU's SRAM.
 
 In doing so, you will learn about:
-- The benefits of kernel fusion for bandwidth-bound operations.
-- Reduction operators in Triton.
+
+* The benefits of kernel fusion for bandwidth-bound operations.
+
+* Reduction operators in Triton.
+
 """
 
 # %%
