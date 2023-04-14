@@ -104,17 +104,6 @@ public:
   }
 };
 
-template <typename ConcreteType>
-class ElementwiseOrNoArg : public TraitBase<ConcreteType, ElementwiseOrNoArg> {
-public:
-  static LogicalResult verifyTrait(Operation *op) {
-    if (op->getNumOperands() == 0)
-      return success();
-    // call element-wise trait
-    return Elementwise<ConcreteType>::verifyTrait(op);
-  }
-};
-
 } // namespace OpTrait
 } // namespace mlir
 

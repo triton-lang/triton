@@ -420,7 +420,7 @@ def TT_ReduceReturnOp: TT_Op<"reduce.return",
 //
 // External Elementwise op
 //
-def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [ElementwiseOrNoArg,
+def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [Elementwise,
                                               SameOperandsAndResultEncoding,
                                               SameVariadicOperandSize]> {
     let summary = "ext_elemwise";
@@ -435,7 +435,7 @@ def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [ElementwiseOrNoArg,
 
     let results = (outs TT_Type:$result);
 
-    let assemblyFormat = "operands attr-dict `:` type(operands) `->` type($result)";
+    let assemblyFormat = "operands attr-dict `:` functional-type(operands, $result)";
 }
 
 //

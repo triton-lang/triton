@@ -224,7 +224,6 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
   extMod->setTargetTriple(module.getTargetTriple());
   extMod->setDataLayout(module.getDataLayout());
 
-  llvm::outs() << path << "\n";
   if (llvm::Linker::linkModules(module, std::move(extMod),
                                 llvm::Linker::Flags::LinkOnlyNeeded)) {
     llvm::errs() << "Failed to link " << path;

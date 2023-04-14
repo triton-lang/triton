@@ -2275,11 +2275,33 @@ def test_while():
 #     print(m[0])
 #     print(n[0])
 
+# -----------------------
+# test extra
+# -----------------------
+
+
+def test_globaltimer():
+
+    @triton.jit
+    def kernel(Out1, Out2):
+        start = tl.extra.cuda.globaltimer()
+        for i in range(10):
+            tl.store(Out1, tl.load(Out1) + 1)
+        end = tl.extra.cuda.globaltimer()
+        tl.store(Out2, end - start)
+
+    out1 = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
+    out2 = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
+    h = kernel[(1,)](out1, out2)
+    assert out2[0] > 0
+    # 2 inlined globaltimers + one extra in the wrapper extern function
+    assert h.asm["ptx"].count("%globaltimer") == 3
 
 # -----------------------
 # test layout conversions
 # -----------------------
 # TODO: backend should be tested separately
+
 
 layouts = [
     # MmaLayout(version=1, warps_per_cta=[1, 4]),
