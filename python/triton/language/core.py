@@ -1199,7 +1199,7 @@ def _insertion_guard(builder):
 
 
 @builtin
-def reduction(input, axis, combine_fn, _builder=None, _generator=None):
+def reduce(input, axis, combine_fn, _builder=None, _generator=None):
     """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
 
     :param input: the input tensor, or tuple of tensors
@@ -1208,8 +1208,8 @@ def reduction(input, axis, combine_fn, _builder=None, _generator=None):
 
     """
     if isinstance(input, tensor):
-        return reduction((input,), axis, combine_fn,
-                         _builder=_builder, _generator=_generator)[0]
+        return reduce((input,), axis, combine_fn,
+                      _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1261,8 +1261,8 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
         index = index.__getitem__(expand_dims_index, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
 
-    rvalue, rindices = reduction((input, index), axis, combine_fn,
-                                 _builder=_builder, _generator=_generator)
+    rvalue, rindices = reduce((input, index), axis, combine_fn,
+                              _builder=_builder, _generator=_generator)
     return rindices
 
 
@@ -1275,7 +1275,7 @@ def _max_combine(a, b):
 @_add_reduction_docstr("maximum")
 def max(input, axis):
     input = _promote_reduction_input(input)
-    return reduction(input, axis, _max_combine)
+    return reduce(input, axis, _max_combine)
 
 
 @triton.jit
@@ -1305,7 +1305,7 @@ def _min_combine(a, b):
 @_add_reduction_docstr("minimum")
 def min(input, axis):
     input = _promote_reduction_input(input)
-    return reduction(input, axis, _min_combine)
+    return reduce(input, axis, _min_combine)
 
 
 @triton.jit
@@ -1334,7 +1334,7 @@ def _sum_combine(a, b):
 @_add_reduction_docstr("sum")
 def sum(input, axis):
     input = _promote_reduction_input(input)
-    return reduction(input, axis, _sum_combine)
+    return reduce(input, axis, _sum_combine)
 
 
 @triton.jit
@@ -1350,8 +1350,8 @@ def xor_sum(input, axis, _builder=None, _generator=None):
         raise ValueError("xor_sum only supported for integers")
 
     input = _promote_reduction_input(input, _builder=_builder)
-    return reduction(input, axis, _xor_combine,
-                     _builder=_builder, _generator=_generator)
+    return reduce(input, axis, _xor_combine,
+                  _builder=_builder, _generator=_generator)
 
 
 # -----------------------
