@@ -931,12 +931,13 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     if mask:
         raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
 
-    # Check same shape
+    # Check same shape and element type
     block_shape = ptr.type.element_ty.get_block_shapes()
     if not val.type.is_block():
         val = broadcast_impl_shape(val, block_shape, builder)
     assert val.type.is_block(), "Value argument must be block type or a scalar"
     assert block_shape == val.type.get_block_shapes(), "Block shape and value shape mismatch"
+    assert ptr.type.element_ty.element_ty == val.type.element_ty, "Block element type and value element type mismatch"
 
     elt_ty = ptr.type.element_ty.element_ty
     assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
