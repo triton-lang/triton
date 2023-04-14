@@ -2,6 +2,7 @@
 # Import order is significant here.
 
 from . import math
+from . import extra
 from .standard import (
     cdiv,
     sigmoid,
@@ -128,6 +129,7 @@ __all__ = [
     "dot",
     "dtype",
     "exp",
+    "extra",
     "fdiv",
     "float16",
     "float32",
