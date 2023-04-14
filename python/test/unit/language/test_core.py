@@ -1366,7 +1366,7 @@ def test_generic_reduction(device='cuda'):
 
     var_mean_kernel[(1,)](x, out_mean, out_var, BLOCK=SIZE)
 
-    expect_var, expect_mean = torch.var_mean(x, correction=0)
+    expect_var, expect_mean = torch.var_mean(x, dim=0, correction=0)
     torch.testing.assert_close(out_mean, expect_mean)
     torch.testing.assert_close(out_var, expect_var)
 
