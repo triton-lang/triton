@@ -33,7 +33,7 @@ def _fwd_kernel(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     off_q = off_hz * stride_qh + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qk
-    off_k = off_hz * stride_qh + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
+    off_k = off_hz * stride_qh + offs_n[None, :] * stride_kn + offs_d[:, None] * stride_kk
     off_v = off_hz * stride_qh + offs_n[:, None] * stride_qm + offs_d[None, :] * stride_qk
     # Initialize pointers to Q, K, V
     q_ptrs = Q + off_q
@@ -50,7 +50,7 @@ def _fwd_kernel(
         # -- compute qk ----
         k = tl.load(k_ptrs)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, tl.trans(k))
+        qk += tl.dot(q, k)
         qk *= sm_scale
         qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
         # compute new m
@@ -62,10 +62,10 @@ def _fwd_kernel(
         l_curr = tl.sum(p, 1) + l_prev
         # rescale operands of matmuls
         l_rcp = 1. / l_curr
-        p *= l_rcp
+        p *= l_rcp[:, None]
         acc *= (l_prev * l_rcp)[:, None]
         # update acc
-        p = p.to(tl.float16)
+        p = p.to(Q.dtype.element_ty)
         v = tl.load(v_ptrs)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -169,7 +169,7 @@ def _bwd_kernel(
             p = tl.exp(qk * sm_scale - m[:, None])
             # compute dv
             do = tl.load(do_ptrs)
-            dv += tl.dot(tl.trans(p.to(tl.float16)), do)
+            dv += tl.dot(tl.trans(p.to(Q.dtype.element_ty)), do)
             # compute dp = dot(v, do)
             Di = tl.load(D_ptrs + offs_m_curr)
             dp = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32) - Di[:, None]
@@ -177,10 +177,10 @@ def _bwd_kernel(
             # compute ds = p * (dp - delta[:, None])
             ds = p * dp * sm_scale
             # compute dk = dot(ds.T, q)
-            dk += tl.dot(tl.trans(ds.to(tl.float16)), q)
+            dk += tl.dot(tl.trans(ds.to(Q.dtype.element_ty)), q)
             # compute dq
             dq = tl.load(dq_ptrs)
-            dq += tl.dot(ds.to(tl.float16), k)
+            dq += tl.dot(ds.to(Q.dtype.element_ty), k)
             tl.store(dq_ptrs, dq)
             # increment pointers
             dq_ptrs += BLOCK_M * stride_qm
