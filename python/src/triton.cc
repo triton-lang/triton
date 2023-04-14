@@ -1267,14 +1267,18 @@ void init_triton_ir(py::module &&m) {
                                                            ptr, val, mask);
            })
       // External
-      .def("create_external_elementwise",
+      .def("create_extern_elementwise",
            [](mlir::OpBuilder &self, const std::string &libName,
               const std::string &libPath, const std::string &symbol,
-              std::vector<mlir::Value> &argList,
-              mlir::Type retType) -> mlir::Value {
+              std::vector<mlir::Value> &argList, mlir::Type retType,
+              bool isPure) -> mlir::Value {
              auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::ExtElemwiseOp>(
-                 loc, retType, argList, libName, libPath, symbol);
+             if (isPure)
+               return self.create<mlir::triton::PureExternElementwiseOp>(
+                   loc, retType, argList, libName, libPath, symbol);
+             else
+               return self.create<mlir::triton::ImpureExternElementwiseOp>(
+                   loc, retType, argList, libName, libPath, symbol);
            })
       // Built-in instruction
       .def("create_get_program_id",

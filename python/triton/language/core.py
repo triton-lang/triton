@@ -1533,7 +1533,7 @@ class static_range:
 # Extern functions
 # -----------------------
 
-def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple, _builder=None):
+def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple, is_pure: bool, _builder=None):
     '''
         Dispatch a function to a library
         :param func: the function to dispatch
@@ -1572,10 +1572,10 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         ret_type = arg_type_symbol_dict[arg_types][1]
         if ret_shape:
             ret_type = block_type(ret_type, ret_shape)
-        return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder)), ret_type)
+        return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder), is_pure), ret_type)
 
 
-def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, _builder=None):
+def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, is_pure: bool, _builder=None):
     '''
         Dispatch an elementwise function to a library
         :param lib_name: the name of the library
@@ -1603,8 +1603,8 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
                 dispatch_args[i], broadcast_arg, _builder)
         ret_shape = broadcast_arg.shape
-    func = getattr(_builder, "create_external_elementwise")
-    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, _builder)
+    func = getattr(_builder, "create_extern_elementwise")
+    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
 
 
 def extern(fn):

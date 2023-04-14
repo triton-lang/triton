@@ -420,14 +420,13 @@ def TT_ReduceReturnOp: TT_Op<"reduce.return",
 //
 // External Elementwise op
 //
-def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [Elementwise,
-                                              SameOperandsAndResultEncoding,
-                                              SameVariadicOperandSize]> {
-    let summary = "ext_elemwise";
+class TT_ExternElementwiseOpBase<string mnemonic, list<Trait> traits = []> :
+    TT_Op<mnemonic,
+         traits # [SameOperandsAndResultEncoding,
+                   SameVariadicOperandSize]> {
 
     let description = [{
         call an external function $symbol implemented in $libpath/$libname with $args
-
         return $libpath/$libname:$symbol($args...)
     }];
 
@@ -436,6 +435,16 @@ def TT_ExtElemwiseOp : TT_Op<"ext_elemwise", [Elementwise,
     let results = (outs TT_Type:$result);
 
     let assemblyFormat = "operands attr-dict `:` functional-type(operands, $result)";
+}
+
+
+def TT_PureExternElementwiseOp : TT_ExternElementwiseOpBase<"pure_extern_elementwise", [Pure, Elementwise]> {
+    let summary = "FFI for pure element-wise extern LLVM bitcode functions";
+}
+
+def TT_ImpureExternElementwiseOp : TT_ExternElementwiseOpBase<"impure_extern_elementwise", [MemoryEffects<[MemRead]>,
+                                                                                            MemoryEffects<[MemWrite]>]> {
+    let summary = "FFI for impure element-wise extern LLVM bitcode functions";
 }
 
 //

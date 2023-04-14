@@ -2285,12 +2285,13 @@ def test_globaltimer():
     @triton.jit
     def kernel(Out1, Out2):
         start = tl.extra.cuda.globaltimer()
+        off = tl.arange(0, 128)
         for i in range(100):
-            tl.store(Out1, tl.load(Out1) + 1)
+            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
         end = tl.extra.cuda.globaltimer()
         tl.store(Out2, end - start)
 
-    out1 = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
+    out1 = to_triton(np.zeros((128,), dtype=np.int64), device='cuda')
     out2 = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
     h = kernel[(1,)](out1, out2)
     assert out2[0] > 0

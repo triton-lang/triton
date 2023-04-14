@@ -156,6 +156,7 @@ class Libdevice(ExternLibrary):
         '''
         super().__init__("libdevice", path)
         self._symbol_groups = {}
+        self.is_pure = True
 
     @staticmethod
     def _extract_symbol(line) -> Optional[Symbol]:
@@ -316,7 +317,8 @@ class Libdevice(ExternLibrary):
             arg_type_symbol_dict_str += "}"
 
             return_str += arg_type_symbol_dict_str
-            return_str += ", _builder)\n"
+            return_str += f", is_pure={self.is_pure}"
+            return_str += ", _builder=_builder)\n"
 
             func_str += func_name_str + return_str + "\n"
         file_str = import_str + header_str + func_str

@@ -9,4 +9,4 @@ __path__ = os.path.dirname(os.path.abspath(__file__))
 def globaltimer(_builder=None):
     return core.extern_elementwise("cuda", os.path.join(__path__, "cuda.bc"), [],
                                    {tuple(): ("globaltimer", core.dtype("int64")),
-                                    }, _builder)
+                                    }, is_pure=False, _builder=_builder)
