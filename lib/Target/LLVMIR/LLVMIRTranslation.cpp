@@ -7,6 +7,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
@@ -40,7 +41,8 @@ struct NVVMMetadata {
 };
 
 // Add the nvvm related metadata to LLVM IR.
-static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
+static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata,
+                          bool isROCM) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
@@ -70,7 +72,7 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata) {
   }
 
   if (metadata.isKernel) {
-    if (isROCM()) {
+    if (isROCM) {
       func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
       func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
     } else {
@@ -209,7 +211,7 @@ static void linkLibdevice(llvm::Module &module) {
 }
 
 static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
-                          llvm::StringRef path) {
+                          llvm::StringRef path, bool isROCM) {
   llvm::SMDiagnostic err;
   auto &ctx = module.getContext();
 
@@ -229,20 +231,23 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
   }
 
   // check if ROCM
-  if (!isROCM()) {
+  if (!isROCM) {
     if (name == "libdevice") {
       linkLibdevice(module);
-    } else {
-      assert(false && "unknown extern lib: ");
     }
+    // else {
+    //   assert(false && "unknown extern lib: ");
+    // }
   }
 
   return false;
 }
 
 std::unique_ptr<llvm::Module>
-translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
+translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
+                      bool isROCM) {
   DialectRegistry registry;
+  mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerROCDLDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
@@ -267,7 +272,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   // dead code.
   auto externLibs = getExternLibs(module);
   for (auto &lib : externLibs) {
-    if (linkExternLib(*llvmModule, lib.first, lib.second))
+    if (linkExternLib(*llvmModule, lib.first, lib.second, isROCM))
       return nullptr;
   }
 
@@ -283,7 +288,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
   for (auto &func : llvmModule->functions()) {
     auto it = nvvmMetadata.find(func.getName());
     if (it != nvvmMetadata.end())
-      amendLLVMFunc(&func, it->second);
+      amendLLVMFunc(&func, it->second, isROCM);
   }
 
   return llvmModule;
@@ -291,9 +296,14 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module) {
 
 std::unique_ptr<llvm::Module>
 translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
-                           mlir::ModuleOp module, int computeCapability) {
+                           mlir::ModuleOp module, int computeCapability,
+                           bool isROCM) {
   mlir::PassManager pm(module->getContext());
-  applyPassManagerCLOptions(pm);
+  mlir::registerPassManagerCLOptions();
+  if (failed(applyPassManagerCLOptions(pm))) {
+    llvm::errs() << "failed to apply pass manager CL options\n";
+    return nullptr;
+  }
   auto printingFlags = mlir::OpPrintingFlags();
   printingFlags.elideLargeElementsAttrs(16);
   pm.enableIRPrinting(
@@ -308,7 +318,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::createConvertIndexToLLVMPass());
-  pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability));
+  pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability, isROCM));
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createCanonicalizerPass());
   // Simplify the IR
@@ -320,7 +330,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
-  auto llvmIR = translateLLVMToLLVMIR(llvmContext, module);
+  auto llvmIR = translateLLVMToLLVMIR(llvmContext, module, isROCM);
   if (!llvmIR) {
     llvm::errs() << "Translate to LLVM IR failed";
     return nullptr;

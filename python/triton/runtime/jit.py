@@ -13,7 +13,6 @@ from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, 
 import torch
 
 import triton
-from triton.utils import MockTensor
 
 
 def get_cuda_stream(idx=None):
@@ -101,8 +100,11 @@ def version_key():
     # frontend
     with open(__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
-    with open(triton.compiler.__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(*triton.__path__, 'compiler')
+    for lib in pkgutil.iter_modules([compiler_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
     # backend
     with open(triton._C.libtriton.__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
@@ -471,6 +473,30 @@ def jit(
     else:
         return decorator
 
+# -----------------------------------------------------------------------------
+# Utilities for mocking tensors
+# -----------------------------------------------------------------------------
+
+
+class MockTensor:
+    """
+    Can be used in place of real tensors when calling:
+        kernel.warmup(MockTensor(torch.float32), ...)
+    """
+    @staticmethod
+    def wrap_dtype(arg):
+        if arg.__class__.__name__ == "dtype" and\
+           arg.__module__ == "torch":
+            return MockTensor(arg)
+        return arg
+
+    def __init__(self, dtype):
+        self.dtype = dtype
+
+    @staticmethod
+    def data_ptr():
+        return 0  # optimistically assumes multiple of 16
+
 
 class TensorWrapper:
     def __init__(self, base, dtype):
@@ -498,4 +524,4 @@ def reinterpret(tensor, dtype):
         # A new wrapper is needed around an unwrapped tensor.
         return TensorWrapper(tensor, dtype)
     else:
-        raise TypeError(f'Cannot reinterpret a {type(tensor)}. Does not contain `data_ptr` method.')
+        raise TypeError(f'Cannot reinterpret a {type(tensor)}.')

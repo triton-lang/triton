@@ -22,15 +22,6 @@ namespace ttg = triton::gpu;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-static Type getI1SameShape(Value v) {
-  Type vType = v.getType();
-  auto i1Type = IntegerType::get(vType.getContext(), 1);
-  if (auto tensorType = vType.dyn_cast<RankedTensorType>())
-    return RankedTensorType::get(tensorType.getShape(), i1Type,
-                                 tensorType.getEncoding());
-  return i1Type;
-}
-
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
   for (const NamedAttribute attr : dictAttrs.getValue())
@@ -203,10 +194,13 @@ LogicalResult LoopPipeliner::initialize() {
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.getPtr();
       unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
+
       if (auto mask = loadOp.getMask())
         vec = std::min<unsigned>(vec, axisInfoAnalysis->getMaskAlignment(mask));
+
+      auto lattice = axisInfoAnalysis->getLatticeElement(ptr)->getValue();
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-      if (!tensorTy)
+      if (!tensorTy || tensorTy.getRank() < 2)
         continue;
       auto ty = tensorTy.getElementType()
                     .cast<triton::PointerType>()
@@ -321,7 +315,7 @@ LogicalResult LoopPipeliner::initialize() {
 
 Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value mappedMask,
                                  Value loopCond, OpBuilder &builder) {
-  Type maskType = getI1SameShape(loadOp);
+  Type maskType = triton::getI1SameShape(loadOp.getType());
   Value mask = loadOp.getMask();
   Value newMask;
   if (mask) {

@@ -68,7 +68,7 @@ def get_llvm_package_info():
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
     name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
-    version = "llvm-17.0.0-2538e550420f"
+    version = "llvm-17.0.0-f733b4fb9b8b"
     url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
@@ -200,7 +200,8 @@ class CMakeBuild(build_ext):
             build_args += ["--", "/m"]
         else:
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ['-j' + str(2 * os.cpu_count())]
+            max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
+            build_args += ['-j' + max_jobs]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
@@ -220,16 +221,18 @@ setup(
     packages=[
         "triton",
         "triton/_C",
+        "triton/common",
+        "triton/compiler",
         "triton/language",
-        "triton/tools",
-        "triton/impl",
+        "triton/language/extra",
         "triton/ops",
+        "triton/ops/blocksparse",
         "triton/runtime",
-        "triton/ops/blocksparse"],
+        "triton/tools",
+    ],
     install_requires=[
         "filelock",
     ],
-    package_data={"triton": ["third_party/**/*"]},
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},

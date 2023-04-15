@@ -95,5 +95,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     b = b.t() if BT else b
     # run test
     th_c = torch.matmul(a, b)
-    tt_c = triton.testing.catch_oor(lambda: triton.ops.matmul(a, b), pytest)
-    torch.testing.assert_allclose(th_c, tt_c, atol=1e-2, rtol=0)
+    try:
+        tt_c = triton.ops.matmul(a, b)
+        torch.testing.assert_allclose(th_c, tt_c, atol=1e-2, rtol=0)
+    except triton.OutOfResources as e:
+        pytest.skip(str(e))

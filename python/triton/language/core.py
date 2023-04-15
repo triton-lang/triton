@@ -1,15 +1,42 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from enum import Enum
+from functools import wraps
 from typing import Callable, List, TypeVar
 
 import triton
-from . import builtin, semantic
+from . import semantic
 from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
 TRITON_MAX_TENSOR_NUMEL = 131072
+
+TRITON_BUILTIN = "__triton_builtin__"
+
+
+def builtin(fn: T) -> T:
+    """Mark a function as a builtin."""
+    assert callable(fn)
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_builder" not in kwargs or kwargs["_builder"] is None:
+            raise ValueError(
+                "Did you forget to add @triton.jit ? "
+                "(`_builder` argument must be provided outside of JIT functions.)"
+            )
+        return fn(*args, **kwargs)
+
+    setattr(wrapper, TRITON_BUILTIN, True)
+
+    return wrapper
+
+
+def is_builtin(fn) -> bool:
+    """Is this a registered triton builtin function?"""
+    return getattr(fn, TRITON_BUILTIN, False)
 
 
 def _to_tensor(x, builder):
@@ -967,9 +994,35 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, _builder)
 
 
+@builtin
+def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _builder=None):
+    """
+    Returns a pointer to a block in a parent tensor
+
+    :param base: The base pointer to the parent tensor
+    :param shape: The shape of the parent tensor
+    :param strides: The strides of the parent tensor
+    :param offsets: The offsets to the block
+    :param block_shape: The shape of the block
+    :param order: The order of the original data format
+    """
+    return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
+
+
+@builtin
+def advance(base: tensor, offsets, _builder=None):
+    """
+    Advance a block pointer
+
+    :param base: the block pointer to advance
+    :param offsets: the offsets to advance, a tuple by dimension
+    """
+    return semantic.advance(base, offsets, _builder)
+
 # -----------------------
 # Atomic Memory Operations
 # -----------------------
+
 
 def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
@@ -1052,7 +1105,6 @@ def atomic_xor(pointer, val, mask=None, _builder=None):
 # -----------------------
 # Conditioning
 # -----------------------
-
 
 @builtin
 def where(condition, x, y, _builder=None):
@@ -1164,46 +1216,193 @@ def _add_reduction_docstr(name: str) -> Callable[[T], T]:
     return _decorator
 
 
+@contextmanager
+def _insertion_guard(builder):
+    ip = builder.get_insertion_point()
+    yield
+    builder.restore_insertion_point(ip)
+
+
 @builtin
+def reduce(input, axis, combine_fn, _builder=None, _generator=None):
+    """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
+
+    :param input: the input tensor, or tuple of tensors
+    :param axis: the dimension along which the reduction should be done
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+
+    """
+    if isinstance(input, tensor):
+        return reduce((input,), axis, combine_fn,
+                      _builder=_builder, _generator=_generator)[0]
+
+    def make_combine_region(reduce_op):
+        in_scalar_tys = [t.type.scalar for t in input]
+        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
+
+        region = reduce_op.get_region(0)
+        with _insertion_guard(_builder):
+            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
+            block = _builder.create_block_with_parent(region, param_types)
+            args = [tensor(block.arg(i), ty)
+                    for i, ty in enumerate(prototype.param_types)]
+            results = _generator.call_JitFunction(combine_fn, args, kwargs={})
+            if isinstance(results, tensor):
+                handles = [results.handle]
+            else:
+                handles = [r.handle for r in results]
+            _builder.create_reduce_ret(*handles)
+
+    axis = _constexpr_to_value(axis)
+    return semantic.reduction(input, axis, make_combine_region, _builder)
+
+
+@builtin
+def _promote_reduction_input(t, _builder=None):
+    scalar_ty = t.type.scalar
+    # input is extended to 32-bits if necessary
+    # this increases numerical accuracy and can be done pretty much for free
+    # on GPUs
+    if scalar_ty.is_int() and scalar_ty.int_bitwidth < 32:
+        return t.to(int32, _builder=_builder)
+
+    # hardware doesn't support FMAX, FMIN, CMP for bfloat16
+    if scalar_ty is bfloat16:
+        return t.to(float32, _builder=_builder)
+
+    return t
+
+
+@builtin
+def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
+    axis = _constexpr_to_value(axis)
+    n = input.shape[axis]
+    index = arange(0, n, _builder=_builder)
+
+    if len(input.shape) > 1:
+        # Broadcast index across the non-reduced axes
+        expand_dims_index = [None] * len(input.shape)
+        expand_dims_index[axis] = slice(None)
+        index = index.__getitem__(expand_dims_index, _builder=_builder)
+        index = broadcast_to(index, input.shape, _builder=_builder)
+
+    rvalue, rindices = reduce((input, index), axis, combine_fn,
+                              _builder=_builder, _generator=_generator)
+    return rindices
+
+
+@triton.jit
+def minimum(x, y):
+    """
+    Computes the element-wise minimum of :code:`x` and :code:`y`.
+
+    :param input: the first input tensor
+    :type input: Block
+    :param other: the second input tensor
+    :type other: Block
+    """
+    return where(x < y, x, y)
+
+
+@triton.jit
+def maximum(x, y):
+    """
+    Computes the element-wise maximum of :code:`x` and :code:`y`.
+
+    :param input: the first input tensor
+    :type input: Block
+    :param other: the second input tensor
+    :type other: Block
+    """
+    return where(x > y, x, y)
+
+
+@triton.jit
+def _max_combine(a, b):
+    return maximum(a, b)
+
+
+@triton.jit
 @_add_reduction_docstr("maximum")
-def max(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.max(input, axis, _builder)
+def max(input, axis):
+    input = _promote_reduction_input(input)
+    return reduce(input, axis, _max_combine)
 
 
-@builtin
+@triton.jit
+def _argmax_combine(value1, index1, value2, index2):
+    gt = value1 > value2
+    lt = value1 < value2
+    index_min = minimum(index1, index2)
+    index_ret = where(gt, index1, where(lt, index2, index_min))
+    value_ret = maximum(value1, value2)
+    return value_ret, index_ret
+
+
+@triton.jit
 @_add_reduction_docstr("maximum index")
-def argmax(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.argmax(input, axis, _builder)
+def argmax(input, axis):
+    input = _promote_reduction_input(input)
+    return _argreduce(input, axis, _argmax_combine)
 
 
-@builtin
+@triton.jit
+def _min_combine(a, b):
+    # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
+    return minimum(a, b)
+
+
+@triton.jit
 @_add_reduction_docstr("minimum")
-def min(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.min(input, axis, _builder)
+def min(input, axis):
+    input = _promote_reduction_input(input)
+    return reduce(input, axis, _min_combine)
 
 
-@builtin
+@triton.jit
+def _argmin_combine(value1, index1, value2, index2):
+    lt = value1 < value2
+    gt = value1 > value2
+    index_min = minimum(index1, index2)
+    index_ret = where(lt, index1, where(gt, index2, index_min))
+    value_ret = minimum(value1, value2)
+    return value_ret, index_ret
+
+
+@triton.jit
 @_add_reduction_docstr("minimum index")
-def argmin(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.argmin(input, axis, _builder)
+def argmin(input, axis):
+    input = _promote_reduction_input(input)
+    return _argreduce(input, axis, _argmin_combine)
 
 
-@builtin
+@triton.jit
+def _sum_combine(a, b):
+    return a + b
+
+
+@triton.jit
 @_add_reduction_docstr("sum")
-def sum(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.sum(input, axis, _builder)
+def sum(input, axis):
+    input = _promote_reduction_input(input)
+    return reduce(input, axis, _sum_combine)
+
+
+@triton.jit
+def _xor_combine(a, b):
+    return a ^ b
 
 
 @builtin
 @_add_reduction_docstr("xor sum")
-def xor_sum(input, axis, _builder=None):
-    axis = _constexpr_to_value(axis)
-    return semantic.xor_sum(input, axis, _builder)
+def xor_sum(input, axis, _builder=None, _generator=None):
+    scalar_ty = input.type.scalar
+    if not scalar_ty.is_int():
+        raise ValueError("xor_sum only supported for integers")
+
+    input = _promote_reduction_input(input, _builder=_builder)
+    return reduce(input, axis, _xor_combine,
+                  _builder=_builder, _generator=_generator)
 
 
 # -----------------------
@@ -1246,127 +1445,6 @@ def max_contiguous(input, values, _builder=None):
             raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
     return semantic.max_contiguous(input, values)
-
-
-# -----------------------
-# Standard library
-# -----------------------
-
-
-@triton.jit
-def cdiv(x, div):
-    """
-    Computes the ceiling division of :code:`x` by :code:`div`
-
-    :param x: the input number
-    :type input: Block
-    :param div: the divisor
-    :param div: Block
-    """
-    return (x + div - 1) // div
-
-
-@triton.jit
-def minimum(x, y):
-    """
-    Computes the element-wise minimum of :code:`x` and :code:`y`.
-
-    :param input: the first input tensor
-    :type input: Block
-    :param other: the second input tensor
-    :type other: Block
-    """
-    return triton.language.where(x < y, x, y)
-
-
-@triton.jit
-def maximum(x, y):
-    """
-    Computes the element-wise maximum of :code:`x` and :code:`y`.
-
-    :param input: the first input tensor
-    :type input: Block
-    :param other: the second input tensor
-    :type other: Block
-    """
-    return triton.language.where(x > y, x, y)
-
-
-@triton.jit
-@_add_math_1arg_docstr("sigmoid")
-def sigmoid(x):
-    return 1 / (1 + triton.language.exp(-x))
-
-
-@triton.jit
-@_add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding=False):
-    z = x - triton.language.max(x, 0)
-    num = triton.language.exp(z)
-    den = triton.language.sum(num, 0)
-    return fdiv(num, den, ieee_rounding)
-
-
-@triton.jit
-def ravel(x):
-    """
-    Returns a contiguous flattened view of :code:`x`.
-
-    :param x: the input tensor
-    :type x: Block
-    """
-    return triton.language.view(x, [x.numel])
-
-
-@triton.jit
-def swizzle2d(i, j, size_i, size_j, size_g):
-    """
-    Transforms indices of a row-major size_i*size_j matrix into those
-    of one where indices are row major for each group of size_j rows.
-    For example, for size_i = size_j = 4 and size_g = 2, it will transform
-    [[0 , 1 , 2 , 3 ],
-     [4 , 5 , 6 , 7 ],
-     [8 , 9 , 10, 11],
-     [12, 13, 14, 15]]
-    into
-    [[0, 2,  4 , 6 ],
-     [1, 3,  5 , 7 ],
-     [8, 10, 12, 14],
-     [9, 11, 13, 15]]
-    """
-    # "unrolled index in array"
-    ij = i * size_j + j
-    # number of elements in `size_g` groups
-    # of `size_j` columns
-    size_gj = size_g * size_j
-    # index of the group in which (i,j) is
-    group_id = ij // size_gj
-    # row-index of the first element of this group
-    off_i = group_id * size_g
-    # last group may have fewer rows
-    size_g = minimum(size_i - off_i, size_g)
-    # new row and column indices
-    new_i = off_i + (ij % size_g)
-    new_j = (ij % size_gj) // size_g
-    return new_i, new_j
-
-
-@triton.jit
-def zeros(shape, dtype):
-    """
-    Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
-
-    :param shape: Shape of the new array, e.g., (8, 16) or (8, )
-    :type shape: tuple of ints
-    :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
-    :type dtype: DType
-    """
-    return full(shape, 0, dtype)
-
-
-@triton.jit
-def zeros_like(input):
-    return zeros(input.shape, input.dtype)
 
 # -----------------------
 # Debugging functions
@@ -1420,32 +1498,6 @@ def device_assert(cond, msg="", _builder=None):
     return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
 
 
-@builtin
-def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _builder=None):
-    """
-    Returns a pointer to a block in a parent tensor
-
-    :param base: The base pointer to the parent tensor
-    :param shape: The shape of the parent tensor
-    :param strides: The strides of the parent tensor
-    :param offsets: The offsets to the block
-    :param block_shape: The shape of the block
-    :param order: The order of the original data format
-    """
-    return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
-
-
-@builtin
-def advance(base: tensor, offsets, _builder=None):
-    """
-    Advance a block pointer
-
-    :param base: the block pointer to advance
-    :param offsets: the offsets to advance, a tuple by dimension
-    """
-    return semantic.advance(base, offsets, _builder)
-
-
 # -----------------------
 # Iterators
 # -----------------------
@@ -1475,3 +1527,86 @@ class static_range:
 
     def __next__(self):
         raise RuntimeError("static_range can only be used in @triton.jit'd functions")
+
+
+# -----------------------
+# Extern functions
+# -----------------------
+
+def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple, is_pure: bool, _builder=None):
+    '''
+        Dispatch a function to a library
+        :param func: the function to dispatch
+        :param lib_name: the name of the library
+        :param lib_path: the path of the library
+        :param args: the arguments of the function
+        :param arg_type_symbol_dict: the type of the arguments
+        :param ret_shape: the shape of the return value
+        :param _builder: the builder
+        :return: the return value of the function
+    '''
+    if len(arg_type_symbol_dict) == 0:
+        raise ValueError("arg_type_symbol_dict is empty")
+
+    num_args = len(list(arg_type_symbol_dict.keys())[0])
+    if len(args) != num_args:
+        raise ValueError(f"length of input args does not match."
+                         f"Expect {len(args)}, got {num_args}")
+
+    arg_types = []
+    arg_list = []
+    for arg in args:
+        if isinstance(arg, tensor):
+            arg_types.append(arg.dtype)
+            arg_list.append(arg.handle)
+        else:
+            arg_types.append(type(arg))
+            arg_list.append(arg)
+    arg_types = tuple(arg_types)
+
+    if arg_types not in arg_type_symbol_dict:
+        raise ValueError(f"input arg type does not match."
+                         f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types}")
+    else:
+        symbol = arg_type_symbol_dict[arg_types][0]
+        ret_type = arg_type_symbol_dict[arg_types][1]
+        if ret_shape:
+            ret_type = block_type(ret_type, ret_shape)
+        return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder), is_pure), ret_type)
+
+
+def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, is_pure: bool, _builder=None):
+    '''
+        Dispatch an elementwise function to a library
+        :param lib_name: the name of the library
+        :param lib_path: the path of the library
+        :param args: the arguments of the function
+        :param arg_type_symbol_dict: the type of the arguments
+        :param _builder: the builder
+        :return: the return value of the function
+    '''
+    dispatch_args = args.copy()
+    all_scalar = True
+    ret_shape = None
+    for i in range(len(dispatch_args)):
+        dispatch_args[i] = _to_tensor(dispatch_args[i], _builder)
+        if dispatch_args[i].type.is_block():
+            all_scalar = False
+    if not all_scalar:
+        broadcast_arg = dispatch_args[0]
+        # Get the broadcast shape over all the arguments
+        for i, item in enumerate(dispatch_args):
+            _, broadcast_arg = semantic.binary_op_type_checking_impl(
+                item, broadcast_arg, _builder)
+        # Change the shape of each argument based on the broadcast shape
+        for i in range(len(dispatch_args)):
+            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
+                dispatch_args[i], broadcast_arg, _builder)
+        ret_shape = broadcast_arg.shape
+    func = getattr(_builder, "create_extern_elementwise")
+    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
+
+
+def extern(fn):
+    """A decorator for external functions."""
+    return builtin(fn)

@@ -50,7 +50,7 @@ def setup(app):
 
         def wrapped(obj, **kwargs):
             import triton
-            if isinstance(obj, triton.code_gen.JITFunction):
+            if isinstance(obj, triton.runtime.JITFunction):
                 obj = obj.fn
             return old(obj)
 
@@ -60,7 +60,7 @@ def setup(app):
 
     def documenter(app, obj, parent):
         import triton
-        if isinstance(obj, triton.code_gen.JITFunction):
+        if isinstance(obj, triton.runtime.JITFunction):
             obj = obj.fn
         return old_documenter(app, obj, parent)
 
@@ -86,8 +86,8 @@ extensions = [
 autosummary_generate = True
 
 # versioning config
-smv_tag_whitelist = r'^(v1.1.2)$'
-smv_branch_whitelist = r'^master$'
+smv_tag_whitelist = r'^(v2.1.0)$'
+smv_branch_whitelist = r'^main$'
 smv_remote_whitelist = None
 smv_released_pattern = r'^tags/.*$'
 smv_outputdir_format = '{ref.name}'
@@ -100,6 +100,7 @@ sphinx_gallery_conf = {
     'examples_dirs': '../python/tutorials/',
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
+    # XXX: Temporarily disable fused attention tutorial on V100
     'ignore_pattern': r'__init__\.py',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {

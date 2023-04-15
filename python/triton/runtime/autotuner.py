@@ -4,9 +4,24 @@ import builtins
 import time
 from typing import Dict
 
-from ..compiler import OutOfResources
 from ..testing import do_bench
 from .jit import KernelInterface
+
+
+class OutOfResources(Exception):
+    def __init__(self, required, limit, name):
+        self.message = f'out of resource: {name}, '\
+                       f'Required: {required}, '\
+                       f'Hardware limit: {limit}'
+        self.message += '. Reducing block sizes or `num_stages` may help.'
+        self.required = required
+        self.limit = limit
+        self.name = name
+        super().__init__(self.message)
+
+    def __reduce__(self):
+        # this is necessary to make CompilationError picklable
+        return (type(self), (self.required, self.limit, self.name))
 
 
 class Autotuner(KernelInterface):
@@ -62,14 +77,19 @@ class Autotuner(KernelInterface):
             self.hook(args)
             self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         try:
-            return do_bench(kernel_call, percentiles=(0.5, 0.2, 0.8))
+            return do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
-            return (float('inf'), float('inf'), float('inf'))
+            return [float('inf'), float('inf'), float('inf')]
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         if len(self.configs) > 1:
-            key = tuple(args[i] for i in self.key_idx)
+            all_args = {**self.nargs, **kwargs}
+            _args = []
+            for name in self.arg_names:
+                if name in all_args:
+                    _args.append(all_args[name])
+            key = tuple(_args[i] for i in self.key_idx)
             if key not in self.cache:
                 # prune configs
                 pruned_configs = self.prune_configs(kwargs)

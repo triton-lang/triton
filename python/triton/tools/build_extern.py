@@ -156,6 +156,7 @@ class Libdevice(ExternLibrary):
         '''
         super().__init__("libdevice", path)
         self._symbol_groups = {}
+        self.is_pure = True
 
     @staticmethod
     def _extract_symbol(line) -> Optional[Symbol]:
@@ -287,19 +288,21 @@ class Libdevice(ExternLibrary):
         # def <op_name>(<args>, _builder=None):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
         #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
-        import_str = "from . import core, extern\n"
+        import_str = "from . import core\n"
+        import_str += "from ..runtime import driver\n"
         import_str += "import os\n"
-        header_str = "LOCAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"..\", \"third_party\", \"cuda\", \"lib\", \"libdevice.10.bc\")\n"
-        header_str += "LIBDEVICE_PATH = os.getenv(\"TRITON_LIBDEVICE_PATH\", LOCAL_PATH)\n"
+
+        header_str = ""
+        header_str += "LIBDEVICE_PATH = os.getenv(\"TRITON_LIBDEVICE_PATH\", driver.libdevice_path)\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
-            func_str += "@extern.extern\n"
+            func_str += "@core.extern\n"
             func_name_str = f"def {symbols[0].op_name}("
             for arg_name in symbols[0].arg_names:
                 func_name_str += f"{arg_name}, "
             func_name_str += "_builder=None):\n"
 
-            return_str = f"\treturn extern.elementwise(\"{self._name}\", LIBDEVICE_PATH, ["
+            return_str = f"\treturn core.extern_elementwise(\"{self._name}\", LIBDEVICE_PATH, ["
             for arg_name in symbols[0].arg_names:
                 return_str += f"{arg_name}, "
             return_str += "], \n"
@@ -314,7 +317,8 @@ class Libdevice(ExternLibrary):
             arg_type_symbol_dict_str += "}"
 
             return_str += arg_type_symbol_dict_str
-            return_str += ", _builder)\n"
+            return_str += f", is_pure={self.is_pure}"
+            return_str += ", _builder=_builder)\n"
 
             func_str += func_name_str + return_str + "\n"
         file_str = import_str + header_str + func_str

@@ -13,7 +13,7 @@ static LogicalResult verifySameEncoding(Type typeA, Type typeB,
       if (auto ptrType = type.dyn_cast<triton::PointerType>())
         rankedType = ptrType.getPointeeType().dyn_cast<RankedTensorType>();
     } else {
-      assert(!isTensorPointerType(type));
+      assert(!triton::isTensorPointerType(type));
     }
     return rankedType ? rankedType.getEncoding() : Attribute();
   };
@@ -40,6 +40,9 @@ OpTrait::impl::verifySameOperandsEncoding(Operation *op,
 
 LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
     Operation *op, bool allowTensorPointerType) {
+  if (op->getNumOperands() == 0)
+    return success();
+
   if (failed(verifyAtLeastNOperands(op, 1)) ||
       failed(verifyAtLeastNResults(op, 1)))
     return failure();
@@ -123,7 +126,7 @@ OpTrait::impl::verifySameLoadStoreOperandsAndResultShape(Operation *op) {
 
 bool OpTrait::impl::verifyLoadStorePointerAndValueType(Type valueType,
                                                        Type ptrType) {
-  if (isTensorPointerType(ptrType)) {
+  if (triton::isTensorPointerType(ptrType)) {
     return ptrType.cast<triton::PointerType>().getPointeeType() == valueType;
   } else if (auto rankedType = ptrType.dyn_cast<RankedTensorType>()) {
     if (auto elementPtrType =

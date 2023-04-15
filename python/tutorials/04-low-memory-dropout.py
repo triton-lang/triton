@@ -7,8 +7,11 @@ will be composed of a single int32 seed. This differs from more traditional impl
 whose state is generally composed of a bit mask tensor of the same shape as the input.
 
 In doing so, you will learn about:
-- The limitations of naive implementations of Dropout with PyTorch
-- Parallel pseudo-random number generation in Triton
+
+* The limitations of naive implementations of Dropout with PyTorch.
+
+* Parallel pseudo-random number generation in Triton.
+
 """
 
 # %%

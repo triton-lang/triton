@@ -103,7 +103,7 @@ def TTG_SelectOp : TTG_Op<"select", [Pure, Elementwise,
                        TT_Tensor:$true_value,
                        TT_Tensor:$false_value);
 
-  let results = (outs TT_Tensor:$result);
+  let results = (outs TT_Type:$result);
 }
 
 

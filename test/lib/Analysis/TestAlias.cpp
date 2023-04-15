@@ -9,7 +9,7 @@ using namespace mlir;
 namespace {
 
 struct TestAliasPass
-    : public PassWrapper<TestAliasPass, OperationPass<func::FuncOp>> {
+    : public PassWrapper<TestAliasPass, OperationPass<triton::FuncOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAliasPass);
 
