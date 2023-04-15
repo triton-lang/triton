@@ -10,8 +10,6 @@ import textwrap
 from collections import defaultdict, namedtuple
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
 
-import torch
-
 import triton
 
 
@@ -240,27 +238,29 @@ class JITFunction(KernelInterface[T]):
 
     def _get_arg_specialization_key(self, arg) -> str:
         arg_annotation = self.__annotations__.get(arg, None)
-        if not arg_annotation:
+        if arg_annotation is None:
             return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0) if hasattr({arg}, "data_ptr") \
                         else ({arg} % {JITFunction.divisibility} == 0, {arg} == 1) if isinstance({arg}, int) \
                         else (False,)'
-        elif arg_annotation is torch.Tensor:
+        elif 'Tensor' in arg_annotation:
             return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)'
-        elif arg_annotation is int:
+        elif arg_annotation == 'int':
             return f'({arg} % {JITFunction.divisibility} == 0, {arg} == 1)'
         else:
             return '(False,)'
 
     def _get_arg_sig_key(self, arg) -> str:
         arg_annotation = self.__annotations__.get(arg, None)
-        if arg_annotation is torch.Tensor:
+        if arg_annotation is None:
+            return f'_key_of({arg})'
+        elif 'Tensor' in arg_annotation:
             return f'{arg}.dtype'
-        elif arg_annotation is bool:
+        elif arg_annotation == 'bool':
             return "i1"
-        elif arg_annotation is float:
+        elif arg_annotation == 'float':
             return 'fp32'
         else:
-            return f'_key_of({arg})'
+            assert False
 
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
@@ -359,12 +359,11 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.kernel = None
         self.debug = os.environ.get("TRITON_DEBUG", "0") == "1" if debug is None else debug
         # annotations
-        self.annotations = {self.arg_names.index(name): ty for name, ty in fn.__annotations__.items()}
+        normalize_ty = lambda ty: ty.__name__ if isinstance(ty, type) else ty
+        self.annotations = {self.arg_names.index(name): normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         self.__annotations__ = fn.__annotations__
         # index of constexprs
-        from triton.language.core import \
-            constexpr  # import here rather than at module level due to circular import tangle
-        self.constexprs = [index for index, ty in self.annotations.items() if isinstance(ty, type) and issubclass(ty, constexpr)]
+        self.constexprs = [index for index, ty in self.annotations.items() if 'constexpr' in ty]
         # launcher
         self.run = self._make_launcher()
         # re-use docs of wrapped function
