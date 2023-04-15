@@ -1,0 +1,55 @@
+#ifndef TRITON_ATTR_DEFS
+#define TRITON_ATTR_DEFS
+
+include "mlir/IR/EnumAttr.td"
+
+// Attributes for LoadOp
+def TT_CacheModifierAttr : I32EnumAttr<
+    "CacheModifier", "",
+    [
+        I32EnumAttrCase<"NONE", 1, "none">,
+        I32EnumAttrCase<"CA", 2, "ca">,
+        I32EnumAttrCase<"CG", 3, "cg">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+def TT_EvictionPolicyAttr : I32EnumAttr<
+    "EvictionPolicy", "",
+    [
+        I32EnumAttrCase<"NORMAL", 1, "evict_normal">,
+        I32EnumAttrCase<"EVICT_FIRST", 2, "evict_first">,
+        I32EnumAttrCase<"EVICT_LAST", 3, "evict_last">
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+def TT_PaddingOptionAttr : I32EnumAttr<
+    "PaddingOption", "",
+    [
+        I32EnumAttrCase<"PAD_ZERO", 1, "zero">,
+        // We can not set the string value to "NAN" because it is a keyword in C++
+        I32EnumAttrCase<"PAD_NAN", 2, "nan">
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+// atomic
+def TT_AtomicRMWAttr : I32EnumAttr<
+    "RMWOp", "",
+    [
+        I32EnumAttrCase<"AND", 1, "and">,
+        I32EnumAttrCase<"OR", 2, "or">,
+        I32EnumAttrCase<"XOR", 3, "xor">,
+        I32EnumAttrCase<"ADD", 4, "add">,
+        I32EnumAttrCase<"FADD", 5, "fadd">,
+        I32EnumAttrCase<"MAX", 6, "max">,
+        I32EnumAttrCase<"MIN", 7, "min">,
+        I32EnumAttrCase<"UMAX", 8, "umax">,
+        I32EnumAttrCase<"UMIN", 9, "umin">,
+        I32EnumAttrCase<"XCHG", 10, "exch">
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+#endif

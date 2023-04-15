@@ -3,53 +3,122 @@ name: Integration Tests
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - master
-      - v2.0
+    branches: [main]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
 
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
 
 jobs:
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"openai/triton" ]; then
+            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "gfx908"], "macos-10.15"]'
+          else
+            echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]'
+          fi
 
   Integration-Tests:
-    
-    runs-on: self-hosted
+    needs: Runner-Preparation
+
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v2
 
+      - name: Set CUDA ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100')}}
+        run: |
+          echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
+
+      - name: Set ROCM ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
+        run: |
+          echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
+
       - name: Clear cache
         run: |
-          rm -r /tmp/triton/
-        continue-on-error: true
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        if: ${{ matrix.runner != 'macos-10.15' }}
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files
 
       - name: Install Triton
+        if: ${{ env.BACKEND != 'ROCM'}}
         run: |
-          alias python='python3'
           cd python
-          pip3 install -e '.[tests]'
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
-      - name: Check imports
-        run: "isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )"
+      - name: Install Triton on ROCM
+        if: ${{ env.BACKEND == 'ROCM'}}
+        run: |
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
-      - name: Check style
-        run: "autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )"
+      - name: Run lit tests
+        if: ${{ env.BACKEND != 'ROCM'}}
+        run: |
+          python3 -m pip install lit
+          cd python
+          LIT_TEST_DIR="build/$(ls build | grep -i temp)/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+          fi
+          lit -v "${LIT_TEST_DIR}"
 
-      - name: Flake8
-        run: "flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )"
-
-      - name: Unit tests
+      - name: Run python tests on CUDA
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python/test/unit
-          pytest -vs .
+          python3 -m pytest
+
+      - name: Run CXX unittests
+        if: ${{ env.BACKEND != 'ROCM'}}
+        run: |
+          cd python
+          cd "build/$(ls build | grep -i temp)"
+          ctest
+
+      - name: Run python tests on ROCM
+        if: ${{ env.BACKEND == 'ROCM'}}
+        run: |
+          cd python/test/unit/language
+          python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
 
       - name: Regression tests
+        if: ${{ contains(matrix.runner, 'A100') }}
         run: |
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          sudo nvidia-smi -i 0 --lock-memory-clocks=877,877
-          pytest -vs .
+          python3 -m pytest -vs .
           sudo nvidia-smi -i 0 -rgc
-          sudo nvidia-smi -i 0 -rmc

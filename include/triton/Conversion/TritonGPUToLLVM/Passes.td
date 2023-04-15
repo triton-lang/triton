@@ -1,0 +1,35 @@
+#ifndef TRITONGPU_CONVERSION_PASSES
+#define TRITONGPU_CONVERSION_PASSES
+
+include "mlir/Pass/PassBase.td"
+
+
+def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Convert TritonGPU to LLVM";
+    let description = [{
+
+    }];
+    let constructor = "mlir::triton::createConvertTritonGPUToLLVMPass()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::math::MathDialect",
+                             "mlir::gpu::GPUDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::LLVM::LLVMDialect",
+                             "mlir::tensor::TensorDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::ROCDL::ROCDLDialect",
+                             "mlir::NVVM::NVVMDialect"];
+
+    let options = [
+        Option<"computeCapability", "compute-capability",
+               "int32_t", /*default*/"80",
+               "device compute capability">,
+        Option<"isROCM", "is-rocm",
+               "bool", /*default*/"false",
+               "compile for ROCM-compatible LLVM">,
+    ];
+}
+
+#endif

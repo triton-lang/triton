@@ -65,7 +65,7 @@ def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     # write result in-place in PROBS
     dout = tl.load(DPROBS + row)
     din = (probs - delta) * dout
-    tl.store(PROBS, din.to(tl.float16), mask=cols < N)
+    tl.store(PROBS, din.to(PROBS.dtype.element_ty), mask=cols < N)
 
 
 class _cross_entropy(torch.autograd.Function):

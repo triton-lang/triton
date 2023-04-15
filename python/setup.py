@@ -1,46 +1,130 @@
-import distutils
-import distutils.spawn
 import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import urllib.request
-from distutils.version import LooseVersion
+from pathlib import Path
+from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 
-def get_llvm():
-    # tries to find system LLVM
-    versions = ['-11.0', '-11', '-11-64']
-    supported = ['llvm-config{v}'.format(v=v) for v in versions]
-    paths = [distutils.spawn.find_executable(cfg) for cfg in supported]
-    paths = [p for p in paths if p is not None]
-    if paths:
-        return '', ''
-    if platform.system() == "Windows":
-        return '', ''
+# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
+def check_env_flag(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
+
+
+def get_build_type():
+    if check_env_flag("DEBUG"):
+        return "Debug"
+    elif check_env_flag("REL_WITH_DEB_INFO"):
+        return "RelWithDebInfo"
+    elif check_env_flag("TRITON_REL_BUILD_WITH_ASSERTS"):
+        return "TritonRelBuildWithAsserts"
+    else:
+        # TODO: change to release when stable enough
+        return "TritonRelBuildWithAsserts"
+
+# --- third party packages -----
+
+
+class Package(NamedTuple):
+    package: str
+    name: str
+    url: str
+    include_flag: str
+    lib_flag: str
+    syspath_var_name: str
+
+# pybind11
+
+
+def get_pybind11_package_info():
+    name = "pybind11-2.10.0"
+    url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
+    return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
+
+# llvm
+
+
+def get_llvm_package_info():
     # download if nothing is installed
-    name = 'clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-16.04'
-    dir = '/tmp'
-    llvm_include_dir = '{dir}/{name}/include'.format(dir=dir, name=name)
-    llvm_library_dir = '{dir}/{name}/lib'.format(dir=dir, name=name)
-    if not os.path.exists(llvm_library_dir):
-        try:
-            shutil.rmtree(os.path.join(dir, name))
-        except Exception:
-            pass
-        url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-11.0.1/{name}.tar.xz".format(name=name)
-        print('downloading and extracting ' + url + '...')
+    system = platform.system()
+    if system == "Darwin":
+        system_suffix = "apple-darwin"
+    elif system == "Linux":
+        vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+        vglibc = vglibc[0] * 100 + vglibc[1]
+        linux_suffix = 'ubuntu-18.04' if vglibc > 217 else 'centos-7'
+        system_suffix = f"linux-gnu-{linux_suffix}"
+    else:
+        return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+    use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
+    release_suffix = "assert" if use_assert_enabled_llvm else "release"
+    name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
+    version = "llvm-17.0.0-f733b4fb9b8b"
+    url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
+    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+
+
+def get_thirdparty_packages(triton_cache_path):
+    packages = [get_pybind11_package_info(), get_llvm_package_info()]
+    thirdparty_cmake_args = []
+    for p in packages:
+        package_root_dir = os.path.join(triton_cache_path, p.package)
+        package_dir = os.path.join(package_root_dir, p.name)
+        if p.syspath_var_name in os.environ:
+            package_dir = os.environ[p.syspath_var_name]
+        version_file_path = os.path.join(package_dir, "version.txt")
+        if p.syspath_var_name not in os.environ and\
+           (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url):
+            try:
+                shutil.rmtree(package_root_dir)
+            except Exception:
+                pass
+            os.makedirs(package_root_dir, exist_ok=True)
+            print(f'downloading and extracting {p.url} ...')
+            ftpstream = urllib.request.urlopen(p.url)
+            file = tarfile.open(fileobj=ftpstream, mode="r|*")
+            file.extractall(path=package_root_dir)
+            # write version url to package_dir
+            with open(os.path.join(package_dir, "version.txt"), "w") as f:
+                f.write(p.url)
+        if p.include_flag:
+            thirdparty_cmake_args.append(f"-D{p.include_flag}={package_dir}/include")
+        if p.lib_flag:
+            thirdparty_cmake_args.append(f"-D{p.lib_flag}={package_dir}/lib")
+    return thirdparty_cmake_args
+
+# ---- package data ---
+
+
+def download_and_copy_ptxas():
+    base_dir = os.path.dirname(__file__)
+    src_path = "bin/ptxas"
+    url = "https://conda.anaconda.org/nvidia/label/cuda-12.0.0/linux-64/cuda-nvcc-12.0.76-0.tar.bz2"
+    dst_prefix = os.path.join(base_dir, "triton")
+    dst_suffix = os.path.join("third_party", "cuda", src_path)
+    dst_path = os.path.join(dst_prefix, dst_suffix)
+    if not os.path.exists(dst_path):
+        print(f'downloading and extracting {url} ...')
         ftpstream = urllib.request.urlopen(url)
-        file = tarfile.open(fileobj=ftpstream, mode="r|xz")
-        file.extractall(path=dir)
-    return llvm_include_dir, llvm_library_dir
+        file = tarfile.open(fileobj=ftpstream, mode="r|*")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file.extractall(path=temp_dir)
+            src_path = os.path.join(temp_dir, src_path)
+            os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+            shutil.copy(src_path, dst_path)
+    return dst_suffix
+
+
+# ---- cmake extension ----
 
 
 class CMakeExtension(Extension):
@@ -69,71 +153,86 @@ class CMakeBuild(build_ext):
                 "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
             )
 
-        if platform.system() == "Windows":
-            cmake_version = LooseVersion(re.search(r"version\s*([\d.]+)", out.decode()).group(1))
-            if cmake_version < "3.1.0":
-                raise RuntimeError("CMake >= 3.1.0 is required on Windows")
+        match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
+        cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
+        if (cmake_major, cmake_minor) < (3, 18):
+            raise RuntimeError("CMake >= 3.18.0 is required")
 
         for ext in self.extensions:
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        llvm_include_dir, llvm_library_dir = get_llvm()
-        self.debug = True
+        lit_dir = shutil.which('lit')
+        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
+            os.getenv("HOMEPATH") or None
+        if not user_home:
+            raise RuntimeError("Could not find user home directory")
+        triton_cache_path = os.path.join(user_home, ".triton")
+        # lit is used by the test suite
+        thirdparty_cmake_args = get_thirdparty_packages(triton_cache_path)
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
-        build_suffix = 'debug' if self.debug else 'release'
-        llvm_build_dir = os.path.join(tempfile.gettempdir(), "llvm-" + build_suffix)
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
-        if not os.path.exists(llvm_build_dir):
-            os.makedirs(llvm_build_dir)
         # python directories
-        python_include_dirs = [distutils.sysconfig.get_python_inc()] + ['/usr/local/cuda/include']
+        python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
+            "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
-            "-DBUILD_TUTORIALS=OFF",
-            "-DBUILD_PYTHON_MODULE=ON",
-            "-DLLVM_INCLUDE_DIRS=" + llvm_include_dir,
-            "-DLLVM_LIBRARY_DIR=" + llvm_library_dir,
-            # '-DPYTHON_EXECUTABLE=' + sys.executable,
-            # '-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON',
-            "-DTRITON_LLVM_BUILD_DIR=" + llvm_build_dir,
-            "-DPYTHON_INCLUDE_DIRS=" + ";".join(python_include_dirs)
+            "-DTRITON_BUILD_TUTORIALS=OFF",
+            "-DTRITON_BUILD_PYTHON_MODULE=ON",
+            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
+            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
+            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
         ]
+        if lit_dir is not None:
+            cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
+        cmake_args.extend(thirdparty_cmake_args)
+
         # configuration
-        cfg = "Debug" if self.debug else "Release"
+        cfg = get_build_type()
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
-            cmake_args += ["-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{}={}".format(cfg.upper(), extdir)]
+            cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
             if sys.maxsize > 2**32:
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
         else:
-            import multiprocessing
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ["--", '-j' + str(2 * multiprocessing.cpu_count())]
+            max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
+            build_args += ['-j' + max_jobs]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
 
 
+download_and_copy_ptxas()
+
+
 setup(
     name="triton",
-    version="2.0.0",
+    version="2.1.0",
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
-    packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/ops", "triton/ops/blocksparse"],
-    install_requires=[
-        "cmake",
-        "filelock",
-        "torch",
+    packages=[
+        "triton",
+        "triton/_C",
+        "triton/common",
+        "triton/compiler",
+        "triton/language",
+        "triton/language/extra",
+        "triton/ops",
+        "triton/ops/blocksparse",
+        "triton/runtime",
+        "triton/tools",
     ],
-    package_data={"triton/ops": ["*.c"], "triton/ops/blocksparse": ["*.c"]},
+    install_requires=[
+        "filelock",
+    ],
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
@@ -146,9 +245,18 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
     ],
+    test_suite="tests",
     extras_require={
+        "build": [
+            "cmake>=3.18",
+            "lit",
+        ],
         "tests": [
             "autopep8",
             "flake8",
@@ -156,6 +264,7 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
+            "torch",
         ],
         "tutorials": [
             "matplotlib",

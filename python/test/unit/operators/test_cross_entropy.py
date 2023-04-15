@@ -2,6 +2,7 @@ import pytest
 import torch
 
 import triton
+import triton.ops
 
 
 @pytest.mark.parametrize("M, N, dtype, mode",
@@ -13,7 +14,10 @@ import triton
                          ]
                          )
 def test_op(M, N, dtype, mode):
-    dtype = {'float16': torch.float16, 'float32': torch.float32}[dtype]
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 8 and dtype == "bfloat16":
+        pytest.skip("Only test bfloat16 on devices with sm >= 80")
+    dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16, 'float32': torch.float32}[dtype]
     # create inputs
     x = torch.randn(M, N, dtype=dtype, device='cuda', requires_grad=True)
     idx = 4 + torch.ones(M, dtype=torch.int64, device='cuda')
@@ -21,7 +25,7 @@ def test_op(M, N, dtype, mode):
     tt_y = triton.ops.cross_entropy(x, idx)
     th_y = torch.nn.CrossEntropyLoss(reduction="none")(x, idx)
     if mode == 'forward':
-        triton.testing.assert_almost_equal(th_y, tt_y)
+        torch.testing.assert_allclose(th_y, tt_y)
     # backward pass
     elif mode == 'backward':
         dy = torch.randn_like(tt_y)
@@ -32,4 +36,4 @@ def test_op(M, N, dtype, mode):
         x.grad.zero_()
         th_y.backward(dy)
         th_dx = x.grad.clone()
-        triton.testing.assert_almost_equal(th_dx, tt_dx)
+        torch.testing.assert_allclose(th_dx, tt_dx)

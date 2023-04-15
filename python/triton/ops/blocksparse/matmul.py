@@ -29,7 +29,7 @@ def _sdd_kernel(
     # ------------ #
     # - Prologue - #
     # ------------ #
-    block_id = tl.program_id(1) + grid_offset
+    block_id = tl.program_id(0) + grid_offset
     lut += block_id * 3
     # offsets
     off_z = tl.program_id(2)  # batch
@@ -64,7 +64,7 @@ def _sdd_kernel(
         else:
             a = tl.load(a_ptrs, mask=offs_ak[None, :] < k, other=0.)
             b = tl.load(b_ptrs, mask=offs_bk[:, None] < k, other=0.)
-        acc += tl.dot(a, b)
+        acc += tl.dot(a, b, out_dtype=tl.float32)
         a_ptrs += TILE_K * stride_ak
         b_ptrs += TILE_K * stride_bk
     c = acc.to(C.dtype.element_ty)
@@ -102,7 +102,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
     else:
         assert out.shape == (a.shape[0], lut.shape[0], block, block)
         c = out
-    grid = [1, c.shape[1], c.shape[0]]
+    grid = [c.shape[1], 1, c.shape[0]]
     _sdd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),
@@ -181,9 +181,9 @@ def _dsd_kernel(
     inc_b = tl.load(pinc)
     inc_b = tl.multiple_of(inc_b, 8)
     for k in range(K, 0, -TILE_K):
-        a = tl.load(pa, mask=True)
-        b = tl.load(pb, mask=offs_bn[None, :] < DS0)
-        acc += tl.dot(a, b)
+        a = tl.load(pa)
+        b = tl.load(pb)
+        acc += tl.dot(a, b, out_dtype=tl.float32)
         pa += inc_a
         pb += inc_b * stride_bk
         pinc += 2
@@ -328,7 +328,7 @@ def dsd_lut(layout, block, step, trans, device):
     # create increments
     incs = torch.stack((B_incs, A_incs), dim=1).view(-1).contiguous()
     # pad by a factor 2*MAX_NUM_STAGES
-    # to accomodate pre-fetching inside the kernel
+    # to accommodate pre-fetching inside the kernel
     pad = torch.zeros(20, device=incs.device, dtype=incs.dtype)
     incs = torch.cat((incs, pad))
     # create lut
