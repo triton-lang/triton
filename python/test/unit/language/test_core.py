@@ -2346,6 +2346,18 @@ def test_globaltimer():
     # 2 inlined globaltimers + one extra in the wrapper extern function
     assert h.asm["ptx"].count("%globaltimer") == 3
 
+
+def test_smid():
+
+    @triton.jit
+    def kernel(Out):
+        tl.store(Out + tl.program_id(0), tl.extra.cuda.smid())
+
+    out = to_triton(np.zeros((1024,), dtype=np.int32), device='cuda')
+    h = kernel[(out.shape[0],)](out)
+    assert out.sort()[0].unique().shape[0] > 0
+    assert h.asm["ptx"].count("%smid") == 2
+
 # -----------------------
 # test layout conversions
 # -----------------------
