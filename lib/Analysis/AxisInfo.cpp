@@ -956,26 +956,25 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(
-    triton::FuncOp funcOp,
-    CallGraph<AxisInfoAnalysis>::FuncDataMapT &funcAnalysisMap) {
+void ModuleAxisInfoAnalysis::initialize(triton::FuncOp funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
   if (failed(solver->initializeAndRun(funcOp)))
     return;
+  auto *axisInfoMap = callGraphAxisInfoMap.getFuncData(funcOp);
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
       auto axisInfo = analysis->getLatticeElement(value)->getValue();
       AxisInfo curAxisInfo;
-      if (axisInfoMap.count(value)) {
-        curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap[value]);
+      if (axisInfoMap->count(value)) {
+        curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
       } else {
         auto contiguity = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
         auto divisibility = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
         auto constancy = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
         curAxisInfo = AxisInfo(contiguity, divisibility, constancy, 0);
       }
-      axisInfoMap[value] = curAxisInfo;
+      (*axisInfoMap)[value] = curAxisInfo;
     }
   });
 }
@@ -983,10 +982,11 @@ void ModuleAxisInfoAnalysis::initialize(
 void ModuleAxisInfoAnalysis::update(triton::CallOp callOp,
                                     triton::FuncOp funcOp) {
   auto args = funcOp->getOperands();
+  auto *axisInfoMap = callGraphAxisInfoMap.getFuncData(funcOp);
   for (auto entry : llvm::enumerate(callOp.getOperands())) {
     auto index = entry.index();
     auto value = entry.value();
-    auto &info = axisInfoMap[value];
+    auto axisInfo = axisInfoMap->lookup(args[index]);
     // Only accepts scalar arguments
     auto curContiguity =
         funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.contiguity");
@@ -994,15 +994,15 @@ void ModuleAxisInfoAnalysis::update(triton::CallOp callOp,
         funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.divisibility");
     auto curConstancy =
         funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.constancy");
-    auto contiguity =
-        IntegerAttr::get(IntegerType::get(funcOp.getContext(), 64),
-                         gcd(info.getContiguity(0), curContiguity.getInt()));
+    auto contiguity = IntegerAttr::get(
+        IntegerType::get(funcOp.getContext(), 64),
+        gcd(axisInfo.getContiguity(0), curContiguity.getInt()));
     auto divisibility = IntegerAttr::get(
         IntegerType::get(funcOp.getContext(), 64),
-        gcd(info.getDivisibility(0), curDivisibility.getInt()));
+        gcd(axisInfo.getDivisibility(0), curDivisibility.getInt()));
     auto constancy =
         IntegerAttr::get(IntegerType::get(funcOp.getContext(), 64),
-                         gcd(info.getConstancy(0), curConstancy.getInt()));
+                         gcd(axisInfo.getConstancy(0), curConstancy.getInt()));
     funcOp.setArgAttr(index, "tt.contiguity", contiguity);
     funcOp.setArgAttr(index, "tt.divisibility", divisibility);
     funcOp.setArgAttr(index, "tt.constancy", constancy);

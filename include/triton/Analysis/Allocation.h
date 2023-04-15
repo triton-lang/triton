@@ -195,7 +195,7 @@ private:
 class ModuleAllocation {
 public:
   ModuleAllocation(ModuleOp moduleOp) : callGraphAllocation(moduleOp) {
-    callGraphAllocation.apply<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+    callGraphAllocation.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         [&](triton::CallOp callOp, triton::FuncOp funcOp) {},
         [&](triton::FuncOp funcOp,
             CallGraph<Allocation>::FuncDataMapT &funcAllocMap) {

@@ -295,21 +295,25 @@ public:
 
 class ModuleAxisInfoAnalysis {
 public:
-  ModuleAxisInfoAnalysis(ModuleOp moduleOp) : callGraphSolver(moduleOp) {
-    callGraphSolver.apply<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        [&](triton::CallOp callOp, triton::FuncOp funcOp) {
-          update(callOp, funcOp);
-        },
-        [&](triton::FuncOp funcOp,
-            CallGraph<AxisInfoAnalysis>::FuncDataMapT &funcAnalysisMap) {
-          initialize(funcOp, funcAnalysisMap);
-        });
+  ModuleAxisInfoAnalysis(ModuleOp moduleOp) : callGraphAxisInfoMap(moduleOp) {
+    auto sortedFuncs = callGraphAxisInfoMap.topologicalSort();
+    for (auto funcOp : sortedFuncs) {
+      initialize(funcOp);
+      funcOp.walk([&](triton::CallOp callOp) { update(callOp, funcOp); });
+    }
   }
 
   AxisInfo *getAxisInfo(Value value) {
-    if (!axisInfoMap.count(value))
+    auto funcOp = value.getParentRegion()->getParentOfType<triton::FuncOp>();
+    auto *axisInfoMap = callGraphAxisInfoMap.getFuncData(funcOp);
+    if (!axisInfoMap) {
       return nullptr;
-    return &axisInfoMap[value];
+    }
+    auto it = axisInfoMap->find(value);
+    if (it == axisInfoMap->end()) {
+      return nullptr;
+    }
+    return &(it->second);
   }
 
   unsigned getPtrContiguity(Value ptr);
@@ -319,13 +323,12 @@ public:
   unsigned getMaskAlignment(Value mask);
 
 private:
-  void initialize(triton::FuncOp funcOp,
-                  CallGraph<AxisInfoAnalysis>::FuncDataMapT &funcAnalysisMap);
+  void initialize(triton::FuncOp funcOp);
 
   void update(triton::CallOp callOp, triton::FuncOp funcOp);
 
-  DenseMap<Value, AxisInfo> axisInfoMap;
-  CallGraph<AxisInfoAnalysis> callGraphSolver;
+  using AxisInfoMapT = DenseMap<Value, AxisInfo>;
+  CallGraph<AxisInfoMapT> callGraphAxisInfoMap;
 };
 
 } // namespace mlir

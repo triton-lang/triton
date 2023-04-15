@@ -132,12 +132,24 @@ public:
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
             WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
             typename UpdateEdgeFn, typename UpdateNodeFn>
-  void apply(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
+  void walk(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
     DenseSet<triton::CallOp> visited;
     for (auto root : roots) {
-      doApply<UpdateEdgeOrder, UpdateNodeOrder>(root, visited, updateEdgeFn,
-                                                updateNodeFn);
+      doWalk<UpdateEdgeOrder, UpdateNodeOrder>(root, visited, updateEdgeFn,
+                                               updateNodeFn);
     }
+  }
+
+  SetVector<triton::FuncOp> topologicalSort() {
+    SmallVector<triton::FuncOp> funcs;
+    for (auto root : roots) {
+      doTopologicalSort(root, funcs);
+    }
+    SetVector<triton::FuncOp> sorted;
+    for (auto func : llvm::reverse(funcs)) {
+      sorted.insert(func);
+    }
+    return sorted;
   }
 
   T *getFuncData(triton::FuncOp funcOp) {
@@ -174,8 +186,8 @@ private:
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
             WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
             typename UpdateEdgeFn, typename UpdateNodeFn>
-  void doApply(triton::FuncOp funcOp, DenseSet<triton::CallOp> &visited,
-               UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
+  void doWalk(triton::FuncOp funcOp, DenseSet<triton::CallOp> &visited,
+              UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
     if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {
       updateNodeFn(funcOp, funcMap);
     }
@@ -191,11 +203,19 @@ private:
       if constexpr (UpdateEdgeOrder == WalkOrder::PostOrder) {
         updateEdgeFn(callOp, callee);
       }
-      doApply(callee, visited, updateEdgeFn, updateNodeFn);
+      doWalk(callee, visited, updateEdgeFn, updateNodeFn);
       visited.erase(callOp);
     }
     if constexpr (UpdateNodeOrder == WalkOrder::PostOrder) {
       updateNodeFn(funcOp, funcMap);
+    }
+  }
+
+  void doTopologicalSort(triton::FuncOp funcOp,
+                         SmallVector<triton::FuncOp> &funcs) {
+    funcs.push_back(funcOp);
+    for (auto [callOp, callee] : callGraph[funcOp]) {
+      doTopologicalSort(callee, funcs);
     }
   }
 
