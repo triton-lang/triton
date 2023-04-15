@@ -223,14 +223,20 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
     }
     Value kMatArr = i32_val(kMatArrInt);
     Value nkMatArr = i32_val(nkMatArrInt);
+    // llvm::outs() << warpOffStride << "\n";
+    // llvm::outs() << cMatShape << "\n";
 
-    Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
-                        mul(nkMatArr, i32_val(matArrStride)));
+    Value cMatOff = mul(nkMatArr, i32_val(matArrStride));
+    if (needTrans)
+      cMatOff = add(cMatOff, mul(warpOff, i32_val(warpOffStride)));
 
     for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
         int ptrOff =
             loadx4Off * 8 + std::max(kMatArrInt, nkMatArrInt) * 4 + elemOff;
+        // llvm::outs() << loadx4Off * pLoadStrideInMat * (test ? 1 : 2) *
+        //                     cMatShape
+        //              << "\n";
         Value cMatOffI = add(
             cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
         //
@@ -249,6 +255,9 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         } else {
           offs[ptrOff] = add(mul(cOff, sStride), sOff);
         }
+
+        if (!needTrans)
+          offs[ptrOff] = add(offs[ptrOff], mul(warpOff, i32_val(64 * 16)));
       }
     }
   }
@@ -366,14 +375,15 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
 
     // assert(sMatStride == 1);
     int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
-    int sOffsetArrElem = 1 * (sMatStride * sMatShape);
     Value sOffsetElemVal;
     Value sOffsetArrElemVal;
     if (needTrans) {
+      int sOffsetArrElem = sMatStride * sMatShape;
       sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
       sOffsetArrElemVal =
           add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
     } else {
+      int sOffsetArrElem = sMatShape;
       sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
       sOffsetArrElemVal =
           add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));

@@ -1441,7 +1441,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     elif out_dtype == tl.float16:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
     else:
+        print((np.abs(to_numpy(z_tri[:, 0]) - z_ref[:, 0]) >= 0.1).nonzero())
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+        # np.testing.assert_allclose(z_ref[:16, 0], to_numpy(z_tri[:16, 0]), rtol=0.01)
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
     if K > 16 or N > 16 or M > 16:
