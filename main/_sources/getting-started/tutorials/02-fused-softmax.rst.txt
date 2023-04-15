@@ -26,10 +26,12 @@ than PyTorch's native op for a particular class of matrices: those whose rows ca
 the GPU's SRAM.
 
 In doing so, you will learn about:
-- The benefits of kernel fusion for bandwidth-bound operations.
-- Reduction operators in Triton.
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-20
+* The benefits of kernel fusion for bandwidth-bound operations.
+
+* Reduction operators in Triton.
+
+.. GENERATED FROM PYTHON SOURCE LINES 18-23
 
 Motivations
 -----------
@@ -37,7 +39,7 @@ Motivations
 Custom GPU kernels for elementwise additions are educationally valuable but won't get you very far in practice.
 Let us consider instead the case of a simple (numerically stabilized) softmax operation:
 
-.. GENERATED FROM PYTHON SOURCE LINES 20-48
+.. GENERATED FROM PYTHON SOURCE LINES 23-51
 
 .. code-block:: default
 
@@ -76,7 +78,7 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 49-57
+.. GENERATED FROM PYTHON SOURCE LINES 52-60
 
 When implemented naively in PyTorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}`
 requires reading :math:`5MN + 2M` elements from DRAM and writing back :math:`3MN + 2M` elements.
@@ -87,7 +89,7 @@ expect a theoretical speed-up of ~4x (i.e., :math:`(8MN + 4M) / 2MN`).
 The `torch.jit.script` flags aims to perform this kind of "kernel fusion" automatically
 but, as we will see later, it is still far from ideal.
 
-.. GENERATED FROM PYTHON SOURCE LINES 59-68
+.. GENERATED FROM PYTHON SOURCE LINES 62-71
 
 Compute Kernel
 --------------
@@ -99,7 +101,7 @@ Note that one important limitation of Triton is that each block must have a
 power-of-two number of elements, so we need to internally "pad" each row and guard the
 memory operations properly if we want to handle any possible input shapes:
 
-.. GENERATED FROM PYTHON SOURCE LINES 68-97
+.. GENERATED FROM PYTHON SOURCE LINES 71-100
 
 .. code-block:: default
 
@@ -139,11 +141,11 @@ memory operations properly if we want to handle any possible input shapes:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 98-99
+.. GENERATED FROM PYTHON SOURCE LINES 101-102
 
 We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-.. GENERATED FROM PYTHON SOURCE LINES 99-130
+.. GENERATED FROM PYTHON SOURCE LINES 102-133
 
 .. code-block:: default
 
@@ -185,17 +187,17 @@ We can create a helper function that enqueues the kernel and its (meta-)argument
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 131-133
+.. GENERATED FROM PYTHON SOURCE LINES 134-136
 
 Unit Test
 ---------
 
-.. GENERATED FROM PYTHON SOURCE LINES 135-137
+.. GENERATED FROM PYTHON SOURCE LINES 138-140
 
 We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.
 
-.. GENERATED FROM PYTHON SOURCE LINES 137-144
+.. GENERATED FROM PYTHON SOURCE LINES 140-147
 
 .. code-block:: default
 
@@ -220,11 +222,11 @@ This will allow us to verify that our padding mechanism works.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 145-146
+.. GENERATED FROM PYTHON SOURCE LINES 148-149
 
 As expected, the results are identical.
 
-.. GENERATED FROM PYTHON SOURCE LINES 148-153
+.. GENERATED FROM PYTHON SOURCE LINES 151-156
 
 Benchmark
 ---------
@@ -232,7 +234,7 @@ Benchmark
 Here we will benchmark our operation as a function of the number of columns in the input matrix -- assuming 4096 rows.
 We will then compare its performance against (1) :code:`torch.softmax` and (2) the :code:`naive_softmax` defined above.
 
-.. GENERATED FROM PYTHON SOURCE LINES 153-193
+.. GENERATED FROM PYTHON SOURCE LINES 156-196
 
 .. code-block:: default
 
@@ -305,24 +307,24 @@ We will then compare its performance against (1) :code:`torch.softmax` and (2) t
     [16384] 0
     softmax-performance:
               N       Triton  Torch (native)  Torch (jit)
-    0     256.0   682.666643      682.666643   264.258068
-    1     384.0   877.714274      819.200021   332.108094
+    0     256.0   682.666643      744.727267   273.066674
+    1     384.0   877.714274      877.714274   332.108094
     2     512.0   910.222190      910.222190   372.363633
-    3     640.0   975.238103      975.238103   401.568635
+    3     640.0   975.238103      930.909084   409.600010
     4     768.0  1068.521715     1023.999964   431.157886
     ..      ...          ...             ...          ...
-    93  12160.0  1594.754129     1069.010969   590.918747
-    94  12288.0  1598.438956     1016.061996   590.414408
-    95  12416.0  1576.634933     1031.979242   587.739623
-    96  12544.0  1580.346374     1013.656595   590.305885
-    97  12672.0  1584.000004     1006.213368   589.395349
+    93  12160.0  1588.244879     1069.010969   590.022730
+    94  12288.0  1591.967682     1018.694301   590.414408
+    95  12416.0  1582.916395     1031.979242   586.871514
+    96  12544.0  1580.346374     1013.656595   588.574769
+    97  12672.0  1584.000004     1006.213368   588.539906
 
     [98 rows x 4 columns]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 194-198
+.. GENERATED FROM PYTHON SOURCE LINES 197-201
 
 In the above plot, we can see that:
  - Triton is 4x faster than the Torch JIT. This confirms our suspicions that the Torch JIT does not do any fusion here.
@@ -332,7 +334,7 @@ In the above plot, we can see that:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 1 minutes  18.799 seconds)
+   **Total running time of the script:** ( 1 minutes  17.617 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_02-fused-softmax.py:

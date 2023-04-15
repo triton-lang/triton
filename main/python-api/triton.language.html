@@ -98,9 +98,13 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#reduction-ops">Reduction Ops</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.argmax.html">triton.language.argmax</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.argmin.html">triton.language.argmin</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.max.html">triton.language.max</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.min.html">triton.language.min</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.reduce.html">triton.language.reduce</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sum.html">triton.language.sum</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.xor_sum.html">triton.language.xor_sum</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#atomic-ops">Atomic Ops</a><ul>
@@ -278,14 +282,26 @@
 <h2>Reduction Ops<a class="headerlink" href="#reduction-ops" title="Permalink to this heading">¶</a></h2>
 <table class="autosummary longtable docutils align-default">
 <tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.argmax.html#triton.language.argmax" title="triton.language.argmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">argmax</span></code></a></p></td>
+<td><p>Returns the maximum index of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.argmin.html#triton.language.argmin" title="triton.language.argmin"><code class="xref py py-obj docutils literal notranslate"><span class="pre">argmin</span></code></a></p></td>
+<td><p>Returns the minimum index of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+</tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.max.html#triton.language.max" title="triton.language.max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">max</span></code></a></p></td>
 <td><p>Returns the maximum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.min.html#triton.language.min" title="triton.language.min"><code class="xref py py-obj docutils literal notranslate"><span class="pre">min</span></code></a></p></td>
 <td><p>Returns the minimum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.sum.html#triton.language.sum" title="triton.language.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.reduce.html#triton.language.reduce" title="triton.language.reduce"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce</span></code></a></p></td>
+<td><p>Applies the combine_fn to all elements in <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensors along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.sum.html#triton.language.sum" title="triton.language.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code></a></p></td>
 <td><p>Returns the sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.xor_sum.html#triton.language.xor_sum" title="triton.language.xor_sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">xor_sum</span></code></a></p></td>
+<td><p>Returns the xor sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 </tbody>
 </table>

@@ -55,7 +55,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In doing so, you will learn about: - Block-level matrix multiplications - Multi-dimensional poi...">
+    <div class="sphx-glr-thumbcontainer" tooltip="You will specifically learn about:">
 
 .. only:: html
 
@@ -89,7 +89,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In doing so, you will learn about: - Implementing backward pass in Triton - Implementing parall...">
+    <div class="sphx-glr-thumbcontainer" tooltip="In doing so, you will learn about:">
 
 .. only:: html
 
@@ -140,6 +140,23 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="Block Pointer (Experimental)">
+
+.. only:: html
+
+  .. image:: /getting-started/tutorials/images/thumb/sphx_glr_08-experimental-block-pointer_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_getting-started_tutorials_08-experimental-block-pointer.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Block Pointer (Experimental)</div>
+    </div>
+
+
+.. raw:: html
+
     </div>
 
 
@@ -153,6 +170,7 @@ To install the dependencies for the tutorials:
    /getting-started/tutorials/05-layer-norm
    /getting-started/tutorials/06-fused-attention
    /getting-started/tutorials/07-math-functions
+   /getting-started/tutorials/08-experimental-block-pointer
 
 
 .. only:: html

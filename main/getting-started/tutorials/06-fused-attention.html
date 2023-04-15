@@ -56,6 +56,7 @@
 <li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Fused Attention</a></li>
 <li class="toctree-l2"><a class="reference internal" href="07-math-functions.html">Libdevice (<cite>tl.math</cite>) function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="08-experimental-block-pointer.html">Block Pointer (Experimental)</a></li>
 </ul>
 </li>
 </ul>
@@ -113,17 +114,17 @@ to download the full example code</p>
 [128, 128] 1
 fused-attention-batch4-head48-d64-fwd:
     N_CTX     Triton
-0  1024.0   0.323668
-1  2048.0   1.094414
-2  4096.0   3.942359
-3  8192.0  15.056554
+0  1024.0   0.323017
+1  2048.0   1.094384
+2  4096.0   3.962921
+3  8192.0  14.962859
 [128, 64] 1
 fused-attention-batch4-head48-d64-bwd:
     N_CTX     Triton
-0  1024.0   1.185261
-1  2048.0   3.758828
-2  4096.0  13.213110
-3  8192.0  49.180672
+0  1024.0   1.186626
+1  2048.0   3.760393
+2  4096.0  13.224523
+3  8192.0  49.601536
 </pre></div>
 </div>
 <div class="line-block">
@@ -484,7 +485,7 @@ fused-attention-batch4-head48-d64-bwd:
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  5.598 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  5.120 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/54a35f6ec55f9746935b9566fb6bb1df/06-fused-attention.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">06-fused-attention.py</span></code></a></p>

@@ -63,6 +63,7 @@
 <li class="toctree-l2"><a class="reference internal" href="05-layer-norm.html">Layer Normalization</a></li>
 <li class="toctree-l2"><a class="reference internal" href="06-fused-attention.html">Fused Attention</a></li>
 <li class="toctree-l2"><a class="reference internal" href="07-math-functions.html">Libdevice (<cite>tl.math</cite>) function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="08-experimental-block-pointer.html">Block Pointer (Experimental)</a></li>
 </ul>
 </li>
 </ul>
@@ -113,9 +114,11 @@ to download the full example code</p>
 <p>In this tutorial, you will write a memory-efficient implementation of dropout whose state
 will be composed of a single int32 seed. This differs from more traditional implementations of dropout,
 whose state is generally composed of a bit mask tensor of the same shape as the input.</p>
-<p>In doing so, you will learn about:
-- The limitations of naive implementations of Dropout with PyTorch
-- Parallel pseudo-random number generation in Triton</p>
+<p>In doing so, you will learn about:</p>
+<ul class="simple">
+<li><p>The limitations of naive implementations of Dropout with PyTorch.</p></li>
+<li><p>Parallel pseudo-random number generation in Triton.</p></li>
+</ul>
 <section id="baseline">
 <h2>Baseline<a class="headerlink" href="#baseline" title="Permalink to this heading">¶</a></h2>
 <p>The <em>dropout</em> operator was first introduced in <a class="reference internal" href="#srivastava2014" id="id1"><span>[SRIVASTAVA2014]</span></a> as a way to improve the performance
@@ -284,7 +287,7 @@ to explore the <cite>triton/language/random</cite> folder!</p>
 <p>Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov, “Dropout: A Simple Way to Prevent Neural Networks from Overfitting”, JMLR 2014</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  1.048 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  0.707 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/c9aed78977a4c05741d675a38dde3d7d/04-low-memory-dropout.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">04-low-memory-dropout.py</span></code></a></p>

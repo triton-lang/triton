@@ -19,7 +19,7 @@
 
 
 Libdevice (`tl.math`) function
-===============
+==============================
 Triton can invoke a custom function from an external library.
 In this example, we will use the `libdevice` library (a.k.a `math` in triton) to apply `asin` on a tensor.
 Please refer to https://docs.nvidia.com/cuda/libdevice-users-guide/index.html regarding the semantics of all available libdevice functions.
@@ -31,7 +31,7 @@ Triton automatically selects the correct underlying device function to invoke ba
 .. GENERATED FROM PYTHON SOURCE LINES 14-16
 
 asin Kernel
---------------------------
+------------
 
 .. GENERATED FROM PYTHON SOURCE LINES 16-38
 
@@ -69,7 +69,7 @@ asin Kernel
 .. GENERATED FROM PYTHON SOURCE LINES 39-42
 
 Using the default libdevice library path
---------------------------
+-----------------------------------------
 We can use the default libdevice library path encoded in `triton/language/math.py`
 
 .. GENERATED FROM PYTHON SOURCE LINES 42-60
@@ -112,7 +112,7 @@ We can use the default libdevice library path encoded in `triton/language/math.p
 .. GENERATED FROM PYTHON SOURCE LINES 61-64
 
 Customize the libdevice library path
---------------------------
+-------------------------------------
 We can also customize the libdevice library path by passing the path to the `libdevice` library to the `asin` kernel.
 
 .. GENERATED FROM PYTHON SOURCE LINES 64-74
@@ -147,7 +147,7 @@ We can also customize the libdevice library path by passing the path to the `lib
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  0.380 seconds)
+   **Total running time of the script:** ( 0 minutes  0.264 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_07-math-functions.py:

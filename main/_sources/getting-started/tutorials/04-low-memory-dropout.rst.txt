@@ -26,10 +26,12 @@ will be composed of a single int32 seed. This differs from more traditional impl
 whose state is generally composed of a bit mask tensor of the same shape as the input.
 
 In doing so, you will learn about:
-- The limitations of naive implementations of Dropout with PyTorch
-- Parallel pseudo-random number generation in Triton
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-31
+* The limitations of naive implementations of Dropout with PyTorch.
+
+* Parallel pseudo-random number generation in Triton.
+
+.. GENERATED FROM PYTHON SOURCE LINES 18-34
 
 Baseline
 --------
@@ -48,7 +50,7 @@ keeps the norm consistent regardless of the dropout probability.
 
 Let's first take a look at the baseline implementation.
 
-.. GENERATED FROM PYTHON SOURCE LINES 31-84
+.. GENERATED FROM PYTHON SOURCE LINES 34-87
 
 .. code-block:: default
 
@@ -122,7 +124,7 @@ Let's first take a look at the baseline implementation.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 85-104
+.. GENERATED FROM PYTHON SOURCE LINES 88-107
 
 Seeded dropout
 --------------
@@ -144,7 +146,7 @@ other :ref:`random number generation strategies <Random Number Generation>`.
 
 Let's put it all together.
 
-.. GENERATED FROM PYTHON SOURCE LINES 104-152
+.. GENERATED FROM PYTHON SOURCE LINES 107-155
 
 .. code-block:: default
 
@@ -214,13 +216,13 @@ Let's put it all together.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 153-156
+.. GENERATED FROM PYTHON SOURCE LINES 156-159
 
 Et Voilà! We have a triton kernel that applies the same dropout mask provided the seed is the same!
 If you'd like explore further applications of pseudorandomness in GPU programming, we encourage you
 to explore the `triton/language/random` folder!
 
-.. GENERATED FROM PYTHON SOURCE LINES 158-164
+.. GENERATED FROM PYTHON SOURCE LINES 161-167
 
 Exercises
 ---------
@@ -229,7 +231,7 @@ Exercises
 2. Add support for striding.
 3. (challenge) Implement a kernel for sparse Johnson-Lindenstrauss transform which generates the projection matrix one the fly each time using a seed.
 
-.. GENERATED FROM PYTHON SOURCE LINES 166-171
+.. GENERATED FROM PYTHON SOURCE LINES 169-174
 
 References
 ----------
@@ -240,7 +242,7 @@ References
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  1.048 seconds)
+   **Total running time of the script:** ( 0 minutes  0.707 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_04-low-memory-dropout.py:

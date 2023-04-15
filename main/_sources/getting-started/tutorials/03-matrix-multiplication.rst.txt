@@ -20,16 +20,20 @@
 
 Matrix Multiplication
 =====================
-In this tutorial, you will write a 25-lines high-performance FP16 matrix multiplication
-kernel that achieves performance on par with cuBLAS.
+In this tutorial, you will write a very short high-performance FP16 matrix multiplication kernel that achieves
+performance on parallel with cuBLAS.
 
-In doing so, you will learn about:
-- Block-level matrix multiplications
-- Multi-dimensional pointer arithmetic
-- Program re-ordering for improved L2 cache hit rate
-- Automatic performance tuning
+You will specifically learn about:
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-43
+* Block-level matrix multiplications.
+
+* Multi-dimensional pointer arithmetics.
+
+* Program re-ordering for improved L2 cache hit rate.
+
+* Automatic performance tuning.
+
+.. GENERATED FROM PYTHON SOURCE LINES 20-48
 
 Motivations
 -----------
@@ -47,20 +51,20 @@ algorithm to multiply a (M, K) by a (K, N) matrix:
 
  .. code-block:: python
 
-   # do in parallel
+   # Do in parallel
    for m in range(0, M, BLOCK_SIZE_M):
-     # do in parallel
+     # Do in parallel
      for n in range(0, N, BLOCK_SIZE_N):
        acc = zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=float32)
        for k in range(0, K, BLOCK_SIZE_K):
          a = A[m : m+BLOCK_SIZE_M, k : k+BLOCK_SIZE_K]
          b = B[k : k+BLOCK_SIZE_K, n : n+BLOCK_SIZE_N]
          acc += dot(a, b)
-       C[m : m+BLOCK_SIZE_M, n : n+BLOCK_SIZE_N] = acc;
+       C[m : m+BLOCK_SIZE_M, n : n+BLOCK_SIZE_N] = acc
 
 where each iteration of the doubly-nested for-loop is performed by a dedicated Triton program instance.
 
-.. GENERATED FROM PYTHON SOURCE LINES 45-139
+.. GENERATED FROM PYTHON SOURCE LINES 50-148
 
 Compute Kernel
 --------------
@@ -68,11 +72,10 @@ Compute Kernel
 The above algorithm is, actually, fairly straightforward to implement in Triton.
 The main difficulty comes from the computation of the memory locations at which blocks
 of :code:`A` and :code:`B` must be read in the inner loop. For that, we need
-multi-dimensional pointer arithmetic.
+multi-dimensional pointer arithmetics.
 
-
-Pointer Arithmetic
-~~~~~~~~~~~~~~~~~~
+Pointer Arithmetics
+~~~~~~~~~~~~~~~~~~~
 
 For a row-major 2D tensor :code:`X`, the memory location of :code:`X[i, j]` is given b
 y :code:`&X[i, j] = X + i*stride_xi + j*stride_xj`.
@@ -84,12 +87,16 @@ Therefore, blocks of pointers for :code:`A[m : m+BLOCK_SIZE_M, k:k+BLOCK_SIZE_K]
    &A[m : m+BLOCK_SIZE_M, k:k+BLOCK_SIZE_K] =  a_ptr + (m : m+BLOCK_SIZE_M)[:, None]*A.stride(0) + (k : k+BLOCK_SIZE_K)[None, :]*A.stride(1);
    &B[k : k+BLOCK_SIZE_K, n:n+BLOCK_SIZE_N] =  b_ptr + (k : k+BLOCK_SIZE_K)[:, None]*B.stride(0) + (n : n+BLOCK_SIZE_N)[None, :]*B.stride(1);
 
-Which means that pointers for blocks of A and B can be initialized (i.e., :code:`k=0`) in Triton as:
+Which means that pointers for blocks of A and B can be initialized (i.e., :code:`k=0`) in Triton as the following
+code. Also note that we need an extra modulo to handle the case where :code:`M` is not a multiple of
+:code:`BLOCK_SIZE_M` or :code:`N` is not a multiple of :code:`BLOCK_SIZE_N`, in which case we can pad the data with
+some useless values, which will not contribute to the results. For the :code:`K` dimension, we will handle that later
+using masking load semantics.
 
  .. code-block:: python
 
-   offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-   offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+   offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+   offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
    offs_k = tl.arange(0, BLOCK_SIZE_K)
    a_ptrs = a_ptr + (offs_am[:, None]*stride_am + offs_k [None, :]*stride_ak)
    b_ptrs = b_ptr + (offs_k [:, None]*stride_bk + offs_bn[None, :]*stride_bn)
@@ -127,42 +134,43 @@ switching to the next column:
 
  .. code-block:: python
 
-   # program ID
+   # Program ID
    pid = tl.program_id(axis=0)
-   # number of program ids along the M axis
+   # Number of program ids along the M axis
    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-   # number of programs ids along the N axis
+   # Number of programs ids along the N axis
    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-   # number of programs in group
+   # Number of programs in group
    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-   # id of the group this program is in
+   # Id of the group this program is in
    group_id = pid // num_pid_in_group
-   # row-id of the first program in the group
+   # Row-id of the first program in the group
    first_pid_m = group_id * GROUP_SIZE_M
-   # if `num_pid_m` isn't divisible by `GROUP_SIZE_M`, the last group is smaller
+   # If `num_pid_m` isn't divisible by `GROUP_SIZE_M`, the last group is smaller
    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-   # *within groups*, programs are ordered in a column-major order
-   # row-id of the program in the *launch grid*
+   # *Within groups*, programs are ordered in a column-major order
+   # Row-id of the program in the *launch grid*
    pid_m = first_pid_m + (pid % group_size_m)
-   # col-id of the program in the *launch grid*
+   # Col-id of the program in the *launch grid*
    pid_n = (pid % num_pid_in_group) // group_size_m
 
 For example, in the following matmul where each matrix is 9 blocks by 9 blocks,
 we can see that if we compute the output in row-major ordering, we need to load 90
 blocks into SRAM to compute the first 9 output blocks, but if we do it in grouped
 ordering, we only need to load 54 blocks.
+
   .. image:: grouped_vs_row_major_ordering.png
 
 In practice, this can improve the performance of our matrix multiplication kernel by
 more than 10\% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 141-143
+.. GENERATED FROM PYTHON SOURCE LINES 150-152
 
 Final Result
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 143-258
+.. GENERATED FROM PYTHON SOURCE LINES 152-262
 
 .. code-block:: default
 
@@ -172,15 +180,12 @@ Final Result
     import triton
     import triton.language as tl
 
-    # %
-    # :code:`triton.jit`'ed functions can be auto-tuned by using the `triton.autotune`
-    # decorator, which consumes:
-    #   - A list of :code:`triton.Config` objects that define different configurations of
-    #       meta-parameters (e.g., BLOCK_SIZE_M) and compilation options (e.g., num_warps) to try
-    #   - An autotuning *key* whose change in values will trigger evaluation of all the
+
+    # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
+    #   - A list of `triton.Config` objects that define different configurations of
+    #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
+    #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
     #       provided configs
-
-
     @triton.autotune(
         configs=[
             triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
@@ -201,8 +206,8 @@ Final Result
         # Matrix dimensions
         M, N, K,
         # The stride variables represent how much to increase the ptr by when moving by 1
-        # element in a particular dimension. E.g. stride_am is how much to increase a_ptr
-        # by to get the element one row down (A has M rows)
+        # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+        # by to get the element one row down (A has M rows).
         stride_am, stride_ak,
         stride_bk, stride_bn,
         stride_cm, stride_cn,
@@ -216,12 +221,11 @@ Final Result
         """
         # -----------------------------------------------------------
         # Map program ids `pid` to the block of C it should compute.
-        # This is done in a grouped ordering to promote L2 data reuse
-        # See above `L2 Cache Optimizations` section for details
+        # This is done in a grouped ordering to promote L2 data reuse.
+        # See above `L2 Cache Optimizations` section for details.
         pid = tl.program_id(axis=0)
         num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
         num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-        num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)
         num_pid_in_group = GROUP_SIZE_M * num_pid_n
         group_id = pid // num_pid_in_group
         first_pid_m = group_id * GROUP_SIZE_M
@@ -233,41 +237,39 @@ Final Result
         # Create pointers for the first blocks of A and B.
         # We will advance this pointer as we move in the K direction
         # and accumulate
-        # a_ptrs is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
-        # b_ptrs is a block of [BLOCK_SIZE_K, BLOCK_SIZE_n] pointers
-        # see above `Pointer Arithmetic` section for details
-        offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-        offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
+        # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
+        # See above `Pointer Arithmetics` section for details
+        offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+        offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
         offs_k = tl.arange(0, BLOCK_SIZE_K)
         a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
         b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
         # -----------------------------------------------------------
-        # Iterate to compute a block of the C matrix
+        # Iterate to compute a block of the C matrix.
         # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
         # of fp32 values for higher accuracy.
-        # `accumulator` will be converted back to fp16 after the loop
+        # `accumulator` will be converted back to fp16 after the loop.
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-        for k in range(0, num_pid_k):
-            # Note that for simplicity, we don't apply a mask here.
-            # This means that if K is not a multiple of BLOCK_SIZE_K,
-            # this will access out-of-bounds memory and produce an
-            # error or (worse!) incorrect results.
-            a = tl.load(a_ptrs)
-            b = tl.load(b_ptrs)
-            # We accumulate along the K dimension
+        for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+            # Load the next block of A and B, generate a mask by checking the K dimension.
+            # If it is out of bounds, set it to 0.
+            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+            # We accumulate along the K dimension.
             accumulator += tl.dot(a, b)
-            # Advance the ptrs to the next K block
+            # Advance the ptrs to the next K block.
             a_ptrs += BLOCK_SIZE_K * stride_ak
             b_ptrs += BLOCK_SIZE_K * stride_bk
-        # you can fuse arbitrary activation functions here
+        # You can fuse arbitrary activation functions here
         # while the accumulator is still in FP32!
-        if ACTIVATION:
-            accumulator = ACTIVATION(accumulator)
+        if ACTIVATION == "leaky_relu":
+            accumulator = leaky_relu(accumulator)
         c = accumulator.to(tl.float16)
 
         # -----------------------------------------------------------
-        # Write back the block of the output matrix C
+        # Write back the block of the output matrix C with masks.
         offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
         c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -275,9 +277,10 @@ Final Result
         tl.store(c_ptrs, c, mask=c_mask)
 
 
-    # we can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`
+    # We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
     @triton.jit
     def leaky_relu(x):
+        x = x + 1
         return tl.where(x >= 0, x, 0.01 * x)
 
 
@@ -288,28 +291,25 @@ Final Result
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 259-261
+.. GENERATED FROM PYTHON SOURCE LINES 263-265
 
-We can now create a convenience wrapper function that only takes two input tensors
-and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel
+We can now create a convenience wrapper function that only takes two input tensors,
+and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 261-290
+.. GENERATED FROM PYTHON SOURCE LINES 265-291
 
 .. code-block:: default
 
 
 
-    def matmul(a, b, activation=None):
-        # checks constraints
-        assert a.shape[1] == b.shape[0], "incompatible dimensions"
-        assert a.is_contiguous(), "matrix A must be contiguous"
-        assert b.is_contiguous(), "matrix B must be contiguous"
+    def matmul(a, b, activation=""):
+        # Check constraints.
+        assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+        assert a.is_contiguous(), "Matrix A must be contiguous"
+        assert b.is_contiguous(), "Matrix B must be contiguous"
         M, K = a.shape
         K, N = b.shape
-        assert (
-            K % 32 == 0
-        ), "We don't check memory-out-of-bounds with K so K must be divisible by BLOCK_SIZE_K"
-        # allocates output
+        # Allocates output.
         c = torch.empty((M, N), device=a.device, dtype=a.dtype)
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (
@@ -321,7 +321,7 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
             a.stride(0), a.stride(1),
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
-            ACTIVATION=activation,
+            ACTIVATION=activation
         )
         return c
 
@@ -333,14 +333,14 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 291-295
+.. GENERATED FROM PYTHON SOURCE LINES 292-296
 
 Unit Test
 ---------
 
-We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS)
+We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
-.. GENERATED FROM PYTHON SOURCE LINES 295-308
+.. GENERATED FROM PYTHON SOURCE LINES 296-309
 
 .. code-block:: default
 
@@ -348,7 +348,7 @@ We can test our custom matrix multiplication operation against a native torch im
     torch.manual_seed(0)
     a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
     b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-    triton_output = matmul(a, b, activation=None)
+    triton_output = matmul(a, b)
     torch_output = torch.matmul(a, b)
     print(f"triton_output={triton_output}")
     print(f"torch_output={torch_output}")
@@ -386,7 +386,7 @@ We can test our custom matrix multiplication operation against a native torch im
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 309-316
+.. GENERATED FROM PYTHON SOURCE LINES 310-318
 
 Benchmark
 ---------
@@ -394,9 +394,10 @@ Benchmark
 Square Matrix Performance
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices, but feel free to arrange this script as you wish to benchmark any other matrix shape.
+We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices,
+but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-.. GENERATED FROM PYTHON SOURCE LINES 316-349
+.. GENERATED FROM PYTHON SOURCE LINES 318-351
 
 .. code-block:: default
 
@@ -404,19 +405,19 @@ We can now compare the performance of our kernel against that of cuBLAS. Here we
 
     @triton.testing.perf_report(
         triton.testing.Benchmark(
-            x_names=['M', 'N', 'K'],  # argument names to use as an x-axis for the plot
+            x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
             x_vals=[
                 128 * i for i in range(2, 33)
-            ],  # different possible values for `x_name`
-            line_arg='provider',  # argument name whose value corresponds to a different line in the plot
-            # possible values for `line_arg``
+            ],  # Different possible values for `x_name`
+            line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
+            # Possible values for `line_arg`
             line_vals=['cublas', 'triton'],
-            # label name for the lines
+            # Label name for the lines
             line_names=["cuBLAS", "Triton"],
-            # line styles
+            # Line styles
             styles=[('green', '-'), ('blue', '-')],
-            ylabel="TFLOPS",  # label name for the y-axis
-            plot_name="matmul-performance",  # name for the plot. Used also as a file name for saving the plot.
+            ylabel="TFLOPS",  # Label name for the y-axis
+            plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
             args={},
         )
     )
@@ -448,37 +449,37 @@ We can now compare the performance of our kernel against that of cuBLAS. Here we
 
     matmul-performance:
              M      cuBLAS      Triton
-    0    256.0    4.681143    4.096000
+    0    256.0    4.096000    4.096000
     1    384.0   12.288000   12.288000
     2    512.0   26.214401   23.831273
     3    640.0   42.666665   39.384616
     4    768.0   63.195428   58.982401
     5    896.0   78.051553   82.642822
-    6   1024.0  110.376426  104.857603
+    6   1024.0  110.376426   99.864382
     7   1152.0  135.726544  129.825388
-    8   1280.0  163.840004  163.840004
-    9   1408.0  151.438217  132.970149
+    8   1280.0  157.538463  163.840004
+    9   1408.0  155.765024  132.970149
     10  1536.0  181.484314  157.286398
-    11  1664.0  183.651271  179.978245
+    11  1664.0  179.978245  179.978245
     12  1792.0  172.914215  208.137481
     13  1920.0  200.347822  168.585369
     14  2048.0  197.379013  190.650180
-    15  2176.0  188.071477  209.621326
+    15  2176.0  189.845737  209.621326
     16  2304.0  225.357284  227.503545
-    17  2432.0  202.118452  200.674737
-    18  2560.0  219.919464  217.006622
-    19  2688.0  196.544332  197.567993
-    20  2816.0  209.683695  210.696652
-    21  2944.0  210.278616  225.502413
-    22  3072.0  205.156169  207.410628
-    23  3200.0  210.526325  216.949149
-    24  3328.0  203.941342  206.278780
-    25  3456.0  215.565692  216.724640
-    26  3584.0  215.108588  206.702053
-    27  3712.0  209.428397  217.168134
-    28  3840.0  205.944129  208.664143
-    29  3968.0  209.663117  218.680889
-    30  4096.0  218.240199  214.405318
+    17  2432.0  200.674737  200.674737
+    18  2560.0  222.911566  217.006622
+    19  2688.0  196.544332  196.544332
+    20  2816.0  208.680416  208.680416
+    21  2944.0  215.740400  222.482283
+    22  3072.0  207.410628  207.410628
+    23  3200.0  215.488222  217.687077
+    24  3328.0  202.792385  205.689424
+    25  3456.0  216.143621  217.896133
+    26  3584.0  217.186932  205.756041
+    27  3712.0  208.553950  214.371984
+    28  3840.0  205.944129  206.328356
+    29  3968.0  207.171367  213.702171
+    30  4096.0  219.310012  214.405318
 
 
 
@@ -486,7 +487,7 @@ We can now compare the performance of our kernel against that of cuBLAS. Here we
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 1 minutes  36.046 seconds)
+   **Total running time of the script:** ( 1 minutes  36.499 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:
