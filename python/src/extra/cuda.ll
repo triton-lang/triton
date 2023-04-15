@@ -9,4 +9,9 @@ define i64 @globaltimer() #0 {
   ret i64 %1
 }
 
+define i32 @smid() #0 {
+  %1 = call i32 asm "mov.u32 $0, %smid;", "=r"() nounwind
+  ret i32 %1
+}
+
 attributes #0 = { alwaysinline nounwind }
