@@ -208,7 +208,7 @@ public:
     size_t size = 0;
     for (auto funcOp : callGraphAllocation.getRoots()) {
       auto *alloc = callGraphAllocation.getFuncData(funcOp);
-      size += alloc->getSharedMemorySize();
+      size = std::max(size, alloc->getSharedMemorySize());
     }
     return size;
   }
