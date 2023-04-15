@@ -166,8 +166,8 @@ private:
               std::pair<triton::CallOp, triton::FuncOp>(callOp, funcOp));
       }
       parentMap[op] = parent;
-      if (parent == op)
-        roots.push_back(parent);
+      if (parent == nullptr && isa<triton::FuncOp>(op))
+        roots.push_back(dyn_cast<triton::FuncOp>(op));
     });
   }
 

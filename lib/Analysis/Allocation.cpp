@@ -222,10 +222,11 @@ private:
                        ? elems * kPtrBitWidth / 8
                        : elems * elemTy.getIntOrFloatBitWidth() / 8;
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
-    } else if (auto funcOp = dyn_cast<triton::FuncOp>(op)) {
-      auto funcAlloc = &(*funcAllocMap)[funcOp];
-      auto bytes = funcAlloc->getSharedMemorySize();
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+    } else if (auto callOp = dyn_cast<triton::CallOp>(op)) {
+      auto callable = dyn_cast<CallOpInterface>(op).resolveCallable();
+      auto funcOp = dyn_cast<FuncOp>(callable);
+      auto *funcAlloc = &(*funcAllocMap)[funcOp];
+      allocation->sharedMemorySize += funcAlloc->getSharedMemorySize();
     }
   }
 

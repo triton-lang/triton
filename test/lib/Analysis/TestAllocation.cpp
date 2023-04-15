@@ -16,13 +16,13 @@ struct TestAllocationPass
   }
 
   void runOnOperation() override {
-    Operation *operation = getOperation();
     auto &os = llvm::errs();
+    ModuleOp moduleOp = getOperation();
     // Convert to std::string can remove quotes from opName
-    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
-    os << opName << "\n";
-    ModuleAllocation moduleAllocation(operation->getParentOfType<ModuleOp>());
-    operation->walk([&](triton::FuncOp funcOp) {
+    ModuleAllocation moduleAllocation(moduleOp);
+    moduleOp.walk([&](triton::FuncOp funcOp) {
+      auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
+      os << opName << "\n";
       auto *allocation = moduleAllocation.getAllocation(funcOp);
       funcOp.walk([&](Operation *op) {
         auto scratchBufferId = allocation->getBufferId(op);
