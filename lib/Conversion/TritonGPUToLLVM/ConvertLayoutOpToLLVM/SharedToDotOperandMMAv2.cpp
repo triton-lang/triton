@@ -209,7 +209,7 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
   Value sOffInMat =
       mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
 
-  bool test = (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
+  bool test = needTrans && kOrder == 1;
 
   SmallVector<Value> offs(numPtrs);
 
@@ -223,8 +223,6 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
     }
     Value kMatArr = i32_val(kMatArrInt);
     Value nkMatArr = i32_val(nkMatArrInt);
-    // llvm::outs() << warpOffStride << "\n";
-    // llvm::outs() << cMatShape << "\n";
 
     Value cMatOff = mul(nkMatArr, i32_val(matArrStride));
     if (needTrans)
@@ -234,9 +232,6 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
         int ptrOff =
             loadx4Off * 8 + std::max(kMatArrInt, nkMatArrInt) * 4 + elemOff;
-        // llvm::outs() << loadx4Off * pLoadStrideInMat * (test ? 1 : 2) *
-        //                     cMatShape
-        //              << "\n";
         Value cMatOffI = add(
             cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
         //
