@@ -134,14 +134,16 @@ semantics.</p>
 <section id="make-a-block-pointer">
 <h2>Make a Block Pointer<a class="headerlink" href="#make-a-block-pointer" title="Permalink to this heading">¶</a></h2>
 <p>A block pointer pointers to a block in a parent tensor and is constructed by <code class="code docutils literal notranslate"><span class="pre">make_block_ptr</span></code> function,
-which takes the following information as arguments:
-- <code class="code docutils literal notranslate"><span class="pre">base</span></code>: the base pointer to the parent tensor;
-- <code class="code docutils literal notranslate"><span class="pre">shape</span></code>: the shape of the parent tensor;
-- <code class="code docutils literal notranslate"><span class="pre">strides</span></code>: the strides of the parent tensor, which means how much to increase the pointer by when moving by 1 element in a specific axis;
-- <code class="code docutils literal notranslate"><span class="pre">offsets</span></code>: the offsets of the block;
-- <code class="code docutils literal notranslate"><span class="pre">block_shape</span></code>: the shape of the block;
-- <code class="code docutils literal notranslate"><span class="pre">order</span></code>: the order of the block, which means how the block is laid out in memory.</p>
-<p>For example, to a block pointer to a <code class="code docutils literal notranslate"><span class="pre">BLOCK_SIZE_M`x:code:`BLOCK_SIZE_K</span></code> block in a row-major 2D matrix A by
+which takes the following information as arguments:</p>
+<ul class="simple">
+<li><p><code class="code docutils literal notranslate"><span class="pre">base</span></code>: the base pointer to the parent tensor;</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">shape</span></code>: the shape of the parent tensor;</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">strides</span></code>: the strides of the parent tensor, which means how much to increase the pointer by when moving by 1 element in a specific axis;</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">offsets</span></code>: the offsets of the block;</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">block_shape</span></code>: the shape of the block;</p></li>
+<li><p><code class="code docutils literal notranslate"><span class="pre">order</span></code>: the order of the block, which means how the block is laid out in memory.</p></li>
+</ul>
+<p>For example, to a block pointer to a <code class="code docutils literal notranslate"><span class="pre">BLOCK_SIZE_M</span> <span class="pre">*</span> <span class="pre">BLOCK_SIZE_K</span></code> block in a row-major 2D matrix A by
 offsets <code class="code docutils literal notranslate"><span class="pre">(pid_m</span> <span class="pre">*</span> <span class="pre">BLOCK_SIZE_M,</span> <span class="pre">0)</span></code> and strides <code class="code docutils literal notranslate"><span class="pre">(stride_am,</span> <span class="pre">stride_ak)</span></code>, we can use the following code
 (exactly the same as the previous matrix multiplication tutorial):</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">a_block_ptr</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">make_block_ptr</span><span class="p">(</span><span class="n">base</span><span class="o">=</span><span class="n">a_ptr</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">strides</span><span class="o">=</span><span class="p">(</span><span class="n">stride_am</span><span class="p">,</span> <span class="n">stride_ak</span><span class="p">),</span>
@@ -157,14 +159,16 @@ for some hardware backends to optimize for better performance.</p>
 <h2>Load/Store a Block Pointer<a class="headerlink" href="#load-store-a-block-pointer" title="Permalink to this heading">¶</a></h2>
 <p>To load/store a block pointer, we can use <code class="code docutils literal notranslate"><span class="pre">load/store</span></code> function, which takes a block pointer as an argument,
 de-references it, and loads/stores a block. You may mask some values in the block, here we have an extra argument
-<code class="code docutils literal notranslate"><span class="pre">boundary_check</span></code> to specify whether to check the boundary of each axis for the block pointer. With check on and
+<code class="code docutils literal notranslate"><span class="pre">boundary_check</span></code> to specify whether to check the boundary of each axis for the block pointer. With check on,
 out-of-bound values will be masked according to the <code class="code docutils literal notranslate"><span class="pre">padding_option</span></code> argument (load only), which can be
 <code class="code docutils literal notranslate"><span class="pre">zero</span></code> or <code class="code docutils literal notranslate"><span class="pre">nan</span></code>. Temporarily, we do not support other values due to some hardware limitations. In this
 mode of block pointer load/store does not support <code class="code docutils literal notranslate"><span class="pre">mask</span></code> or <code class="code docutils literal notranslate"><span class="pre">other</span></code> arguments in the legacy mode.</p>
-<p>So to load a block in A, we can simply write <code class="code docutils literal notranslate"><span class="pre">a</span> <span class="pre">=</span> <span class="pre">tl.load(a_block_ptr,</span> <span class="pre">boundary_check=(0,</span> <span class="pre">1))</span></code>. Boundary check
-may cost extra performance, so if you can guarantee that the block pointer is always in-bound in some axis, you can
-turn off the check by not passing the index into the <code class="code docutils literal notranslate"><span class="pre">boundary_check</span></code> argument. For example, if we know that
-<code class="code docutils literal notranslate"><span class="pre">M</span></code> is a multiple of <code class="code docutils literal notranslate"><span class="pre">BLOCK_SIZE_M</span></code>, we can write <code class="code docutils literal notranslate"><span class="pre">a</span> <span class="pre">=</span> <span class="pre">tl.load(a_block_ptr,</span> <span class="pre">boundary_check=(1,</span> <span class="pre">))</span></code>.</p>
+<p>So to load the block pointer of A in the previous section, we can simply write
+<code class="code docutils literal notranslate"><span class="pre">a</span> <span class="pre">=</span> <span class="pre">tl.load(a_block_ptr,</span> <span class="pre">boundary_check=(0,</span> <span class="pre">1))</span></code>. Boundary check may cost extra performance, so if you can
+guarantee that the block pointer is always in-bound in some axis, you can turn off the check by not passing the index
+into the <code class="code docutils literal notranslate"><span class="pre">boundary_check</span></code> argument. For example, if we know that <code class="code docutils literal notranslate"><span class="pre">M</span></code> is a multiple of
+<code class="code docutils literal notranslate"><span class="pre">BLOCK_SIZE_M</span></code>, we can replace with <code class="code docutils literal notranslate"><span class="pre">a</span> <span class="pre">=</span> <span class="pre">tl.load(a_block_ptr,</span> <span class="pre">boundary_check=(1,</span> <span class="pre">))</span></code>, since axis 0 is
+always in bound.</p>
 </section>
 <section id="advance-a-block-pointer">
 <h2>Advance a Block Pointer<a class="headerlink" href="#advance-a-block-pointer" title="Permalink to this heading">¶</a></h2>
@@ -172,7 +176,7 @@ turn off the check by not passing the index into the <code class="code docutils 
 each axis as arguments and returns a new block pointer with the same shape and strides as the original one,
 but with the offsets advanced by the specified amount.</p>
 <p>For example, to advance the block pointer by <code class="code docutils literal notranslate"><span class="pre">BLOCK_SIZE_K</span></code> in the second axis
-(no need to multiply with stride), we can write <code class="code docutils literal notranslate"><span class="pre">a_block_ptr</span> <span class="pre">=</span> <span class="pre">tl.advance(a_block_ptr,</span> <span class="pre">(0,</span> <span class="pre">BLOCK_SIZE_K))</span></code>.</p>
+(no need to multiply with strides), we can write <code class="code docutils literal notranslate"><span class="pre">a_block_ptr</span> <span class="pre">=</span> <span class="pre">tl.advance(a_block_ptr,</span> <span class="pre">(0,</span> <span class="pre">BLOCK_SIZE_K))</span></code>.</p>
 </section>
 <section id="final-result">
 <h2>Final Result<a class="headerlink" href="#final-result" title="Permalink to this heading">¶</a></h2>
@@ -331,7 +335,7 @@ torch_output=tensor([[-10.9531,  -4.7109,  15.6953,  ..., -28.4062,   4.3320, -2
 ✅ Triton and Torch match
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  9.969 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  10.049 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-experimental-block-pointer-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/4d6052117d61c2ca779cd4b75567fee5/08-experimental-block-pointer.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">08-experimental-block-pointer.py</span></code></a></p>
