@@ -25,7 +25,7 @@ struct TestMembarPass
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     // Print all ops after membar pass
     ModuleAllocation allocation(moduleOp);
-    MembarAnalysis membarPass(&allocation);
+    ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
     // Print all ops before membar pass
     auto &os = llvm::errs();

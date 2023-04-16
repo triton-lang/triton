@@ -293,10 +293,29 @@ public:
                       ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
 };
 
-class ModuleAxisInfoAnalysis {
+/// Module level axis info analysis based on call graph, assuming that we
+/// do not have recursive functions.
+/// Since each function will be called multiple times, we need to
+/// calculate the axis info based on the axis info of all the callers.
+/// In the future, we can perform optimization using function cloning.
+using AxisInfoMapT = DenseMap<Value, AxisInfo>;
+
+class ModuleAxisInfoAnalysis : public ModuleAnalysis<AxisInfoMapT> {
 public:
-  ModuleAxisInfoAnalysis(ModuleOp moduleOp) : callGraphAxisInfoMap(moduleOp) {
-    auto sortedFuncs = callGraphAxisInfoMap.topologicalSort();
+  ModuleAxisInfoAnalysis(ModuleOp moduleOp)
+      : ModuleAnalysis<AxisInfoMapT>(moduleOp) {
+    SmallVector<triton::FuncOp> funcs;
+    for (auto root : callGraph.getRoots()) {
+      callGraph.walk<WalkOrder::PreOrder, WalkOrder::PreOrder>(
+          // Pre-order edge walk callback
+          [](triton::CallOp callOp, triton::FuncOp funcOp) {},
+          // Post-order node walk callback
+          [&](triton::FuncOp funcOp,
+              CallGraph<AxisInfoMapT>::FuncDataMapT &funcAxisInfoMap) {
+            funcs.push_back(funcOp);
+          });
+    }
+    SetVector<triton::FuncOp> sortedFuncs(funcs.rbegin(), funcs.rend());
     for (auto funcOp : sortedFuncs) {
       initialize(funcOp);
       funcOp.walk([&](triton::CallOp callOp) { update(callOp, funcOp); });
@@ -305,7 +324,7 @@ public:
 
   AxisInfo *getAxisInfo(Value value) {
     auto funcOp = value.getParentRegion()->getParentOfType<triton::FuncOp>();
-    auto *axisInfoMap = callGraphAxisInfoMap.getFuncData(funcOp);
+    auto *axisInfoMap = callGraph.getFuncData(funcOp);
     if (!axisInfoMap) {
       return nullptr;
     }
@@ -326,9 +345,6 @@ private:
   void initialize(triton::FuncOp funcOp);
 
   void update(triton::CallOp callOp, triton::FuncOp funcOp);
-
-  using AxisInfoMapT = DenseMap<Value, AxisInfo>;
-  CallGraph<AxisInfoMapT> callGraphAxisInfoMap;
 };
 
 } // namespace mlir

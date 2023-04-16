@@ -133,23 +133,11 @@ public:
             WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
             typename UpdateEdgeFn, typename UpdateNodeFn>
   void walk(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
-    DenseSet<triton::CallOp> visited;
+    DenseSet<triton::FuncOp> visited;
     for (auto root : roots) {
       doWalk<UpdateEdgeOrder, UpdateNodeOrder>(root, visited, updateEdgeFn,
                                                updateNodeFn);
     }
-  }
-
-  SetVector<triton::FuncOp> topologicalSort() {
-    SmallVector<triton::FuncOp> funcs;
-    for (auto root : roots) {
-      doTopologicalSort(root, funcs);
-    }
-    SetVector<triton::FuncOp> sorted;
-    for (auto func : llvm::reverse(funcs)) {
-      sorted.insert(func);
-    }
-    return sorted;
   }
 
   T *getFuncData(triton::FuncOp funcOp) {
@@ -186,29 +174,27 @@ private:
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
             WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
             typename UpdateEdgeFn, typename UpdateNodeFn>
-  void doWalk(triton::FuncOp funcOp, DenseSet<triton::CallOp> &visited,
+  void doWalk(triton::FuncOp funcOp, DenseSet<triton::FuncOp> &visited,
               UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
+    if (visited.count(funcOp)) {
+      llvm::report_fatal_error("Cycle detected in call graph");
+    }
     if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {
       updateNodeFn(funcOp, funcMap);
     }
     for (auto [callOp, callee] : callGraph[funcOp]) {
-      if (visited.count(callOp)) {
-        llvm::report_fatal_error("Cycle detected in call graph");
-      }
-      visited.insert(callOp);
       if constexpr (UpdateEdgeOrder == WalkOrder::PreOrder) {
         updateEdgeFn(callOp, callee);
       }
-      updateEdgeFn(callOp, callee);
+      doWalk(callee, visited, updateEdgeFn, updateNodeFn);
       if constexpr (UpdateEdgeOrder == WalkOrder::PostOrder) {
         updateEdgeFn(callOp, callee);
       }
-      doWalk(callee, visited, updateEdgeFn, updateNodeFn);
-      visited.erase(callOp);
     }
     if constexpr (UpdateNodeOrder == WalkOrder::PostOrder) {
       updateNodeFn(funcOp, funcMap);
     }
+    visited.erase(funcOp);
   }
 
   void doTopologicalSort(triton::FuncOp funcOp,
@@ -225,6 +211,22 @@ private:
       callGraph;
   FuncDataMapT funcMap;
   SmallVector<triton::FuncOp> roots;
+};
+
+template <typename T> class ModuleAnalysis {
+public:
+  ModuleAnalysis(ModuleOp moduleOp) : callGraph(moduleOp) {}
+
+  template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
+            WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
+            typename UpdateEdgeFn, typename UpdateNodeFn>
+  void walk(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
+    callGraph.template walk<UpdateEdgeOrder, UpdateNodeOrder>(updateEdgeFn,
+                                                              updateNodeFn);
+  }
+
+protected:
+  CallGraph<T> callGraph;
 };
 
 } // namespace mlir

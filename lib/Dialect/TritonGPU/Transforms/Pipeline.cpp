@@ -181,8 +181,8 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 ///                                                  this pass?)
 LogicalResult LoopPipeliner::initialize() {
   Block *loop = forOp.getBody();
-
-  ModuleAxisInfoAnalysis axisInfoAnalysis(forOp->getParentOfType<ModuleOp>());
+  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
+  ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> validLoads;

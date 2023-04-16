@@ -151,7 +151,7 @@ public:
 
     /* allocate shared memory and set barrier */
     ModuleAllocation allocation(mod);
-    MembarAnalysis membarPass(&allocation);
+    ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
 
     /* lower functions */

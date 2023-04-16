@@ -226,7 +226,8 @@ private:
       auto callable = dyn_cast<CallOpInterface>(op).resolveCallable();
       auto funcOp = dyn_cast<FuncOp>(callable);
       auto *funcAlloc = &(*funcAllocMap)[funcOp];
-      allocation->sharedMemorySize += funcAlloc->getSharedMemorySize();
+      auto bytes = funcAlloc->getSharedMemorySize();
+      allocation->addBuffer<BufferT::BufferKind::Virtual>(op, bytes);
     }
   }
 
@@ -306,15 +307,19 @@ private:
   /// allocated, but is used to store intermediate results.
   void resolveScratchBufferLiveness(
       const DenseMap<Operation *, size_t> &operationId) {
-    // Analyze liveness of scratch buffers
-    for (auto opScratchIter : allocation->opScratch) {
-      // Any scratch memory's live range is the current operation's live
-      // range.
-      auto *op = opScratchIter.first;
-      auto *buffer = opScratchIter.second;
-      bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                           operationId.lookup(op) + 1)});
-    }
+    // Analyze liveness of scratch buffers and vritual buffers.
+    auto processScratchMemory = [&](const auto &container) {
+      for (auto opScratchIter : container) {
+        // Any scratch memory's live range is the current operation's live
+        // range.
+        auto *op = opScratchIter.first;
+        auto *buffer = opScratchIter.second;
+        bufferRange.insert({buffer, Interval(operationId.lookup(op),
+                                             operationId.lookup(op) + 1)});
+      }
+    };
+    processScratchMemory(allocation->opScratch);
+    processScratchMemory(allocation->opVirtual);
   }
 
   /// Resolves liveness of all values involved under the root operation.

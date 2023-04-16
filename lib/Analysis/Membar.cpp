@@ -9,15 +9,15 @@
 
 namespace mlir {
 
-void MembarAnalysis::run() {
-  auto moduleOp = moduleAllocation->getModuleOp();
-  moduleOp.walk([&](triton::FuncOp funcOp) {
-    OpBuilder builder(funcOp.getContext());
-    resolve(funcOp, &builder);
-  });
+void MembarAnalysis::run(FuncMembarAnalysisMap &funcMembarAnalysisMap) {
+  triton::FuncOp funcOp = dyn_cast<triton::FuncOp>(allocation->getOperation());
+  OpBuilder builder(funcOp.getContext());
+  resolve(funcOp, &funcMembarAnalysisMap, &builder);
 }
 
-void MembarAnalysis::resolve(triton::FuncOp funcOp, OpBuilder *builder) {
+void MembarAnalysis::resolve(triton::FuncOp funcOp,
+                             FuncMembarAnalysisMap *funcMembarAnalysisMap,
+                             OpBuilder *builder) {
   // Initialize the blockList
   std::deque<Block *> blockList;
   funcOp.walk<WalkOrder::PreOrder>([&](Block *block) {
@@ -35,7 +35,8 @@ void MembarAnalysis::resolve(triton::FuncOp funcOp, OpBuilder *builder) {
       blockList.emplace_back(block);
   });
 
-  auto *allocation = moduleAllocation->getAllocation(funcOp);
+  DenseMap<Block *, BlockInfo> inputBlockInfoMap;
+  DenseMap<Block *, BlockInfo> outputBlockInfoMap;
   // A fixed point algorithm
   while (!blockList.empty()) {
     auto *block = blockList.front();
@@ -47,7 +48,7 @@ void MembarAnalysis::resolve(triton::FuncOp funcOp, OpBuilder *builder) {
       if (op.hasTrait<OpTrait::IsTerminator>()) {
         visitTerminator(&op, successors);
       } else {
-        update(&op, &inputBlockInfo, builder, allocation);
+        update(&op, &inputBlockInfo, funcMembarAnalysisMap, builder);
       }
     }
     // Get the reference because we want to update if it changed
@@ -65,6 +66,12 @@ void MembarAnalysis::resolve(triton::FuncOp funcOp, OpBuilder *builder) {
       blockList.emplace_back(successor);
     }
   }
+
+  funcOp.walk<WalkOrder::PreOrder>([&](Block *block) {
+    block->walk([&](triton::ReturnOp returnOp) {
+      funcBlockInfo.join(outputBlockInfoMap[block]);
+    });
+  });
 }
 
 void MembarAnalysis::visitTerminator(Operation *op,
@@ -84,7 +91,8 @@ void MembarAnalysis::visitTerminator(Operation *op,
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                            OpBuilder *builder, Allocation *allocation) {
+                            FuncMembarAnalysisMap *funcMembarAnalysisMap,
+                            OpBuilder *builder) {
   if (isa<triton::gpu::ExtractSliceOp>(op) ||
       isa<triton::gpu::AllocTensorOp>(op) || isa<triton::TransOp>(op)) {
     // alloc is an allocation op without memory write.
@@ -111,33 +119,40 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   BlockInfo curBlockInfo;
-  for (Value value : op->getOperands()) {
-    for (auto bufferId : allocation->getBufferIds(value)) {
-      if (bufferId != Allocation::InvalidBufferId) {
-        if (isa<triton::gpu::InsertSliceAsyncOp>(op) ||
-            isa<tensor::InsertSliceOp>(op)) {
-          // FIXME(Keren): insert_slice and insert_slice_async are always
-          // alias for now
-          curBlockInfo.syncWriteBuffers.insert(bufferId);
-        } else {
-          // ConvertLayoutOp: shared memory -> registers
-          curBlockInfo.syncReadBuffers.insert(bufferId);
+  if (isa<triton::CallOp>(op)) {
+    auto callOpInterface = dyn_cast<CallOpInterface>(op);
+    if (auto callee =
+            dyn_cast<triton::FuncOp>(callOpInterface.resolveCallable()))
+      curBlockInfo = funcMembarAnalysisMap->lookup(callee).getBlockInfo();
+  } else {
+    for (Value value : op->getOperands()) {
+      for (auto bufferId : allocation->getBufferIds(value)) {
+        if (bufferId != Allocation::InvalidBufferId) {
+          if (isa<triton::gpu::InsertSliceAsyncOp>(op) ||
+              isa<tensor::InsertSliceOp>(op)) {
+            // FIXME(Keren): insert_slice and insert_slice_async are always
+            // alias for now
+            curBlockInfo.syncWriteBuffers.insert(bufferId);
+          } else {
+            // ConvertLayoutOp: shared memory -> registers
+            curBlockInfo.syncReadBuffers.insert(bufferId);
+          }
         }
       }
     }
-  }
-  for (Value value : op->getResults()) {
-    // ConvertLayoutOp: registers -> shared memory
-    auto bufferId = allocation->getBufferId(value);
+    for (Value value : op->getResults()) {
+      // ConvertLayoutOp: registers -> shared memory
+      auto bufferId = allocation->getBufferId(value);
+      if (bufferId != Allocation::InvalidBufferId) {
+        curBlockInfo.syncWriteBuffers.insert(bufferId);
+      }
+    }
+    // Scratch buffer is considered as both shared memory write & read
+    auto bufferId = allocation->getBufferId(op);
     if (bufferId != Allocation::InvalidBufferId) {
       curBlockInfo.syncWriteBuffers.insert(bufferId);
+      curBlockInfo.syncReadBuffers.insert(bufferId);
     }
-  }
-  // Scratch buffer is considered as both shared memory write & read
-  auto bufferId = allocation->getBufferId(op);
-  if (bufferId != Allocation::InvalidBufferId) {
-    curBlockInfo.syncWriteBuffers.insert(bufferId);
-    curBlockInfo.syncReadBuffers.insert(bufferId);
   }
 
   if (blockInfo->isIntersected(curBlockInfo, allocation)) {

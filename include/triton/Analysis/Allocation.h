@@ -110,6 +110,8 @@ public:
   BufferId getBufferId(Operation *operation) const {
     if (opScratch.count(operation)) {
       return opScratch.lookup(operation)->id;
+    } else if (opVirtual.count(operation)) {
+      return opVirtual.lookup(operation)->id;
     } else {
       return InvalidBufferId;
     }
@@ -129,7 +131,7 @@ public:
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
-    enum class BufferKind { Explicit, Scratch };
+    enum class BufferKind { Explicit, Scratch, Virtual };
 
     /// MT: thread-safe
     inline static std::atomic<BufferId> nextId = 0;
@@ -172,6 +174,8 @@ private:
     bufferSet[buffer.id] = std::move(buffer);
     if constexpr (Kind == BufferT::BufferKind::Explicit) {
       valueBuffer[key] = &bufferSet[buffer.id];
+    } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
+      opVirtual[key] = &bufferSet[buffer.id];
     } else {
       opScratch[key] = &bufferSet[buffer.id];
     }
@@ -184,6 +188,7 @@ private:
 private:
   Operation *operation = nullptr;
   OpScratchMapT opScratch;
+  OpScratchMapT opVirtual;
   ValueBufferMapT valueBuffer;
   AliasBufferMapT aliasBuffer;
   BufferSetT bufferSet;
@@ -192,35 +197,43 @@ private:
   friend class triton::AllocationAnalysis;
 };
 
-class ModuleAllocation {
+/// Static analysis that computes the allocation of shared memory buffers
+/// across the call graph.
+/// The allocation is performed in a post-order walk of the call graph.
+/// Each call op is treated like convert_layout that allocates a scratch buffer.
+/// At each call, we compute the start offset of the scratch buffer and pass it
+/// as an argument to the callee.
+class ModuleAllocation : public ModuleAnalysis<Allocation> {
 public:
-  ModuleAllocation(ModuleOp moduleOp) : callGraphAllocation(moduleOp) {
-    callGraphAllocation.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        [&](triton::CallOp callOp, triton::FuncOp funcOp) {},
+  ModuleAllocation(ModuleOp moduleOp) : ModuleAnalysis<Allocation>(moduleOp) {
+    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        // Pre-order edge walk callback
+        [](triton::CallOp callOp, triton::FuncOp funcOp) {},
+        // Post-order node walk callback
         [&](triton::FuncOp funcOp,
             CallGraph<Allocation>::FuncDataMapT &funcAllocMap) {
-          funcAllocMap.try_emplace(funcOp, funcOp);
-          funcAllocMap[funcOp].run(funcAllocMap);
+          auto [iter, inserted] = funcAllocMap.try_emplace(funcOp, funcOp);
+          if (inserted)
+            iter->second.run(funcAllocMap);
         });
   }
 
   size_t getSharedMemorySize() {
+    assert(callGraph.getRoots().size() == 1 &&
+           "The module should have only one root function");
     size_t size = 0;
-    for (auto funcOp : callGraphAllocation.getRoots()) {
-      auto *alloc = callGraphAllocation.getFuncData(funcOp);
+    for (auto funcOp : callGraph.getRoots()) {
+      auto *alloc = callGraph.getFuncData(funcOp);
       size = std::max(size, alloc->getSharedMemorySize());
     }
     return size;
   }
 
   Allocation *getAllocation(triton::FuncOp funcOp) {
-    return callGraphAllocation.getFuncData(funcOp);
+    return callGraph.getFuncData(funcOp);
   }
 
-  ModuleOp getModuleOp() { return callGraphAllocation.getModuleOp(); }
-
-private:
-  CallGraph<Allocation> callGraphAllocation;
+  ModuleOp getModuleOp() { return callGraph.getModuleOp(); }
 };
 
 template <typename T> Interval(T, T) -> Interval<T>;

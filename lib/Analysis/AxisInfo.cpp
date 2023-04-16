@@ -961,7 +961,7 @@ void ModuleAxisInfoAnalysis::initialize(triton::FuncOp funcOp) {
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
   if (failed(solver->initializeAndRun(funcOp)))
     return;
-  auto *axisInfoMap = callGraphAxisInfoMap.getFuncData(funcOp);
+  auto *axisInfoMap = callGraph.getFuncData(funcOp);
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
       auto axisInfo = analysis->getLatticeElement(value)->getValue();
@@ -982,7 +982,7 @@ void ModuleAxisInfoAnalysis::initialize(triton::FuncOp funcOp) {
 void ModuleAxisInfoAnalysis::update(triton::CallOp callOp,
                                     triton::FuncOp funcOp) {
   auto args = funcOp->getOperands();
-  auto *axisInfoMap = callGraphAxisInfoMap.getFuncData(funcOp);
+  auto *axisInfoMap = callGraph.getFuncData(funcOp);
   for (auto entry : llvm::enumerate(callOp.getOperands())) {
     auto index = entry.index();
     auto value = entry.value();
