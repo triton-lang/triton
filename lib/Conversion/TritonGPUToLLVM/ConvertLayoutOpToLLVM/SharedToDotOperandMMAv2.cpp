@@ -110,29 +110,25 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   Value kMatArr = kOrder == 1 ? s1 : s0;
   Value nkMatArr = kOrder == 1 ? s0 : s1;
 
-  // Matrix coordinates inside a CTA,
-  // the matrix layout is [2wpt[0], 2] for A and [2, 2wpt[1]] for B.
-  // e.g., Setting wpt=4, the data layout for A(kOrder=1) is
-  //   |0 0|  -> 0,1,2,3 are the warpids
-  //   |0 0|
-  //   |1 1|
-  //   |1 1|
-  //   |2 2|
-  //   |2 2|
-  //   |3 3|
-  //   |3 3|
+  // matrix coordinate inside a CTA, the matrix layout is [2x2wpt] for A and
+  // [2wptx2] for B. e.g. Setting wpt=3, The data layout for A(kOrder=1) is
+  //   |0 0 1 1 2 2| -> 0,1,2 are the warpids
+  //   |0 0 1 1 2 2|
   //
   // for B(kOrder=0) is
-  //   |0 1 2 3 0 1 2 3| -> 0,1,2,3 are the warpids
-  //   |0 1 2 3 0 1 2 3|
+  //   |0 0|  -> 0,1,2 are the warpids
+  //   |1 1|
+  //   |2 2|
+  //   |0 0|
+  //   |1 1|
+  //   |2 2|
   // Note, for each warp, it handles a 2x2 matrices, that is the coordinate
   // address (s0,s1) annotates.
 
   Value matOff[2];
   matOff[kOrder ^ 1] =
-      add(mul(warpId, i32_val(warpOffStride)), // warp offset (kOrder=1)
-          mul(nkMatArr,
-              i32_val(matArrStride))); // matrix offset inside a warp (kOrder=1)
+      add(mul(warpId, i32_val(warpOffStride)),   // warp offset
+          mul(nkMatArr, i32_val(matArrStride))); // matrix offset inside a warp
   matOff[kOrder] = kMatArr;
 
   // Physical offset (before swizzling)
@@ -146,13 +142,7 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 
   SmallVector<Value> offs(numPtrs);
   Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
-  // To prevent out-of-bound access of B when wpt * 16 > tile_size.
-  // In such a case, we need to wrap around the offset of B.
-  // |0 1 2 3 0 1 2 3| -> | 0(0) 1(1) 2(2) 3(3) |
-  // |0 1 2 3 0 1 2 3|    | 0(0) 1(1) 2(2) 3(3) |
-  //          ~~~~~~~ out-of-bound access
-  Value sOff = urem(add(sOffInMat, mul(sMatOff, i32_val(sMatShape))),
-                    i32_val(tileShape[order[1]]));
+  Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
   for (int i = 0; i < numPtrs; ++i) {
     Value cMatOffI = add(cMatOff, i32_val(i * pLoadStrideInMat));
     cMatOffI = xor_(cMatOffI, phase);
@@ -215,6 +205,9 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
     std::swap(cTileShape, sTileShape);
   }
 
+  // llvm::outs() << sMatShape << " " << sStride << "\n";
+  // llvm::outs() << warpOffStride << "\n";
+
   Value cOffInMat = udiv(lane, i32_val(4));
   Value sOffInMat =
       mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
@@ -223,15 +216,9 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
 
   SmallVector<Value> offs(numPtrs);
 
-  for (int mat = 0; mat < 4; ++mat) {
-    int kMatArrInt = test ? mat / 2 : mat % 2;
-    int nkMatArrInt = test ? mat % 2 : mat / 2;
-    if (kMatArrInt > 0) // we don't need pointers for k
-      continue;
-    if (!needTrans) {
-      std::swap(kMatArrInt, nkMatArrInt);
-    }
-    Value kMatArr = i32_val(kMatArrInt);
+  for (int outer = 0; outer < 2; ++outer) {
+    int nkMatArrInt = needTrans ? outer : 0;
+    int kMatArrInt = needTrans ? 0 : outer;
     Value nkMatArr = i32_val(nkMatArrInt);
 
     Value cMatOff = mul(nkMatArr, i32_val(matArrStride));
@@ -240,8 +227,7 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
 
     for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
-        int ptrOff =
-            loadx4Off * 8 + std::max(kMatArrInt, nkMatArrInt) * 4 + elemOff;
+        int ptrOff = loadx4Off * 8 + outer * 4 + elemOff;
         Value cMatOffI = add(
             cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
         //
@@ -262,7 +248,8 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         }
 
         if (!needTrans)
-          offs[ptrOff] = add(offs[ptrOff], mul(warpOff, i32_val(64 * 16)));
+          offs[ptrOff] =
+              add(offs[ptrOff], mul(warpOff, mul(i32_val(sMatShape), sStride)));
       }
     }
   }
@@ -689,6 +676,12 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
 
   SmallVector<int64_t> shape(tensorTy.getShape().begin(),
                              tensorTy.getShape().end());
+
+  // TODO[Superjomn]: transB cannot be accessed in ConvertLayoutOp.
+  bool transB = false;
+  if (transB) {
+    std::swap(shape[0], shape[1]);
+  }
 
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;

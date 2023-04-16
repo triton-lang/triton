@@ -1426,21 +1426,19 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 
 
 @pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype",
-                         [(*shape, 4, False, False, epilogue, allow_tf32, in_dtype, out_dtype)
-                          for shape in [(64, 64, 64), (16, 16, 16)]
-                          for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
-                          for allow_tf32 in [True, False]
-                          for in_dtype, out_dtype in [('float16', 'float16'),
-                                                      ('float16', 'float32'),
-                                                      ('float32', 'float32')]
-                          if not (allow_tf32 and (in_dtype in ['float16']))] +
-
                          [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype)
-                          for shape_nw in [[64, 64, 64, 2]]
-                          for allow_tf32 in [True]
-                          for col_a in [True, False]
-                          for col_b in [True, False]
-                          for in_dtype, out_dtype in [('int8', 'int8')]])
+                          for shape_nw in [
+                             [64, 64, 64, 2],
+                             [128, 128, 128, 4],
+                             [128, 128, 64, 2],
+                             [128, 128, 128, 2],
+                             [128, 128, 128, 1],
+                             [128, 128, 128, 8],
+                         ]
+                             for allow_tf32 in [True]
+                             for col_a in [True, False]
+                             for col_b in [True, False]
+                             for in_dtype, out_dtype in [('int8', 'int8')]])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
@@ -1586,7 +1584,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     elif out_dtype == tl.float16:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
     else:
-        print((np.abs(to_numpy(z_tri[:, 0]) - z_ref[:, 0]) >= 0.1).nonzero())
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
         # np.testing.assert_allclose(z_ref[:16, 0], to_numpy(z_tri[:16, 0]), rtol=0.01)
     # make sure ld/st are vectorized
