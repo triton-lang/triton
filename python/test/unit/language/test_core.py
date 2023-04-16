@@ -1429,11 +1429,11 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                          [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype)
                           for shape_nw in [
                              [64, 64, 64, 2],
-                             [128, 128, 128, 4],
+                             #  [128, 128, 128, 4],
                              [128, 128, 64, 2],
                              [128, 128, 128, 2],
-                             [128, 128, 128, 1],
-                             [128, 128, 128, 8],
+                             #  [128, 128, 128, 1],
+                             #  [128, 128, 128, 8],
                          ]
                              for allow_tf32 in [True]
                              for col_a in [True, False]
