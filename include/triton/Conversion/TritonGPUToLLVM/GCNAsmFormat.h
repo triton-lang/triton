@@ -19,6 +19,69 @@ class GCNInstr;
 class GCNInstrCommon;
 class GCNInstrExecution;
 
+// GCNBuilder helps to manage a GCN asm program consists of one or multiple
+// instructions.
+//
+// A helper for building an ASM program, the objective of GCNBuilder is to give
+// a thin encapsulation and make the ASM code for MLIR LLVM Dialect more clear.
+// Currently, several factors are introduced to reduce the need for mixing
+// string and C++ if-else code.
+//
+// Usage:
+// To create a multiplcation operation
+//
+//
+// GCNBuilder gcnBuilder;
+// unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+//
+// const std::string readConstraint = "v";
+// const std::string writeConstraint = "=v";
+// auto res = gcnBuilder.newOperand(writeConstraint);
+// auto lhs = gcnBuilder.newOperand(operands[0], readConstraint);
+// auto rhs = gcnBuilder.newOperand(operands[1], readConstraint);
+//
+// create inst
+// auto &mul_inst =
+// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+//
+// launch insts
+// mul_inst(res, lhs, rhs);
+//
+// return result
+// Value ret = gcnBuilder.launch(rewriter, loc, elemTy, false);
+// return ret;
+// To get the asm code:
+// builder.dump()
+//
+// To get all the mlir::Value used in the GCN code,
+//
+// builder.getAllMlirArgs() // get {pVal, iVal, jVal, kVal}
+//
+// To get the string containing all the constraints with "," separated,
+// builder.getConstraints() // get "=v,v,v"
+//
+// GCNBuilder can build a GCN asm with multiple instructions, sample code:
+//
+// GCNBuilder builder;
+// auto &rcp = gcnBuilder.create<GCNInstr>("v_rcp")->float_op_type(bitwidth);
+// auto &mul_inst =
+// gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth);
+//
+// rcp(...);
+// mul_inst(...);
+// This will get a GCN code with two instructions.
+//
+// Similar to a C function, a declared GCNInstr instance can be launched
+// multiple times with different operands, e.g.
+//
+//   auto &mul_inst =
+//   gcnBuilder.create<GCNInstr>("v_mul")->float_op_type(bitwidth); mul_inst(...
+//   some operands ...); mul_inst(... some different operands ...);
+//
+// Finally, we will get a GCN code with two mov instructions.
+//
+// There are several derived instruction type for typical instructions, for
+// example, the GCNIOInstr for ld and st instructions.
 struct GCNBuilder {
   struct Operand {
     std::string constraint;
@@ -48,7 +111,7 @@ struct GCNBuilder {
     std::string dump() const;
   };
 
-struct Modifier {
+  struct Modifier {
     Value value;
     std::string modifier;
     std::string arg;
@@ -191,10 +254,12 @@ struct GCNInstrCommon {
   // clang-format on
 
   // Set operands of this instruction.
-  GCNInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs, llvm::ArrayRef<Modifier*> mods);
+  GCNInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,
+                                llvm::ArrayRef<Modifier *> mods);
 
 protected:
-  GCNInstrExecution &call(llvm::ArrayRef<Operand *> oprs, ArrayRef<Modifier *> mods);
+  GCNInstrExecution &call(llvm::ArrayRef<Operand *> oprs,
+                          ArrayRef<Modifier *> mods);
 
   GCNBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
@@ -218,17 +283,12 @@ template <class ConcreteT> struct GCNInstrBase : public GCNInstrCommon {
   }
 };
 
-enum VectorWidth {
-  Byte = 8,
-  Short = 16,
-  Dword = 32,
-  Qword = 64
-};
+enum VectorWidth { Byte = 8, Short = 16, Dword = 32, Qword = 64 };
 
 struct GCNInstr : public GCNInstrBase<GCNInstr> {
   using GCNInstrBase<GCNInstr>::GCNInstrBase;
 
-   GCNInstr &float_op_type(int width) {
+  GCNInstr &float_op_type(int width) {
     switch (width) {
     case Byte:
       assert(Byte != width);
@@ -258,8 +318,10 @@ struct GCNInstrExecution {
 
   GCNInstrExecution() = default;
   explicit GCNInstrExecution(GCNInstrCommon *instr,
-                             llvm::ArrayRef<Operand *> oprs, llvm::ArrayRef<Modifier *> modifiers)
-      : instr(instr), argsInOrder(oprs.begin(), oprs.end()), mods(modifiers.begin(), modifiers.end()) {}
+                             llvm::ArrayRef<Operand *> oprs,
+                             llvm::ArrayRef<Modifier *> modifiers)
+      : instr(instr), argsInOrder(oprs.begin(), oprs.end()),
+        mods(modifiers.begin(), modifiers.end()) {}
 
   std::string dump() const;
 
@@ -267,8 +329,6 @@ struct GCNInstrExecution {
 
   GCNInstrCommon *instr{};
 };
-
-
 
 struct GCNMemInstr : public GCNInstrBase<GCNMemInstr> {
   using GCNInstrBase<GCNMemInstr>::GCNInstrBase;

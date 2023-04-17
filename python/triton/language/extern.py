@@ -45,6 +45,11 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         return core.tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder)), ret_type)
 
 
+def extern(fn):
+    """A decorator for external functions."""
+    return core.builtin(fn)
+
+
 def elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, _builder=None):
     '''
         Dispatch an elementwise function to a library

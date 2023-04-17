@@ -1,5 +1,4 @@
 #include "TritonGPUToLLVM.h"
-#include "DotOpHelpers.h"
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 

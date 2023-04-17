@@ -1,14 +1,13 @@
-import distutils
 import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import urllib.request
-from distutils.version import LooseVersion
 from pathlib import Path
 from typing import NamedTuple
 
@@ -154,10 +153,10 @@ class CMakeBuild(build_ext):
                 "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
             )
 
-        if platform.system() == "Windows":
-            cmake_version = LooseVersion(re.search(r"version\s*([\d.]+)", out.decode()).group(1))
-            if cmake_version < "3.1.0":
-                raise RuntimeError("CMake >= 3.1.0 is required on Windows")
+        match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
+        cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
+        if (cmake_major, cmake_minor) < (3, 18):
+            raise RuntimeError("CMake >= 3.18.0 is required")
 
         for ext in self.extensions:
             self.build_extension(ext)
@@ -176,7 +175,7 @@ class CMakeBuild(build_ext):
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         # python directories
-        python_include_dir = distutils.sysconfig.get_python_inc()
+        python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
             "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
@@ -200,9 +199,9 @@ class CMakeBuild(build_ext):
                 cmake_args += ["-A", "x64"]
             build_args += ["--", "/m"]
         else:
-            import multiprocessing
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-            build_args += ['-j' + str(2 * multiprocessing.cpu_count())]
+            max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
+            build_args += ['-j' + max_jobs]
 
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
@@ -211,6 +210,7 @@ class CMakeBuild(build_ext):
 
 download_and_copy_ptxas()
 
+
 setup(
     name="triton",
     version="2.1.0",
@@ -218,14 +218,21 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
-    packages=["triton", "triton/_C", "triton/language", "triton/tools", "triton/impl", "triton/ops", "triton/runtime", "triton/ops/blocksparse"],
-    install_requires=[
-        "cmake>=3.20",
-        "filelock",
-        "torch",
-        "lit",
+    packages=[
+        "triton",
+        "triton/_C",
+        "triton/common",
+        "triton/compiler",
+        "triton/language",
+        "triton/ops",
+        "triton/ops/blocksparse",
+        "triton/runtime",
+        "triton/runtime/driver",
+        "triton/tools",
     ],
-    package_data={"triton": ["third_party/**/*"]},
+    install_requires=[
+        "filelock",
+    ],
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={"build_ext": CMakeBuild},
@@ -238,10 +245,18 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
     ],
     test_suite="tests",
     extras_require={
+        "build": [
+            "cmake>=3.18",
+            "lit",
+        ],
         "tests": [
             "autopep8",
             "flake8",
@@ -249,6 +264,7 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
+            "torch",
         ],
         "tutorials": [
             "matplotlib",

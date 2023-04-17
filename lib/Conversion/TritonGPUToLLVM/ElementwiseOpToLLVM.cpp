@@ -87,17 +87,21 @@ struct FpToFpOpConversion
              extract_element(f16_ty, fp16x2Vec1, i32_val(1))
            };
 #else
-    auto *ptxAsm = "{                                      \n"
-                   ".reg .b32 a<2>, b<2>;                  \n"
-                   "prmt.b32 a0, 0, $2, 0x5040;            \n"
-                   "prmt.b32 a1, 0, $2, 0x7060;            \n"
-                   "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-                   "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-                   "shr.b32  b0, b0, 1;                    \n"
-                   "shr.b32  b1, b1, 1;                    \n"
-                   "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
-                   "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n"
-                   "}";
+    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
+        "{                                      \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+        "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
+        "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
+        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
+        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "shr.b32  b0, b0, 1;                    \n" // b0 >>= 1
+        "shr.b32  b1, b1, 1;                    \n" // shift into fp16 position
+        "add.u32  b0, b0, 0x20002000;           \n" // b0.exp += 2**4-2**3
+                                                    // exponent compensate = 8
+        "add.u32  b1, b1, 0x20002000;           \n" // b1 += 8<<10 | 8<<10<<16
+        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+        "}";
     return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
 #endif
   }
@@ -106,6 +110,7 @@ struct FpToFpOpConversion
   convertFp8E5M2x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
+    // exponent bias of Fp8E5M2 and Fp16 are the same
 #ifdef USE_ROCM
     auto ctx = rewriter.getContext();
     auto fp8x4VecTy = vec_ty(i8_ty, 4);
@@ -221,42 +226,44 @@ struct FpToFpOpConversion
              extract_element(i16_ty, bf16x2Vec1, i32_val(1))
            };
 #else
-    auto *ptxAsm = "{                                          \n"
-                   ".reg .b32 a<2>, sign<2>, nosign<2>, b<2>;  \n"
-                   "prmt.b32 a0, 0, $2, 0x5040;                \n"
-                   "prmt.b32 a1, 0, $2, 0x7060;                \n"
-                   "and.b32 sign0, a0, 0x80008000;             \n"
-                   "and.b32 sign1, a1, 0x80008000;             \n"
-                   "and.b32 nosign0, a0, 0x7fff7fff;           \n"
-                   "and.b32 nosign1, a1, 0x7fff7fff;           \n"
-                   "shr.b32 nosign0, nosign0, 4;               \n"
-                   "shr.b32 nosign1, nosign1, 4;               \n"
-                   "add.u32 nosign0, nosign0, 0x38003800;      \n"
-                   "add.u32 nosign1, nosign1, 0x38003800;      \n"
-                   "or.b32 $0, sign0, nosign0;                 \n"
-                   "or.b32 $1, sign1, nosign1;                 \n"
-                   "}";
+    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
+        "{                                      \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+        "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
+        "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
+        "and.b32 b0, a0, 0x7fff7fff;            \n" // b0 = a0 & 0x7fff7fff
+        "and.b32 b1, a1, 0x7fff7fff;            \n" // (strip sign)
+        "shr.b32 b0, b0, 4;                     \n" // b0 >>= 4
+        "shr.b32 b1, b1, 4;                     \n" // shift into fp16 position
+        "add.u32 b0, b0, 0x3c003c00;            \n" // b0.exp += 2**7-2**3
+                                                    // exponent compensate = 120
+        "add.u32 b1, b1, 0x3c003c00;            \n" // b1 += 120<<7 | 120<<7<<16
+        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+        "}";
     return convertFp8x4ToBf16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-#endif
+#endif    
   };
 
   static SmallVector<Value>
   convertFp8E5M2x4ToBf16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm = "{                                      \n"
-                   ".reg .b32 a<2>, b<2>;                  \n"
-                   "prmt.b32 a0, 0, $2, 0x5140;            \n"
-                   "prmt.b32 a1, 0, $2, 0x7362;            \n"
-                   "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-                   "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-                   "shr.b32  b0, b0, 3;                    \n"
-                   "shr.b32  b1, b1, 3;                    \n"
-                   "add.u32  b0, b0, 0x30003000;           \n"
-                   "add.u32  b1, b1, 0x30003000;           \n"
-                   "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
-                   "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n"
-                   "}";
+    auto *ptxAsm = // WARN: subnormal (0bs00000xx) are not handled
+        "{                                      \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+        "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
+        "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
+        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
+        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
+        "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
+        "add.u32  b0, b0, 0x38003800;           \n" // b0.exp += 2**7-2**4
+                                                    // exponent compensate = 112
+        "add.u32  b1, b1, 0x38003800;           \n" // b1 += 112<<7 | 112<<7<<16
+        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+        "}";
     return convertFp8x4ToBf16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   };
 
@@ -329,18 +336,23 @@ struct FpToFpOpConversion
             };
 
 #else
-    auto *ptxAsm = "{                                      \n"
-                   ".reg .b32 a<2>, b<2>;                  \n"
-                   "shl.b32 a0, $1, 1;                     \n"
-                   "shl.b32 a1, $2, 1;                     \n"
-                   "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-                   "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-                   "add.u32 a0, a0, 0x00800080;            \n"
-                   "add.u32 a1, a1, 0x00800080;            \n"
-                   "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
-                   "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
-                   "prmt.b32 $0, b0, b1, 0x7531;           \n"
-                   "}";
+    auto *ptxAsm = // WARN: subnormal Fp8s are not handled
+        "{                                      \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // see Fp8E4M3x4ToFp16x4
+        "sub.u32 a0, $1, 0x20002000;            \n" // a0 = input0 - 0x20002000
+                                                    // (compensate offset)
+        "sub.u32 a1, $2, 0x20002000;            \n" // a1 = input1 - 0x20002000
+                                                    // (8 << 10 | 8 << 10 << 16)
+        "shl.b32 a0, a0, 1;                     \n" // a0 <<= 1
+        "shl.b32 a1, a1, 1;                     \n" // shift into fp8e4 position
+        "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n" // a0 &= 0x7fff7fff
+        "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "add.u32 a0, a0, 0x00800080;            \n" // a0 += 0x00800080
+        "add.u32 a1, a1, 0x00800080;            \n" // (round to nearest)
+        "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n" // b0 = a0|(0x80008000&in0)
+        "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
+        "prmt.b32 $0, b0, b1, 0x7531;           \n" // output = b1b0
+        "}";
     return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
 #endif
   }
@@ -369,11 +381,18 @@ struct FpToFpOpConversion
             extract_element(i8_ty, b1, i32_val(1)),
             extract_element(i8_ty, b1, i32_val(3))
             };
-
 #else
-    auto *ptxAsm = "{                                      \n"
-                   "prmt.b32 $0, $1, $2, 0x7531; \n\t"
-                   "}";
+    auto *ptxAsm =
+        "{                            \n"
+        ".reg .b32 a<2>;              \n"
+        "and.b32 a0, $1, 0x7fff7fff;  \n"           // a0 &= 0x7fff7fff
+        "and.b32 a1, $2, 0x7fff7fff;  \n"           // (strip sign)
+        "add.u32 a0, a0, 0x00800080;  \n"           // a0 += 0x00800080
+        "add.u32 a1, a1, 0x00800080;  \n"           // (round to nearest)
+        "lop3.b32 a0, $1, 0x80008000, a0, 0xea; \n" // a0 = a0|(0x80008000&in0)
+        "lop3.b32 a1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
+        "prmt.b32 $0, a0, a1, 0x7531; \n\t"         // output = a1a0
+        "}";
     return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
 #endif
   }
@@ -507,52 +526,98 @@ struct FpToFpOpConversion
             extract_element(i8_ty, fp8x4Vec, i32_val(2)),
             extract_element(i8_ty, fp8x4Vec, i32_val(3))};
 #else
-    auto *ptxAsm = "{                                            \n"
-                   ".reg .u32 sign, sign<2>, nosign, nosign<2>;  \n"
-                   ".reg .u32 fp8_min, fp8_max, rn_, zero;       \n"
-                   "mov.u32 fp8_min, 0x38003800;                 \n"
-                   "mov.u32 fp8_max, 0x3ff03ff0;                 \n"
-                   "mov.u32 rn_, 0x80008;                        \n"
-                   "mov.u32 zero, 0;                             \n"
-                   "and.b32 sign0, $1, 0x80008000;               \n"
-                   "and.b32 sign1, $2, 0x80008000;               \n"
-                   "prmt.b32 sign, sign0, sign1, 0x7531;         \n"
-                   "and.b32 nosign0, $1, 0x7fff7fff;             \n"
-                   "and.b32 nosign1, $2, 0x7fff7fff;             \n"
-                   ".reg .u32 nosign_0_<2>, nosign_1_<2>;        \n"
-                   "and.b32 nosign_0_0, nosign0, 0xffff0000;     \n"
-                   "max.u32 nosign_0_0, nosign_0_0, 0x38000000;  \n"
-                   "min.u32 nosign_0_0, nosign_0_0, 0x3ff00000;  \n"
-                   "and.b32 nosign_0_1, nosign0, 0x0000ffff;     \n"
-                   "max.u32 nosign_0_1, nosign_0_1, 0x3800;      \n"
-                   "min.u32 nosign_0_1, nosign_0_1, 0x3ff0;      \n"
-                   "or.b32 nosign0, nosign_0_0, nosign_0_1;      \n"
-                   "and.b32 nosign_1_0, nosign1, 0xffff0000;     \n"
-                   "max.u32 nosign_1_0, nosign_1_0, 0x38000000;  \n"
-                   "min.u32 nosign_1_0, nosign_1_0, 0x3ff00000;  \n"
-                   "and.b32 nosign_1_1, nosign1, 0x0000ffff;     \n"
-                   "max.u32 nosign_1_1, nosign_1_1, 0x3800;      \n"
-                   "min.u32 nosign_1_1, nosign_1_1, 0x3ff0;      \n"
-                   "or.b32 nosign1, nosign_1_0, nosign_1_1;      \n"
-                   "add.u32 nosign0, nosign0, rn_;               \n"
-                   "add.u32 nosign1, nosign1, rn_;               \n"
-                   "sub.u32 nosign0, nosign0, 0x38003800;        \n"
-                   "sub.u32 nosign1, nosign1, 0x38003800;        \n"
-                   "shr.u32 nosign0, nosign0, 4;                 \n"
-                   "shr.u32 nosign1, nosign1, 4;                 \n"
-                   "prmt.b32 nosign, nosign0, nosign1, 0x6420;   \n"
-                   "or.b32 $0, nosign, sign;                     \n"
-                   "}";
+    auto *ptxAsm = // bf16 is clamped firstly to fp8 min/max
+        "{                                           \n" // bf16=fp8>>4 + 120<<7
+        ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
+        ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
+        "mov.u32 fp8_min, 0x3c003c00;                \n" // so bf16_min = 0x3c00
+        "mov.u32 fp8_max, 0x43f043f0;                \n" // so bf16_max = 0x43f0
+        "mov.u32 rn_, 0x80008;                       \n" // round to nearest
+        "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
+        "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
+        "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
+        "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
+        "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
+
+        // nosign = clamp(nosign, min, max)
+        ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
+        "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
+        "max.u32 nosign_0_0, nosign_0_0, 0x3c000000; \n"
+        "min.u32 nosign_0_0, nosign_0_0, 0x43f00000; \n"
+        "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
+        "max.u32 nosign_0_1, nosign_0_1, 0x3c00;     \n"
+        "min.u32 nosign_0_1, nosign_0_1, 0x43f0;     \n"
+        "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
+        "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
+        "max.u32 nosign_1_0, nosign_1_0, 0x3c000000; \n"
+        "min.u32 nosign_1_0, nosign_1_0, 0x43f00000; \n"
+        "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
+        "max.u32 nosign_1_1, nosign_1_1, 0x3c00;     \n"
+        "min.u32 nosign_1_1, nosign_1_1, 0x43f0;     \n"
+        "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
+
+        "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
+        "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
+        "sub.u32 nosign0, nosign0, 0x3c003c00;       \n" // nosign0-=0x3c003c00
+        "sub.u32 nosign1, nosign1, 0x3c003c00;       \n" // (compensate offset)
+        "shr.u32 nosign0, nosign0, 4;                \n" // nosign0 >>= 4
+        "shr.u32 nosign1, nosign1, 4;                \n" // shift into to fp8e4
+        "prmt.b32 nosign, nosign0, nosign1, 0x6420;  \n" // nosign0 = 0x00f100f2
+                                                         // nosign1 = 0x00f300f4
+                                                         // nosign = 0xf3f4f1f2
+        "or.b32 $0, nosign, sign;                    \n" // restore sign
+        "}";
     return convertBf16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
 #endif
   };
 
-  // TODO:
-  // static SmallVector<Value>
-  // convertBf16x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
-  //                          const Value &v0, const Value &v1, const Value &v2,
-  //                          const Value &v3) {
-  // }
+  static SmallVector<Value>
+  convertBf16x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
+                           const Value &v0, const Value &v1, const Value &v2,
+                           const Value &v3) {
+    auto *ptxAsm = // bf16 is clamped firstly to fp8 min/max
+        "{                                           \n" // bf16=fp8>>3 + 112<<7
+        ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
+        ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
+        "mov.u32 fp8_min, 0x38003800;                \n" // so bf16_min = 0x3800
+        "mov.u32 fp8_max, 0x57e057e0;                \n" // so bf16_max = 0x57e0
+        "mov.u32 rn_, 0x00100010;                    \n" // round to nearest
+        "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
+        "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
+        "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
+        "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
+        "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
+
+        // nosign = clamp(nosign, min, max)
+        ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
+        "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
+        "max.u32 nosign_0_0, nosign_0_0, 0x38000000; \n"
+        "min.u32 nosign_0_0, nosign_0_0, 0x57e00000; \n"
+        "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
+        "max.u32 nosign_0_1, nosign_0_1, 0x3800;     \n"
+        "min.u32 nosign_0_1, nosign_0_1, 0x57e0;     \n"
+        "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
+        "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
+        "max.u32 nosign_1_0, nosign_1_0, 0x38000000; \n"
+        "min.u32 nosign_1_0, nosign_1_0, 0x57e00000; \n"
+        "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
+        "max.u32 nosign_1_1, nosign_1_1, 0x3800;     \n"
+        "min.u32 nosign_1_1, nosign_1_1, 0x57e0;     \n"
+        "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
+
+        "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
+        "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
+        "sub.u32 nosign0, nosign0, 0x38003800;       \n" // nosign0-=0x38003800
+        "sub.u32 nosign1, nosign1, 0x38003800;       \n" // (compensate offset)
+        "shl.b32 nosign0, nosign0, 3;                \n" // nosign0 <<= 3
+        "shl.b32 nosign1, nosign1, 3;                \n" // shift into to fp8e4
+        "prmt.b32 nosign, nosign0, nosign1, 0x7531;  \n" // nosign0 = 0xf100f200
+                                                         // nosign1 = 0xf300f400
+                                                         // nosign = 0xf3f4f1f2
+        "or.b32 $0, nosign, sign;                    \n" // restore sign
+        "}";
+    return convertBf16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+  }
 
   /* ------------------ */
   // FP8 -> FP32
@@ -722,8 +787,7 @@ struct FpToFpOpConversion
         {{F8E5M2TyID, BF16TyID}, convertFp8E5M2x4ToBf16x4},
         // BF16 -> F8
         {{BF16TyID, F8E4M3TyID}, convertBf16x4ToFp8E4M3x4},
-        // TODO:
-        // {{BF16TyID, F8E5M2TyID}, convertBf16x4ToFp8E5M2x4},
+        {{BF16TyID, F8E5M2TyID}, convertBf16x4ToFp8E5M2x4},
         // F8 -> F32
         {{F8E4M3TyID, F32TyID}, convertFp8E4M3x4ToFp32x4},
         {{F8E5M2TyID, F32TyID}, convertFp8E5M2x4ToFp32x4},
@@ -1215,8 +1279,8 @@ struct ExpOpConversionApprox
   Value createDestOp(mlir::math::ExpOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
-    // For FP64 input, call __nv_expf for higher-precision calculation
-    if (elemTy.getIntOrFloatBitWidth() == 64)
+    // For non-FP32 input, call __nv_expf for higher-precision calculation
+    if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
     const double log2e = 1.4426950408889634;
@@ -1233,6 +1297,48 @@ struct ExpOpConversionApprox
     exp2(output, input);
     return ptxBuilder.launch(rewriter, loc, f32_ty, false);
 #endif
+  }
+};
+
+struct AbsIOpConversion
+    : ElementwiseOpConversionBase<mlir::math::AbsIOp, AbsIOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::math::AbsIOp, AbsIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::math::AbsIOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    auto boolFalse = rewriter.getBoolAttr(false);
+    auto constFalse = rewriter.create<LLVM::ConstantOp>(loc, boolFalse);
+    return rewriter.create<LLVM::AbsOp>(loc, elemTy, operands[0],
+                                        /*is_int_min_poison=*/constFalse);
+  }
+};
+
+struct AbsFOpConversion
+    : ElementwiseOpConversionBase<mlir::math::AbsFOp, AbsFOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::math::AbsFOp, AbsFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::math::AbsFOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    if (llvm::isa<IntegerType>(elemTy)) {
+      // Mask out the sign bit
+      auto num_bits =
+          getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
+      assert(num_bits <= 16);
+      auto mask = (1u << (num_bits - 1u)) - 1u;
+      auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
+      auto maskConst = rewriter.create<LLVM::ConstantOp>(loc, maskAttr);
+      return and_(operands[0], maskConst);
+    }
+
+    return rewriter.create<LLVM::FAbsOp>(loc, elemTy, operands[0]);
   }
 };
 
@@ -1281,6 +1387,8 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
+  patterns.add<AbsIOpConversion>(typeConverter, benefit);
+  patterns.add<AbsFOpConversion>(typeConverter, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, benefit);
 
@@ -1298,159 +1406,8 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
-  // FP32. For FP64 input type, ExpOpConversionApprox will return failure and
+  // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
-}
-
-struct FPExtOpConversion
-    : ElementwiseOpConversionBase<LLVM::FPExtOp, FPExtOpConversion> {
-  using Base = ElementwiseOpConversionBase<LLVM::FPExtOp, FPExtOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  static bool isLegalOp(LLVM::FPExtOp op) {
-    auto retTy = op.getResult().getType();
-    auto srcTy = op.getOperand().getType();
-    if (retTy.isF32() && srcTy.isF16()) {
-      return false;
-    }
-    return true;
-  }
-
-  Value createDestOp(LLVM::FPExtOp op, OpAdaptor adaptor,
-                     ConversionPatternRewriter &rewriter, Type elemTy,
-                     ValueRange operands, Location loc) const {
-    return FpToFpOpConversion::convertFp16ToFp32(loc, rewriter, operands[0]);
-  }
-};
-
-struct FPTruncOpConversion
-    : ElementwiseOpConversionBase<LLVM::FPTruncOp, FPTruncOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<LLVM::FPTruncOp, FPTruncOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  static bool isLegalOp(LLVM::FPTruncOp op) {
-    auto retTy = op.getResult().getType();
-    auto srcTy = op.getOperand().getType();
-    if (retTy.isF16() && srcTy.isF32()) {
-      return false;
-    }
-    return true;
-  }
-
-  Value createDestOp(LLVM::FPTruncOp op, OpAdaptor adaptor,
-                     ConversionPatternRewriter &rewriter, Type elemTy,
-                     ValueRange operands, Location loc) const {
-    return FpToFpOpConversion::convertFp32ToFp16(loc, rewriter, operands[0]);
-  }
-};
-
-struct TruncOpConversion
-    : ElementwiseOpConversionBase<LLVM::TruncOp, TruncOpConversion> {
-  using Base = ElementwiseOpConversionBase<LLVM::TruncOp, TruncOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  static bool isLegalOp(LLVM::TruncOp op) {
-    auto retTy = op.getResult().getType();
-    auto srcTy = op.getOperand().getType();
-    if (retTy.isInteger(16) && srcTy.isInteger(32)) {
-      return false;
-    }
-    return true;
-  }
-
-  Value createDestOp(LLVM::TruncOp op, OpAdaptor adaptor,
-                     ConversionPatternRewriter &rewriter, Type elemTy,
-                     ValueRange operands, Location loc) const {
-    PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.u16.u32");
-    auto res = builder.newOperand("=h");
-    auto operand = builder.newOperand(operands[0], "r");
-    cvt(res, operand);
-    return builder.launch(rewriter, loc, i16_ty, false);
-  }
-};
-
-struct SExtOpConversion
-    : ElementwiseOpConversionBase<LLVM::SExtOp, SExtOpConversion> {
-  using Base = ElementwiseOpConversionBase<LLVM::SExtOp, SExtOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  static bool isLegalOp(LLVM::SExtOp op) {
-    auto retTy = op.getResult().getType();
-    auto srcTy = op.getOperand().getType();
-    if (retTy.isInteger(32) && srcTy.isInteger(16)) {
-      return false;
-    }
-    return true;
-  }
-
-  Value createDestOp(LLVM::SExtOp op, OpAdaptor adaptor,
-                     ConversionPatternRewriter &rewriter, Type elemTy,
-                     ValueRange operands, Location loc) const {
-    PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.s32.s16");
-    auto res = builder.newOperand("=r");
-    auto operand = builder.newOperand(operands[0], "h");
-    cvt(res, operand);
-    return builder.launch(rewriter, loc, i32_ty, false);
-  }
-};
-
-struct ZExtOpConversion
-    : ElementwiseOpConversionBase<LLVM::ZExtOp, ZExtOpConversion> {
-  using Base = ElementwiseOpConversionBase<LLVM::ZExtOp, ZExtOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  static bool isLegalOp(LLVM::ZExtOp op) {
-    auto retTy = op.getResult().getType();
-    auto srcTy = op.getOperand().getType();
-    if (retTy.isInteger(32) && srcTy.isInteger(16)) {
-      return false;
-    }
-    return true;
-  }
-
-  Value createDestOp(LLVM::ZExtOp op, OpAdaptor adaptor,
-                     ConversionPatternRewriter &rewriter, Type elemTy,
-                     ValueRange operands, Location loc) const {
-    PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.u32.u16");
-    auto res = builder.newOperand("=r");
-    auto operand = builder.newOperand(operands[0], "h");
-    cvt(res, operand);
-    return builder.launch(rewriter, loc, i32_ty, false);
-  }
-};
-
-bool isLegalElementwiseOp(Operation *op) {
-  if (isa<LLVM::FPExtOp>(op)) {
-    return FPExtOpConversion::isLegalOp(cast<LLVM::FPExtOp>(op));
-  } else if (isa<LLVM::FPTruncOp>(op)) {
-    return FPTruncOpConversion::isLegalOp(cast<LLVM::FPTruncOp>(op));
-  } else if (isa<LLVM::TruncOp>(op)) {
-    return TruncOpConversion::isLegalOp(cast<LLVM::TruncOp>(op));
-  } else if (isa<LLVM::SExtOp>(op)) {
-    return SExtOpConversion::isLegalOp(cast<LLVM::SExtOp>(op));
-  } else if (isa<LLVM::ZExtOp>(op)) {
-    return ZExtOpConversion::isLegalOp(cast<LLVM::ZExtOp>(op));
-  }
-  return true;
-}
-
-void populateElementwiseOpToPTXPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<FPExtOpConversion>(typeConverter, benefit);
-  patterns.add<FPTruncOpConversion>(typeConverter, benefit);
-  patterns.add<TruncOpConversion>(typeConverter, benefit);
-  patterns.add<SExtOpConversion>(typeConverter, benefit);
-  patterns.add<ZExtOpConversion>(typeConverter, benefit);
 }

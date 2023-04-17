@@ -607,13 +607,13 @@ def broadcast_impl_value(lhs: tl.tensor,
         if len(lhs_shape) < len(rhs_shape):
             # Add new axes to lhs
             for dim in range(len(lhs_shape), len(rhs_shape)):
-                lhs = tl.tensor(builder.create_expand_dims(lhs.handle, dim), tl.block_type(lhs_ty.scalar, lhs_shape + [1]))
+                lhs = tl.tensor(builder.create_expand_dims(lhs.handle, 0), tl.block_type(lhs_ty.scalar, [1] + lhs_shape))
                 lhs_ty = lhs.type
                 lhs_shape = lhs_ty.get_block_shapes()
         elif len(rhs_shape) < len(lhs_shape):
             # Add new axes to rhs
             for dim in range(len(rhs_shape), len(lhs_shape)):
-                rhs = tl.tensor(builder.create_expand_dims(rhs.handle, dim), tl.block_type(rhs_ty.scalar, rhs_shape + [1]))
+                rhs = tl.tensor(builder.create_expand_dims(rhs.handle, 0), tl.block_type(rhs_ty.scalar, [1] + rhs_shape))
                 rhs_ty = rhs.type
                 rhs_shape = rhs_ty.get_block_shapes()
         assert len(rhs_shape) == len(lhs_shape)
@@ -779,7 +779,7 @@ def cast(input: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
-def str_to_cache_modifier(cache_modifier):
+def _str_to_cache_modifier(cache_modifier):
     cache = ir.CACHE_MODIFIER.NONE  # default
     if cache_modifier:
         if cache_modifier == ".ca":
@@ -791,7 +791,7 @@ def str_to_cache_modifier(cache_modifier):
     return cache
 
 
-def str_to_eviction_policy(eviction_policy):
+def _str_to_eviction_policy(eviction_policy):
     eviction = ir.EVICTION_POLICY.NORMAL  # default
     if eviction_policy:
         if eviction_policy == "evict_last":
@@ -803,96 +803,218 @@ def str_to_eviction_policy(eviction_policy):
     return eviction
 
 
-def load(ptr: tl.tensor,
-         mask: Optional[tl.tensor],
-         other: Optional[tl.tensor],
-         cache_modifier: str,
-         eviction_policy: str,
-         is_volatile: bool,
-         builder: ir.builder) -> tl.tensor:
+def _str_to_padding_option(padding_option):
+    padding = None  # default
+    if padding_option:
+        if padding_option == "zero":
+            padding = ir.PADDING_OPTION.PAD_ZERO
+        elif padding_option == "nan":
+            padding = ir.PADDING_OPTION.PAD_NAN
+        else:
+            raise ValueError(f"Padding option {padding_option} not supported")
+    return padding
+
+
+def _canonicalize_boundary_check(boundary_check, block_shape):
+    if boundary_check:
+        if not hasattr(boundary_check, "__iter__"):
+            boundary_check = [boundary_check]
+        boundary_check = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in boundary_check]
+        for dim in boundary_check:
+            assert isinstance(dim, int) and 0 <= dim < len(block_shape)
+        assert len(boundary_check) > 0
+        assert len(boundary_check) == len(set(boundary_check)), "Duplicate dimension in `boundary_check`"
+        return sorted(boundary_check)
+    return tuple()
+
+
+def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
+    # Load by a block pointer: `pointer_type<block_type<>>`
+    # Block pointer can not have `mask` and `other` arguments
+    if mask or other:
+        raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
+
+    elt_ty = ptr.type.element_ty.element_ty
+    assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
+    if elt_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
+        raise ValueError("Padding option `nan` is not supported for integer block pointers")
+
+    # `dst_ty` is de-referenced type of the pointer type
+    dst_ty = ptr.type.element_ty
+
+    # Check `boundary_check` argument
+    boundary_check = _canonicalize_boundary_check(boundary_check, dst_ty.get_block_shapes())
+
+    # Build IR
+    return tl.tensor(builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction,
+                                                        is_volatile), dst_ty)
+
+
+def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
+    # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
     if not ptr.type.scalar.is_ptr():
-        raise ValueError("Pointer argument of load instruction is " + ptr.type.__repr__())
+        raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
+
+    # Check `mask`, `other`, `boundary_check`, and `padding` arguments
+    if not mask and other:
+        raise ValueError("`other` cannot be provided without `mask`")
+    if padding or boundary_check:
+        raise ValueError("`padding_option` or `boundary_check` argument is not supported for loading a tensor of"
+                         "pointers or loading a scalar. Because the compiler does not know the boundary; please "
+                         "use block pointers (defined by `make_block_ptr`) instead")
+
+    # For a pointer of scalar, check the type of `mask` and `other`
     if not ptr.type.is_block():
         if mask and mask.type.is_block():
             raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
         if other and other.type.is_block():
             raise ValueError("Other argument cannot be block type if pointer argument is not a block")
+
+    # Make `mask` and `other` into the same shape as `ptr`
     if ptr.type.is_block():
         if mask:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
         if other:
             other = broadcast_impl_shape(other, ptr.type.get_block_shapes(), builder)
 
+    # Get `pointer_type<elt_ty>` and `elt_ty`
     ptr_ty = ptr.type.scalar
     elt_ty = ptr_ty.element_ty
 
-    # treat bool* as tl.int8*
+    # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
     if elt_ty == tl.int1:
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
 
+    # Cast `other` into `ele_ty` type
     if other:
         other = cast(other, elt_ty, builder)
 
-    # cache modifier
-
+    # Create loaded result type `dst_ty`
     if ptr.type.is_block():
         shape = ptr.type.get_block_shapes()
         dst_ty = tl.block_type(elt_ty, shape)
     else:
+        # Load by de-referencing the pointer of scalar
         dst_ty = elt_ty
 
-    cache = str_to_cache_modifier(cache_modifier)
-    eviction = str_to_eviction_policy(eviction_policy)
-
+    # Build IR
     if not mask:
-        if other:
-            raise ValueError("`other` cannot be provided without `mask`")
-        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile),
-                         dst_ty)
+        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
     else:
-        return tl.tensor(builder.create_masked_load(ptr.handle,
-                                                    mask.handle,
-                                                    other.handle if other else None,
-                                                    cache, eviction, is_volatile),
-                         dst_ty)
+        return tl.tensor(builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache,
+                                                    eviction, is_volatile), dst_ty)
 
 
-def store(ptr: tl.tensor,
-          val: tl.tensor,
-          mask: Optional[tl.tensor],
-          cache_modifier: str,
-          eviction_policy: str,
-          builder: ir.builder) -> tl.tensor:
+def load(ptr: tl.tensor,
+         mask: Optional[tl.tensor],
+         other: Optional[tl.tensor],
+         boundary_check,
+         padding_option: str,
+         cache_modifier: str,
+         eviction_policy: str,
+         is_volatile: bool,
+         builder: ir.builder) -> tl.tensor:
+    # Cache, eviction and padding options
+    cache = _str_to_cache_modifier(cache_modifier)
+    eviction = _str_to_eviction_policy(eviction_policy)
+    padding = _str_to_padding_option(padding_option)
+
+    if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
+        # Load by a block pointer: `pointer_type<block_type<>>`
+        return _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
+    else:
+        # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
+        return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
+
+
+def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
+    # Store by a block pointer: `pointer_type<block_type<>>`
+    # Block pointers can not have the `mask` argument
+    if mask:
+        raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
+
+    # Check same shape
+    block_shape = ptr.type.element_ty.get_block_shapes()
+    if not val.type.is_block():
+        val = broadcast_impl_shape(val, block_shape, builder)
+    assert val.type.is_block(), "Value argument must be block type or a scalar"
+    assert block_shape == val.type.get_block_shapes(), "Block shape and value shape mismatch"
+
+    elt_ty = ptr.type.element_ty.element_ty
+    assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
+
+    # Check `boundary_check` argument
+    boundary_check = _canonicalize_boundary_check(boundary_check, block_shape)
+
+    # Build IR
+    return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
+                     tl.void)
+
+
+def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
+    # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
     if not ptr.type.scalar.is_ptr():
-        raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+        raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
+
+    # Check `boundary_check` argument
+    if boundary_check:
+        raise ValueError("`boundary_check` argument is not supported for storing a tensor of pointers or storing a "
+                         "scalar. Because the compiler does not know the boundary; please use block pointers "
+                         "(defined by `make_block_ptr`) instead")
+
+    # For a pointer of scalar, check the type of `val` and `mask`
     if not ptr.type.is_block():
         if val.type.is_block():
             raise ValueError("Value argument cannot be block type if pointer argument is not a block")
         if mask and mask.type.is_block():
             raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
+
+    # Make `mask` and `val` into the same shape as `ptr`
     if ptr.type.is_block():
         val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
-    if mask and ptr.type.is_block():
-        mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
+        if mask:
+            mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
+
     ptr_ty = ptr.type.scalar
     elt_ty = ptr_ty.element_ty
-    # treat bool* as tl.int8*
+
+    # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
     if elt_ty == tl.int1:
         elt_ty = tl.int8
         ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
         ptr = cast(ptr, ptr_ty, builder)
-    # attributes
-    cache = str_to_cache_modifier(cache_modifier)
-    eviction = str_to_eviction_policy(eviction_policy)
-    # cast to target data-type
+
+    # Cast to target data type
     val = cast(val, elt_ty, builder)
+
+    # Build IR
     if not mask:
         return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
     return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction), tl.void)
+
+
+def store(ptr: tl.tensor,
+          val: tl.tensor,
+          mask: Optional[tl.tensor],
+          boundary_check,
+          cache_modifier: str,
+          eviction_policy: str,
+          builder: ir.builder) -> tl.tensor:
+    # Cache and eviction options
+    cache = _str_to_cache_modifier(cache_modifier)
+    eviction = _str_to_eviction_policy(eviction_policy)
+
+    if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
+        # Store by a block pointer: `pointer_type<block_type<>>`
+        return _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder)
+    else:
+        # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
+        return _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder)
+
 
 #########
 # atomic
@@ -1060,6 +1182,7 @@ def atomic_xchg(ptr: tl.tensor,
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         allow_tf32: bool,
+        out_dtype: tl.dtype,
         builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     assert lhs.dtype == rhs.dtype, "lhs and rhs must have the same dtype!"
@@ -1069,11 +1192,18 @@ def dot(lhs: tl.tensor,
         and rhs.shape[1].value >= 16,\
         "small blocks not supported!"
     if lhs.type.scalar.is_int():
+        assert lhs.type.scalar == tl.int8, "only int8 supported!"
+        # TODO: This is CUDA specific, check if ROCm has the same limitation
+        assert lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
-    else:
+    elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
         _0 = builder.get_fp32(0)
         ret_scalar_ty = tl.float32
+    else:
+        _0 = builder.get_fp16(0) if out_dtype.is_fp16() else builder.get_fp32(0)
+        ret_scalar_ty = out_dtype
+
     M = lhs.type.shape[0]
     N = rhs.type.shape[1]
 
@@ -1241,7 +1371,20 @@ def sqrt(x: tl.tensor, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_sqrt(x.handle), x.type)
 
 
+def abs(x: tl.tensor, builder: ir.builder) -> tl.tensor:
+    dtype = x.dtype
+    if dtype.is_floating():
+        return tl.tensor(builder.create_fabs(x.handle), x.type)
+    elif dtype.is_int_signed():
+        return tl.tensor(builder.create_iabs(x.handle), x.type)
+    elif dtype.is_int_unsigned():
+        return x  # no-op
+    else:
+        assert False, f"Unexpected dtype {dtype}"
+
+
 ##
+
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
     if len(x.shape) != len(values):
@@ -1270,3 +1413,70 @@ def device_print(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.
 
 def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: int, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_assert(cond.handle, msg, file_name, func_name, lineno), tl.void)
+
+
+def _convert_elem_to_ir_value(builder, elem, require_i64):
+    if isinstance(elem, tl.constexpr):
+        return builder.get_int64(elem.value) if require_i64 else builder.get_int32(elem.value)
+    elif isinstance(elem, tl.tensor):
+        assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
+        assert elem.dtype.is_int(), "Expected an integer scalar type in shape/strides/offsets"
+        if elem.dtype != tl.int64 and require_i64:
+            return builder.create_int_cast(elem.handle, builder.get_int64_ty(), elem.dtype.is_int_signed())
+        elif elem.dtype != tl.int32:
+            return builder.create_int_cast(elem.handle, builder.get_int32_ty(), elem.dtype.is_int_signed())
+        return elem.handle
+    assert False, f"Unsupported element type in shape/strides/offsets: {type(elem)}"
+
+
+def _convert_to_ir_values(builder, list_like, require_i64=True):
+    if hasattr(list_like, "__iter__"):
+        return [_convert_elem_to_ir_value(builder, elem, require_i64) for elem in list_like]
+    return [_convert_elem_to_ir_value(builder, list_like, require_i64)]
+
+
+def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order, builder: ir.builder) -> tl.tensor:
+    # Convert dynamic arguments to IR values
+    # NOTES(Chenggang): current `shape/strides` are `int64_t`, while `offsets/block_shape` are `int32_t`
+    shape = _convert_to_ir_values(builder, shape)
+    strides = _convert_to_ir_values(builder, strides)
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+
+    # Check `base` type
+    if not base.type.is_ptr() or base.type.element_ty.is_block():
+        raise ValueError("Expected `base` to be a pointer type (but not a block pointer type or others)")
+
+    # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
+    if base.type.element_ty == tl.int1:
+        base = cast(base, tl.pointer_type(tl.int8, base.type.address_space), builder)
+
+    # Check whether `block_shape` is static
+    if not hasattr(block_shape, "__iter__"):
+        block_shape = [block_shape]
+    block_shape = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in block_shape]
+    assert all([isinstance(elem, int) and -2**31 <= elem < 2**31 for elem in block_shape]), \
+        "Expected a list of constant integers (`int32_t` range) in `block_shape`"
+
+    # Check `order`
+    if not hasattr(order, "__iter__"):
+        order = [order]
+    order = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in order]
+    assert sorted(order) == list(range(len(order))), "Expected a permutation of (0, 1, ..., len(order)-1) in order"
+
+    # Must have same length
+    assert all([len(block_shape) == len(list_like) for list_like in [shape, strides, offsets, order]]), \
+        "Expected shape/strides/offsets/block_shape to have the same length"
+
+    # Build value, the type is:
+    #   `pointer_type<blocked<shape, element_type>>` in Python
+    #   `tt.ptr<tensor<shape, element_type>>` in MLIR
+    handle = builder.create_make_block_ptr(base.handle, shape, strides, offsets, block_shape, order)
+    return tl.tensor(handle, tl.pointer_type(tl.block_type(base.type.element_ty, block_shape)))
+
+
+def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    # Convert dynamic offsets to IR values
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+
+    # Advanced block pointer type is the same as before
+    return tl.tensor(builder.create_advance(base.handle, offsets), base.type)

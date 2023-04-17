@@ -114,7 +114,7 @@ Programs amenable to polyhedral compilation can be aggressively transformed and 
 
 Polyhedral compilers can also automatically go through complex verification processes to ensure that the semantics of their input program is preserved throughout this optimization phase. Note that polyhedral optimizers are not incompatible with more standard optimization techniques. In fact, it is not uncommon for these systems to be implemented as a set of LLVM passes that can be run ahead of more traditional compilation techniques [GROSSER2012]_.
 
-All in all, polyhedral machinery is extremely powerful, when applicable. It has been shown to support most common loop transformations, and has indeed achieved performance comparable to state-of-the-art GPU libraries for dense matrix multiplication [ELANGO2018]_. Additionally, it is also fully automatic and doesn't require any hint from programmers apart from source-code in a C-like format. 
+All in all, polyhedral machinery is extremely powerful, when applicable. It has been shown to support most common loop transformations, and has indeed achieved performance comparable to state-of-the-art GPU libraries for dense matrix multiplication [ELANGO2018]_. Additionally, it is also fully automatic and doesn't require any hint from programmers apart from source-code in a C-like format.
 
 +++++++++++
 Limitations
@@ -133,26 +133,26 @@ On the other hand, blocked program representations advocated by this dissertatio
 Scheduling Languages
 --------------------
 
-Separation of concerns [DIJKSTRA82]_ is a well-known design principle in computer science: programs should be decomposed into modular layers of abstraction that separate the semantics of their algorithms from the details of their implementation. Systems like Halide and TVM push this philosophy one step further, and enforce this separation at the grammatical level through the use of a  **scheduling language**. The benefits of this methodology are particularly visible in the case of matrix multiplication, where, as one can see below, the definition of the algorithm (Line 1-7) is completely disjoint from its implementation (Line 8-16), meaning that both can be maintained, optimized and distributed independently. 
+Separation of concerns [DIJKSTRA82]_ is a well-known design principle in computer science: programs should be decomposed into modular layers of abstraction that separate the semantics of their algorithms from the details of their implementation. Systems like Halide and TVM push this philosophy one step further, and enforce this separation at the grammatical level through the use of a  **scheduling language**. The benefits of this methodology are particularly visible in the case of matrix multiplication, where, as one can see below, the definition of the algorithm (Line 1-7) is completely disjoint from its implementation (Line 8-16), meaning that both can be maintained, optimized and distributed independently.
 
 .. code-block:: python
   :linenos:
 
   // algorithm
   Var x("x"), y("y");
-  Func matmul("matmul"); 
-  RDom k(0, matrix_size); 
-  RVar ki; 
-  matmul(x, y) = 0.0f; 
-  matmul(x, y) += A(k, y) * B(x, k); 
+  Func matmul("matmul");
+  RDom k(0, matrix_size);
+  RVar ki;
+  matmul(x, y) = 0.0f;
+  matmul(x, y) += A(k, y) * B(x, k);
   // schedule
-  Var xi("xi"), xo("xo"), yo("yo"), yi("yo"), yii("yii"), xii("xii"); 
-  matmul.vectorize(x, 8); 
-  matmul.update(0) 
-      .split(x, x, xi, block_size).split(xi, xi, xii, 8) 
-      .split(y, y, yi, block_size).split(yi, yi, yii, 4) 
-      .split(k, k, ki, block_size) 
-      .reorder(xii, yii, xi, ki, yi, k, x, y) 
+  Var xi("xi"), xo("xo"), yo("yo"), yi("yo"), yii("yii"), xii("xii");
+  matmul.vectorize(x, 8);
+  matmul.update(0)
+      .split(x, x, xi, block_size).split(xi, xi, xii, 8)
+      .split(y, y, yi, block_size).split(yi, yi, yii, 4)
+      .split(k, k, ki, block_size)
+      .reorder(xii, yii, xi, ki, yi, k, x, y)
       .parallel(y).vectorize(xii).unroll(xi).unroll(yii);
 
 
