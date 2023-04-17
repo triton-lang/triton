@@ -704,7 +704,7 @@ class tensor:
             elif sl == slice(None, None, None):
                 pass
             else:
-                assert False, "unsupported"
+                assert False, f"unsupported tensor index: {sl}"
         return ret
 
     @property
@@ -1281,7 +1281,7 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
 
     if len(input.shape) > 1:
         # Broadcast index across the non-reduced axes
-        expand_dims_index = [None] * len(input.shape)
+        expand_dims_index = [constexpr(None)] * len(input.shape)
         expand_dims_index[axis] = slice(None)
         index = index.__getitem__(expand_dims_index, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)

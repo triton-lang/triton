@@ -478,8 +478,8 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
     addNamedAttrs(newReduce, adaptor.getAttributes());
 
     auto &newCombineOp = newReduce.getCombineOp();
-    rewriter.inlineRegionBefore(op.getCombineOp(), newCombineOp,
-                                newCombineOp.end());
+    rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp,
+                               newCombineOp.end());
     rewriter.replaceOp(op, newReduce.getResult());
     return success();
   }
