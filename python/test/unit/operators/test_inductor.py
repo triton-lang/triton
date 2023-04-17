@@ -57,11 +57,9 @@ def test_normalization_with_remat():
 def test_avg_pool_bw():
 
     @triton.jit
-    def triton_(in_ptr0, out_ptr0, xnumel, XBLOCK : tl.constexpr):
-        xnumel = 1048576
+    def triton_(in_ptr0, out_ptr0, XBLOCK : tl.constexpr):
         xoffset = tl.program_id(0) * XBLOCK
         xindex = xoffset + tl.arange(0, XBLOCK)[:]
-        xmask = xindex < xnumel
         x1 = (xindex // 8) % 8
         x0 = xindex % 8
         x2 = (xindex // 64)
@@ -148,11 +146,9 @@ def test_avg_pool_bw():
     inp = torch.ones(8, 2048, 8, 8, device="cuda", dtype=torch.half)
     out = torch.ones_like(inp) * 3
     numel = inp.numel()
-    triton_[(numel//1024,)](inp, out, numel, 1024)
+    triton_[(numel//1024,)](inp, out, 1024)
     out_ref = torch.ones_like(inp)
     out_ref[:, :, 1:7, 0::7] = 2/3
     out_ref[:, :, 0::7, 1:7] = 2/3
     out_ref[:, :, 0::7, 0::7] = 4/9
     torch.testing.assert_allclose(out, out_ref)
-
-
