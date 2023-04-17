@@ -192,6 +192,28 @@ SmallVector<Value> MMA16816SmemLoader::computeB32MatOffs(Value warpOff,
   return offs;
 }
 
+// clang-format off
+// Each `ldmatrix.x4` loads data as follows when `needTrans == False`:
+//
+// 32/width
+// <------->
+//  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3
+//  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   ||  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7
+//  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   ||  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11
+// ...
+// t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31   || t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31
+// --------------------------------------------- || --------------------------------------------
+//  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3
+//  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   ||  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7
+//  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   ||  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11
+// ...
+// t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31   || t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31
+//
+// we assume that the phase is < 8 so we don't need to maintain a separate pointer for the two
+// lower quadrants. This pattern repeats every warpsPerTile[0] (resp. warpsPerTile[1]) blocks
+// along the row (resp. col) dimension.
+// clang-format on
+
 SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
                                                         Value lane,
                                                         Value cSwizzleOffset) {
@@ -205,9 +227,6 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
     std::swap(cTileShape, sTileShape);
   }
 
-  // llvm::outs() << sMatShape << " " << sStride << "\n";
-  // llvm::outs() << warpOffStride << "\n";
-
   Value cOffInMat = udiv(lane, i32_val(4));
   Value sOffInMat =
       mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
@@ -216,26 +235,29 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
 
   SmallVector<Value> offs(numPtrs);
 
-  for (int outer = 0; outer < 2; ++outer) {
-    for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
+  for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
+    for (int outer = 0; outer < 2; ++outer) {
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
         int idx = loadx4Off * 8 + outer * 4 + elemOff;
 
-        Value cMatOff = i32_val(0);
-        if (needTrans)
-          cMatOff = add(i32_val(outer * matArrStride),
-                        mul(warpOff, i32_val(warpOffStride)));
-
-        Value cMatOffI = add(
-            cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
-        //
-        Value cOff = cOffInMat;
+        // offset along the contiguous dimension
         Value sOff = add(sOffInMat, i32_val(elemOff));
-        if (needTrans)
-          cOff = add(cOff, mul(cMatOffI, i32_val(cMatShape)));
-        else {
+        if (!needTrans) {
           sOff = add(sOff, i32_val(outer * sMatShape));
+          Value cMatOff = i32_val(0);
+          Value cMatOffI = add(
+              cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
           sOff = add(sOff, mul(cMatOffI, i32_val(cMatShape)));
+        }
+
+        // offset along the non-contiguous dimension
+        Value cOff = cOffInMat;
+        if (needTrans) {
+          Value cMatOff = add(i32_val(outer * matArrStride),
+                              mul(warpOff, i32_val(warpOffStride)));
+          Value cMatOffI = add(
+              cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
+          cOff = add(cOff, mul(cMatOffI, i32_val(cMatShape)));
         }
 
         // To prevent out-of-bound access when tile is too small.
