@@ -322,10 +322,10 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='cuda'):
     y_ref.backward(dy, retain_graph=True)
     dx_ref, dw_ref, db_ref = [_.grad.clone() for _ in [x, weight, bias]]
     # compare
-    triton.testing.assert_almost_equal(y_tri, y_ref)
-    triton.testing.assert_almost_equal(dx_tri, dx_ref)
-    triton.testing.assert_almost_equal(db_tri, db_ref, decimal=1)
-    triton.testing.assert_almost_equal(dw_tri, dw_ref, decimal=1)
+    assert torch.allclose(y_tri, y_ref, atol=1e-2, rtol=0)
+    assert torch.allclose(dx_tri, dx_ref, atol=1e-2, rtol=0)
+    assert torch.allclose(db_tri, db_ref, atol=1e-2, rtol=0)
+    assert torch.allclose(dw_tri, dw_ref, atol=1e-2, rtol=0)
 
 
 @triton.testing.perf_report(

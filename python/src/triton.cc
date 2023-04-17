@@ -23,6 +23,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/HSACO/HSACOTranslation.h"
@@ -78,6 +79,11 @@ void init_triton_ir(py::module &&m) {
   using ret = py::return_value_policy;
   using namespace pybind11::literals;
 
+  py::enum_<mlir::triton::PaddingOption>(m, "PADDING_OPTION")
+      .value("PAD_ZERO", mlir::triton::PaddingOption::PAD_ZERO)
+      .value("PAD_NAN", mlir::triton::PaddingOption::PAD_NAN)
+      .export_values();
+
   py::enum_<mlir::triton::CacheModifier>(m, "CACHE_MODIFIER")
       .value("NONE", mlir::triton::CacheModifier::NONE)
       .value("CA", mlir::triton::CacheModifier::CA)
@@ -124,11 +130,11 @@ void init_triton_ir(py::module &&m) {
       .def("load_triton", [](mlir::MLIRContext &self) {
         self.getOrLoadDialect<mlir::triton::TritonDialect>();
         self.getOrLoadDialect<mlir::index::IndexDialect>();
+        self.getOrLoadDialect<mlir::triton::TritonDialect>();
+        self.getOrLoadDialect<mlir::gpu::GPUDialect>();
         // we load LLVM because the frontend uses LLVM.undef for
         // some placeholders
-        self.getOrLoadDialect<mlir::triton::TritonDialect>();
         self.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-        self.getOrLoadDialect<mlir::gpu::GPUDialect>();
         self.getOrLoadDialect<mlir::tensor::TensorDialect>();
       });
   // .def(py::init([](){
@@ -400,7 +406,8 @@ void init_triton_ir(py::module &&m) {
                         mlir::triton::gpu::TritonGPUDialect,
                         mlir::math::MathDialect, mlir::arith::ArithDialect,
                         mlir::index::IndexDialect, mlir::func::FuncDialect,
-                        mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect>();
+                        mlir::scf::SCFDialect, mlir::cf::ControlFlowDialect,
+                        mlir::LLVM::LLVMDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
 
@@ -1225,6 +1232,27 @@ void init_triton_ir(py::module &&m) {
              self.create<mlir::triton::StoreOp>(loc, ptrs, value, cacheModifier,
                                                 evictionPolicy);
            })
+      .def("create_tensor_pointer_load",
+           [](mlir::OpBuilder &self, mlir::Value &ptr,
+              std::vector<int32_t> &boundaryCheck,
+              std::optional<mlir::triton::PaddingOption> paddingOption,
+              mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy,
+              bool isVolatile) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::LoadOp>(
+                 loc, ptr, boundaryCheck, paddingOption, cacheModifier,
+                 evictionPolicy, isVolatile);
+           })
+      .def("create_tensor_pointer_store",
+           [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &val,
+              std::vector<int32_t> &boundaryCheck,
+              mlir::triton::CacheModifier cacheModifier,
+              mlir::triton::EvictionPolicy evictionPolicy) -> void {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::triton::StoreOp>(loc, ptr, val, boundaryCheck,
+                                                cacheModifier, evictionPolicy);
+           })
       .def("create_masked_load",
            [](mlir::OpBuilder &self, mlir::Value &ptrs, mlir::Value &mask,
               std::optional<mlir::Value> &other,
@@ -1412,6 +1440,16 @@ void init_triton_ir(py::module &&m) {
              auto loc = self.getUnknownLoc();
              return self.create<mlir::math::SqrtOp>(loc, val);
            })
+      .def("create_fabs",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::AbsFOp>(loc, val);
+           })
+      .def("create_iabs",
+           [](mlir::OpBuilder &self, mlir::Value &val) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::math::AbsIOp>(loc, val);
+           })
       .def("create_reduce",
            [](mlir::OpBuilder &self, mlir::Value &operand,
               mlir::triton::RedOp redOp, int axis) -> mlir::Value {
@@ -1481,10 +1519,31 @@ void init_triton_ir(py::module &&m) {
              return self.create<::mlir::LLVM::UndefOp>(loc, type);
            })
       // Force GPU barrier
-      .def("create_barrier", [](mlir::OpBuilder &self) {
-        auto loc = self.getUnknownLoc();
-        self.create<mlir::gpu::BarrierOp>(loc);
-      });
+      .def("create_barrier",
+           [](mlir::OpBuilder &self) {
+             auto loc = self.getUnknownLoc();
+             self.create<mlir::gpu::BarrierOp>(loc);
+           })
+      // Make a block pointer (tensor pointer in Triton IR)
+      .def("create_make_block_ptr",
+           [](mlir::OpBuilder &self, mlir::Value &base,
+              std::vector<mlir::Value> &shape,
+              std::vector<mlir::Value> &strides,
+              std::vector<mlir::Value> &offsets,
+              std::vector<int32_t> &tensorShape,
+              std::vector<int32_t> &order) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::MakeTensorPtrOp>(
+                 loc, base, shape, strides, offsets, tensorShape, order);
+           })
+      // Advance a block pointer
+      .def("create_advance",
+           [](mlir::OpBuilder &self, mlir::Value &ptr,
+              std::vector<mlir::Value> &offsets) -> mlir::Value {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::AdvanceOp>(loc, ptr.getType(),
+                                                         ptr, offsets);
+           });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
       .def(py::init<mlir::MLIRContext *>())
@@ -1539,6 +1598,11 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createCombineOpsPass());
            })
+      .def("add_rewrite_tensor_pointer_pass",
+           [](mlir::PassManager &self, int computeCapability) {
+             self.addPass(mlir::triton::createRewriteTensorPointerPass(
+                 computeCapability));
+           })
       .def("add_convert_triton_to_tritongpu_pass",
            [](mlir::PassManager &self, int numWarps) {
              self.addPass(
@@ -1591,9 +1655,6 @@ void init_triton_translation(py::module &m) {
   });
 
   m.def(
-      "set_rocm", []() { setROCM(); }, ret::take_ownership);
-
-  m.def(
       "get_arch_info",
       []() {
         return std::get<0>(getArchInfo());
@@ -1609,11 +1670,11 @@ void init_triton_translation(py::module &m) {
 
   m.def(
       "translate_triton_gpu_to_llvmir",
-      [](mlir::ModuleOp op, int computeCapability) {
+      [](mlir::ModuleOp op, int computeCapability, bool isROCM) {
         py::gil_scoped_release allow_threads;
         llvm::LLVMContext llvmContext;
         auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(
-            &llvmContext, op, computeCapability);
+            &llvmContext, op, computeCapability, isROCM);
         if (!llvmModule)
           llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
 
@@ -1710,8 +1771,8 @@ void init_triton_translation(py::module &m) {
 
   m.def(
       "translate_llvmir_to_hsaco",
-      [](const std::string llvmIR, std::string gfx_arch, std::string gfx_triple, 
-          std::string gfx_features) -> std::tuple<std::string, std::string> {
+      [](const std::string llvmIR, std::string gfx_arch, std::string gfx_triple,
+         std::string gfx_features) -> std::tuple<std::string, std::string> {
         // create LLVM module from C++
         llvm::LLVMContext context;
         std::unique_ptr<llvm::MemoryBuffer> buffer =
@@ -1720,7 +1781,8 @@ void init_triton_translation(py::module &m) {
         std::unique_ptr<llvm::Module> module =
             llvm::parseIR(buffer->getMemBufferRef(), error, context);
         // translate module to HSACO
-        auto hsacoCode = triton::translateLLVMIRToHSACO(*module, gfx_arch, gfx_triple, gfx_features);
+        auto hsacoCode = triton::translateLLVMIRToHSACO(
+            *module, gfx_arch, gfx_triple, gfx_features);
         return hsacoCode;
       },
       ret::take_ownership);

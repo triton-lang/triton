@@ -25,11 +25,13 @@ void addExternalLibs(mlir::ModuleOp &module,
 // Translate TritonGPU dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>
 translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
-                           mlir::ModuleOp module, int computeCapability);
+                           mlir::ModuleOp module, int computeCapability,
+                           bool isROCM);
 
 // Translate mlir LLVM dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>
-translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module);
+translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
+                      bool isROCM);
 
 } // namespace triton
 } // namespace mlir

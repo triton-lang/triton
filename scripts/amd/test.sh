@@ -3,9 +3,6 @@
 # clear
 set -x
 
-# export MLIR_ENABLE_DUMP=1
-# export LLVM_IR_ENABLE_DUMP=1
-# export AMDGCN_ENABLE_DUMP=1
 
 # log dir
 ROOT_DIR=$(pwd)
@@ -16,12 +13,16 @@ chmod -R 777 $LOG_DIR
 
 sh scripts/amd/clean.sh
 
-# UNIT_TEST="python/test/unit/language/test_core_amd.py"
+UNIT_TEST="python/test/unit/language/test_core_amd.py"
+# UNIT_TEST="python/test/unit/language/test_core_amd.py::test_shift_op[int8-int8-<<]"
+# UNIT_TEST="python/test/unit/language/test_core_amd.py::test_shift_op[int32-int32->>]"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_empty_kernel[float32]"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[float32-float32-+]"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[int8-float16-%]"
-UNIT_TEST="python/test/unit/language/test_elementwise.py"
+# UNIT_TEST="python/test/unit/language/test_core_amd.py::test_masked_load_shared_memory[dtype0]"
+# UNIT_TEST="python/test/unit/language/test_core_amd.py::test_masked_load_shared_memory[dtype1]"
+# UNIT_TEST="python/test/unit/language/test_elementwise.py"
 
 # check for backtrace
 if [ "$1" == "backtrace" ]; then
@@ -39,3 +40,5 @@ if [ "$1" == "backtrace" ]; then
 else
 	pytest --capture=tee-sys -rfs --verbose "$UNIT_TEST" 2>&1 | tee $LOG_DIR/unit_test.log
 fi
+
+# bash scripts/amd/cache_print.sh  2>&1 |tee $LOG_DIR/cache.log

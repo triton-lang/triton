@@ -422,7 +422,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
         if (wpt[0] * wpt[1] < numWarps)
           wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
       } while (wpt_nm1 != wpt);
-      
+
       return $_get(context, versionMajor, versionMinor, wpt);
     }]>,
 
@@ -522,6 +522,10 @@ section 9.7.13.4.1 for more details.
     SmallVector<int> getMMAv1ShapePerWarp() const;
     int getMMAv1Vec() const;
     int getMMAv1NumOuter(ArrayRef<int64_t> shape) const;
+    //
+    SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
+                                     int bitwidth) const;
+
   }];
 }
 
