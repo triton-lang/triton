@@ -234,28 +234,26 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
   int quadHeight = laneHeight;
   int numQuadI = 2;
 
-  for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
+  for (int rep = 0; rep < numPtrs / 8; ++rep) {
     for (int quadId = 0; quadId < 2; ++quadId) {
       for (int elemId = 0; elemId < 4; ++elemId) {
-        int idx = loadx4Off * 8 + quadId * 4 + elemId;
+        int idx = rep * 8 + quadId * 4 + elemId;
 
         // inner index
         Value j = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
         j = add(j, i32_val(elemId));
         if (!needTrans) {
           j = add(j, i32_val(quadId * quadWidth));
-          j = add(j, i32_val(loadx4Off * pLoadStrideInMat * quadWidth));
+          j = add(j, i32_val(rep * pLoadStrideInMat * quadWidth));
         }
 
         // outer index
         Value i = udiv(lane, i32_val(laneWidth));
+        i = add(i, mul(warpOff, i32_val(numQuadI * quadHeight)));
         if (needTrans) {
+          int pStride = kOrder == 1 ? 1 : 2;
           i = add(i, i32_val(quadId * matArrStride * quadHeight));
-          i = add(i, mul(warpOff, i32_val(warpOffStride * quadHeight)));
-          i = add(i, i32_val(loadx4Off * pLoadStrideInMat *
-                             (kOrder == 1 ? 1 : 2) * quadHeight));
-        } else {
-          i = add(i, mul(warpOff, i32_val(quadHeight * numQuadI)));
+          i = add(i, i32_val(rep * pLoadStrideInMat * pStride * quadHeight));
         }
 
         // To prevent out-of-bound access when tile is too small.
