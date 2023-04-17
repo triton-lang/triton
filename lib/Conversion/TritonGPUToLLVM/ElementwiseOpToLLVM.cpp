@@ -734,20 +734,20 @@ struct CmpFOpConversion
   }
 };
 
-struct ExtElemwiseOpConversion
-    : public ElementwiseOpConversionBase<triton::ExtElemwiseOp,
-                                         ExtElemwiseOpConversion> {
-  using Base = ElementwiseOpConversionBase<triton::ExtElemwiseOp,
-                                           ExtElemwiseOpConversion>;
+template <class T>
+struct ExternElementwiseOpConversion
+    : public ElementwiseOpConversionBase<T, ExternElementwiseOpConversion<T>> {
+  using Base = ElementwiseOpConversionBase<T, ExternElementwiseOpConversion<T>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
+  typedef typename Base::OpAdaptor OpAdaptor;
 
-  Value createDestOp(triton::ExtElemwiseOp op, OpAdaptor adaptor,
+  Value createDestOp(T op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
     StringRef funcName = op.getSymbol();
     if (funcName.empty())
-      llvm::errs() << "ExtElemwiseOpConversion";
+      llvm::errs() << "ExternElementwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands);
     LLVM::LLVMFuncOp funcOp =
@@ -761,8 +761,7 @@ private:
     return LLVM::LLVMFunctionType::get(resultType, operandTypes);
   }
 
-  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                     triton::ExtElemwiseOp op,
+  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter, T op,
                                      StringRef funcName, Type funcType) const {
     using LLVM::LLVMFuncOp;
 
@@ -771,7 +770,8 @@ private:
     if (funcOp)
       return cast<LLVMFuncOp>(*funcOp);
 
-    mlir::OpBuilder b(op->getParentOfType<LLVMFuncOp>());
+    auto parent = ((Operation *)op)->getParentOfType<mlir::LLVM::LLVMFuncOp>();
+    mlir::OpBuilder b(parent);
     auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
     ret.getOperation()->setAttr(
         "libname", StringAttr::get(op->getContext(), op.getLibname()));
@@ -1116,7 +1116,11 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<FpToFpOpConversion>(typeConverter, benefit);
 
-  patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
+  patterns.add<ExternElementwiseOpConversion<triton::PureExternElementwiseOp>>(
+      typeConverter, benefit);
+  patterns
+      .add<ExternElementwiseOpConversion<triton::ImpureExternElementwiseOp>>(
+          typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call

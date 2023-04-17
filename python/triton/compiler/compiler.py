@@ -121,6 +121,7 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
+@functools.lru_cache
 def path_to_ptxas():
     base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
     paths = [
