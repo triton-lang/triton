@@ -244,9 +244,8 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         Value sOff = add(sOffInMat, i32_val(elemOff));
         if (!needTrans) {
           sOff = add(sOff, i32_val(outer * sMatShape));
-          Value cMatOff = i32_val(0);
-          Value cMatOffI = add(
-              cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
+          Value cMatOffI =
+              i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2));
           sOff = add(sOff, mul(cMatOffI, i32_val(cMatShape)));
         }
 
