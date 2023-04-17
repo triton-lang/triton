@@ -1447,6 +1447,9 @@ def test_masked_load(dtype_str, size, size_diff, device='cuda'):
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 def test_masked_load_shared_memory(dtype, device='cuda'):
     check_type_supported(dtype)  # bfloat16 on cc < 80 will not be tested
+    # skip bfloat on ROCM
+    if torch.version.hip is not None and (dtype is tl.bfloat16 or dtype == "bfloat16" or dtype is torch.bfloat16):
+        pytest.skip("test_masked_load_shared_memory[bfloat16] is only supported on AMDGPU")
 
     M = 32
     N = 32
