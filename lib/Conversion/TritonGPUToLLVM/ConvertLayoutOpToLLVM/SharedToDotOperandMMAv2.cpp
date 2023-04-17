@@ -227,12 +227,7 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
     std::swap(cTileShape, sTileShape);
   }
 
-  Value cOffInMat = udiv(lane, i32_val(4));
-  Value sOffInMat =
-      mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
-
   bool test = needTrans && kOrder == 1;
-
   SmallVector<Value> offs(numPtrs);
 
   for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
@@ -240,35 +235,37 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
       for (int elemOff = 0; elemOff < 4; ++elemOff) {
         int idx = loadx4Off * 8 + outer * 4 + elemOff;
 
-        // offset along the contiguous dimension
-        Value sOff = add(sOffInMat, i32_val(elemOff));
+        // column index
+        Value j = mul(urem(lane, i32_val(4)), i32_val(4));
+        j = add(j, i32_val(elemOff));
         if (!needTrans) {
-          sOff = add(sOff, i32_val(outer * sMatShape));
-          sOff = add(sOff, i32_val(loadx4Off * pLoadStrideInMat * sMatShape));
+          j = add(j, i32_val(outer * sMatShape));
+          j = add(j, i32_val(loadx4Off * pLoadStrideInMat * sMatShape));
         }
 
-        // offset along the non-contiguous dimension
-        Value cOff = cOffInMat;
+        // row index
+        Value i = udiv(lane, i32_val(4));
         if (needTrans) {
-          Value cMatOff = add(i32_val(outer * matArrStride),
-                              mul(warpOff, i32_val(warpOffStride)));
-          Value cMatOffI = add(
-              cMatOff, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2)));
-          cOff = add(cOff, mul(cMatOffI, i32_val(cMatShape)));
+          i = add(i, i32_val(outer * matArrStride * cMatShape));
+          i = add(i, mul(warpOff, i32_val(warpOffStride * cMatShape)));
+          i = add(i, i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2) *
+                             cMatShape));
+        } else {
+          i = add(i, mul(warpOff, i32_val(sMatShape)));
         }
 
         // To prevent out-of-bound access when tile is too small.
-        cOff = urem(cOff, i32_val(cTileShape));
-        sOff = urem(sOff, i32_val(sTileShape));
+        i = urem(i, i32_val(cTileShape));
+        j = urem(j, i32_val(sTileShape));
         if (needTrans) {
-          offs[idx] = add(cOff, mul(sOff, sStride));
+          offs[idx] = add(i, mul(j, sStride));
         } else {
-          offs[idx] = add(mul(cOff, sStride), sOff);
+          offs[idx] = add(mul(i, sStride), j);
         }
 
-        if (!needTrans)
-          offs[idx] =
-              add(offs[idx], mul(warpOff, mul(i32_val(sMatShape), sStride)));
+        // if (!needTrans)
+        //   offs[idx] =
+        //       add(offs[idx], mul(warpOff, mul(i32_val(sMatShape), sStride)));
       }
     }
   }
