@@ -969,10 +969,7 @@ void ModuleAxisInfoAnalysis::initialize(triton::FuncOp funcOp) {
       if (axisInfoMap->count(value)) {
         curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
       } else {
-        auto contiguity = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
-        auto divisibility = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
-        auto constancy = AxisInfo::DimVectorT(axisInfo.getRank(), 1);
-        curAxisInfo = AxisInfo(contiguity, divisibility, constancy, 0);
+        curAxisInfo = axisInfo;
       }
       (*axisInfoMap)[value] = curAxisInfo;
     }

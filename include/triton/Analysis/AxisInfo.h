@@ -306,13 +306,14 @@ public:
       : ModuleAnalysis<AxisInfoMapT>(moduleOp) {
     SmallVector<triton::FuncOp> funcs;
     for (auto root : callGraph.getRoots()) {
-      callGraph.walk<WalkOrder::PreOrder, WalkOrder::PreOrder>(
+      callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
           // Pre-order edge walk callback
           [](triton::CallOp callOp, triton::FuncOp funcOp) {},
           // Post-order node walk callback
           [&](triton::FuncOp funcOp,
               CallGraph<AxisInfoMapT>::FuncDataMapT &funcAxisInfoMap) {
             funcs.push_back(funcOp);
+            funcAxisInfoMap.try_emplace(funcOp, AxisInfoMapT{});
           });
     }
     SetVector<triton::FuncOp> sortedFuncs(funcs.rbegin(), funcs.rend());

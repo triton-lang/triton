@@ -28,15 +28,6 @@ struct TestAxisInfoPass
         if (op->getNumResults() < 1)
           return;
         for (Value result : op->getResults()) {
-          auto axisInfo = moduleAxisInfoAnalysis.getAxisInfo(result);
-          if (axisInfo)
-            axisInfo->print(llvm::errs());
-        }
-      });
-      funcOp.walk([&](Operation *op) {
-        if (op->getNumResults() < 1)
-          return;
-        for (Value result : op->getResults()) {
           result.print(os);
           os << " => ";
           auto *axisInfo = moduleAxisInfoAnalysis.getAxisInfo(result);
