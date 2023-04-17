@@ -244,9 +244,7 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
         Value sOff = add(sOffInMat, i32_val(elemOff));
         if (!needTrans) {
           sOff = add(sOff, i32_val(outer * sMatShape));
-          Value cMatOffI =
-              i32_val(loadx4Off * pLoadStrideInMat * (test ? 1 : 2));
-          sOff = add(sOff, mul(cMatOffI, i32_val(cMatShape)));
+          sOff = add(sOff, i32_val(loadx4Off * pLoadStrideInMat * sMatShape));
         }
 
         // offset along the non-contiguous dimension
