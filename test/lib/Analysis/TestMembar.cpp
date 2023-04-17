@@ -27,14 +27,6 @@ struct TestMembarPass
     ModuleAllocation allocation(moduleOp);
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
-    // Print all ops before membar pass
-    auto &os = llvm::errs();
-    moduleOp.walk([&](triton::FuncOp funcOp) {
-      // Convert to std::string can remove quotes from op_name
-      auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
-      os << opName << "\n";
-      funcOp.walk([&](Operation *op) { os << *op << "\n"; });
-    });
   }
 };
 
