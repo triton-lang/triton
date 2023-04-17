@@ -126,6 +126,11 @@ private:
   BlockInfo funcBlockInfo;
 };
 
+/// Postorder traversal on the callgraph to insert membar instructions
+/// of each function.
+/// Each function maintains a BlockInfo map that includes all potential buffers
+/// after returning. This way users do not have to explicitly insert membars
+/// before and after function calls, but might be a bit conservative.
 class ModuleMembarAnalysis : public ModuleAnalysis<MembarAnalysis> {
 public:
   ModuleMembarAnalysis(ModuleAllocation *moduleAllocation)
@@ -133,7 +138,6 @@ public:
         moduleAllocation(moduleAllocation) {}
 
   void run() {
-    DenseSet<triton::FuncOp> funcSet;
     callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order walk callback
         [](triton::CallOp callOp, triton::FuncOp funcOp) {},
