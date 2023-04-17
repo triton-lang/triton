@@ -59,7 +59,7 @@ initialize_module(llvm::Module *module, const std::string &triple,
   auto target =
       llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
   if (target == nullptr) {
-    std::cout << "LookupTarget fail: " << error << std::endl;
+    llvm::errs() << "LookupTarget fail: " << error << '\n';
     return nullptr;
   }
   llvm::TargetOptions opt;
@@ -99,7 +99,7 @@ std::string generate_amdgcn_assembly(llvm::Module *module,
 
   std::string amdgcn(buffer.begin(), buffer.end());
   if (::triton::tools::getBoolEnv("AMDGCN_ENABLE_DUMP")) {
-    std::cout << "// -----// AMDGCN Dump //----- //\n" << amdgcn << std::endl;
+    llvm::dbgs() << "// -----// AMDGCN Dump //----- //\n" << amdgcn << '\n';
   }
 
   return amdgcn;
@@ -131,8 +131,9 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
   std::unique_ptr<llvm::raw_fd_ostream> isabin_fs(
       new llvm::raw_fd_ostream(isabin_path, ec, llvm::sys::fs::OF_Text));
   if (ec) {
-    std::cerr << isabin_path << " was not created. error code: " << ec
-              << std::endl;
+    llvm::errs() << isabin_path
+                 << " was not created. error code: " << ec.category().name()
+                 << ':' << ec.value() << '\n';
   }
 
   // emit
@@ -151,9 +152,9 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
       {lld_path, "-flavor", "gnu", "-shared", "-o", hsaco_path, isabin_path},
       std::nullopt, {}, 0, 0, &error_message);
   if (lld_result) {
-    std::cout << "ld.lld execute fail: " << std::endl;
-    std::cout << error_message << std::endl;
-    std::cout << lld_result << std::endl;
+    llvm::errs() << "ld.lld execute fail: " << '\n'
+                 << error_message << "Code: "
+                 << lld_result << '\n';
   }
 
   return hsaco_path;

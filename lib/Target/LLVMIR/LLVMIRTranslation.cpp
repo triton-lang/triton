@@ -345,8 +345,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     std::unique_ptr<llvm::raw_string_ostream> ir_ss(
         new llvm::raw_string_ostream(mod_string));
     llvmIR->print(*ir_ss, nullptr);
-    std::cout << "// -----// LLVM IR Dump //----- //\n"
-              << mod_string << std::endl;
+    llvm::dbgs() << "// -----// LLVM IR Dump //----- //\n" << mod_string << '\n';
   }
 
   return llvmIR;
