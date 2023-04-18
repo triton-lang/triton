@@ -203,6 +203,14 @@ class CMakeBuild(build_ext):
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
             build_args += ['-j' + max_jobs]
 
+        if check_env_flag("TRITON_BUILD_WITH_CLANG_LLD"):
+            cmake_args += ["-DCMAKE_C_COMPILER=clang",
+                           "-DCMAKE_CXX_COMPILER=clang++",
+                           "-DCMAKE_LINKER=lld",
+                           "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld",
+                           "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld",
+                           "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld"]
+
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
