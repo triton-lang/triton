@@ -1597,11 +1597,11 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
         # Get the broadcast shape over all the arguments
         for i, item in enumerate(dispatch_args):
             _, broadcast_arg = semantic.binary_op_type_checking_impl(
-                item, broadcast_arg, _builder)
+                item, broadcast_arg, _builder, arithmetic_check=False)
         # Change the shape of each argument based on the broadcast shape
         for i in range(len(dispatch_args)):
             dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder)
+                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=False)
         ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
