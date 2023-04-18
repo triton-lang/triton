@@ -32,13 +32,8 @@ public:
                                           Value cSwizzleOffset) {
     if (canUseLdmatrix)
       return computeLdmatrixMatOffs(warpOff, lane, cSwizzleOffset);
-    else if (elemBytes == 4 && needTrans)
-      return computeB32MatOffs(warpOff, lane, cSwizzleOffset);
-    else if (elemBytes == 1)
-      return computeB8MatOffs(warpOff, lane, cSwizzleOffset);
     else
-      llvm::report_fatal_error("Invalid smem load config");
-
+      return computeLdsMatOffs(warpOff, lane, cSwizzleOffset, elemBytes);
     return {};
   }
 
@@ -48,14 +43,9 @@ public:
   // mapped to.
   SmallVector<Value> computeLdmatrixMatOffs(Value warpId, Value lane,
                                             Value cSwizzleOffset);
-
-  // Compute 32-bit matrix offsets.
-  SmallVector<Value> computeB32MatOffs(Value warpOff, Value lane,
-                                       Value cSwizzleOffset);
-
   // compute 8-bit matrix offset.
-  SmallVector<Value> computeB8MatOffs(Value warpOff, Value lane,
-                                      Value cSwizzleOffset);
+  SmallVector<Value> computeLdsMatOffs(Value warpOff, Value lane,
+                                       Value cSwizzleOffset, int elemBytes);
 
   // Load 4 matrices and returns 4 vec<2> elements.
   std::tuple<Value, Value, Value, Value>
@@ -152,46 +142,6 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   return offs;
 }
 
-SmallVector<Value> MMA16816SmemLoader::computeB32MatOffs(Value warpOff,
-                                                         Value lane,
-                                                         Value cSwizzleOffset) {
-  assert(needTrans && "Only used in transpose mode.");
-  // Load tf32 matrices with lds32
-  Value cOffInMat = udiv(lane, i32_val(4));
-  Value sOffInMat = urem(lane, i32_val(4));
-
-  Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
-  SmallVector<Value> offs(numPtrs);
-
-  for (int mat = 0; mat < 4; ++mat) { // Load 4 mats each time
-    int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
-    int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
-    if (kMatArrInt > 0) // we don't need pointers for k
-      continue;
-    Value kMatArr = i32_val(kMatArrInt);
-    Value nkMatArr = i32_val(nkMatArrInt);
-
-    Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
-                        mul(nkMatArr, i32_val(matArrStride)));
-    Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
-    cMatOff = add(cMatOff, cSwizzleMatOff);
-
-    Value sMatOff = kMatArr;
-    Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
-    // FIXME: (kOrder == 1?) is really dirty hack
-    for (int i = 0; i < numPtrs / 2; ++i) {
-      Value cMatOffI =
-          add(cMatOff, i32_val(i * pLoadStrideInMat * (kOrder == 1 ? 1 : 2)));
-      cMatOffI = xor_(cMatOffI, phase);
-      Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
-      cOff = urem(cOff, i32_val(tileShape[order[0]]));
-      sOff = urem(sOff, i32_val(tileShape[order[1]]));
-      offs[2 * i + nkMatArrInt] = add(cOff, mul(sOff, sStride));
-    }
-  }
-  return offs;
-}
-
 // clang-format off
 // Each `ldmatrix.x4` loads data as follows when `needTrans == False`:
 //
@@ -216,9 +166,11 @@ SmallVector<Value> MMA16816SmemLoader::computeB32MatOffs(Value warpOff,
 // along the row (resp. col) dimension.
 // clang-format on
 
-SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
-                                                        Value lane,
-                                                        Value cSwizzleOffset) {
+SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
+                                                         Value lane,
+                                                         Value cSwizzleOffset,
+                                                         int elemBytes) {
+  assert(elemBytes <= 4);
   int cTileShape = tileShape[order[0]];
   int sTileShape = tileShape[order[1]];
   if (!needTrans) {
@@ -230,7 +182,7 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
   int threadsPerQuad[2] = {8, 4};
   int laneWidth = 4;
   int laneHeight = 8;
-  int vecWidth = 32 / 8;
+  int vecWidth = 4 / elemBytes;
   int quadWidth = laneWidth * vecWidth;
   int quadHeight = laneHeight;
   int numQuadI = 2;
@@ -239,8 +191,8 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
 
   for (int rep = 0; rep < numPtrs / 8; ++rep) {
     for (int quadId = 0; quadId < 2; ++quadId) {
-      for (int elemId = 0; elemId < 4; ++elemId) {
-        int idx = rep * 8 + quadId * 4 + elemId;
+      for (int elemId = 0; elemId < vecWidth; ++elemId) {
+        int idx = rep * 8 + quadId * vecWidth + elemId;
         // inner index
         Value j = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
         j = add(j, i32_val(elemId));
@@ -334,34 +286,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     Value resV4 = builder.launch(rewriter, loc, resTy);
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
-  } else if (elemBytes == 4 && needTrans) { // Use lds.32 to load tf32 matrices
-    Value ptr2 = getPtr(ptrIdx + 1);
-    assert(sMatStride == 1);
-    int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
-    Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
-    int sOffsetArrElem = sMatStride * sMatShape;
-    Value sOffsetArrElemVal =
-        add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
-
-    Value elems[4];
-    if (kOrder == 1) {
-      elems[0] = load(gep(shemPtrTy, ptr, sOffsetElemVal));
-      elems[1] = load(gep(shemPtrTy, ptr2, sOffsetElemVal));
-      elems[2] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
-      elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
-    } else {
-      elems[0] = load(gep(shemPtrTy, ptr, sOffsetElemVal));
-      elems[2] = load(gep(shemPtrTy, ptr2, sOffsetElemVal));
-      elems[1] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
-      elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
-    }
-    std::array<Value, 4> retElems;
-    retElems.fill(undef(elemTy));
-    for (auto i = 0; i < 4; ++i) {
-      retElems[i] = insert_element(elemTy, retElems[i], elems[i], i32_val(0));
-    }
-    return {retElems[0], retElems[1], retElems[2], retElems[3]};
-  } else if (elemBytes == 1) { // work with int8
+  } else {
     elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
     // base pointers
     std::array<std::array<Value, 4>, 2> ptrs;
@@ -379,42 +304,60 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
       _i1 += (kOrder == 1 ? 1 : sMatStride) * sMatShape;
     Value i0 = mul(i32_val(_i0), sStride);
     Value i1 = mul(i32_val(_i1), sStride);
-
-    Value i8Elems[4][4];
+    std::array<Value, 2> ii = {i0, i1};
+    // load 4 32-bit values from shared memory
+    // (equivalent to ldmatrix.x4)
+    SmallVector<SmallVector<Value>> vals(4, SmallVector<Value>(vecWidth));
+    for (int i = 0; i < 4; ++i)
+      for (int j = 0; j < vecWidth; ++j)
+        vals[i][j] = load(gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]));
     // row + trans and col + no-trans are equivalent
-    bool isTrans = (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
-    if (isTrans) {
-      for (int j = 0; j < 4; ++j)
-        i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], i0));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[1][j] = load(gep(shemPtrTy, ptrs[1][j], i0));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[2][j] = load(gep(shemPtrTy, ptrs[0][j], i1));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], i1));
-
-    } else {
-      for (int j = 0; j < 4; ++j)
-        i8Elems[0][j] = load(gep(shemPtrTy, ptrs[0][j], i0));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[2][j] = load(gep(shemPtrTy, ptrs[1][j], i0));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[1][j] = load(gep(shemPtrTy, ptrs[0][j], i1));
-      for (int j = 0; j < 4; ++j)
-        i8Elems[3][j] = load(gep(shemPtrTy, ptrs[1][j], i1));
-    }
-
-    std::array<Value, 4> i8v4Elems;
-    i8v4Elems.fill(undef(elemTy));
+    if ((needTrans && kOrder == 1) || (!needTrans && kOrder == 0))
+      std::swap(vals[1], vals[2]);
+    // pack loaded vectors into 4 32-bit values
+    std::array<Value, 4> retElems;
+    retElems.fill(undef(elemTy));
     for (int m = 0; m < 4; ++m) {
-      for (int e = 0; e < 4; ++e)
-        i8v4Elems[m] = insert_element(i8v4Elems[m].getType(), i8v4Elems[m],
-                                      i8Elems[m][e], i32_val(e));
+      for (int e = 0; e < vecWidth; ++e)
+        retElems[m] = insert_element(retElems[m].getType(), retElems[m],
+                                     vals[m][e], i32_val(e));
     }
-
-    return {bitcast(i8v4Elems[0], i32_ty), bitcast(i8v4Elems[1], i32_ty),
-            bitcast(i8v4Elems[2], i32_ty), bitcast(i8v4Elems[3], i32_ty)};
+    if (elemBytes == 1)
+      return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
+              bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
+    else
+      return {retElems[0], retElems[1], retElems[2], retElems[3]};
   }
+
+  // else if (elemBytes == 4 && needTrans) { // Use lds.32 to load tf32 matrices
+  //   Value ptr2 = getPtr(ptrIdx + 1);
+  //   assert(sMatStride == 1);
+  //   int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
+  //   Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
+  //   int sOffsetArrElem = sMatStride * sMatShape;
+  //   Value sOffsetArrElemVal =
+  //       add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
+
+  //   Value elems[4];
+  //   if (kOrder == 1) {
+  //     elems[0] = load(gep(shemPtrTy, ptr, sOffsetElemVal));
+  //     elems[1] = load(gep(shemPtrTy, ptr2, sOffsetElemVal));
+  //     elems[2] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
+  //     elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
+  //   } else {
+  //     elems[0] = load(gep(shemPtrTy, ptr, sOffsetElemVal));
+  //     elems[2] = load(gep(shemPtrTy, ptr2, sOffsetElemVal));
+  //     elems[1] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
+  //     elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
+  //   }
+  //   std::array<Value, 4> retElems;
+  //   retElems.fill(undef(elemTy));
+  //   for (auto i = 0; i < 4; ++i) {
+  //     retElems[i] = insert_element(elemTy, retElems[i], elems[i],
+  //     i32_val(0));
+  //   }
+  //   return {retElems[0], retElems[1], retElems[2], retElems[3]};
+  // }
 
   assert(false && "Invalid smem load");
   return {Value{}, Value{}, Value{}, Value{}};
