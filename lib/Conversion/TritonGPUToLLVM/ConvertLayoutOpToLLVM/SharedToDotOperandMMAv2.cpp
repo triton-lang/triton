@@ -166,6 +166,49 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 // along the row (resp. col) dimension.
 // clang-format on
 
+// SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
+//                                                          Value lane,
+//                                                          Value
+//                                                          cSwizzleOffset, int
+//                                                          elemBytes) {
+//   assert(needTrans && "Only used in transpose mode.");
+//   // Load tf32 matrices with lds32
+//   Value cOffInMat = udiv(lane, i32_val(4));
+//   Value sOffInMat = urem(lane, i32_val(4));
+
+//   Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
+//   SmallVector<Value> offs(numPtrs);
+
+//   for (int mat = 0; mat < 4; ++mat) { // Load 4 mats each time
+//     int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
+//     int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
+//     if (kMatArrInt > 0) // we don't need pointers for k
+//       continue;
+//     Value kMatArr = i32_val(kMatArrInt);
+//     Value nkMatArr = i32_val(nkMatArrInt);
+
+//     Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
+//                         mul(nkMatArr, i32_val(matArrStride)));
+//     // Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
+//     // cMatOff = add(cMatOff, cSwizzleMatOff);
+
+//     Value sMatOff = kMatArr;
+//     Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
+//     // FIXME: (kOrder == 1?) is really dirty hack
+//     for (int i = 0; i < numPtrs / 2; ++i) {
+//       Value cMatOffI =
+//           add(cMatOff, i32_val(i * pLoadStrideInMat * (kOrder == 1 ? 1 :
+//           2)));
+//       // cMatOffI = xor_(cMatOffI, phase);
+//       Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
+//       cOff = urem(cOff, i32_val(tileShape[order[0]]));
+//       sOff = urem(sOff, i32_val(tileShape[order[1]]));
+//       offs[2 * i + nkMatArrInt] = add(cOff, mul(sOff, sStride));
+//     }
+//   }
+//   return offs;
+// }
+
 SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
                                                          Value lane,
                                                          Value cSwizzleOffset,
@@ -188,11 +231,12 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   int numQuadI = 2;
 
   Value cOffInMat = udiv(lane, i32_val(4));
+  Value sOffInMat = urem(lane, i32_val(4));
 
-  for (int rep = 0; rep < numPtrs / 8; ++rep) {
-    for (int quadId = 0; quadId < 2; ++quadId) {
+  for (int rep = 0; rep < numPtrs / (2 * vecWidth); ++rep)
+    for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < vecWidth; ++elemId) {
-        int idx = rep * 8 + quadId * vecWidth + elemId;
+        int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
         // inner index
         Value j = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
         j = add(j, i32_val(elemId));
@@ -217,8 +261,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
           offs[idx] = add(mul(i, sStride), j);
         }
       }
-    }
-  }
+
   return offs;
 }
 
