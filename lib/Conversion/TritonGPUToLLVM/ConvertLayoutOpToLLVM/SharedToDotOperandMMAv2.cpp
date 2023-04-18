@@ -214,10 +214,52 @@ SmallVector<Value> MMA16816SmemLoader::computeB32MatOffs(Value warpOff,
 // along the row (resp. col) dimension.
 // clang-format on
 
+// SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
+//                                                         Value lane,
+//                                                         Value cSwizzleOffset)
+//                                                         {
+//   assert(needTrans && "Only used in transpose mode.");
+//   Value cOffInMat = udiv(lane, i32_val(4));
+//   Value sOffInMat =
+//       mul(urem(lane, i32_val(4)), i32_val(4)); // each thread load 4 cols
+
+//   SmallVector<Value> offs(numPtrs);
+//   for (int mat = 0; mat < 4; ++mat) {
+//     int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
+//     int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
+//     if (kMatArrInt > 0) // we don't need pointers for k
+//       continue;
+//     Value kMatArr = i32_val(kMatArrInt);
+//     Value nkMatArr = i32_val(nkMatArrInt);
+
+//     Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
+//                         mul(nkMatArr, i32_val(matArrStride)));
+//     Value sMatOff = kMatArr;
+
+//     for (int loadx4Off = 0; loadx4Off < numPtrs / 8; ++loadx4Off) {
+//       for (int elemOff = 0; elemOff < 4; ++elemOff) {
+//         int ptrOff = loadx4Off * 8 + nkMatArrInt * 4 + elemOff;
+//         Value cMatOffI = add(cMatOff, i32_val(loadx4Off * pLoadStrideInMat *
+//                                               (kOrder == 1 ? 1 : 2)));
+//         Value sOffInMatElem = add(sOffInMat, i32_val(elemOff));
+
+//         // disable swizzling ...
+
+//         Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
+//         Value sOff = add(sOffInMatElem, mul(sMatOff, i32_val(sMatShape)));
+//         // To prevent out-of-bound access when tile is too small.
+//         cOff = urem(cOff, i32_val(tileShape[order[0]]));
+//         sOff = urem(sOff, i32_val(tileShape[order[1]]));
+//         offs[ptrOff] = add(cOff, mul(sOff, sStride));
+//       }
+//     }
+//   }
+//   return offs;
+// }
+
 SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
                                                         Value lane,
                                                         Value cSwizzleOffset) {
-
   int cTileShape = tileShape[order[0]];
   int sTileShape = tileShape[order[1]];
   if (!needTrans) {
@@ -234,11 +276,12 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
   int quadHeight = laneHeight;
   int numQuadI = 2;
 
+  Value cOffInMat = udiv(lane, i32_val(4));
+
   for (int rep = 0; rep < numPtrs / 8; ++rep) {
     for (int quadId = 0; quadId < 2; ++quadId) {
       for (int elemId = 0; elemId < 4; ++elemId) {
         int idx = rep * 8 + quadId * 4 + elemId;
-
         // inner index
         Value j = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
         j = add(j, i32_val(elemId));
@@ -246,10 +289,9 @@ SmallVector<Value> MMA16816SmemLoader::computeB8MatOffs(Value warpOff,
           j = add(j, i32_val(quadId * quadWidth));
           j = add(j, i32_val(rep * pLoadStrideInMat * quadWidth));
         }
-
         // outer index
         Value i = udiv(lane, i32_val(laneWidth));
-        i = add(i, mul(warpOff, i32_val(numQuadI * quadHeight)));
+        i = add(i, mul(warpOff, i32_val(warpOffStride * quadHeight)));
         if (needTrans) {
           int pStride = kOrder == 1 ? 1 : 2;
           i = add(i, i32_val(quadId * matArrStride * quadHeight));
