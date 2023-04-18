@@ -1183,7 +1183,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
 # TODO: [Qingyi] Fix argmin / argmax
 reduce_configs1 = [
     (op, dtype, (1, 1024), axis) for dtype in dtypes_with_bfloat16
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for axis in [1]
 ]
 
@@ -1199,7 +1199,7 @@ if 'V100' in torch.cuda.get_device_name(0):
 
 reduce_configs2 = [
     (op, 'float32', shape, axis)
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for shape in reduce2d_shapes
     for axis in [0, 1]
 ]
