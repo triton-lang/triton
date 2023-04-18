@@ -69,7 +69,7 @@ private:
 //===----------------------------------------------------------------------===//
 class MembarAnalysis {
 public:
-  using FuncMembarAnalysisMap = CallGraph<MembarAnalysis>::FuncDataMapT;
+  using FuncBlockInfoMapT = CallGraph<BlockInfo>::FuncDataMapT;
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
   /// - RAW: If a shared memory write is followed by a shared memory read, and
@@ -91,7 +91,7 @@ public:
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
-  void run(FuncMembarAnalysisMap &funcMembarAnalysisMap);
+  void run(FuncBlockInfoMapT &funcBlockInfoMapT);
 
   BlockInfo &getBlockInfo() { return funcBlockInfo; }
 
@@ -110,13 +110,12 @@ private:
   ///        op6
   ///   op7
   /// TODO: Explain why we don't use ForwardAnalysis:
-  void resolve(triton::FuncOp funcOp,
-               FuncMembarAnalysisMap *funcMembarAnalysisMap,
+  void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
                OpBuilder *builder);
 
   /// Updates the BlockInfo operation based on the operation.
   void update(Operation *operation, BlockInfo *blockInfo,
-              FuncMembarAnalysisMap *funcMembarAnalysisMap, OpBuilder *builder);
+              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder);
 
   /// Collects the successors of the terminator
   void visitTerminator(Operation *operation, SmallVector<Block *> &successors);
@@ -131,24 +130,26 @@ private:
 /// Each function maintains a BlockInfo map that includes all potential buffers
 /// after returning. This way users do not have to explicitly insert membars
 /// before and after function calls, but might be a bit conservative.
-class ModuleMembarAnalysis : public ModuleAnalysis<MembarAnalysis> {
+class ModuleMembarAnalysis : public CallGraph<BlockInfo> {
 public:
   ModuleMembarAnalysis(ModuleAllocation *moduleAllocation)
-      : ModuleAnalysis<MembarAnalysis>(moduleAllocation->getModuleOp()),
+      : CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
         moduleAllocation(moduleAllocation) {}
 
   void run() {
-    callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order walk callback
-        [](triton::CallOp callOp, triton::FuncOp funcOp) {},
+        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
         // Post-order walk callback
-        [&](triton::FuncOp funcOp,
-            CallGraph<MembarAnalysis>::FuncDataMapT &funcMembarAnalysisMap) {
-          auto *allocation = moduleAllocation->getAllocation(funcOp);
+        [&](FunctionOpInterface funcOp,
+            CallGraph<BlockInfo>::FuncDataMapT &funcBlockInfoMap) {
+          auto *allocation = moduleAllocation->getFuncData(funcOp);
           auto [it, inserted] =
-              funcMembarAnalysisMap.try_emplace(funcOp, allocation);
-          if (inserted)
-            it->second.run(funcMembarAnalysisMap);
+              funcBlockInfoMap.try_emplace(funcOp, BlockInfo());
+          if (inserted) {
+            MembarAnalysis analysis(allocation);
+            analysis.run(funcBlockInfoMap);
+          }
         });
   }
 

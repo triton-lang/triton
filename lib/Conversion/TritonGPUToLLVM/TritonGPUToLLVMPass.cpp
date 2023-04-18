@@ -81,8 +81,9 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// information.
 struct FuncOpConversion : public FuncOpConversionBase {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
+                   ModuleAllocation &allocation, PatternBenefit benefit)
+      : FuncOpConversionBase(converter, benefit), allocation(allocation),
+        numWarps(numWarps) {}
 
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
@@ -102,12 +103,15 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
 
+    allocation.mapFuncOp(funcOp, newFuncOp);
+
     rewriter.eraseOp(funcOp);
     return success();
   }
 
 private:
   int numWarps{0};
+  ModuleAllocation &allocation;
 };
 
 class TritonLLVMConversionTarget : public ConversionTarget {
@@ -160,7 +164,7 @@ public:
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
       funcPatterns.add<ReturnOpConversion>(typeConverter);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,

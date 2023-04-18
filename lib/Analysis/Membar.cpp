@@ -9,14 +9,15 @@
 
 namespace mlir {
 
-void MembarAnalysis::run(FuncMembarAnalysisMap &funcMembarAnalysisMap) {
-  triton::FuncOp funcOp = dyn_cast<triton::FuncOp>(allocation->getOperation());
+void MembarAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
+  FunctionOpInterface funcOp =
+      dyn_cast<FunctionOpInterface>(allocation->getOperation());
   OpBuilder builder(funcOp.getContext());
-  resolve(funcOp, &funcMembarAnalysisMap, &builder);
+  resolve(funcOp, &funcBlockInfoMap, &builder);
 }
 
-void MembarAnalysis::resolve(triton::FuncOp funcOp,
-                             FuncMembarAnalysisMap *funcMembarAnalysisMap,
+void MembarAnalysis::resolve(FunctionOpInterface funcOp,
+                             FuncBlockInfoMapT *funcBlockInfoMapT,
                              OpBuilder *builder) {
   // Initialize the blockList
   std::deque<Block *> blockList;
@@ -48,7 +49,7 @@ void MembarAnalysis::resolve(triton::FuncOp funcOp,
       if (op.hasTrait<OpTrait::IsTerminator>()) {
         visitTerminator(&op, successors);
       } else {
-        update(&op, &inputBlockInfo, funcMembarAnalysisMap, builder);
+        update(&op, &inputBlockInfo, funcBlockInfoMapT, builder);
       }
     }
     // Get the reference because we want to update if it changed
@@ -91,7 +92,7 @@ void MembarAnalysis::visitTerminator(Operation *op,
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                            FuncMembarAnalysisMap *funcMembarAnalysisMap,
+                            FuncBlockInfoMapT *funcBlockInfoMapT,
                             OpBuilder *builder) {
   if (isa<triton::gpu::ExtractSliceOp>(op) ||
       isa<triton::gpu::AllocTensorOp>(op) || isa<triton::TransOp>(op)) {
@@ -122,8 +123,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   if (isa<triton::CallOp>(op)) {
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
     if (auto callee =
-            dyn_cast<triton::FuncOp>(callOpInterface.resolveCallable()))
-      curBlockInfo = funcMembarAnalysisMap->lookup(callee).getBlockInfo();
+            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable()))
+      curBlockInfo = funcBlockInfoMapT->lookup(callee);
   } else {
     for (Value value : op->getOperands()) {
       for (auto bufferId : allocation->getBufferIds(value)) {

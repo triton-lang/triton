@@ -116,73 +116,103 @@ bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 SetVector<Operation *>
 multiRootTopologicalSort(const SetVector<Operation *> &toSort);
 
-// This uses the toplogicalSort above
+/// This uses the toplogicalSort above
 SetVector<Operation *>
 multiRootGetSlice(Operation *op, TransitiveFilter backwardFilter = nullptr,
                   TransitiveFilter forwardFilter = nullptr);
 
-// Create a basic DataFlowSolver with constant and dead code analysis included.
+/// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
+/// This class represents a call graph for a given ModuleOp and holds
+/// data of type T associated with each FunctionOpInterface.
 template <typename T> class CallGraph {
 public:
-  using FuncDataMapT = DenseMap<triton::FuncOp, T>;
+  using FuncDataMapT = DenseMap<FunctionOpInterface, T>;
+
+  /// Constructor that builds the call graph for the given moduleOp.
   CallGraph(ModuleOp moduleOp) : moduleOp(moduleOp) { build(); }
 
+  /// Walks the call graph and applies the provided update functions
+  /// to the edges and nodes.
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
             WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
             typename UpdateEdgeFn, typename UpdateNodeFn>
   void walk(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
-    DenseSet<triton::FuncOp> visited;
+    DenseSet<FunctionOpInterface> visited;
     for (auto root : roots) {
       doWalk<UpdateEdgeOrder, UpdateNodeOrder>(root, visited, updateEdgeFn,
                                                updateNodeFn);
     }
   }
 
-  T *getFuncData(triton::FuncOp funcOp) {
+  /// Retrieves the data associated with a function
+  T *getFuncData(FunctionOpInterface funcOp) {
     if (funcMap.count(funcOp)) {
       return &funcMap[funcOp];
     }
     return nullptr;
   }
 
+  /// Getters for moduleOp and roots.
   ModuleOp getModuleOp() const { return moduleOp; }
+  SmallVector<FunctionOpInterface> getRoots() const { return roots; }
 
-  SmallVector<triton::FuncOp> getRoots() const { return roots; }
+  /// Maps the data associated with a FunctionOpInterface to a targetFuncOp.
+  template <typename FROM, typename TO>
+  void mapFuncOp(FROM funcOp, TO targetFuncOp) {
+    // Iterate over graph and replace
+    for (auto &kv : graph) {
+      for (auto &edge : kv.second) {
+        if (edge.second == funcOp) {
+          edge.second = targetFuncOp;
+        }
+      }
+    }
+    graph[targetFuncOp] = graph[funcOp];
+    // Replace in roots
+    for (auto it = roots.begin(); it != roots.end(); ++it) {
+      if (*it == funcOp) {
+        *it = targetFuncOp;
+        break;
+      }
+    }
+    // Replace in funcMap
+    funcMap[targetFuncOp] = funcMap[funcOp];
+  }
 
 private:
   void build() {
     SymbolTableCollection symbolTable;
     DenseMap<Operation *, Operation *> parentMap;
     moduleOp.walk([&](Operation *op) {
-      auto parent = op->getParentOfType<triton::FuncOp>();
-      if (auto callOpInterface = dyn_cast<CallOpInterface>(op)) {
-        auto callOp = cast<triton::CallOp>(op);
-        auto *callee = callOpInterface.resolveCallable(&symbolTable);
-        auto funcOp = dyn_cast_or_null<triton::FuncOp>(callee);
+      auto parent = op->getParentOfType<FunctionOpInterface>();
+      if (auto callOp = dyn_cast<CallOpInterface>(op)) {
+        auto *callee = callOp.resolveCallable(&symbolTable);
+        auto funcOp = dyn_cast_or_null<FunctionOpInterface>(callee);
         if (funcOp)
-          callGraph[parent].emplace_back(
-              std::pair<triton::CallOp, triton::FuncOp>(callOp, funcOp));
+          graph[parent].emplace_back(
+              std::pair<CallOpInterface, FunctionOpInterface>(callOp, funcOp));
       }
       parentMap[op] = parent;
-      if (parent == nullptr && isa<triton::FuncOp>(op))
-        roots.push_back(dyn_cast<triton::FuncOp>(op));
+      if (parent == nullptr && isa<FunctionOpInterface>(op))
+        roots.push_back(dyn_cast<FunctionOpInterface>(op));
     });
   }
 
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
             WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
             typename UpdateEdgeFn, typename UpdateNodeFn>
-  void doWalk(triton::FuncOp funcOp, DenseSet<triton::FuncOp> &visited,
-              UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
+  void doWalk(FunctionOpInterface funcOp,
+              DenseSet<FunctionOpInterface> &visited, UpdateEdgeFn updateEdgeFn,
+              UpdateNodeFn updateNodeFn) {
     if (visited.count(funcOp)) {
       llvm::report_fatal_error("Cycle detected in call graph");
     }
     if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {
       updateNodeFn(funcOp, funcMap);
     }
-    for (auto [callOp, callee] : callGraph[funcOp]) {
+    for (auto [callOp, callee] : graph[funcOp]) {
       if constexpr (UpdateEdgeOrder == WalkOrder::PreOrder) {
         updateEdgeFn(callOp, callee);
       }
@@ -197,36 +227,12 @@ private:
     visited.erase(funcOp);
   }
 
-  void doTopologicalSort(triton::FuncOp funcOp,
-                         SmallVector<triton::FuncOp> &funcs) {
-    funcs.push_back(funcOp);
-    for (auto [callOp, callee] : callGraph[funcOp]) {
-      doTopologicalSort(callee, funcs);
-    }
-  }
-
   ModuleOp moduleOp;
-  DenseMap<triton::FuncOp,
-           SmallVector<std::pair<triton::CallOp, triton::FuncOp>>>
-      callGraph;
+  DenseMap<FunctionOpInterface,
+           SmallVector<std::pair<CallOpInterface, FunctionOpInterface>>>
+      graph;
   FuncDataMapT funcMap;
-  SmallVector<triton::FuncOp> roots;
-};
-
-template <typename T> class ModuleAnalysis {
-public:
-  ModuleAnalysis(ModuleOp moduleOp) : callGraph(moduleOp) {}
-
-  template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,
-            WalkOrder UpdateNodeOrder = WalkOrder::PreOrder,
-            typename UpdateEdgeFn, typename UpdateNodeFn>
-  void walk(UpdateEdgeFn updateEdgeFn, UpdateNodeFn updateNodeFn) {
-    callGraph.template walk<UpdateEdgeOrder, UpdateNodeOrder>(updateEdgeFn,
-                                                              updateNodeFn);
-  }
-
-protected:
-  CallGraph<T> callGraph;
+  SmallVector<FunctionOpInterface> roots;
 };
 
 } // namespace mlir

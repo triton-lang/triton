@@ -23,7 +23,7 @@ struct TestAllocationPass
     moduleOp.walk([&](triton::FuncOp funcOp) {
       auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
       os << opName << "\n";
-      auto *allocation = moduleAllocation.getAllocation(funcOp);
+      auto *allocation = moduleAllocation.getFuncData(funcOp);
       funcOp.walk([&](Operation *op) {
         auto scratchBufferId = allocation->getBufferId(op);
         if (scratchBufferId != Allocation::InvalidBufferId) {

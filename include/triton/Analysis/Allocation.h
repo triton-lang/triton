@@ -203,14 +203,14 @@ private:
 /// Each call op is treated like convert_layout that allocates a scratch buffer.
 /// At each call, we compute the start offset of the scratch buffer and pass it
 /// as an argument to the callee.
-class ModuleAllocation : public ModuleAnalysis<Allocation> {
+class ModuleAllocation : public CallGraph<Allocation> {
 public:
-  ModuleAllocation(ModuleOp moduleOp) : ModuleAnalysis<Allocation>(moduleOp) {
+  ModuleAllocation(ModuleOp moduleOp) : CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
-        [](triton::CallOp callOp, triton::FuncOp funcOp) {},
+        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
         // Post-order node walk callback
-        [&](triton::FuncOp funcOp,
+        [&](FunctionOpInterface funcOp,
             CallGraph<Allocation>::FuncDataMapT &funcAllocMap) {
           auto [iter, inserted] = funcAllocMap.try_emplace(funcOp, funcOp);
           if (inserted)
@@ -219,21 +219,15 @@ public:
   }
 
   size_t getSharedMemorySize() {
-    assert(callGraph.getRoots().size() == 1 &&
+    assert(getRoots().size() == 1 &&
            "The module should have only one root function");
     size_t size = 0;
-    for (auto funcOp : callGraph.getRoots()) {
-      auto *alloc = callGraph.getFuncData(funcOp);
+    for (auto funcOp : getRoots()) {
+      auto *alloc = getFuncData(funcOp);
       size = std::max(size, alloc->getSharedMemorySize());
     }
     return size;
   }
-
-  Allocation *getAllocation(triton::FuncOp funcOp) {
-    return callGraph.getFuncData(funcOp);
-  }
-
-  ModuleOp getModuleOp() { return callGraph.getModuleOp(); }
 };
 
 template <typename T> Interval(T, T) -> Interval<T>;

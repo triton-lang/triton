@@ -233,13 +233,13 @@ public:
                             T value) const {
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
-    triton::FuncOp funcOp;
+    FunctionOpInterface funcOp;
     if constexpr (std::is_pointer_v<T>)
-      funcOp = value->template getParentOfType<triton::FuncOp>();
+      funcOp = value->template getParentOfType<FunctionOpInterface>();
     else
       funcOp =
-          value.getParentRegion()->template getParentOfType<triton::FuncOp>();
-    auto *funcAllocation = allocation->getAllocation(funcOp);
+          value.getParentRegion()->template getParentOfType<FunctionOpInterface>();
+    auto *funcAllocation = allocation->getFuncData(funcOp);
     auto bufferId = funcAllocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = funcAllocation->getOffset(bufferId);

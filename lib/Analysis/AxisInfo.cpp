@@ -77,7 +77,7 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
 
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
-    if (auto fun = dyn_cast<triton::FuncOp>(op))
+    if (auto fun = dyn_cast<FunctionOpInterface>(op))
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
@@ -956,31 +956,39 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(triton::FuncOp funcOp) {
+void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
   if (failed(solver->initializeAndRun(funcOp)))
     return;
-  auto *axisInfoMap = callGraph.getFuncData(funcOp);
+  auto *axisInfoMap = getFuncData(funcOp);
+  auto updateAxisInfoMap = [&](Value value) {
+    auto axisInfo = analysis->getLatticeElement(value)->getValue();
+    AxisInfo curAxisInfo;
+    if (axisInfoMap->count(value)) {
+      curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
+    } else {
+      curAxisInfo = axisInfo;
+    }
+    (*axisInfoMap)[value] = curAxisInfo;
+  };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
-      auto axisInfo = analysis->getLatticeElement(value)->getValue();
-      AxisInfo curAxisInfo;
-      if (axisInfoMap->count(value)) {
-        curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
-      } else {
-        curAxisInfo = axisInfo;
-      }
-      (*axisInfoMap)[value] = curAxisInfo;
+      updateAxisInfoMap(value);
+    }
+  });
+  funcOp.walk([&](Block *block) {
+    for (auto value : block->getArguments()) {
+      updateAxisInfoMap(value);
     }
   });
 }
 
-void ModuleAxisInfoAnalysis::update(triton::CallOp callOp,
-                                    triton::FuncOp funcOp) {
+void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
+                                    FunctionOpInterface funcOp) {
   auto args = funcOp->getOperands();
-  auto *axisInfoMap = callGraph.getFuncData(funcOp);
-  for (auto entry : llvm::enumerate(callOp.getOperands())) {
+  auto *axisInfoMap = getFuncData(funcOp);
+  for (auto entry : llvm::enumerate(callOp->getOperands())) {
     auto index = entry.index();
     auto value = entry.value();
     auto axisInfo = axisInfoMap->lookup(args[index]);

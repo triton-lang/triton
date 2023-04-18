@@ -631,8 +631,8 @@ struct InsertSliceOpConversion
     Value dst = op.getDest();
     Value src = op.getSource();
     Value res = op.getResult();
-    auto funcOp = op->getParentOfType<triton::FuncOp>();
-    auto *funcAllocation = allocation->getAllocation(funcOp);
+    auto funcOp = op->getParentOfType<FunctionOpInterface>();
+    auto *funcAllocation = allocation->getFuncData(funcOp);
     assert(funcAllocation->getBufferId(res) == Allocation::InvalidBufferId &&
            "Only support in-place insert_slice for now");
 
@@ -711,8 +711,8 @@ struct InsertSliceAsyncOpConversion
     Value res = op.getResult();
     Value mask = op.getMask();
     Value other = op.getOther();
-    auto funcOp = op->getParentOfType<triton::FuncOp>();
-    auto *funcAllocation = allocation->getAllocation(funcOp);
+    auto funcOp = op->getParentOfType<FunctionOpInterface>();
+    auto *funcAllocation = allocation->getFuncData(funcOp);
     assert(funcAllocation->getBufferId(res) == Allocation::InvalidBufferId &&
            "Only support in-place insert_slice_async for now");
 

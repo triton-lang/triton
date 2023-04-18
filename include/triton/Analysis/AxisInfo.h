@@ -286,7 +286,7 @@ public:
   AxisInfoAnalysis(DataFlowSolver &solver);
   using dataflow::SparseDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
-  using FuncAxisInfoMapT = DenseMap<triton::FuncOp, AxisInfo>;
+  using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
 
   void visitOperation(Operation *op,
                       ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
@@ -299,33 +299,33 @@ public:
 /// calculate the axis info based on the axis info of all the callers.
 /// In the future, we can perform optimization using function cloning.
 using AxisInfoMapT = DenseMap<Value, AxisInfo>;
-
-class ModuleAxisInfoAnalysis : public ModuleAnalysis<AxisInfoMapT> {
+class ModuleAxisInfoAnalysis : public CallGraph<AxisInfoMapT> {
 public:
   ModuleAxisInfoAnalysis(ModuleOp moduleOp)
-      : ModuleAnalysis<AxisInfoMapT>(moduleOp) {
-    SmallVector<triton::FuncOp> funcs;
-    for (auto root : callGraph.getRoots()) {
-      callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+      : CallGraph<AxisInfoMapT>(moduleOp) {
+    SmallVector<FunctionOpInterface> funcs;
+    for (auto root : getRoots()) {
+      walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
           // Pre-order edge walk callback
-          [](triton::CallOp callOp, triton::FuncOp funcOp) {},
+          [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
           // Post-order node walk callback
-          [&](triton::FuncOp funcOp,
+          [&](FunctionOpInterface funcOp,
               CallGraph<AxisInfoMapT>::FuncDataMapT &funcAxisInfoMap) {
             funcs.push_back(funcOp);
             funcAxisInfoMap.try_emplace(funcOp, AxisInfoMapT{});
           });
     }
-    SetVector<triton::FuncOp> sortedFuncs(funcs.rbegin(), funcs.rend());
+    SetVector<FunctionOpInterface> sortedFuncs(funcs.rbegin(), funcs.rend());
     for (auto funcOp : sortedFuncs) {
       initialize(funcOp);
-      funcOp.walk([&](triton::CallOp callOp) { update(callOp, funcOp); });
+      funcOp.walk([&](CallOpInterface callOp) { update(callOp, funcOp); });
     }
   }
 
   AxisInfo *getAxisInfo(Value value) {
-    auto funcOp = value.getParentRegion()->getParentOfType<triton::FuncOp>();
-    auto *axisInfoMap = callGraph.getFuncData(funcOp);
+    auto funcOp =
+        value.getParentRegion()->getParentOfType<FunctionOpInterface>();
+    auto *axisInfoMap = getFuncData(funcOp);
     if (!axisInfoMap) {
       return nullptr;
     }
@@ -343,9 +343,9 @@ public:
   unsigned getMaskAlignment(Value mask);
 
 private:
-  void initialize(triton::FuncOp funcOp);
+  void initialize(FunctionOpInterface funcOp);
 
-  void update(triton::CallOp callOp, triton::FuncOp funcOp);
+  void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
 
 } // namespace mlir
