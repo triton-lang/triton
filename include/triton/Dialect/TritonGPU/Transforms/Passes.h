@@ -9,6 +9,9 @@ std::unique_ptr<Pass> createTritonGPUPipelinePass(int numStages = 2);
 std::unique_ptr<Pass>
 createTritonGPUAccelerateMatmulPass(int computeCapability = 80);
 
+std::unique_ptr<Pass>
+createTritonGPUConvertSliceReductionToBlockReductionPass();
+
 std::unique_ptr<Pass> createTritonGPUPrefetchPass();
 
 std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();

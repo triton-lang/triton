@@ -1505,6 +1505,13 @@ void init_triton_ir(py::module &&m) {
              self.addPass(
                  mlir::createTritonGPUAccelerateMatmulPass(computeCapability));
            })
+      .def(
+          "add_tritongpu_convert_slice_reduction_to_block_reduction_pass",
+          [](mlir::PassManager &self) {
+            self.addPass(
+                mlir::
+                    createTritonGPUConvertSliceReductionToBlockReductionPass());
+          })
       .def("add_tritongpu_optimize_dot_operands_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUOptimizeDotOperandsPass());

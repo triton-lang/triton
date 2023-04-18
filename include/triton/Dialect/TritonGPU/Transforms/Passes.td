@@ -86,6 +86,22 @@ def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
 
+// TODO: remove pass once reductions on arguments with sliced layouts are
+// well supported.
+def TritonGPUConvertSliceReductionToBlockReduction :
+  Pass<"tritongpu-convert-slice-reduction-to-block-reduction", "mlir::ModuleOp"> {
+
+  let summary = "Forces arguments to reduction operations to use a blocked layout instead of a sliced layout";
+  let description = [{
+    Reductions on arguments with a sliced layout are not well-supported for
+    the time being. This transformation ensures that arguments to reductions
+    are passed with a blocked layout instead of a sliced layout where
+    necessary.
+  }];
+
+  let constructor = "mlir::createTritonGPUConvertSliceReductionToBlockReductionPass()";
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+}
 
 def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions", "mlir::ModuleOp"> {
   let summary = "remove superfluous layout conversions";
