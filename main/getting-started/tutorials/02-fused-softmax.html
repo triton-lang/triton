@@ -235,10 +235,6 @@ This will allow us to verify that our padding mechanism works.</p>
 <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">),</span> <span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>[1024] 0
-[1024] 0
-</pre></div>
-</div>
 <p>As expected, the results are identical.</p>
 </section>
 <section id="benchmark">
@@ -284,32 +280,18 @@ We will then compare its performance against (1) <code class="code docutils lite
 <span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<img src="../../_images/sphx_glr_02-fused-softmax_001.png" srcset="../../_images/sphx_glr_02-fused-softmax_001.png" alt="02 fused softmax" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>[256] 0
-[256] 0
-[512] 0
-[512] 0
-[1024] 0
-[1024] 0
-[2048] 0
-[2048] 0
-[4096] 0
-[4096] 0
-[8192] 0
-[8192] 0
-[16384] 0
-[16384] 0
-softmax-performance:
+<img src="../../_images/sphx_glr_02-fused-softmax_001.png" srcset="../../_images/sphx_glr_02-fused-softmax_001.png" alt="02 fused softmax" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>softmax-performance:
           N       Triton  Torch (native)  Torch (jit)
-0     256.0   682.666643      744.727267   273.066674
-1     384.0   877.714274      877.714274   332.108094
+0     256.0   682.666643      744.727267   264.258068
+1     384.0   877.714274      819.200021   323.368435
 2     512.0   910.222190      910.222190   372.363633
-3     640.0   975.238103      975.238103   409.600010
+3     640.0   975.238103      975.238103   401.568635
 4     768.0  1068.521715     1023.999964   431.157886
 ..      ...          ...             ...          ...
-93  12160.0  1594.754129     1071.955925   590.470399
-94  12288.0  1591.967682     1018.694301   590.414408
+93  12160.0  1594.754129     1066.082150   591.367777
+94  12288.0  1598.438956     1018.694301   590.414408
 95  12416.0  1582.916395     1029.305700   588.610355
-96  12544.0  1580.346374     1016.222759   587.713013
+96  12544.0  1580.346374     1013.656595   590.305885
 97  12672.0  1584.000004     1006.213368   589.395349
 
 [98 rows x 4 columns]
@@ -323,7 +305,7 @@ Note however that the PyTorch <cite>softmax</cite> operation is more general and
 </ul>
 </dd>
 </dl>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  18.914 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 1 minutes  18.527 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/d91442ac2982c4e0cc3ab0f43534afbc/02-fused-softmax.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">02-fused-softmax.py</span></code></a></p>

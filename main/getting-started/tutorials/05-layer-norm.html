@@ -458,49 +458,38 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 <span class="n">bench_layer_norm</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<img src="../../_images/sphx_glr_05-layer-norm_001.png" srcset="../../_images/sphx_glr_05-layer-norm_001.png" alt="05 layer norm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>[8192] 0
-[8192] 0
-[32, 128] 0
-[1024] 0
-[1024] 0
-[2048] 0
-[2048] 0
-[4096] 0
-[4096] 0
-[16384] 0
-[16384] 0
-layer-norm-backward:
+<img src="../../_images/sphx_glr_05-layer-norm_001.png" srcset="../../_images/sphx_glr_05-layer-norm_001.png" alt="05 layer norm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>layer-norm-backward:
           N      Triton       Torch
-0    1024.0  319.168844  361.411758
-1    1536.0  361.411771  405.098894
-2    2048.0  455.111110  438.857137
-3    2560.0  538.947358  472.615383
+0    1024.0  234.057145  361.411758
+1    1536.0  344.523365  405.098894
+2    2048.0  446.836360  438.857137
+3    2560.0  534.260858  472.615383
 4    3072.0  619.563043  501.551024
 5    3584.0  688.127967  445.678757
 6    4096.0  750.412251  436.906674
 7    4608.0  708.923101  438.857146
 8    5120.0  763.229797  445.217381
-9    5632.0  809.389194  458.196602
-10   6144.0  847.448272  465.160886
-11   6656.0  882.563556  471.221251
-12   7168.0  919.957230  452.715775
-13   7680.0  950.103127  443.076928
-14   8192.0  978.149241  464.794337
-15   8704.0  663.161879  458.105254
-16   9216.0  686.906817  466.632911
-17   9728.0  713.981680  470.709684
-18  10240.0  731.428577  466.337764
-19  10752.0  758.964709  465.790591
-20  11264.0  781.317950  470.149555
-21  11776.0  802.909085  471.039978
-22  12288.0  819.199988  471.105436
-23  12800.0  825.806430  471.889394
-24  13312.0  840.757868  477.560558
-25  13824.0  844.213752  478.753261
-26  14336.0  849.540743  477.203871
-27  14848.0  852.516725  476.406423
-28  15360.0  865.352086  475.051564
-29  15872.0  865.745448  478.552759
+9    5632.0  809.389194  459.755106
+10   6144.0  847.448272  466.632925
+11   6656.0  887.466653  474.017797
+12   7168.0  919.957230  455.111115
+13   7680.0  950.103127  445.217381
+14   8192.0  987.979890  467.002371
+15   8704.0  663.161879  459.112087
+16   9216.0  686.906817  467.619457
+17   9728.0  713.981680  473.574009
+18  10240.0  731.428577  469.007657
+19  10752.0  761.203560  468.326675
+20  11264.0  781.317950  470.968637
+21  11776.0  805.196592  472.615374
+22  12288.0  828.404485  472.615401
+23  12800.0  830.270283  473.343610
+24  13312.0  849.702103  478.275433
+25  13824.0  852.894616  479.445106
+26  14336.0  860.160022  477.203871
+27  14848.0  856.615394  477.683661
+28  15360.0  865.352086  476.895209
+29  15872.0  865.745448  480.363187
 </pre></div>
 </div>
 </section>
@@ -512,7 +501,7 @@ layer-norm-backward:
 <p>Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, “Layer Normalization”, Arxiv 2016</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  38.249 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  37.775 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-05-layer-norm-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/935c0dd0fbeb4b2e69588471cbb2d4b2/05-layer-norm.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">05-layer-norm.py</span></code></a></p>
