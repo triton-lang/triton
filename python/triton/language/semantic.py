@@ -1238,7 +1238,6 @@ def reduction(
 ) -> Tuple[tl.tensor, ...]:
     # get result shape
     shape = inputs[0].type.shape
-    print(shape, axis)
     ret_shape = [s for i, s in enumerate(shape) if i != axis]
     for t in inputs:
         assert t.type.shape == shape

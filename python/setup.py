@@ -232,6 +232,7 @@ setup(
         "triton/common",
         "triton/compiler",
         "triton/language",
+        "triton/language/extra",
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",

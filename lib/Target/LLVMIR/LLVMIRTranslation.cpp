@@ -234,9 +234,10 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
   if (!isROCM) {
     if (name == "libdevice") {
       linkLibdevice(module);
-    } else {
-      assert(false && "unknown extern lib: ");
     }
+    // else {
+    //   assert(false && "unknown extern lib: ");
+    // }
   }
 
   return false;

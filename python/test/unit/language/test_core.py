@@ -1183,7 +1183,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
 # TODO: [Qingyi] Fix argmin / argmax
 reduce_configs1 = [
     (op, dtype, (1, 1024), axis) for dtype in dtypes_with_bfloat16
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for axis in [1]
 ]
 
@@ -1199,7 +1199,7 @@ if 'V100' in torch.cuda.get_device_name(0):
 
 reduce_configs2 = [
     (op, 'float32', shape, axis)
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for shape in reduce2d_shapes
     for axis in [0, 1]
 ]
@@ -1332,6 +1332,43 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
     z_ref = np.max(x, axis=axis, keepdims=True)
 
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+
+
+@triton.jit
+def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
+    delta = mean_2 - mean_1
+    new_weight = weight_1 + weight_2
+    w2_over_w = weight_2 / new_weight
+    return (
+        mean_1 + delta * w2_over_w,
+        m2_1 + m2_2 + delta * delta * weight_1 * w2_over_w,
+        new_weight,
+    )
+
+
+def test_generic_reduction(device='cuda'):
+
+    @triton.jit
+    def var_mean_kernel(X, out_mean, out_var, BLOCK: tl.constexpr):
+        xindex = tl.arange(0, BLOCK)
+        x = tl.load(X + xindex)
+        mean = x
+        m2 = tl.zeros_like(x)
+        weight = tl.full(x.shape, 1, x.dtype)
+        (mean, m2, weight) = tl.reduce((mean, m2, weight), 0, _welford_combine)
+        tl.store(out_mean, mean)
+        tl.store(out_var, m2 / weight)
+
+    SIZE = 512
+    x = torch.rand(SIZE, device=device)
+    out_mean = torch.empty((), device=device)
+    out_var = torch.empty((), device=device)
+
+    var_mean_kernel[(1,)](x, out_mean, out_var, BLOCK=SIZE)
+
+    expect_var, expect_mean = torch.var_mean(x, dim=0, correction=0)
+    torch.testing.assert_close(out_mean, expect_mean)
+    torch.testing.assert_close(out_var, expect_var)
 
 
 # ---------------
@@ -2275,11 +2312,46 @@ def test_while():
 #     print(m[0])
 #     print(n[0])
 
+# -----------------------
+# test extra
+# -----------------------
+
+
+def test_globaltimer():
+
+    @triton.jit
+    def kernel(Out1, Out2):
+        start = tl.extra.cuda.globaltimer()
+        off = tl.arange(0, 128)
+        for i in range(100):
+            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
+        end = tl.extra.cuda.globaltimer()
+        tl.store(Out2, end - start)
+
+    out1 = to_triton(np.zeros((128,), dtype=np.int64), device='cuda')
+    out2 = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
+    h = kernel[(1,)](out1, out2)
+    assert out2[0] > 0
+    # 2 inlined globaltimers + one extra in the wrapper extern function
+    assert h.asm["ptx"].count("%globaltimer") == 3
+
+
+def test_smid():
+
+    @triton.jit
+    def kernel(Out):
+        tl.store(Out + tl.program_id(0), tl.extra.cuda.smid())
+
+    out = to_triton(np.zeros((1024,), dtype=np.int32), device='cuda')
+    h = kernel[(out.shape[0],)](out)
+    assert out.sort()[0].unique().shape[0] > 0
+    assert h.asm["ptx"].count("%smid") == 2
 
 # -----------------------
 # test layout conversions
 # -----------------------
 # TODO: backend should be tested separately
+
 
 layouts = [
     # MmaLayout(version=1, warps_per_cta=[1, 4]),
