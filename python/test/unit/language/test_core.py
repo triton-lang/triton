@@ -1439,7 +1439,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                              for allow_tf32 in [True]
                              for col_a in [True, False]
                              for col_b in [True, False]
-                             for in_dtype, out_dtype in [('int8', 'int8'), ('float32', 'float32')]])
+                             for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16')]])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
