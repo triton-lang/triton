@@ -28,9 +28,10 @@ struct TritonInlinerInterface : public DialectInlinerInterface {
     auto funcOp = dyn_cast<triton::FuncOp>(callable);
     if (!funcOp)
       return true;
-    auto noinline = funcOp->getAttrOfType<BoolAttr>("noinline");
-    if (noinline)
-      return false;
+    // TODO: associate noinline with call ops but not function ops.
+    //auto noinline = funcOp->getAttrOfType<BoolAttr>("noinline");
+    //if (noinline)
+    //  return false;
     return true;
   }
 
