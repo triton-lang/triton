@@ -122,15 +122,14 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   }
 
   void runOnOperation() override {
-    Operation *op = getOperation();
     // Run axis info analysis
-    ModuleOp moduleOp = op->getParentOfType<ModuleOp>();
+    ModuleOp moduleOp = getOperation();
     ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
     // For each i/o operation, we determine what layout
     // the pointers should have for best memory coalescing
     LayoutMap layoutMap;
-    op->walk([&](Operation *curr) {
+    moduleOp.walk([&](Operation *curr) {
       Value ptr;
       if (auto op = dyn_cast<triton::LoadOp>(curr))
         ptr = op.getPtr();
@@ -160,7 +159,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     //    produces a tensor with layout L2
     // 4. Convert the output of this new memory op back to L1
     // 5. Replace all the uses of the original memory op by the new one
-    op->walk([&](Operation *curr) {
+    moduleOp.walk([&](Operation *curr) {
       OpBuilder builder(curr);
       if (auto load = dyn_cast<triton::LoadOp>(curr)) {
         coalesceOp<triton::LoadOp>(layoutMap, curr, load.getPtr(), builder);
