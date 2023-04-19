@@ -1390,7 +1390,7 @@ def test_full(dtype_str):
 # ---------------
 
 # Simplified matrix multiplication kernel
-# checks dot operation inside of loop is optimized correctly
+# Checks Matrix multiplication consists of several blocks is optimized correctly
 
 @triton.jit
 def matmul_kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr):
@@ -1408,8 +1408,6 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak, stride_bk, stride_b
         b_ptrs += BLOCK_SIZE_K * stride_bk
     c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
     tl.store(c_ptrs, accumulator)
-
-# TODO: DotConversion in TritonGPUToLLVM cannot support non-splat C for the moment
 
 def get_variant_golden(a, b):
     SIZE_M = a.shape[0]
@@ -1453,8 +1451,7 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
     golden_abs_err = torch.max(torch.abs(golden_diff)).item()
     golden_rel_err = torch.max(torch.abs(golden_diff / golden)).item()
 
-    torch.set_printoptions(profile="full")
-    triton.testing.allclose(c, golden.to(torch.float32), rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
+    triton.testing.assert_close(c, golden.to(torch.float32), rtol=max(1e-4, 1.5 * golden_rel_err), atol=max(1e-4, 1.5 * golden_abs_err))
 
 # ---------------
 # test arange
