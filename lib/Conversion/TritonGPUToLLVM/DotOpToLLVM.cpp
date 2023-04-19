@@ -19,6 +19,11 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               TritonGPUToLLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter);
 
+LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter);
+
+
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
       triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
@@ -47,7 +52,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
         return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
 #ifdef USE_ROCM
       if (mmaLayout.isMI200()) {
-        return convertMFMA(op, adaptor, rewriter);
+        return convertMFMA(op, adaptor, getTypeConverter(), rewriter);
       }
 #endif
       llvm::report_fatal_error(
@@ -62,41 +67,6 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
-  }
-
-private:
-// TODO move to separate file
-  LogicalResult convertMFMA(triton::DotOp op, OpAdaptor adaptor,
-                            ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto mmaLayout = op.getResult()
-                         .getType()
-                         .cast<RankedTensorType>()
-                         .getEncoding()
-                         .cast<MmaEncodingAttr>();
-
-    Value A = op.getA();
-    Value B = op.getB();
-    Value C = op.getC();
-
-    DotOpMFMAConversionHelper helper(A.getType(), mmaLayout,
-                                     getThreadId(rewriter, loc), rewriter,
-                                     getTypeConverter(), loc);
-
-    auto ATensorTy = A.getType().cast<RankedTensorType>();
-    auto BTensorTy = B.getType().cast<RankedTensorType>();
-
-    assert(ATensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
-           BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
-           "Both $a and %b should be DotOperand layout.");
-
-    Value loadedA, loadedB, loadedC;
-    loadedA = adaptor.getA();
-    loadedB = adaptor.getB();
-    loadedC = helper.loadC(op.getC(), adaptor.getC());
-
-    return helper.convertDot(A, B, C, op.getD(), loadedA, loadedB, loadedC, op,
-                             adaptor);
   }
 };
 

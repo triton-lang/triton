@@ -6,10 +6,12 @@ add_mlir_conversion_library(TritonGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv3.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/MMAv1.cpp
     DotOpToLLVM/MMAv2.cpp
+    DotOpToLLVM/MMAv3.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp

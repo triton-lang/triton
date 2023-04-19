@@ -40,6 +40,14 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
 }
 
+namespace SharedToDotOperandMMAv3 {
+Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
+                    Location loc, Value tensor,
+                    DotOperandEncodingAttr bEncoding,
+                    const SharedMemoryObject &smemObj,
+                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
+} // SharedToDotOperandMMAv3
+
 namespace SharedToDotOperandFMA {
 Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
                     Value thread, Location loc,
@@ -710,25 +718,16 @@ private:
 #ifdef USE_ROCM
     // AMD MI200 matrix cores
     } else if (!isOuter && mmaLayout.isMI200() && isHMMA) {
-      DotOpMFMAConversionHelper mfmaHelper(src.getType(), mmaLayout,
-                                           getThreadId(rewriter, loc), rewriter,
-                                           getTypeConverter(), op.getLoc());
-      if (dotOperandLayout.getOpIdx() == 0) {
-        // operand $a
-        res = mfmaHelper.loadA(src, smemObj);
-      } else if (dotOperandLayout.getOpIdx() == 1) {
-        // operand $b
-        res = mfmaHelper.loadB(src, smemObj);
-      }
+      res = SharedToDotOperandMMAv3::convertLayout(
+          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
+          smemObj, getTypeConverter(), tid_val());
 #endif
     } else {
       assert(false && "Unsupported mma layout found");
     }
     return res;
-    }
-  };
-
-}; // namespace triton::gpu::ConvertLayoutOp>
+  }
+};
 
 void populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
