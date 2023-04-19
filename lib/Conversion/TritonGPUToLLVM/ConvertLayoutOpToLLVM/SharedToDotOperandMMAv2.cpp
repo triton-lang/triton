@@ -68,7 +68,6 @@ private:
   int cMatShape;
   int sMatShape;
 
-  Value cStride;
   Value sStride;
 
   bool needTrans;
@@ -78,7 +77,6 @@ private:
 
   int pLoadStrideInMat;
   int sMatStride;
-  int cMatStride;
 
   int matArrStride;
   int warpOffStride;
@@ -165,49 +163,6 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 // lower quadrants. This pattern repeats every warpsPerTile[0] (resp. warpsPerTile[1]) blocks
 // along the row (resp. col) dimension.
 // clang-format on
-
-// SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
-//                                                          Value lane,
-//                                                          Value
-//                                                          cSwizzleOffset, int
-//                                                          elemBytes) {
-//   assert(needTrans && "Only used in transpose mode.");
-//   // Load tf32 matrices with lds32
-//   Value cOffInMat = udiv(lane, i32_val(4));
-//   Value sOffInMat = urem(lane, i32_val(4));
-
-//   Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
-//   SmallVector<Value> offs(numPtrs);
-
-//   for (int mat = 0; mat < 4; ++mat) { // Load 4 mats each time
-//     int kMatArrInt = kOrder == 1 ? mat / 2 : mat % 2;
-//     int nkMatArrInt = kOrder == 1 ? mat % 2 : mat / 2;
-//     if (kMatArrInt > 0) // we don't need pointers for k
-//       continue;
-//     Value kMatArr = i32_val(kMatArrInt);
-//     Value nkMatArr = i32_val(nkMatArrInt);
-
-//     Value cMatOff = add(mul(warpOff, i32_val(warpOffStride)),
-//                         mul(nkMatArr, i32_val(matArrStride)));
-//     // Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
-//     // cMatOff = add(cMatOff, cSwizzleMatOff);
-
-//     Value sMatOff = kMatArr;
-//     Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
-//     // FIXME: (kOrder == 1?) is really dirty hack
-//     for (int i = 0; i < numPtrs / 2; ++i) {
-//       Value cMatOffI =
-//           add(cMatOff, i32_val(i * pLoadStrideInMat * (kOrder == 1 ? 1 :
-//           2)));
-//       // cMatOffI = xor_(cMatOffI, phase);
-//       Value cOff = add(cOffInMat, mul(cMatOffI, i32_val(cMatShape)));
-//       cOff = urem(cOff, i32_val(tileShape[order[0]]));
-//       sOff = urem(sOff, i32_val(tileShape[order[1]]));
-//       offs[2 * i + nkMatArrInt] = add(cOff, mul(sOff, sStride));
-//     }
-//   }
-//   return offs;
-// }
 
 SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
                                                          Value lane,
@@ -372,36 +327,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
       return {retElems[0], retElems[1], retElems[2], retElems[3]};
   }
 
-  // else if (elemBytes == 4 && needTrans) { // Use lds.32 to load tf32 matrices
-  //   Value ptr2 = getPtr(ptrIdx + 1);
-  //   assert(sMatStride == 1);
-  //   int sOffsetElem = matIdx[order[1]] * (sMatStride * sMatShape);
-  //   Value sOffsetElemVal = mul(i32_val(sOffsetElem), sStride);
-  //   int sOffsetArrElem = sMatStride * sMatShape;
-  //   Value sOffsetArrElemVal =
-  //       add(sOffsetElemVal, mul(i32_val(sOffsetArrElem), sStride));
-
-  //   Value elems[4];
-  //   if (kOrder == 1) {
-  //     elems[0] = load(gep(shemPtrTy, ptr, sOffsetElemVal));
-  //     elems[1] = load(gep(shemPtrTy, ptr2, sOffsetElemVal));
-  //     elems[2] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
-  //     elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
-  //   } else {
-  //     elems[0] = load(gep(shemPtrTy, ptr, sOffsetElemVal));
-  //     elems[2] = load(gep(shemPtrTy, ptr2, sOffsetElemVal));
-  //     elems[1] = load(gep(shemPtrTy, ptr, sOffsetArrElemVal));
-  //     elems[3] = load(gep(shemPtrTy, ptr2, sOffsetArrElemVal));
-  //   }
-  //   std::array<Value, 4> retElems;
-  //   retElems.fill(undef(elemTy));
-  //   for (auto i = 0; i < 4; ++i) {
-  //     retElems[i] = insert_element(elemTy, retElems[i], elems[i],
-  //     i32_val(0));
-  //   }
-  //   return {retElems[0], retElems[1], retElems[2], retElems[3]};
-  // }
-
   assert(false && "Invalid smem load");
   return {Value{}, Value{}, Value{}, Value{}};
 }
@@ -421,7 +346,6 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   cMatShape = matShape[order[0]];
   sMatShape = matShape[order[1]];
 
-  cStride = smemStrides[order[0]];
   sStride = smemStrides[order[1]];
 
   // rule: k must be the fast-changing axis.
@@ -439,8 +363,6 @@ MMA16816SmemLoader::MMA16816SmemLoader(
     numPtrs = tileShape[order[0]] / (needTrans ? wpt : 1) / matShape[order[0]];
   }
   numPtrs = std::max<int>(numPtrs, 2);
-  // llvm::outs() << order[0] << " " << order[1] << " " << needTrans << " " <<
-  // matShape[0] << " " << matShape[1] << " " << tileShape[1] << "\n";
 
   // Special rule for i8/u8, 4 ptrs for each matrix
   if (!canUseLdmatrix && elemBytes == 1)
@@ -456,8 +378,6 @@ MMA16816SmemLoader::MMA16816SmemLoader(
 
   sMatStride =
       loadStrideInMat[order[1]] / (instrShape[order[1]] / matShape[order[1]]);
-  cMatStride =
-      loadStrideInMat[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
 
   // Each matArr contains warpOffStride matrices.
   matArrStride = kOrder == 1 ? 1 : wpt;
