@@ -103,10 +103,10 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto ret = getSizePerThread(sliceLayout.getParent());
-    return ret;
-    // ret.erase(ret.begin() + sliceLayout.getDim());
-    return ret;
+    // TODO: maybe should not be supported
+    auto sizePerThread = getSizePerThread(sliceLayout.getParent());
+    sizePerThread.erase(sizePerThread.begin() + sliceLayout.getDim());
+    return sizePerThread;
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.isAmpere()) {
       return {2, 2};
@@ -375,6 +375,7 @@ SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   auto parent = getParent();
   auto parentElemsPerThread =
       ::getElemsPerThread(parent, paddedShape(shape), eltTy);
+  parentElemsPerThread.erase(parentElemsPerThread.begin() + getDim());
   return parentElemsPerThread;
 }
 unsigned SliceEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,

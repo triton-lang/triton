@@ -129,9 +129,9 @@ struct ViewOpConversion : public ConvertTritonGPUOpToLLVMPattern<ViewOp> {
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto vals = this->getTypeConverter()->unpackLLElements(
         loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
-    Value view =
+    Value ret =
         this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
-    rewriter.replaceOp(op, view);
+    rewriter.replaceOp(op, ret);
     return success();
   }
 };
@@ -147,12 +147,33 @@ struct ExpandDimsOpConversion
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto resultTy = op.getType().template cast<RankedTensorType>();
-    auto vals = this->getTypeConverter()->unpackLLElements(
+    auto srcVals = this->getTypeConverter()->unpackLLElements(
         loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
-    Value view =
-        this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
-    rewriter.replaceOp(op, view);
+
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+    auto resultTy = op.getType().template cast<RankedTensorType>();
+
+    assert(srcTy.getEncoding().isa<SliceEncodingAttr>() &&
+           "ExpandDimsOp only support SliceEncodingAttr");
+    auto srcLayout = srcTy.getEncoding().dyn_cast<SliceEncodingAttr>();
+    auto resultLayout = resultTy.getEncoding();
+
+    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
+    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
+    DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
+    for (size_t i = 0; i < srcOffsets.size(); i++) {
+      srcValues[srcOffsets[i]] = srcVals[i];
+    }
+
+    SmallVector<Value> resultVals;
+    for (size_t i = 0; i < resultOffsets.size(); i++) {
+      auto offset = resultOffsets[i];
+      offset.erase(offset.begin() + srcLayout.getDim());
+      resultVals.push_back(srcValues.lookup(offset));
+    }
+    Value ret = this->getTypeConverter()->packLLElements(loc, resultVals,
+                                                         rewriter, resultTy);
+    rewriter.replaceOp(op, ret);
     return success();
   }
 };
