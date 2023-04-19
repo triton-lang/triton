@@ -5,8 +5,8 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
-using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
+using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 struct ReduceOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::ReduceOp> {
@@ -64,7 +64,7 @@ private:
                ConversionPatternRewriter &rewriter) const {
     auto types = op.getInputTypes();
     auto operands = adaptor.getOperands();
-    unsigned srcElems = getElemsPerThread(types[0]);
+    unsigned srcElems = getTotalElemsPerThread(types[0]);
     SmallVector<SmallVector<Value>> srcValues(srcElems);
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto values = getTypeConverter()->unpackLLElements(loc, operands[i],
@@ -158,7 +158,7 @@ private:
                   elemPtrTys[i]);
     }
 
-    unsigned srcElems = getElemsPerThread(srcTys[0]);
+    unsigned srcElems = getTotalElemsPerThread(srcTys[0]);
     // Emits indices of the original tensor that each thread
     // would own
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);
@@ -263,7 +263,7 @@ private:
 
         auto resultLayout = resultTy.getEncoding();
 
-        unsigned resultElems = getElemsPerThread(resultTy);
+        unsigned resultElems = getTotalElemsPerThread(resultTy);
         auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
         assert(resultIndices.size() == resultElems);
 
@@ -330,7 +330,7 @@ private:
     unsigned sizeIntraWarps = helper.getIntraWarpSize();
     unsigned sizeInterWarps = helper.getInterWarpSize();
 
-    unsigned srcElems = getElemsPerThread(srcTys[0]);
+    unsigned srcElems = getTotalElemsPerThread(srcTys[0]);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);
     auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
 
@@ -457,7 +457,7 @@ private:
               op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
         // nd-tensor where n >= 1
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
-        unsigned resultElems = getElemsPerThread(resultTy);
+        unsigned resultElems = getTotalElemsPerThread(resultTy);
         auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
         assert(resultIndices.size() == resultElems);
 

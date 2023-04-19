@@ -6,7 +6,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::triton::gpu::getElemsPerThread;
+using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
@@ -435,7 +435,7 @@ struct AddPtrOpConversion
     auto ptrTy = op.getPtr().getType();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     if (resultTensorTy) {
-      unsigned elems = getElemsPerThread(resultTy);
+      unsigned elems = getTotalElemsPerThread(resultTy);
       Type elemTy =
           getTypeConverter()->convertType(resultTensorTy.getElementType());
       auto ptrs = getTypeConverter()->unpackLLElements(loc, adaptor.getPtr(),
