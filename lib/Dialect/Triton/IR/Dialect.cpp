@@ -30,8 +30,6 @@ struct TritonInlinerInterface : public DialectInlinerInterface {
       return true;
     if (call->hasAttr("noinline"))
       return !call->getAttrOfType<BoolAttr>("noinline").getValue();
-    //if (noinline)
-    //  return false;
     return true;
   }
 
