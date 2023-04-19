@@ -188,7 +188,8 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   Value cOffInMat = udiv(lane, i32_val(4));
   Value sOffInMat = urem(lane, i32_val(4));
 
-  Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
+  Value phase = urem(udiv(needTrans ? sOffInMat : cOffInMat, i32_val(perPhase)),
+                     i32_val(maxPhase));
   Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
 
   for (int rep = 0; rep < numPtrs / (2 * vecWidth); ++rep)
@@ -202,6 +203,8 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
         if (!needTrans) {
           jOff = add(jOff, i32_val(quadId));
           jOff = add(jOff, i32_val(rep * pLoadStrideInMat));
+          jOff = add(jOff, cSwizzleMatOff);
+          jOff = xor_(jOff, phase);
         }
         // outer index base
         Value iBase = udiv(lane, i32_val(laneWidth));
@@ -209,9 +212,9 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
         Value iOff = mul(warpOff, i32_val(warpOffStride));
         if (needTrans) {
           int pStride = kOrder == 1 ? 1 : 2;
-          iOff = add(iOff, cSwizzleMatOff);
           iOff = add(iOff, i32_val(quadId * matArrStride));
           iOff = add(iOff, i32_val(rep * pLoadStrideInMat * pStride));
+          iOff = add(iOff, cSwizzleMatOff);
           iOff = xor_(iOff, phase);
         }
         // swizzle
@@ -219,6 +222,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
         Value i = add(iBase, mul(iOff, i32_val(quadHeight)));
         Value j = add(jBase, mul(jOff, i32_val(quadWidth)));
         j = add(j, i32_val(elemId));
+        // wrap around the bounds
         i = urem(i, i32_val(cTileShape));
         j = urem(j, i32_val(sTileShape));
         if (needTrans) {
