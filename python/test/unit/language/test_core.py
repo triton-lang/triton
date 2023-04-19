@@ -1183,7 +1183,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
 # TODO: [Qingyi] Fix argmin / argmax
 reduce_configs1 = [
     (op, dtype, (1, 1024), axis) for dtype in dtypes_with_bfloat16
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for axis in [1]
 ]
 
@@ -1199,7 +1199,7 @@ if 'V100' in torch.cuda.get_device_name(0):
 
 reduce_configs2 = [
     (op, 'float32', shape, axis)
-    for op in ['min', 'max', 'sum']
+    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for shape in reduce2d_shapes
     for axis in [0, 1]
 ]
@@ -1426,20 +1426,33 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 
 
 @pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype",
+                         [(*shape, 4, False, False, epilogue, allow_tf32, in_dtype, out_dtype)
+                          for shape in [(64, 64, 64), (16, 16, 16)]
+                          for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
+                          for allow_tf32 in [True, False]
+                          for in_dtype, out_dtype in [('float16', 'float16'),
+                                                      ('float16', 'float32'),
+                                                      ('float32', 'float32')]
+                          if not (allow_tf32 and (in_dtype in ['float16']))] +
+
                          [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype)
-                          for shape_nw in [
-                             [32, 32, 32, 1],
-                             [64, 64, 64, 4],
-                             [128, 128, 128, 4],
-                             [128, 128, 64, 2],
-                             [128, 128, 128, 2],
-                             [128, 128, 128, 1],
-                             [128, 128, 128, 8],
-                         ]
-                             for allow_tf32 in [True]
-                             for col_a in [True, False]
-                             for col_b in [True, False]
-                             for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16')]])
+                          for shape_nw in [[128, 256, 32, 8],
+                                           [128, 16, 32, 4],
+                                           [32, 128, 64, 4],
+                                           [128, 128, 64, 4],
+                                           [64, 128, 128, 4],
+                                           [32, 128, 64, 2],
+                                           [64, 64, 32, 4],
+                                           [32, 32, 128, 16],
+                                           [128, 128, 64, 2],
+                                           [64, 128, 128, 2]]
+                          for allow_tf32 in [True]
+                          for col_a in [True, False]
+                          for col_b in [True, False]
+                          for in_dtype, out_dtype in [('int8', 'int8'),
+                                                      ('float16', 'float16'),
+                                                      ('float16', 'float32'),
+                                                      ('float32', 'float32')]])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
@@ -1517,10 +1530,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
-    # x = x*0 + 3
-    # y = y*0 + 1
-    # for i in range(K):
-    #     y[i, :] = i
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     w_tri = to_triton(w, device=device)
@@ -1586,7 +1595,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
     else:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
-        # np.testing.assert_allclose(z_ref[:16, 0], to_numpy(z_tri[:16, 0]), rtol=0.01)
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):

@@ -13,10 +13,10 @@ def test_kwargs():
 
     @triton.autotune(configs=configs, key=['N'])
     @triton.jit
-    def _kernel(dst: torch.Tensor, N: int, BLOCK_SIZE: tl.constexpr):
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         x = tl.load(src + offsets, mask=offsets < N)
         tl.store(dst + offsets, x, mask=offsets < N)
     grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']),)
-    _kernel[grid](dst, src, N, 32)
-    _kernel[grid](dst, src, N, 32)
+    _kernel[grid](dst, src, N)
+    _kernel[grid](dst=dst, src=src, N=N)
