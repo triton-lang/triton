@@ -87,7 +87,7 @@ class enter_sub_region:
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, function_name,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None,
-                 debug=False, noinline=False):
+                 debug=False):
         self.builder = ir.builder(context)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
@@ -100,7 +100,6 @@ class CodeGenerator(ast.NodeVisitor):
         self.is_kernel = is_kernel
         self.last_node = None
         self.debug = debug
-        self.noinline = noinline
         self.scf_stack = []
         # SSA-construction
         # name => language.tensor
@@ -230,7 +229,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit(init_node)
         # initialize function
         visibility = "public" if self.is_kernel else "private"
-        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility, self.noinline)
+        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility)
         self.module.push_back(fn)
         entry = fn.add_entry_block()
         arg_values = []
@@ -775,14 +774,15 @@ class CodeGenerator(ast.NodeVisitor):
         if not self.module.has_function(fn_name):
             prototype = language.function_type([], arg_types)
             gscope = sys.modules[fn.fn.__module__].__dict__
-            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=fn.debug, noinline=fn.noinline)
+            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=fn.debug)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type
         else:
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
-        call_op = self.builder.call(symbol, arg_vals)
+        noinline = kwargs.get('noinline', False)
+        call_op = self.builder.call(symbol, arg_vals, noinline)
         if call_op.get_num_results() == 0 or callee_ret_type is None:
             return None
         elif call_op.get_num_results() == 1:
