@@ -396,3 +396,127 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
 }
 
 }
+
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: alloc1
+tt.func @alloc1(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 512
+  %cst0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
+  tt.return
+  // CHECK: size = 512
+}
+
+// CHECK-LABEL: alloc2
+tt.func @alloc2(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 1024
+  %cst0 = triton_gpu.alloc_tensor : tensor<32x16xf16, #A_SHARED>
+  tt.return
+  // CHECK: size = 1024
+}
+
+// CHECK-LABEL: alloc3
+tt.func @alloc3(%cond : i1) {
+  scf.if %cond {
+    // CHECK: offset = 0, size = 512
+    %cst0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
+  } else {
+    // CHECK: offset = 0, size = 1024
+    %cst0 = triton_gpu.alloc_tensor : tensor<16x32xf16, #A_SHARED>
+  }
+  tt.return
+  // CHECK: size = 1024
+}
+
+// CHECK-LABEL: alloc4
+tt.func @alloc4(%A : !tt.ptr<f16>, %cond : i1) {
+  scf.if %cond {
+    // virtual offset = 0, size = 1024
+    tt.call @alloc3(%cond) : (i1) -> ()
+  } else {
+    // virtual offset = 0, size = 512
+    tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+  // size = 1024
+}
+
+// CHECK-LABEL: single_call
+tt.func @single_call(%A : !tt.ptr<f16>) {
+  // offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // virtual offset = 0, size = 512
+  tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  tt.return
+  // size = 512
+}
+
+// CHECK-LABEL: multiple_calls
+tt.func @multiple_calls(%A : !tt.ptr<f16>) {
+  // offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // virtual offset = 0, size = 512
+  tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // virtual offset = 0, size = 1024
+  tt.call @alloc2(%A) : (!tt.ptr<f16>) -> ()
+  tt.return
+  // size = 1024
+}
+
+// CHECK-LABEL: if_else_calls
+tt.func @if_else_calls(%A : !tt.ptr<f16>, %cond : i1) {
+  scf.if %cond {
+    // offset = 0, size = 512
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+    // offset = 0, size = 1024
+    %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
+    // virtual offset = 0, size = 512
+    tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  } else {
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+    // virtual offset = 0, size = 1024
+    tt.call @alloc2(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+  // size = 1024
+}
+
+// CHECK-LABEL: for_calls
+tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
+  // offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  %lb = arith.constant 0 : index
+  %ub = arith.constant 10 : index
+  %step = arith.constant 1 : index
+  scf.for %iv = %lb to %ub step %step {
+    // virtual offset = 0, size = 512
+    tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+  // size = 512
+}
+
+// CHECK-LABEL: call_graph_1
+tt.func @call_graph_1(%A : !tt.ptr<f16>, %cond : i1) {
+  // offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // virtual offset = 0, size = 1024
+  tt.call @alloc3(%cond) : (i1) -> ()
+  tt.return
+  // size = 1024
+}
+
+// CHECK-LABEL: call_graph_2
+tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
+  // offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // virtual offset = 0, size = 1024
+  tt.call @alloc4(%A, %cond) : (!tt.ptr<f16>, i1) -> ()
+  tt.return
+  // size = 1024
+}
+
+}

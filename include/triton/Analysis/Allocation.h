@@ -117,6 +117,11 @@ public:
     }
   }
 
+  /// Returns the size of the given buffer is a virtual buffer.
+  bool isVirtualBuffer(BufferId bufferId) const {
+    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
+  }
+
   /// Returns the size of total shared memory allocated
   size_t getSharedMemorySize() const { return sharedMemorySize; }
 

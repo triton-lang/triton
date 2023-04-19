@@ -29,7 +29,10 @@ struct TestAllocationPass
         if (scratchBufferId != Allocation::InvalidBufferId) {
           size_t offset = allocation->getOffset(scratchBufferId);
           size_t size = allocation->getAllocatedSize(scratchBufferId);
-          os << "scratch offset = " << offset << ", size = " << size << "\n";
+          if (allocation->isVirtualBuffer(scratchBufferId))
+            os << "virtual offset = " << offset << ", size = " << size << "\n";
+          else
+            os << "scratch offset = " << offset << ", size = " << size << "\n";
         }
         if (op->getNumResults() < 1)
           return;
