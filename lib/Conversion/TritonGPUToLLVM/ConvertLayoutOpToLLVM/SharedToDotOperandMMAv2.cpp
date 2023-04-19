@@ -185,19 +185,19 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   int quadHeight = laneHeight;
   int numQuadI = 2;
 
-  Value cOffInMat = udiv(lane, i32_val(4));
-  Value sOffInMat = urem(lane, i32_val(4));
-
-  Value phase = urem(udiv(needTrans ? sOffInMat : cOffInMat, i32_val(perPhase)),
-                     i32_val(maxPhase));
+  Value iLane = udiv(lane, i32_val(laneWidth));
+  Value jLane = urem(lane, i32_val(laneWidth));
+  Value contigLane = needTrans ? jLane : iLane;
+  Value phase = urem(udiv(contigLane, i32_val(perPhase)), i32_val(maxPhase));
   Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
+  // llvm::outs() << "!!\n";
 
   for (int rep = 0; rep < numPtrs / (2 * vecWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < vecWidth; ++elemId) {
         int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
         // inner index base
-        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
+        Value jBase = mul(jLane, i32_val(vecWidth));
         // inner index offset
         Value jOff = i32_val(0);
         if (!needTrans) {
@@ -207,7 +207,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
           jOff = xor_(jOff, phase);
         }
         // outer index base
-        Value iBase = udiv(lane, i32_val(laneWidth));
+        Value iBase = iLane;
         // outer index offset
         Value iOff = mul(warpOff, i32_val(warpOffStride));
         if (needTrans) {
@@ -246,8 +246,10 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
 
   if (canUseLdmatrix)
     ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
-  else if (elemBytes == 4 && needTrans)
+  else if (elemBytes == 4)
     ptrIdx = matIdx[order[0]];
+  else if (elemBytes == 2)
+    ptrIdx = matIdx[order[0]] * 2;
   else if (elemBytes == 1)
     ptrIdx = matIdx[order[0]] * 4;
   else
@@ -257,7 +259,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
   // prefetch-related logic here for the upstream optimizer phase should
   // take care with it, and that is transparent in dot conversion.
   auto getPtr = [&](int idx) { return ptrs[idx]; };
-
   Value ptr = getPtr(ptrIdx);
 
   // The struct should have exactly the same element types.
@@ -366,8 +367,8 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
-  if (elemBytes == 1)
-    canUseLdmatrix = false;
+  // if (elemBytes == 1)
+  canUseLdmatrix = false;
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwpt] if not transposed,
@@ -376,12 +377,12 @@ MMA16816SmemLoader::MMA16816SmemLoader(
         tileShape[order[0]] / (needTrans ? wpt : 1) / instrShape[order[0]];
   } else {
     numPtrs = tileShape[order[0]] / (needTrans ? wpt : 1) / matShape[order[0]];
+    numPtrs *= 4 / elemBytes;
   }
   numPtrs = std::max<int>(numPtrs, 2);
 
   // Special rule for i8/u8, 4 ptrs for each matrix
-  if (!canUseLdmatrix && elemBytes == 1)
-    numPtrs *= 4;
+  // if (!canUseLdmatrix && elemBytes == 1)
 
   int loadStrideInMat[2];
   loadStrideInMat[kOrder] =
