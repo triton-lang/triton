@@ -116,15 +116,35 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
   }
 };
 
-template <typename SourceOp>
-struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
-  using OpAdaptor = typename SourceOp::Adaptor;
-  explicit ViewLikeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                                PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
+struct ViewOpConversion : public ConvertTritonGPUOpToLLVMPattern<ViewOp> {
+  using OpAdaptor = typename ViewOp::Adaptor;
+  explicit ViewOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<ViewOp>(typeConverter, benefit) {}
 
   LogicalResult
-  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+  matchAndRewrite(ViewOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = op.getType().template cast<RankedTensorType>();
+    auto vals = this->getTypeConverter()->unpackLLElements(
+        loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
+    Value view =
+        this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
+    rewriter.replaceOp(op, view);
+    return success();
+  }
+};
+
+struct ExpandDimsOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp> {
+  using OpAdaptor = typename ExpandDimsOp::Adaptor;
+  explicit ExpandDimsOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                                  PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
@@ -165,9 +185,8 @@ void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                   AxisInfoAnalysis &axisInfoAnalysis,
                                   const Allocation *allocation, Value smem,
                                   PatternBenefit benefit) {
-  patterns.add<ViewLikeOpConversion<triton::ViewOp>>(typeConverter, benefit);
-  patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
-                                                           benefit);
+  patterns.add<ViewOpConversion>(typeConverter, benefit);
+  patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
