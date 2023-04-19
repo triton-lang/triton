@@ -81,6 +81,12 @@ public:
     return bufferSet.at(bufferId).size;
   }
 
+  /// Returns the allocated interval of the given buffer.
+  Interval<size_t> getAllocatedInterval(BufferId bufferId) const {
+    auto &buffer = bufferSet.at(bufferId);
+    return Interval<size_t>(buffer.offset, buffer.offset + buffer.size);
+  }
+
   /// Returns the buffer id of the given value.
   /// This interface only returns the allocated buffer id.
   /// If you want to get all the buffer ids that are associated with the given
@@ -125,14 +131,6 @@ public:
   /// Returns the size of total shared memory allocated
   size_t getSharedMemorySize() const { return sharedMemorySize; }
 
-  bool isIntersected(BufferId lhsId, BufferId rhsId) const {
-    if (lhsId == InvalidBufferId || rhsId == InvalidBufferId)
-      return false;
-    auto lhsBuffer = bufferSet.at(lhsId);
-    auto rhsBuffer = bufferSet.at(rhsId);
-    return lhsBuffer.intersects(rhsBuffer);
-  }
-
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
@@ -155,12 +153,6 @@ private:
     BufferT(BufferKind kind, size_t size) : BufferT(kind, size, 0) {}
     BufferT(BufferKind kind, size_t size, size_t offset)
         : kind(kind), id(nextId++), size(size), offset(offset) {}
-
-    bool intersects(const BufferT &other) const {
-      return Interval<size_t>(offset, offset + size)
-          .intersects(
-              Interval<size_t>(other.offset, other.offset + other.size));
-    }
   };
 
   /// Op -> Scratch Buffer

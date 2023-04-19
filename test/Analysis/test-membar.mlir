@@ -503,3 +503,136 @@ tt.func @cf_if_else_return(%i1 : i1) {
 }
 
 }
+
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: convert_layout1
+tt.func @convert_layout1(%A : !tt.ptr<f16>) {
+  // CHECK-NOT: gpu.barrier
+  %0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
+  %1 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: convert_layout2
+tt.func @convert_layout2(%A : !tt.ptr<f16>) {
+  %0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
+  %1 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
+  %2 = tt.cat %1, %1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  // CHECK: triton_gpu.convert_layout
+  // CHECK-NEXT: gpu.barrier
+  %3 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+  %4 = tt.cat %2, %2 {axis = 0} : (tensor<32x16xf16, #A_SHARED>, tensor<32x16xf16, #A_SHARED>) -> tensor<64x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: convert_layout3
+tt.func @convert_layout3(%cond : i1) {
+  scf.if %cond {
+    %0 = triton_gpu.alloc_tensor : tensor<16x64xf16, #A_SHARED>
+    // CHECK: triton_gpu.convert_layout
+    // CHECK-NOT: gpu.barrier
+    %1 = triton_gpu.convert_layout %0 : (tensor<16x64xf16, #A_SHARED>) -> tensor<16x64xf16, #AL>
+  } else {
+    %0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
+    // CHECK: triton_gpu.convert_layout
+    // CHECK-NEXT: gpu.barrier
+    // CHECK-NEXT: triton_gpu.convert_layout
+    %1 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
+    %2 = triton_gpu.convert_layout %1 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #A_SHARED>
+  }
+  tt.return
+}
+
+// CHEKC-LABEL: convert_layout4
+tt.func @convert_layout4(%A : !tt.ptr<f16>, %cond : i1) {
+  // CHECK-NOT: gpu.barrier
+  scf.if %cond {
+    tt.call @convert_layout3(%cond) : (i1) -> ()
+  } else {
+    tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+}
+
+// CHECK-LABEL: single_call_sync
+tt.func @single_call_sync(%A : !tt.ptr<f16>) {
+  %0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // CHECK: tt.call
+  // CHECK-NEXT: gpu.barrier
+  tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
+  %1 = triton_gpu.convert_layout %0 : (tensor<16x32xf16, #AL>) -> tensor<16x32xf16, #BL>
+  tt.return
+}
+
+// CHECK-LABEL: single_call_no_sync
+// %1 can reuse %0 in convert_layout2, which has been synced
+tt.func @single_call_no_sync(%A : !tt.ptr<f16>) {
+  // CHECK-NOT: gpu.barrier
+  %0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
+  tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
+  %1 = triton_gpu.convert_layout %0 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #BL>
+  tt.return
+}
+
+// CHECK-LABEL: multiple_calls
+tt.func @multiple_calls(%A : !tt.ptr<f16>) {
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: if_else_calls
+tt.func @if_else_calls(%A : !tt.ptr<f16>, %cond : i1) {
+  scf.if %cond {
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+    // CHECK: gpu.barrier
+    // CHECK-NEXT: tt.call
+    // CHECK-NEXT: gpu.barrier
+    tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
+    %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
+  } else {
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+    // CHECK: tt.call
+    // CHECK-NOT: gpu.barrier
+    tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+}
+
+// CHECK-LABEL: for_calls
+tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  %lb = arith.constant 0 : index
+  %ub = arith.constant 10 : index
+  %step = arith.constant 1 : index
+  scf.for %iv = %lb to %ub step %step {
+    // CHECK: gpu.barrier
+    // CHECK-NEXT: tt.call
+    tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+}
+
+// CHECK-LABEL: call_graph_1
+tt.func @call_graph_1(%A : !tt.ptr<f16>, %cond : i1) {
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // CHECK: gpu.barrier
+  // CHECK-NEXT: tt.call
+  tt.call @convert_layout3(%cond) : (i1) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: call_graph_2
+tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
+  tt.call @convert_layout4(%A, %cond) : (!tt.ptr<f16>, i1) -> ()
+  // CHECK: tt.call
+  // CHECK-NEXT: gpu.barrier
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  tt.return
+}
+
+}

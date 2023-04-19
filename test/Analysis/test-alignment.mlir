@@ -1,5 +1,7 @@
 // RUN: triton-opt %s -test-print-alignment -split-input-file -o %t 2>&1 | FileCheck %s
 
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
 // CHECK-LABEL: @cast
 tt.func @cast() {
   // CHECK: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
@@ -490,4 +492,9 @@ tt.func @vecadd_mask_align_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
   %15 = tt.addptr %14, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   tt.store %15, %13, %10 : tensor<64xf32>
   tt.return
+}
+
+}
+
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 }

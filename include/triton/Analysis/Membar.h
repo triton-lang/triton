@@ -4,63 +4,61 @@
 #include "Allocation.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
+#include <set>
+
 namespace mlir {
 
 class OpBuilder;
 
 struct BlockInfo {
   using BufferIdSetT = Allocation::BufferIdSetT;
+  using IntervalSetT = std::set<Interval<size_t>>;
 
-  BufferIdSetT syncReadBuffers;
-  BufferIdSetT syncWriteBuffers;
+  IntervalSetT syncReadIntervals;
+  IntervalSetT syncWriteIntervals;
 
   BlockInfo() = default;
-  BlockInfo(const BufferIdSetT &syncReadBuffers,
-            const BufferIdSetT &syncWriteBuffers)
-      : syncReadBuffers(syncReadBuffers), syncWriteBuffers(syncWriteBuffers) {}
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
-    syncReadBuffers.insert(other.syncReadBuffers.begin(),
-                           other.syncReadBuffers.end());
-    syncWriteBuffers.insert(other.syncWriteBuffers.begin(),
-                            other.syncWriteBuffers.end());
+    syncReadIntervals.insert(other.syncReadIntervals.begin(),
+                             other.syncReadIntervals.end());
+    syncWriteIntervals.insert(other.syncWriteIntervals.begin(),
+                              other.syncWriteIntervals.end());
     return *this;
   }
 
   /// Returns true if buffers in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other, Allocation *allocation) const {
-    return /*RAW*/ isIntersected(syncWriteBuffers, other.syncReadBuffers,
-                                 allocation) ||
+  bool isIntersected(const BlockInfo &other) const {
+    return /*RAW*/ isIntersected(syncWriteIntervals, other.syncReadIntervals) ||
            /*WAR*/
-           isIntersected(syncReadBuffers, other.syncWriteBuffers, allocation) ||
+           isIntersected(syncReadIntervals, other.syncWriteIntervals) ||
            /*WAW*/
-           isIntersected(syncWriteBuffers, other.syncWriteBuffers, allocation);
+           isIntersected(syncWriteIntervals, other.syncWriteIntervals);
   }
 
   /// Clears the buffers because a barrier is inserted.
   void sync() {
-    syncReadBuffers.clear();
-    syncWriteBuffers.clear();
+    syncReadIntervals.clear();
+    syncWriteIntervals.clear();
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
-    return syncReadBuffers == other.syncReadBuffers &&
-           syncWriteBuffers == other.syncWriteBuffers;
+    return syncReadIntervals == other.syncReadIntervals &&
+           syncWriteIntervals == other.syncWriteIntervals;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
-  /// Returns true if buffers in two sets are intersected.
-  bool isIntersected(const BufferIdSetT &lhs, const BufferIdSetT &rhs,
-                     Allocation *allocation) const {
-    return std::any_of(lhs.begin(), lhs.end(), [&](auto lhsId) {
-      return std::any_of(rhs.begin(), rhs.end(), [&](auto rhsId) {
-        return allocation->isIntersected(lhsId, rhsId);
-      });
-    });
+  bool isIntersected(const IntervalSetT &lhsIntervalSet,
+                     const IntervalSetT &rhsIntervalSet) const {
+    for (auto &lhs : lhsIntervalSet)
+      for (auto &rhs : rhsIntervalSet)
+        if (lhs.intersects(rhs))
+          return true;
+    return false;
   }
 };
 
@@ -87,13 +85,11 @@ public:
   /// - Double buffers
   /// - N buffers
   MembarAnalysis() = default;
-  MembarAnalysis(Allocation *allocation) : allocation(allocation) {}
+  explicit MembarAnalysis(Allocation *allocation) : allocation(allocation) {}
 
   /// Runs the membar analysis to the given operation, inserts a barrier if
   /// necessary.
-  void run(FuncBlockInfoMapT &funcBlockInfoMapT);
-
-  BlockInfo &getBlockInfo() { return funcBlockInfo; }
+  void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
 private:
   /// Applies the barrier analysis based on the SCF dialect, in which each
@@ -122,7 +118,6 @@ private:
 
 private:
   Allocation *allocation = nullptr;
-  BlockInfo funcBlockInfo;
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
