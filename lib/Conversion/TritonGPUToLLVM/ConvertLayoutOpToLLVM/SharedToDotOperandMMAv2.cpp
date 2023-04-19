@@ -188,26 +188,37 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   Value cOffInMat = udiv(lane, i32_val(4));
   Value sOffInMat = urem(lane, i32_val(4));
 
+  Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
+  Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
+
   for (int rep = 0; rep < numPtrs / (2 * vecWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < vecWidth; ++elemId) {
         int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
-        // inner index
-        Value j = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
-        j = add(j, i32_val(elemId));
+        // inner index base
+        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
+        // inner index offset
+        Value jOff = i32_val(0);
         if (!needTrans) {
-          j = add(j, i32_val(quadId * quadWidth));
-          j = add(j, i32_val(rep * pLoadStrideInMat * quadWidth));
+          jOff = add(jOff, i32_val(quadId));
+          jOff = add(jOff, i32_val(rep * pLoadStrideInMat));
         }
-        // outer index
-        Value i = udiv(lane, i32_val(laneWidth));
-        i = add(i, mul(warpOff, i32_val(warpOffStride * quadHeight)));
+        // outer index base
+        Value iBase = udiv(lane, i32_val(laneWidth));
+        // outer index offset
+        Value iOff = mul(warpOff, i32_val(warpOffStride));
         if (needTrans) {
           int pStride = kOrder == 1 ? 1 : 2;
-          i = add(i, i32_val(quadId * matArrStride * quadHeight));
-          i = add(i, i32_val(rep * pLoadStrideInMat * pStride * quadHeight));
+          iOff = add(iOff, cSwizzleMatOff);
+          iOff = add(iOff, i32_val(quadId * matArrStride));
+          iOff = add(iOff, i32_val(rep * pLoadStrideInMat * pStride));
+          iOff = xor_(iOff, phase);
         }
+        // swizzle
         // To prevent out-of-bound access when tile is too small.
+        Value i = add(iBase, mul(iOff, i32_val(quadHeight)));
+        Value j = add(jBase, mul(jOff, i32_val(quadWidth)));
+        j = add(j, i32_val(elemId));
         i = urem(i, i32_val(cTileShape));
         j = urem(j, i32_val(sTileShape));
         if (needTrans) {
