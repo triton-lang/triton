@@ -74,7 +74,9 @@ def optimize_ttgir(mod, num_stages, arch):
         pm.add_tritongpu_accelerate_matmul_pass(arch)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
-    pm.add_tritongpu_pipeline_pass(num_stages)
+    # TODO enable this pass for AMD GPU when it is ready
+    if torch.version.hip is None:
+        pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_tritongpu_prefetch_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
