@@ -137,11 +137,12 @@ public:
           op->getLoc(), newTy, newOperands[i]);
     }
 
+    rewriter.setInsertionPoint(reduce);
     auto newReduce = rewriter.create<triton::ReduceOp>(
         op->getLoc(), newOperands, reduce.getAxis());
     auto &newCombineOp = newReduce.getCombineOp();
-    rewriter.inlineRegionBefore(reduce.getCombineOp(), newCombineOp,
-                                newCombineOp.end());
+    rewriter.cloneRegionBefore(reduce.getCombineOp(), newCombineOp,
+                               newCombineOp.end());
 
     SmallVector<Value> newRet = newReduce.getResult();
     auto oldTypes = reduce.getResult().getType();

@@ -704,7 +704,7 @@ class tensor:
             elif sl == slice(None, None, None):
                 pass
             else:
-                assert False, "unsupported"
+                assert False, f"unsupported tensor index: {sl}"
         return ret
 
     @property
@@ -1281,7 +1281,7 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
 
     if len(input.shape) > 1:
         # Broadcast index across the non-reduced axes
-        expand_dims_index = [None] * len(input.shape)
+        expand_dims_index = [constexpr(None)] * len(input.shape)
         expand_dims_index[axis] = slice(None)
         index = index.__getitem__(expand_dims_index, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
@@ -1597,11 +1597,11 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
         # Get the broadcast shape over all the arguments
         for i, item in enumerate(dispatch_args):
             _, broadcast_arg = semantic.binary_op_type_checking_impl(
-                item, broadcast_arg, _builder)
+                item, broadcast_arg, _builder, arithmetic_check=False)
         # Change the shape of each argument based on the broadcast shape
         for i in range(len(dispatch_args)):
             dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder)
+                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=False)
         ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
