@@ -616,12 +616,14 @@ void populateTritonGPUToLLVMPatterns(
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
-  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation, benefit);
+  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation,
+                                        benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
 
-  patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation, benefit);
+  patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
+                                         benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
