@@ -14,3 +14,16 @@ tt.func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
 }
 
 }
+
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
+tt.func @test_func(%lb : index, %A : !tt.ptr<f16>) {
+  tt.return
+}
+
+tt.func @test_noinline_kernel(%lb : index, %A : !tt.ptr<f16>) {
+  tt.call @test_func(%lb, %A) : (index, !tt.ptr<f16>) -> ()
+  tt.return
+}
+
+}

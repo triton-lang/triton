@@ -63,7 +63,7 @@ public:
   Allocation() = default;
   /// Creates a new Allocation analysis that computes the shared memory
   /// information for all associated shared memory values.
-  Allocation(Operation *operation) : operation(operation) {}
+  explicit Allocation(Operation *operation) : operation(operation) {}
 
   /// Runs allocation analysis on the given top-level operation.
   void run(FuncAllocMapT &funcAllocMap);
@@ -202,6 +202,8 @@ private:
 /// as an argument to the callee.
 class ModuleAllocation : public CallGraph<Allocation> {
 public:
+  using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
+
   ModuleAllocation(ModuleOp moduleOp) : CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
@@ -215,8 +217,6 @@ public:
   }
 
   size_t getSharedMemorySize() {
-    assert(getRoots().size() == 1 &&
-           "The module should have only one root function");
     size_t size = 0;
     for (auto funcOp : getRoots()) {
       auto *alloc = getFuncData(funcOp);
@@ -224,6 +224,21 @@ public:
     }
     return size;
   }
+
+  size_t getSharedMemorySize(FunctionOpInterface funcOp) {
+    return getFuncData(funcOp)->getSharedMemorySize();
+  }
+
+  void setFunctionSharedMemoryValue(FunctionOpInterface funcOp, Value value) {
+    sharedMemoryValue[funcOp] = value;
+  }
+
+  Value getFunctionSharedMemoryValue(FunctionOpInterface funcOp) {
+    return sharedMemoryValue[funcOp];
+  }
+
+private:
+  FuncOffsetMapT sharedMemoryValue;
 };
 
 template <typename T> Interval(T, T) -> Interval<T>;

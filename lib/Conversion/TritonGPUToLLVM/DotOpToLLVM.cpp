@@ -63,7 +63,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
 void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
-                                 ModuleAllocation &allocation, Value smem,
+                                 ModuleAllocation &allocation,
                                  PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, allocation, smem, benefit);
+  patterns.add<DotOpConversion>(typeConverter, allocation, benefit);
 }

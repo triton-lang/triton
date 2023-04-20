@@ -158,6 +158,11 @@ public:
   ModuleOp getModuleOp() const { return moduleOp; }
   SmallVector<FunctionOpInterface> getRoots() const { return roots; }
 
+  /// Returns true if the given function is a root.
+  bool isRoot(FunctionOpInterface funcOp) const {
+    return llvm::is_contained(roots, funcOp);
+  }
+
   /// Maps the data associated with a FunctionOpInterface to a targetFuncOp.
   template <typename FROM, typename TO>
   void mapFuncOp(FROM funcOp, TO targetFuncOp) {

@@ -141,6 +141,70 @@ protected:
   }
 };
 
+// CallOpInterfaceLowering is modified from
+// https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
+// A CallOp automatically promotes MemRefType to a sequence of alloca/store and
+// passes the pointer to the MemRef across function boundaries.
+template <typename CallOpType>
+struct CallOpInterfaceLowering : public ConvertOpToLLVMPattern<CallOpType> {
+  using ConvertOpToLLVMPattern<CallOpType>::ConvertOpToLLVMPattern;
+  using Super = CallOpInterfaceLowering<CallOpType>;
+  using Base = ConvertOpToLLVMPattern<CallOpType>;
+
+  LogicalResult convertCallOpToLLVMCallOp(
+      CallOpType callOp, typename CallOpType::Adaptor adaptor, Value newOperand,
+      ConversionPatternRewriter &rewriter) const {
+    // Pack the result types into a struct.
+    Type packedResult = nullptr;
+    unsigned numResults = callOp.getNumResults();
+    auto resultTypes = llvm::to_vector<4>(callOp.getResultTypes());
+
+    if (numResults != 0) {
+      if (!(packedResult =
+                this->getTypeConverter()->packFunctionResults(resultTypes)))
+        return failure();
+    }
+
+    auto promoted = this->getTypeConverter()->promoteOperands(
+        callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
+        adaptor.getOperands(), rewriter);
+    promoted.emplace_back(newOperand);
+    auto newOp = rewriter.create<LLVM::CallOp>(
+        callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
+        promoted, callOp->getAttrs());
+
+    SmallVector<Value, 4> results;
+    if (numResults < 2) {
+      // If < 2 results, packing did not do anything and we can just return.
+      results.append(newOp.result_begin(), newOp.result_end());
+    } else {
+      // Otherwise, it had been converted to an operation producing a structure.
+      // Extract individual results from the structure and return them as list.
+      results.reserve(numResults);
+      for (unsigned i = 0; i < numResults; ++i) {
+        results.push_back(rewriter.create<LLVM::ExtractValueOp>(
+            callOp.getLoc(), newOp->getResult(0), i));
+      }
+    }
+
+    if (this->getTypeConverter()->getOptions().useBarePtrCallConv) {
+      // For the bare-ptr calling convention, promote memref results to
+      // descriptors.
+      assert(results.size() == resultTypes.size() &&
+             "The number of arguments and types doesn't match");
+      this->getTypeConverter()->promoteBarePtrsToDescriptors(
+          rewriter, callOp.getLoc(), resultTypes, results);
+    } else if (failed(this->copyUnrankedDescriptors(rewriter, callOp.getLoc(),
+                                                    resultTypes, results,
+                                                    /*toDynamic=*/false))) {
+      return failure();
+    }
+
+    rewriter.replaceOp(callOp, results);
+    return success();
+  }
+};
+
 using IndexCacheKeyT = std::pair<Attribute, RankedTensorType>;
 
 struct CacheKeyDenseMapInfo {
@@ -189,14 +253,13 @@ public:
       : converter(&typeConverter), indexCacheInfo(indexCacheInfo) {}
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      Value smem)
-      : converter(&typeConverter), allocation(&allocation), smem(smem) {}
+      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation)
+      : converter(&typeConverter), allocation(&allocation) {}
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      Value smem, IndexCacheInfo indexCacheInfo)
-      : converter(&typeConverter), allocation(&allocation), smem(smem),
+      IndexCacheInfo indexCacheInfo)
+      : converter(&typeConverter), allocation(&allocation),
         indexCacheInfo(indexCacheInfo) {}
 
   TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
@@ -237,9 +300,10 @@ public:
     if constexpr (std::is_pointer_v<T>)
       funcOp = value->template getParentOfType<FunctionOpInterface>();
     else
-      funcOp =
-          value.getParentRegion()->template getParentOfType<FunctionOpInterface>();
+      funcOp = value.getParentRegion()
+                   ->template getParentOfType<FunctionOpInterface>();
     auto *funcAllocation = allocation->getFuncData(funcOp);
+    auto smem = allocation->getFunctionSharedMemoryValue(funcOp);
     auto bufferId = funcAllocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = funcAllocation->getOffset(bufferId);
@@ -914,7 +978,6 @@ private:
 protected:
   TritonGPUToLLVMTypeConverter *converter;
   ModuleAllocation *allocation;
-  Value smem;
   IndexCacheInfo indexCacheInfo;
 };
 
@@ -938,15 +1001,15 @@ public:
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      Value smem, PatternBenefit benefit = 1)
+      PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, smem) {}
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      Value smem, IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
+      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, smem,
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation,
                                             indexCacheInfo) {}
 
 protected:
