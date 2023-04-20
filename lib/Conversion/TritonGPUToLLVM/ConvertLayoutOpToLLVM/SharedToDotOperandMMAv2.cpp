@@ -360,9 +360,6 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
-  // if (elemBytes == 1)
-  canUseLdmatrix = false;
-  // canUseLdmatrix = needTrans;
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwpt] if not transposed,
