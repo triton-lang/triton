@@ -161,6 +161,14 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
+    def get_cmake_dir(self):
+        plat_name = sysconfig.get_platform()
+        python_version = sysconfig.get_python_version()
+        dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
+        cmake_dir = Path(self.base_dir) / "python" / "build" / dir_name
+        cmake_dir.mkdir(parents=True, exist_ok=True)
+        return cmake_dir
+
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
@@ -212,8 +220,9 @@ class CMakeBuild(build_ext):
                            "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld"]
 
         env = os.environ.copy()
-        subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
-        subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
+        cmake_dir = self.get_cmake_dir()
+        subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
+        subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
 
 
 download_and_copy_ptxas()
@@ -236,6 +245,10 @@ setup(
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",
+        "triton/runtime/backends",
+        "triton/third_party/cuda/bin",
+        "triton/third_party/cuda/include",
+        "triton/third_party/cuda/lib",
         "triton/tools",
     ],
     install_requires=[
