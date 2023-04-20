@@ -98,25 +98,29 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   Value kMatArr = kOrder == 1 ? s1 : s0;
   Value nkMatArr = kOrder == 1 ? s0 : s1;
 
-  // matrix coordinate inside a CTA, the matrix layout is [2x2wpt] for A and
-  // [2wptx2] for B. e.g. Setting wpt=3, The data layout for A(kOrder=1) is
-  //   |0 0 1 1 2 2| -> 0,1,2 are the warpids
-  //   |0 0 1 1 2 2|
-  //
-  // for B(kOrder=0) is
-  //   |0 0|  -> 0,1,2 are the warpids
-  //   |1 1|
-  //   |2 2|
+  // Matrix coordinates inside a CTA,
+  // the matrix layout is [2wpt[0], 2] for A and [2, 2wpt[1]] for B.
+  // e.g., Setting wpt=4, the data layout for A(kOrder=1) is
+  //   |0 0|  -> 0,1,2,3 are the warpids
   //   |0 0|
   //   |1 1|
+  //   |1 1|
   //   |2 2|
+  //   |2 2|
+  //   |3 3|
+  //   |3 3|
+  //
+  // for B(kOrder=0) is
+  //   |0 1 2 3 0 1 2 3| -> 0,1,2,3 are the warpids
+  //   |0 1 2 3 0 1 2 3|
   // Note, for each warp, it handles a 2x2 matrices, that is the coordinate
   // address (s0,s1) annotates.
 
   Value matOff[2];
   matOff[kOrder ^ 1] =
-      add(mul(warpId, i32_val(warpOffStride)),   // warp offset
-          mul(nkMatArr, i32_val(matArrStride))); // matrix offset inside a warp
+      add(mul(warpId, i32_val(warpOffStride)), // warp offset (kOrder=1)
+          mul(nkMatArr,
+              i32_val(matArrStride))); // matrix offset inside a warp (kOrder=1)
   matOff[kOrder] = kMatArr;
 
   // Physical offset (before swizzling)
@@ -130,7 +134,13 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 
   SmallVector<Value> offs(numPtrs);
   Value phase = urem(udiv(sOffInMat, i32_val(perPhase)), i32_val(maxPhase));
-  Value sOff = add(sOffInMat, mul(sMatOff, i32_val(sMatShape)));
+  // To prevent out-of-bound access of B when wpt * 16 > tile_size.
+  // In such a case, we need to wrap around the offset of B.
+  // |0 1 2 3 0 1 2 3| -> | 0(0) 1(1) 2(2) 3(3) |
+  // |0 1 2 3 0 1 2 3|    | 0(0) 1(1) 2(2) 3(3) |
+  //          ~~~~~~~ out-of-bound access
+  Value sOff = urem(add(sOffInMat, mul(sMatOff, i32_val(sMatShape))),
+                    i32_val(tileShape[order[1]]));
   for (int i = 0; i < numPtrs; ++i) {
     Value cMatOffI = add(cMatOff, i32_val(i * pLoadStrideInMat));
     cMatOffI = xor_(cMatOffI, phase);
