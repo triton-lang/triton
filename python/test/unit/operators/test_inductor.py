@@ -53,3 +53,103 @@ def test_normalization_with_remat():
     arg9_1 = torch.rand(64, device="cuda")
     triton_[(512,)](buf14, buf16, arg114_1, arg115_1, arg8_1, arg9_1, 512, 4096, 1, 2048)
     torch.testing.assert_allclose(buf16.mean().item(), buf14.mean().item(), atol=1e-7, rtol=0)
+
+
+def test_avg_pool_bw():
+
+    @triton.jit
+    def triton_(in_ptr0, out_ptr0, XBLOCK: tl.constexpr):
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)[:]
+        x1 = (xindex // 8) % 8
+        x0 = xindex % 8
+        x2 = (xindex // 64)
+        x5 = xindex
+        tmp0 = (-1) + x1
+        tmp1 = (-1) + x0
+        tmp2 = 2 + x1
+        tmp3 = 2 + x0
+        tmp4 = 0
+        tmp5 = tl.where(tmp0 != tmp0, tmp0, tl.where(tmp0 > tmp4, tmp0, tmp4))
+        tmp6 = tl.where(tmp1 != tmp1, tmp1, tl.where(tmp1 > tmp4, tmp1, tmp4))
+        tmp7 = 8
+        tmp8 = tl.where(tmp2 != tmp2, tmp2, tl.where(tmp2 < tmp7, tmp2, tmp7))
+        tmp9 = tl.where(tmp3 != tmp3, tmp3, tl.where(tmp3 < tmp7, tmp3, tmp7))
+        tmp10 = tmp5 + tmp4
+        tmp11 = tmp6 + tmp4
+        tmp12 = 1
+        tmp13 = tmp8 - tmp12
+        tmp14 = tl.where(tmp10 != tmp10, tmp10, tl.where(tmp10 < tmp13, tmp10, tmp13))
+        tmp15 = tmp9 - tmp12
+        tmp16 = tl.where(tmp11 != tmp11, tmp11, tl.where(tmp11 < tmp15, tmp11, tmp15))
+        tmp17 = tl.load(in_ptr0 + (tmp16 + (8 * tmp14) + (64 * x2)), None).to(tl.float32)
+        tmp18 = tmp17 / 9
+        tmp19 = tmp10 < tmp8
+        tmp20 = tmp11 < tmp9
+        tmp21 = tmp19 & tmp20
+        tmp22 = 0.0
+        tmp23 = tl.where(tmp21, tmp18, tmp22)
+        tmp24 = tmp6 + tmp12
+        tmp25 = tl.where(tmp24 != tmp24, tmp24, tl.where(tmp24 < tmp15, tmp24, tmp15))
+        tmp26 = tl.load(in_ptr0 + (tmp25 + (8 * tmp14) + (64 * x2)), None).to(tl.float32)
+        tmp27 = tmp26 / 9
+        tmp28 = tmp24 < tmp9
+        tmp29 = tmp19 & tmp28
+        tmp30 = tmp23 + tmp27
+        tmp31 = tl.where(tmp29, tmp30, tmp23)
+        tmp32 = 2
+        tmp33 = tmp6 + tmp32
+        tmp34 = tl.where(tmp33 != tmp33, tmp33, tl.where(tmp33 < tmp15, tmp33, tmp15))
+        tmp35 = tl.load(in_ptr0 + (tmp34 + (8 * tmp14) + (64 * x2)), None).to(tl.float32)
+        tmp36 = tmp35 / 9
+        tmp37 = tmp33 < tmp9
+        tmp38 = tmp19 & tmp37
+        tmp39 = tmp31 + tmp36
+        tmp40 = tl.where(tmp38, tmp39, tmp31)
+        tmp41 = tmp5 + tmp12
+        tmp42 = tl.where(tmp41 != tmp41, tmp41, tl.where(tmp41 < tmp13, tmp41, tmp13))
+        tmp43 = tl.load(in_ptr0 + (tmp16 + (8 * tmp42) + (64 * x2)), None).to(tl.float32)
+        tmp44 = tmp43 / 9
+        tmp45 = tmp41 < tmp8
+        tmp46 = tmp45 & tmp20
+        tmp47 = tmp40 + tmp44
+        tmp48 = tl.where(tmp46, tmp47, tmp40)
+        tmp49 = tl.load(in_ptr0 + (tmp25 + (8 * tmp42) + (64 * x2)), None).to(tl.float32)
+        tmp50 = tmp49 / 9
+        tmp51 = tmp45 & tmp28
+        tmp52 = tmp48 + tmp50
+        tmp53 = tl.where(tmp51, tmp52, tmp48)
+        tmp54 = tl.load(in_ptr0 + (tmp34 + (8 * tmp42) + (64 * x2)), None).to(tl.float32)
+        tmp55 = tmp54 / 9
+        tmp56 = tmp45 & tmp37
+        tmp57 = tmp53 + tmp55
+        tmp58 = tl.where(tmp56, tmp57, tmp53)
+        tmp59 = tmp5 + tmp32
+        tmp60 = tl.where(tmp59 != tmp59, tmp59, tl.where(tmp59 < tmp13, tmp59, tmp13))
+        tmp61 = tl.load(in_ptr0 + (tmp16 + (8 * tmp60) + (64 * x2)), None).to(tl.float32)
+        tmp62 = tmp61 / 9
+        tmp63 = tmp59 < tmp8
+        tmp64 = tmp63 & tmp20
+        tmp65 = tmp58 + tmp62
+        tmp66 = tl.where(tmp64, tmp65, tmp58)
+        tmp67 = tl.load(in_ptr0 + (tmp25 + (8 * tmp60) + (64 * x2)), None).to(tl.float32)
+        tmp68 = tmp67 / 9
+        tmp69 = tmp63 & tmp28
+        tmp70 = tmp66 + tmp68
+        tmp71 = tl.where(tmp69, tmp70, tmp66)
+        tmp72 = tl.load(in_ptr0 + (tmp34 + (8 * tmp60) + (64 * x2)), None).to(tl.float32)
+        tmp73 = tmp72 / 9
+        tmp74 = tmp63 & tmp37
+        tmp75 = tmp71 + tmp73
+        tmp76 = tl.where(tmp74, tmp75, tmp71)
+        tl.store(out_ptr0 + (x5 + tl.zeros([XBLOCK], tl.int32)), tmp76, None)
+
+    inp = torch.ones(8, 2048, 8, 8, device="cuda", dtype=torch.half)
+    out = torch.ones_like(inp) * 3
+    numel = inp.numel()
+    triton_[(numel // 1024,)](inp, out, 1024)
+    out_ref = torch.ones_like(inp)
+    out_ref[:, :, 1:7, 0::7] = 2 / 3
+    out_ref[:, :, 0::7, 1:7] = 2 / 3
+    out_ref[:, :, 0::7, 0::7] = 4 / 9
+    torch.testing.assert_allclose(out, out_ref)
