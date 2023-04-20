@@ -2,7 +2,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using ::mlir::triton::gpu::getElemsPerThread;
+using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 struct FpToFpOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::FpToFpOp> {
@@ -499,7 +499,7 @@ struct FpToFpOpConversion
     auto srcEltType = srcTensorType.getElementType();
     auto dstEltType = dstTensorType.getElementType();
     auto loc = op->getLoc();
-    auto elems = getElemsPerThread(dstTensorType);
+    auto elems = getTotalElemsPerThread(dstTensorType);
     SmallVector<Value> resultVals;
     bool isSrcFP8 =
         srcEltType.isa<mlir::Float8E4M3FNType, mlir::Float8E5M2Type>();
@@ -583,7 +583,7 @@ public:
     auto resultTy = op.getType();
     Location loc = op->getLoc();
 
-    unsigned elems = getElemsPerThread(resultTy);
+    unsigned elems = getTotalElemsPerThread(resultTy);
     auto resultElementTy = getElementTypeOrSelf(resultTy);
     Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
     SmallVector<Type> types(elems, elemTy);

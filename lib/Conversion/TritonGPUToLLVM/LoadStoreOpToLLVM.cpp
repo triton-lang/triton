@@ -8,7 +8,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::triton::gpu::getElemsPerThread;
+using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Contains some helper functions for both Load and Store conversions.
@@ -73,7 +73,7 @@ struct LoadOpConversion
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     unsigned vec = getVectorSize(ptr);
-    unsigned numElems = getElemsPerThread(ptr.getType());
+    unsigned numElems = getTotalElemsPerThread(ptr.getType());
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
@@ -278,7 +278,7 @@ struct StoreOpConversion
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
 
     unsigned vec = getVectorSize(ptr);
-    unsigned elemsPerThread = getElemsPerThread(ptr.getType());
+    unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
 
     auto ptrElems = getTypeConverter()->unpackLLElements(loc, llPtr, rewriter,
                                                          ptr.getType());
@@ -495,7 +495,7 @@ struct AtomicRMWOpConversion
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : op.getResult().getType();
     const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
-    auto elemsPerThread = getElemsPerThread(val.getType());
+    auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
     auto vec = getVectorSize(ptr);
     int numElems = 1;
@@ -782,7 +782,7 @@ struct InsertSliceAsyncOpConversion
     unsigned inVec = getContiguity(src);
     unsigned outVec = resSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
-    unsigned numElems = getElemsPerThread(srcTy);
+    unsigned numElems = getTotalElemsPerThread(srcTy);
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
     auto sizePerThread = srcBlockedLayout.getSizePerThread();
