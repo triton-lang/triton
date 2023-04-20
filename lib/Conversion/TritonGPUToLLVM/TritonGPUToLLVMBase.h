@@ -275,7 +275,7 @@ public:
 
     auto srcEncoding = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
-    unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
+    unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     // swizzling params as described in TritonGPUAttrDefs.td
     unsigned outVec = resSharedLayout.getVec();
     unsigned perPhase = resSharedLayout.getPerPhase();
@@ -376,7 +376,7 @@ public:
     unsigned minVec = std::min(outVec, inVec);
     unsigned perPhase = dstSharedLayout.getPerPhase();
     unsigned maxPhase = dstSharedLayout.getMaxPhase();
-    unsigned numElems = triton::gpu::getElemsPerThread(srcTy);
+    unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
     auto inVals =
         getTypeConverter()->unpackLLElements(loc, llSrc, rewriter, srcTy);
@@ -667,7 +667,7 @@ private:
                                   threadOffset * sizePerThread[k] + elemOffset);
     }
 
-    unsigned elemsPerThread = triton::gpu::getElemsPerThread(type);
+    unsigned elemsPerThread = triton::gpu::getTotalElemsPerThread(type);
     unsigned totalSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<SmallVector<unsigned>> reorderedOffset(elemsPerThread);
     for (unsigned n = 0; n < elemsPerThread; ++n) {
