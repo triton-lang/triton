@@ -136,14 +136,12 @@ public:
         // Pre-order walk callback
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
         // Post-order walk callback
-        [&](FunctionOpInterface funcOp,
-            CallGraph<BlockInfo>::FuncDataMapT &funcBlockInfoMap) {
+        [&](FunctionOpInterface funcOp) {
           auto *allocation = moduleAllocation->getFuncData(funcOp);
-          auto [it, inserted] =
-              funcBlockInfoMap.try_emplace(funcOp, BlockInfo());
+          auto [it, inserted] = funcMap.try_emplace(funcOp, BlockInfo());
           if (inserted) {
             MembarAnalysis analysis(allocation);
-            analysis.run(funcBlockInfoMap);
+            analysis.run(funcMap);
           }
         });
   }

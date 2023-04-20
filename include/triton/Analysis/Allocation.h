@@ -207,11 +207,10 @@ public:
         // Pre-order edge walk callback
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
         // Post-order node walk callback
-        [&](FunctionOpInterface funcOp,
-            CallGraph<Allocation>::FuncDataMapT &funcAllocMap) {
-          auto [iter, inserted] = funcAllocMap.try_emplace(funcOp, funcOp);
+        [&](FunctionOpInterface funcOp) {
+          auto [iter, inserted] = funcMap.try_emplace(funcOp, funcOp);
           if (inserted)
-            iter->second.run(funcAllocMap);
+            iter->second.run(funcMap);
         });
   }
 

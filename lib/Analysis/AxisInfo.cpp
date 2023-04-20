@@ -696,13 +696,13 @@ private:
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
-      if constexpr (std::is_same<OpTy, arith::AndIOp>::value) {
+      if constexpr (std::is_same_v<OpTy, arith::AndIOp>) {
         return {lhs.getConstantValue().value() &
                 rhs.getConstantValue().value()};
-      } else if constexpr (std::is_same<OpTy, arith::OrIOp>::value) {
+      } else if constexpr (std::is_same_v<OpTy, arith::OrIOp>) {
         return {lhs.getConstantValue().value() |
                 rhs.getConstantValue().value()};
-      } else if constexpr (std::is_same<OpTy, arith::XOrIOp>::value) {
+      } else if constexpr (std::is_same_v<OpTy, arith::XOrIOp>) {
         return {lhs.getConstantValue().value() ^
                 rhs.getConstantValue().value()};
       }
@@ -985,32 +985,27 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
 }
 
 void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
-                                    FunctionOpInterface funcOp) {
-  auto args = funcOp->getOperands();
-  auto *axisInfoMap = getFuncData(funcOp);
+                                    FunctionOpInterface callee) {
+  auto caller = callOp->getParentOfType<triton::FuncOp>();
+  auto *axisInfoMap = getFuncData(caller);
   for (auto entry : llvm::enumerate(callOp->getOperands())) {
     auto index = entry.index();
     auto value = entry.value();
-    auto axisInfo = axisInfoMap->lookup(args[index]);
     // Only accepts scalar arguments
-    auto curContiguity =
-        funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.contiguity");
-    auto curDivisibility =
-        funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.divisibility");
-    auto curConstancy =
-        funcOp.getArgAttrOfType<IntegerAttr>(index, "tt.constancy");
-    auto contiguity = IntegerAttr::get(
-        IntegerType::get(funcOp.getContext(), 64),
-        gcd(axisInfo.getContiguity(0), curContiguity.getInt()));
-    auto divisibility = IntegerAttr::get(
-        IntegerType::get(funcOp.getContext(), 64),
-        gcd(axisInfo.getDivisibility(0), curDivisibility.getInt()));
-    auto constancy =
-        IntegerAttr::get(IntegerType::get(funcOp.getContext(), 64),
-                         gcd(axisInfo.getConstancy(0), curConstancy.getInt()));
-    funcOp.setArgAttr(index, "tt.contiguity", contiguity);
-    funcOp.setArgAttr(index, "tt.divisibility", divisibility);
-    funcOp.setArgAttr(index, "tt.constancy", constancy);
+    auto setAttrFn = [&](StringRef attrName, int64_t prevValue) {
+      auto curValue = highestPowOf2Divisor<int64_t>(0);
+      if (callee.getArgAttrOfType<IntegerAttr>(index, attrName)) {
+        curValue =
+            callee.getArgAttrOfType<IntegerAttr>(index, attrName).getInt();
+      }
+      auto attr = IntegerAttr::get(IntegerType::get(callee.getContext(), 64),
+                                   gcd(prevValue, curValue));
+      callee.setArgAttr(index, attrName, attr);
+    };
+    auto axisInfo = axisInfoMap->lookup(value);
+    setAttrFn("tt.contiguity", axisInfo.getContiguity(0));
+    setAttrFn("tt.divisibility", axisInfo.getDivisibility(0));
+    setAttrFn("tt.constancy", axisInfo.getConstancy(0));
   }
 }
 

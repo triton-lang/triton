@@ -210,7 +210,7 @@ private:
       llvm::report_fatal_error("Cycle detected in call graph");
     }
     if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {
-      updateNodeFn(funcOp, funcMap);
+      updateNodeFn(funcOp);
     }
     for (auto [callOp, callee] : graph[funcOp]) {
       if constexpr (UpdateEdgeOrder == WalkOrder::PreOrder) {
@@ -222,11 +222,12 @@ private:
       }
     }
     if constexpr (UpdateNodeOrder == WalkOrder::PostOrder) {
-      updateNodeFn(funcOp, funcMap);
+      updateNodeFn(funcOp);
     }
     visited.erase(funcOp);
   }
 
+protected:
   ModuleOp moduleOp;
   DenseMap<FunctionOpInterface,
            SmallVector<std::pair<CallOpInterface, FunctionOpInterface>>>

@@ -309,16 +309,20 @@ public:
           // Pre-order edge walk callback
           [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
           // Post-order node walk callback
-          [&](FunctionOpInterface funcOp,
-              CallGraph<AxisInfoMapT>::FuncDataMapT &funcAxisInfoMap) {
+          [&](FunctionOpInterface funcOp) {
             funcs.push_back(funcOp);
-            funcAxisInfoMap.try_emplace(funcOp, AxisInfoMapT{});
+            funcMap.try_emplace(funcOp, AxisInfoMapT{});
           });
     }
-    SetVector<FunctionOpInterface> sortedFuncs(funcs.rbegin(), funcs.rend());
-    for (auto funcOp : sortedFuncs) {
+    SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
+    SymbolTableCollection symbolTable;
+    for (auto funcOp : llvm::reverse(sortedFuncs)) {
       initialize(funcOp);
-      funcOp.walk([&](CallOpInterface callOp) { update(callOp, funcOp); });
+      funcOp.walk([&](CallOpInterface callOp) {
+        auto callee =
+            dyn_cast<FunctionOpInterface>(callOp.resolveCallable(&symbolTable));
+        update(callOp, callee);
+      });
     }
   }
 
