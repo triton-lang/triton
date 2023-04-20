@@ -186,7 +186,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   int numQuadI = 2;
 
   // inner index base
-  Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
 
@@ -194,6 +193,8 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < vecWidth; ++elemId) {
         int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
+        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
+        jBase = add(jBase, i32_val(elemId));
         // inner index offset
         Value jOff = i32_val(0);
         if (!needTrans) {
@@ -213,15 +214,13 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
           jOff = add(jOff, udiv(cSwizzleOffset, i32_val(quadWidth)));
           jOff = xor_(jOff, phase);
         } else {
-          Value phase = add(jBase, i32_val(elemId));
-          phase = urem(udiv(phase, i32_val(perPhase)), i32_val(maxPhase));
+          Value phase = urem(udiv(jBase, i32_val(perPhase)), i32_val(maxPhase));
           iOff = add(iOff, udiv(cSwizzleOffset, i32_val(quadHeight)));
           iOff = xor_(iOff, phase);
         }
         // To prevent out-of-bound access when tile is too small.
         Value i = add(iBase, mul(iOff, i32_val(quadHeight)));
         Value j = add(jBase, mul(jOff, i32_val(quadWidth)));
-        j = add(j, i32_val(elemId));
         // wrap around the bounds
         i = urem(i, i32_val(cTileShape));
         j = urem(j, i32_val(sTileShape));
