@@ -185,39 +185,40 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   int quadHeight = laneHeight;
   int numQuadI = 2;
 
-  Value iLane = udiv(lane, i32_val(laneWidth));
-  Value jLane = urem(lane, i32_val(laneWidth));
-  Value contigLane = needTrans ? jLane : iLane;
-  Value phase = urem(udiv(contigLane, i32_val(perPhase)), i32_val(maxPhase));
-  Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
-  // llvm::outs() << "!!\n";
+  // inner index base
+  Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
+  // outer index base
+  Value iBase = udiv(lane, i32_val(laneWidth));
 
   for (int rep = 0; rep < numPtrs / (2 * vecWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < vecWidth; ++elemId) {
         int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
-        // inner index base
-        Value jBase = mul(jLane, i32_val(vecWidth));
         // inner index offset
         Value jOff = i32_val(0);
         if (!needTrans) {
           jOff = add(jOff, i32_val(quadId));
           jOff = add(jOff, i32_val(rep * pLoadStrideInMat));
-          jOff = add(jOff, cSwizzleMatOff);
-          jOff = xor_(jOff, phase);
         }
-        // outer index base
-        Value iBase = iLane;
         // outer index offset
         Value iOff = mul(warpOff, i32_val(warpOffStride));
         if (needTrans) {
           int pStride = kOrder == 1 ? 1 : 2;
           iOff = add(iOff, i32_val(quadId * matArrStride));
           iOff = add(iOff, i32_val(rep * pLoadStrideInMat * pStride));
-          iOff = add(iOff, cSwizzleMatOff);
-          iOff = xor_(iOff, phase);
         }
         // swizzle
+        if (!needTrans) {
+          Value phase = urem(udiv(iBase, i32_val(perPhase)), i32_val(maxPhase));
+          jOff = add(jOff, udiv(cSwizzleOffset, i32_val(quadWidth)));
+          jOff = xor_(jOff, phase);
+        } else {
+          Value phase =
+              urem(udiv(add(jBase, i32_val(elemId)), i32_val(perPhase)),
+                   i32_val(maxPhase));
+          iOff = add(iOff, udiv(cSwizzleOffset, i32_val(quadHeight)));
+          iOff = xor_(iOff, phase);
+        }
         // To prevent out-of-bound access when tile is too small.
         Value i = add(iBase, mul(iOff, i32_val(quadHeight)));
         Value j = add(jBase, mul(jOff, i32_val(quadWidth)));
@@ -246,14 +247,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
 
   if (canUseLdmatrix)
     ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
-  else if (elemBytes == 4)
-    ptrIdx = matIdx[order[0]];
-  else if (elemBytes == 2)
-    ptrIdx = matIdx[order[0]] * 2;
-  else if (elemBytes == 1)
-    ptrIdx = matIdx[order[0]] * 4;
   else
-    llvm::report_fatal_error("unsupported mma type found");
+    ptrIdx = matIdx[order[0]] * 4 / elemBytes;
 
   // The main difference with the original triton code is we removed the
   // prefetch-related logic here for the upstream optimizer phase should
@@ -369,6 +364,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
   // if (elemBytes == 1)
   canUseLdmatrix = false;
+  // canUseLdmatrix = needTrans;
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwpt] if not transposed,
@@ -481,6 +477,8 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
+  // llvm::outs() << sharedLayout.getVec() << " " << perPhase << " " << maxPhase
+  //              << "\n";
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 
