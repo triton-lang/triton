@@ -213,9 +213,8 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
           jOff = add(jOff, udiv(cSwizzleOffset, i32_val(quadWidth)));
           jOff = xor_(jOff, phase);
         } else {
-          Value phase =
-              urem(udiv(add(jBase, i32_val(elemId)), i32_val(perPhase)),
-                   i32_val(maxPhase));
+          Value phase = add(jBase, i32_val(elemId));
+          phase = urem(udiv(phase, i32_val(perPhase)), i32_val(maxPhase));
           iOff = add(iOff, udiv(cSwizzleOffset, i32_val(quadHeight)));
           iOff = xor_(iOff, phase);
         }
