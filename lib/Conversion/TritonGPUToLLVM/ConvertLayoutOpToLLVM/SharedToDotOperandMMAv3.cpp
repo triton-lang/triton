@@ -220,6 +220,7 @@ Value loadA(ConversionPatternRewriter &rewriter,
   Value waveM = getWaveM(rewriter, loc, wave, warpsPerCTA, mfmaInstrM, shape[0]);
   int numOfElems = getNumOfElems(aTensorTy);
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+  // TODO make macro tile size granilarity configurable
   int macroTileM =
       std::max<int>(shape[0] / (mmaLayout.getWarpsPerCTA()[0] * 32), 1);
   int wptM = std::min<int>(mmaLayout.getWarpsPerCTA()[0], macroTileM);
