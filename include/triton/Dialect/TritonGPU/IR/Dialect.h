@@ -21,7 +21,9 @@ namespace mlir {
 namespace triton {
 namespace gpu {
 
-unsigned getElemsPerThread(Type type);
+unsigned getTotalElemsPerThread(Type type);
+
+SmallVector<unsigned> getElemsPerThread(Type type);
 
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
 
