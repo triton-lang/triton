@@ -4,11 +4,141 @@ using namespace mlir;
 using namespace mlir::triton;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
+static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
+                                        Type inType, Type ouType) {
+  auto inTensorTy = inType.dyn_cast<RankedTensorType>();
+  auto ouTensorTy = ouType.dyn_cast<RankedTensorType>();
+  if (!inTensorTy || !ouTensorTy)
+    return values;
+  auto inEncoding =
+      dyn_cast<triton::gpu::DotOperandEncodingAttr>(inTensorTy.getEncoding());
+  auto ouEncoding =
+      dyn_cast<triton::gpu::DotOperandEncodingAttr>(ouTensorTy.getEncoding());
+  assert(inEncoding == ouEncoding);
+  if (!inEncoding)
+    return values;
+  size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
+  size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
+  auto ouEltTy = ouTensorTy.getElementType();
+  if (inBitWidth == ouBitWidth)
+    return values;
+  if (inBitWidth == 16 && ouBitWidth == 32) {
+    SmallVector<Value> ret;
+    for (unsigned i = 0; i < values.size(); i += 8) {
+      ret.push_back(values[i]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+    }
+    return ret;
+  }
+  if (inBitWidth == 8 && ouBitWidth == 16) {
+    llvm::outs() << values.size() << "\n";
+    SmallVector<Value> ret;
+    for (unsigned i = 0; i < values.size(); i += 16) {
+      ret.push_back(values[i + 0]);
+      ret.push_back(values[i + 1]);
+      ret.push_back(values[i + 2]);
+      ret.push_back(values[i + 3]);
+      ret.push_back(values[i + 8]);
+      ret.push_back(values[i + 9]);
+      ret.push_back(values[i + 10]);
+      ret.push_back(values[i + 11]);
+      ret.push_back(values[i + 4]);
+      ret.push_back(values[i + 5]);
+      ret.push_back(values[i + 6]);
+      ret.push_back(values[i + 7]);
+      ret.push_back(values[i + 12]);
+      ret.push_back(values[i + 13]);
+      ret.push_back(values[i + 14]);
+      ret.push_back(values[i + 15]);
+    }
+    return ret;
+    // for (unsigned i = 0; i < values.size(); i += 16) {
+    //   ret.push_back(values[i]);
+    //   ret.push_back(values[i + 1]);
+    //   ret.push_back(values[i + 4]);
+    //   ret.push_back(values[i + 5]);
+    //   ret.push_back(values[i + 8]);
+    //   ret.push_back(values[i + 9]);
+    //   ret.push_back(values[i + 12]);
+    //   ret.push_back(values[i + 13]);
+
+    //   ret.push_back(values[i + 2]);
+    //   ret.push_back(values[i + 3]);
+    //   ret.push_back(values[i + 6]);
+    //   ret.push_back(values[i + 7]);
+    //   ret.push_back(values[i + 10]);
+    //   ret.push_back(values[i + 11]);
+    //   ret.push_back(values[i + 14]);
+    //   ret.push_back(values[i + 15]);
+    // }
+    return values;
+  }
+  llvm_unreachable("unimplemented code path");
+}
+
+inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
+                                    Type srcTy,
+                                    ConversionPatternRewriter &rewriter,
+                                    Location loc,
+                                    TypeConverter *typeConverter) {
+  auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return inValues;
+  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+  if (!(encoding && encoding.getParent().isa<MmaEncodingAttr>()))
+    return inValues;
+  SmallVector<Value> outValues;
+  for (auto v : inValues) {
+    // cast i32 to appropriate eltType vector and extract elements
+    auto eltType = typeConverter->convertType(tensorTy.getElementType());
+    auto vecType = vec_ty(eltType, 32 / eltType.getIntOrFloatBitWidth());
+    auto vec = bitcast(v, vecType);
+    for (int i = 0; i < 32 / eltType.getIntOrFloatBitWidth(); i++) {
+      outValues.push_back(extract_element(vec, i32_val(i)));
+    }
+  }
+  return outValues;
+}
+
+inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
+                                  Type srcTy,
+                                  ConversionPatternRewriter &rewriter,
+                                  Location loc, TypeConverter *typeConverter) {
+  auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return inValues;
+  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+  if (!(encoding && encoding.getParent().isa<MmaEncodingAttr>()))
+    return inValues;
+  SmallVector<Value> outValues;
+  auto eltType = typeConverter->convertType(tensorTy.getElementType());
+  int vecWidth = 32 / eltType.getIntOrFloatBitWidth();
+  auto vecType = vec_ty(eltType, vecWidth);
+  for (int i = 0; i < inValues.size(); i += vecWidth) {
+    Value vec = undef(vecType);
+    for (int j = 0; j < vecWidth; j++) {
+      vec = insert_element(vec, inValues[i + j], i32_val(j));
+    }
+    outValues.push_back(bitcast(vec, i32_ty));
+  }
+  return outValues;
+}
+
 struct FpToFpOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::FpToFpOp> {
   using ConvertTritonGPUOpToLLVMPattern<
       triton::FpToFpOp>::ConvertTritonGPUOpToLLVMPattern;
 
+  typedef std::function<SmallVector<Value>(
+      Location, ConversionPatternRewriter &, const Value &, const Value &,
+      const Value &, const Value &)>
+      ConvertorT;
   /* ------------------ */
   // FP8 -> FP16
   /* ------------------ */
@@ -490,35 +620,14 @@ struct FpToFpOpConversion
     return builder.launch(rewriter, loc, f16_ty, false);
   }
 
-  LogicalResult
-  matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto srcTensorType = op.getFrom().getType().cast<mlir::RankedTensorType>();
-    auto dstTensorType =
-        op.getResult().getType().cast<mlir::RankedTensorType>();
-    auto srcEltType = srcTensorType.getElementType();
-    auto dstEltType = dstTensorType.getElementType();
-    auto loc = op->getLoc();
-    auto elems = getTotalElemsPerThread(dstTensorType);
-    SmallVector<Value> resultVals;
-    bool isSrcFP8 =
-        srcEltType.isa<mlir::Float8E4M3FNType, mlir::Float8E5M2Type>();
-    bool isDstFP8 =
-        dstEltType.isa<mlir::Float8E4M3FNType, mlir::Float8E5M2Type>();
-
-    // Select convertor
-    typedef std::function<SmallVector<Value>(
-        Location, ConversionPatternRewriter &, const Value &, const Value &,
-        const Value &, const Value &)>
-        ConvertorT;
-
+  ConvertorT getConversionFunc(Type srcTy, Type dstTy) const {
     auto F8E4M3TyID = TypeID::get<mlir::Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<mlir::Float8E5M2Type>();
     auto F16TyID = TypeID::get<mlir::Float16Type>();
     auto BF16TyID = TypeID::get<mlir::BFloat16Type>();
     auto F32TyID = TypeID::get<mlir::Float32Type>();
     auto F64TyID = TypeID::get<mlir::Float64Type>();
-    DenseMap<std::pair<TypeID, TypeID>, ConvertorT> convertorMap = {
+    static DenseMap<std::pair<TypeID, TypeID>, ConvertorT> convertorMap = {
         // F8 -> F16
         {{F8E4M3TyID, F16TyID}, convertFp8E4M3x4ToFp16x4},
         {{F8E5M2TyID, F16TyID}, convertFp8E5M2x4ToFp16x4},
@@ -539,28 +648,46 @@ struct FpToFpOpConversion
         {{F32TyID, F8E5M2TyID}, convertFp32x4ToFp8E5M2x4},
     };
 
-    std::pair<TypeID, TypeID> key = {srcEltType.getTypeID(),
-                                     dstEltType.getTypeID()};
+    std::pair<TypeID, TypeID> key = {srcTy.getTypeID(), dstTy.getTypeID()};
     if (convertorMap.count(key) == 0) {
-      llvm::errs() << "Unsupported conversion from " << srcEltType << " to "
-                   << dstEltType << "\n";
+      llvm::errs() << "Unsupported conversion from " << srcTy << " to " << dstTy
+                   << "\n";
       llvm_unreachable("");
     }
-    auto convertor = convertorMap.lookup(key);
+    return convertorMap.lookup(key);
+  }
 
-    // Vectorized casting
+  LogicalResult
+  matchAndRewrite(triton::FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // llvm::outs() << 0 << "\n";
+    auto srcTensorType = op.getFrom().getType().cast<mlir::RankedTensorType>();
+    auto dstTensorType =
+        op.getResult().getType().cast<mlir::RankedTensorType>();
+    auto loc = op->getLoc();
+    // check that the number of elements is divisible by 4
+    // Get convertor
+    auto cvtFunc = getConversionFunc(srcTensorType.getElementType(),
+                                     dstTensorType.getElementType());
+    // Unpack value
+    auto inVals = getTypeConverter()->unpackLLElements(loc, adaptor.getFrom(),
+                                                       rewriter, srcTensorType);
+    inVals =
+        unpackI32(inVals, srcTensorType, rewriter, loc, getTypeConverter());
+    // Cast
+    SmallVector<Value> outVals;
+    auto elems = inVals.size();
     assert(elems % 4 == 0 &&
            "FP8 casting only support tensors with 4-aligned sizes");
-    auto elements = getTypeConverter()->unpackLLElements(
-        loc, adaptor.getFrom(), rewriter, srcTensorType);
-    for (size_t i = 0; i < elems; i += 4) {
-      auto converted = convertor(loc, rewriter, elements[i], elements[i + 1],
-                                 elements[i + 2], elements[i + 3]);
-      resultVals.append(converted);
-    }
-
-    assert(resultVals.size() == elems);
-    auto result = getTypeConverter()->packLLElements(loc, resultVals, rewriter,
+    for (size_t i = 0; i < elems; i += 4)
+      outVals.append(cvtFunc(loc, rewriter, inVals[i], inVals[i + 1],
+                             inVals[i + 2], inVals[i + 3]));
+    // Pack values
+    assert(outVals.size() == elems);
+    outVals = reorderValues(outVals, srcTensorType, dstTensorType);
+    outVals =
+        packI32(outVals, dstTensorType, rewriter, loc, getTypeConverter());
+    auto result = getTypeConverter()->packLLElements(loc, outVals, rewriter,
                                                      dstTensorType);
     rewriter.replaceOp(op, result);
     return success();
@@ -580,44 +707,40 @@ public:
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto argTy = op->getOperand(0).getType();
     auto resultTy = op.getType();
     Location loc = op->getLoc();
-
-    unsigned elems = getTotalElemsPerThread(resultTy);
+    // element type
     auto resultElementTy = getElementTypeOrSelf(resultTy);
     Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
-    SmallVector<Type> types(elems, elemTy);
-    Type structTy = this->getTypeConverter()->convertType(resultTy);
-
-    auto *concreteThis = static_cast<const ConcreteT *>(this);
-    auto operands = getOperands(rewriter, adaptor, resultTy, elems, loc);
-    SmallVector<Value> resultVals(elems);
-    for (unsigned i = 0; i < elems; ++i) {
-      resultVals[i] = concreteThis->createDestOp(op, adaptor, rewriter, elemTy,
-                                                 operands[i], loc);
-      if (!bool(resultVals[i]))
-        return failure();
+    SmallVector<Value> resultVals;
+    //
+    SmallVector<SmallVector<Value>> allOperands;
+    for (auto operand : adaptor.getOperands()) {
+      auto sub_operands = this->getTypeConverter()->unpackLLElements(
+          loc, operand, rewriter, argTy);
+      sub_operands = unpackI32(sub_operands, argTy, rewriter, loc,
+                               this->getTypeConverter());
+      allOperands.resize(sub_operands.size());
+      for (auto v : llvm::enumerate(sub_operands))
+        allOperands[v.index()].push_back(v.value());
     }
+    for (const SmallVector<Value> &operands : allOperands) {
+      Value curr =
+          ((ConcreteT *)(this))
+              ->createDestOp(op, adaptor, rewriter, elemTy, operands, loc);
+      if (!bool(curr))
+        return failure();
+      resultVals.push_back(curr);
+    }
+    resultVals = reorderValues(resultVals, argTy, resultTy);
+    resultVals =
+        packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
                                                           rewriter, resultTy);
     rewriter.replaceOp(op, view);
 
     return success();
-  }
-
-protected:
-  SmallVector<SmallVector<Value>>
-  getOperands(ConversionPatternRewriter &rewriter, OpAdaptor adaptor,
-              Type operandTy, const unsigned elems, Location loc) const {
-    SmallVector<SmallVector<Value>> operands(elems);
-    for (auto operand : adaptor.getOperands()) {
-      auto sub_operands = this->getTypeConverter()->unpackLLElements(
-          loc, operand, rewriter, operandTy);
-      for (size_t i = 0; i < elems; ++i) {
-        operands[i].push_back(sub_operands[i]);
-      }
-    }
-    return operands;
   }
 };
 
