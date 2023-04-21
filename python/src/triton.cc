@@ -450,10 +450,9 @@ void init_triton_ir(py::module &&m) {
            })
       .def("call",
            [](mlir::OpBuilder &self, mlir::triton::FuncOp &func,
-              std::vector<mlir::Value> &args, bool noinline) -> mlir::OpState {
+              std::vector<mlir::Value> &args) -> mlir::OpState {
              auto loc = self.getUnknownLoc();
              auto callOp = self.create<mlir::triton::CallOp>(loc, func, args);
-             callOp->setAttr("noinline", self.getBoolAttr(noinline));
              return callOp;
            })
       // insertion block/point
@@ -636,14 +635,16 @@ void init_triton_ir(py::module &&m) {
       .def("get_or_insert_function",
            [](mlir::OpBuilder &self, mlir::ModuleOp &module,
               std::string &funcName, mlir::Type &funcType,
-              std::string &visibility) -> mlir::triton::FuncOp {
+              std::string &visibility, bool noinline) -> mlir::triton::FuncOp {
              if (mlir::Operation *funcOperation = module.lookupSymbol(funcName))
                return llvm::dyn_cast<mlir::triton::FuncOp>(funcOperation);
              auto loc = self.getUnknownLoc();
              if (auto funcTy = funcType.dyn_cast<mlir::FunctionType>()) {
                llvm::SmallVector<mlir::NamedAttribute> attrs = {
                    mlir::NamedAttribute(self.getStringAttr("sym_visibility"),
-                                        self.getStringAttr(visibility))};
+                                        self.getStringAttr(visibility)),
+                   mlir::NamedAttribute(self.getStringAttr("noinline"),
+                                        self.getBoolAttr(noinline))};
                return self.create<mlir::triton::FuncOp>(loc, funcName, funcTy,
                                                         attrs);
              }

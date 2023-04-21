@@ -334,7 +334,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         exec(src, scope)
         return scope[self.fn.__name__]
 
-    def __init__(self, fn, version=None, do_not_specialize=None, debug=None):
+    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
         self.fn = fn
         self.module = fn.__module__
         self.version = version
@@ -356,6 +356,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.kernel_decorators = []
         self.kernel = None
         self.debug = os.environ.get("TRITON_DEBUG", "0") == "1" if debug is None else debug
+        self.noinline = noinline
         # annotations
         normalize_ty = lambda ty: ty.__name__ if isinstance(ty, type) else ty
         self.__annotations__ = {name: normalize_ty(ty) for name, ty in fn.__annotations__.items()}
@@ -425,6 +426,7 @@ def jit(
     version=None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
+    noinline: Optional[bool] = None,
 ) -> Callable[[T], JITFunction[T]]:
     ...
 
@@ -435,6 +437,7 @@ def jit(
     version=None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
+    noinline: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -461,6 +464,7 @@ def jit(
             version=version,
             do_not_specialize=do_not_specialize,
             debug=debug,
+            noinline=noinline,
         )
 
     if fn is not None:

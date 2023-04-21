@@ -686,7 +686,6 @@ def test_index1d(expr, dtype_str, device='cuda'):
 # test tuples
 # ---------------
 
-
 @triton.jit
 def fn(a, b):
     return a + b, \
@@ -726,6 +725,27 @@ def test_tuples():
         assert a_tri == a_ref
         assert b_tri == b_ref
         assert c_tri == c_ref
+
+
+@triton.jit(noinline=True)
+def device_fn(x, y, Z):
+    z = x + y
+    tl.store(Z, z)
+
+def test_noinline():
+    device = 'cuda'
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        x = tl.load(X)
+        y = tl.load(Y)
+        device_fn(x, y, Z)
+
+    x = torch.tensor([1.0], device=device, dtype=torch.float32)
+    y = torch.tensor([2.0], device=device, dtype=torch.float32)
+    z = torch.tensor([0.0], device=device, dtype=torch.float32)
+    kernel[(1,)](x, y, z, num_warps=1)
+    assert torch.equal(z, x + y)
 
 
 # ---------------
