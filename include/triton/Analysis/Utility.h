@@ -189,20 +189,28 @@ public:
 private:
   void build() {
     SymbolTableCollection symbolTable;
-    DenseMap<Operation *, Operation *> parentMap;
+    DenseSet<FunctionOpInterface> visited;
+    // Build graph
     moduleOp.walk([&](Operation *op) {
-      auto parent = op->getParentOfType<FunctionOpInterface>();
+      auto caller = op->getParentOfType<FunctionOpInterface>();
+      if (caller)
+        graph[caller] = {};
       if (auto callOp = dyn_cast<CallOpInterface>(op)) {
         auto *callee = callOp.resolveCallable(&symbolTable);
         auto funcOp = dyn_cast_or_null<FunctionOpInterface>(callee);
-        if (funcOp)
-          graph[parent].emplace_back(
+        if (funcOp) {
+          graph[caller].emplace_back(
               std::pair<CallOpInterface, FunctionOpInterface>(callOp, funcOp));
+          visited.insert(funcOp);
+        }
       }
-      parentMap[op] = parent;
-      if (parent == nullptr && isa<FunctionOpInterface>(op))
-        roots.push_back(dyn_cast<FunctionOpInterface>(op));
     });
+    // Find roots
+    for (auto &kv : graph) {
+      if (!visited.count(kv.first)) {
+        roots.push_back(kv.first);
+      }
+    }
   }
 
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,

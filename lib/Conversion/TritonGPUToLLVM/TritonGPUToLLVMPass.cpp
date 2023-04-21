@@ -107,8 +107,10 @@ struct FuncOpConversion : public FuncOpConversionBase {
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     triton::FuncOp amendedFuncOp = funcOp;
-    if (!allocation.isRoot(funcOp))
-      amendedFuncOp = amendFunctionArgs(funcOp, rewriter);
+    //if (!allocation.isRoot(funcOp)) {
+    //  amendedFuncOp = amendFunctionArgs(funcOp, rewriter);
+    //  rewriter.eraseOp(funcOp);
+    //}
     auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
@@ -147,10 +149,16 @@ struct CallOpConversion : public CallOpInterfaceLowering<triton::CallOp> {
                   ConversionPatternRewriter &rewriter) const override {
     // Get the last argument of the caller, which is the current stack pointer
     // of shared memory and append it to the operands of the callOp.
+    auto loc = callOp.getLoc();
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
     auto lastArg = caller.getArgument(caller.getNumArguments() - 1);
+    auto *funcAllocation = allocation.getFuncData(caller);
+    auto bufferId = funcAllocation->getBufferId(callOp);
+    assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
+    size_t offset = funcAllocation->getOffset(bufferId);
+    auto offsetValue = add(lastArg, i32_val(offset));
     return CallOpInterfaceLowering<triton::CallOp>::convertCallOpToLLVMCallOp(
-        callOp, adaptor, lastArg, rewriter);
+        callOp, adaptor, offsetValue, rewriter);
   }
 
 private:
@@ -287,12 +295,13 @@ private:
       Value funcSmem;
       b.setInsertionPointToStart(&funcOp.getFunctionBody().front());
       if (allocation.isRoot(funcOp)) {
-        Value funcSmem = b.create<LLVM::AddressOfOp>(loc, global);
+        funcSmem = b.create<LLVM::AddressOfOp>(loc, global);
       } else {
         funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
       }
-      auto ptrTy = LLVM::LLVMPointerType::get(
-          typeConverter.convertType(b.getI8Type()), 3);
+      auto ptrTy =
+          LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()), 
+                                     NVVM::NVVMMemorySpace::kSharedMemorySpace);
       funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
       allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
     });
