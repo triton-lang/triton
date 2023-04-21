@@ -186,6 +186,18 @@ public:
     funcMap[targetFuncOp] = funcMap[funcOp];
   }
 
+  template <typename FROM, typename TO>
+  void mapCallOp(FROM callOp, TO targetCallOp) {
+    // Iterate over graph and replace
+    for (auto &kv : graph) {
+      for (auto &edge : kv.second) {
+        if (edge.first == callOp) {
+          edge.first = targetCallOp;
+        }
+      }
+    }
+  }
+
 private:
   void build() {
     SymbolTableCollection symbolTable;

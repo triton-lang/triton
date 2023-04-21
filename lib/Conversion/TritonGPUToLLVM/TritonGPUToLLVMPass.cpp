@@ -85,31 +85,38 @@ struct FuncOpConversion : public FuncOpConversionBase {
       : FuncOpConversionBase(converter, benefit), allocation(allocation),
         numWarps(numWarps) {}
 
-  triton::FuncOp amendFunctionArgs(FuncOp funcOp,
-                                   ConversionPatternRewriter &rewriter) const {
+  LLVM::LLVMFuncOp
+  amendFunctionArgs(LLVM::LLVMFuncOp funcOp,
+                    ConversionPatternRewriter &rewriter) const {
     // Push back a variable that indicates the current stack pointer of shared
     // memory to the function arguments.
     auto ctx = funcOp->getContext();
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
     auto funcTy = funcOp.getFunctionType();
-    auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
+    // Modify the function type to add the new argument.
+    auto amendedInputTy = llvm::to_vector<4>(funcTy.getParams());
     amendedInputTy.push_back(ptrTy);
     auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
-                                           funcTy.getResults());
-    auto amendedFuncOp = rewriter.create<triton::FuncOp>(
-        funcOp.getLoc(), funcOp.getName(), funcOp.getFunctionType(),
-        funcOp->getAttrs());
+                                           funcTy.getReturnTypes());
+    // Modify the function attributes to disable inline
+    auto amendedAttrs = llvm::to_vector(funcOp->getAttrs());
+    amendedAttrs.push_back(
+        rewriter.getNamedAttr("noinline", rewriter.getBoolAttr(true)));
+    // Modify the argument attributes to add the new argument.
+    SmallVector<DictionaryAttr> amendedArgAttrs;
+    funcOp.getAllArgAttrs(amendedArgAttrs);
+    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+    auto amendedFuncOp = rewriter.create<LLVM::LLVMFuncOp>(
+        funcOp.getLoc(), funcOp.getName(), amendedFuncTy, funcOp.getLinkage(),
+        /*dsoLocal=*/false, LLVM::CConv::C, amendedAttrs, amendedArgAttrs);
     return amendedFuncOp;
   }
 
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    triton::FuncOp amendedFuncOp = funcOp;
-    if (!allocation.isRoot(funcOp))
-      amendedFuncOp = amendFunctionArgs(funcOp, rewriter);
-    auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
+    auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
     if (!newFuncOp) {
       return failure();
     }
@@ -124,11 +131,11 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
 
+    // Prevent LLVM's inliner to inline this function
+    if (!allocation.isRoot(funcOp))
+      newFuncOp = amendFunctionArgs(newFuncOp, rewriter);
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
-    // Prevent LLVM's inliner to inline this function
-    if (!allocation.isRoot(newFuncOp))
-      newFuncOp->setAttr("noinline", rewriter.getBoolAttr(true));
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -153,26 +160,21 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
                   ConversionPatternRewriter &rewriter) const override {
     // Get the last argument of the caller, which is the current stack pointer
     // of shared memory and append it to the operands of the callOp.
-    auto loc = callOp.getLoc();
-    auto caller = callOp->getParentOfType<FunctionOpInterface>();
-    auto lastArg = caller.getArgument(caller.getNumArguments() - 1);
-    auto *funcAllocation = allocation.getFuncData(caller);
-    auto bufferId = funcAllocation->getBufferId(callOp);
-    auto offset = funcAllocation->getOffset(bufferId);
-    auto offsetValue = add(lastArg, i32_val(offset));
-    auto newCallOp =
-        convertCallOpToLLVMCallOp(callOp, adaptor, offsetValue, rewriter);
+    auto newCallOp = convertCallOpToLLVMCallOp(callOp, adaptor, rewriter);
     if (!newCallOp)
       return failure();
-    auto results = getCallOpResults(callOp, newCallOp, rewriter);
+    auto amendedCallOp = amendCallOp(callOp, newCallOp, rewriter);
+    allocation.mapCallOp(callOp, amendedCallOp);
+    auto results = getCallOpResults(callOp, amendedCallOp, rewriter);
     rewriter.replaceOp(callOp, results);
     return success();
   }
 
 private:
-  LLVM::CallOp convertCallOpToLLVMCallOp(
-      triton::CallOp callOp, typename triton::CallOp::Adaptor adaptor,
-      Value sharedMemoryValue, ConversionPatternRewriter &rewriter) const {
+  LLVM::CallOp
+  convertCallOpToLLVMCallOp(triton::CallOp callOp,
+                            typename triton::CallOp::Adaptor adaptor,
+                            ConversionPatternRewriter &rewriter) const {
     // Pack the result types into a struct.
     Type packedResult = nullptr;
     unsigned numResults = callOp.getNumResults();
@@ -187,11 +189,26 @@ private:
     auto promoted = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
-    promoted.emplace_back(sharedMemoryValue);
     auto newCallOp = rewriter.create<LLVM::CallOp>(
         callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
         promoted, callOp->getAttrs());
     return newCallOp;
+  }
+
+  LLVM::CallOp amendCallOp(triton::CallOp callOp, LLVM::CallOp newCallOp,
+                           ConversionPatternRewriter &rewriter) const {
+    auto loc = callOp.getLoc();
+    auto caller = callOp->getParentOfType<FunctionOpInterface>();
+    auto lastArg = caller.getArgument(caller.getNumArguments() - 1);
+    auto *funcAllocation = allocation.getFuncData(caller);
+    auto bufferId = funcAllocation->getBufferId(callOp);
+    auto offset = funcAllocation->getOffset(bufferId);
+    auto offsetValue = add(lastArg, i32_val(offset));
+    auto operands = llvm::to_vector<4>(newCallOp.getOperands());
+    operands.push_back(offsetValue);
+    return rewriter.create<LLVM::CallOp>(newCallOp.getLoc(),
+                                         newCallOp.getResultTypes(), operands,
+                                         newCallOp->getAttrs());
   }
 
   SmallVector<Value>
