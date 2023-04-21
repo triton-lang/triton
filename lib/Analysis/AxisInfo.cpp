@@ -986,7 +986,7 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
 
 void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
                                     FunctionOpInterface callee) {
-  auto caller = callOp->getParentOfType<triton::FuncOp>();
+  auto caller = callOp->getParentOfType<FunctionOpInterface>();
   auto *axisInfoMap = getFuncData(caller);
   for (auto entry : llvm::enumerate(callOp->getOperands())) {
     auto index = entry.index();

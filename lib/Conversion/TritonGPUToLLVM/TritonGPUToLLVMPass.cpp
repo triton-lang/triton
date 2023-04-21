@@ -107,10 +107,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     triton::FuncOp amendedFuncOp = funcOp;
-    if (!allocation.isRoot(funcOp)) {
+    if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFunctionArgs(funcOp, rewriter);
-      rewriter.eraseOp(funcOp);
-    }
     auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
@@ -128,6 +126,9 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
+    // Prevent LLVM's inliner to inline this function
+    if (!allocation.isRoot(newFuncOp))
+      newFuncOp->setAttr("noinline", rewriter.getBoolAttr(true));
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -138,10 +139,12 @@ private:
   ModuleAllocation &allocation;
 };
 
-struct CallOpConversion : public CallOpInterfaceLowering<triton::CallOp> {
+// CallOpInterfaceLowering is adapted from
+// https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
+struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
   CallOpConversion(LLVMTypeConverter &converter, int numWarps,
                    ModuleAllocation &allocation, PatternBenefit benefit)
-      : CallOpInterfaceLowering<triton::CallOp>(converter, benefit),
+      : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit),
         allocation(allocation), numWarps(numWarps) {}
 
   LogicalResult
@@ -155,14 +158,62 @@ struct CallOpConversion : public CallOpInterfaceLowering<triton::CallOp> {
     auto lastArg = caller.getArgument(caller.getNumArguments() - 1);
     auto *funcAllocation = allocation.getFuncData(caller);
     auto bufferId = funcAllocation->getBufferId(callOp);
-    assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
-    size_t offset = funcAllocation->getOffset(bufferId);
+    auto offset = funcAllocation->getOffset(bufferId);
     auto offsetValue = add(lastArg, i32_val(offset));
-    return CallOpInterfaceLowering<triton::CallOp>::convertCallOpToLLVMCallOp(
-        callOp, adaptor, offsetValue, rewriter);
+    auto newCallOp =
+        convertCallOpToLLVMCallOp(callOp, adaptor, offsetValue, rewriter);
+    if (!newCallOp)
+      return failure();
+    auto results = getCallOpResults(callOp, newCallOp, rewriter);
+    rewriter.replaceOp(callOp, results);
+    return success();
   }
 
 private:
+  LLVM::CallOp convertCallOpToLLVMCallOp(
+      triton::CallOp callOp, typename triton::CallOp::Adaptor adaptor,
+      Value sharedMemoryValue, ConversionPatternRewriter &rewriter) const {
+    // Pack the result types into a struct.
+    Type packedResult = nullptr;
+    unsigned numResults = callOp.getNumResults();
+    auto resultTypes = llvm::to_vector<4>(callOp.getResultTypes());
+
+    if (numResults != 0) {
+      if (!(packedResult =
+                this->getTypeConverter()->packFunctionResults(resultTypes)))
+        return nullptr;
+    }
+
+    auto promoted = this->getTypeConverter()->promoteOperands(
+        callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
+        adaptor.getOperands(), rewriter);
+    promoted.emplace_back(sharedMemoryValue);
+    auto newCallOp = rewriter.create<LLVM::CallOp>(
+        callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
+        promoted, callOp->getAttrs());
+    return newCallOp;
+  }
+
+  SmallVector<Value>
+  getCallOpResults(triton::CallOp callOp, LLVM::CallOp newCallOp,
+                   ConversionPatternRewriter &rewriter) const {
+    auto numResults = callOp.getNumResults();
+    SmallVector<Value, 4> results;
+    if (numResults < 2) {
+      // If < 2 results, packing did not do anything and we can just return.
+      results.append(newCallOp.result_begin(), newCallOp.result_end());
+    } else {
+      // Otherwise, it had been converted to an operation producing a structure.
+      // Extract individual results from the structure and return them as list.
+      results.reserve(numResults);
+      for (unsigned i = 0; i < numResults; ++i) {
+        results.push_back(rewriter.create<LLVM::ExtractValueOp>(
+            callOp.getLoc(), newCallOp->getResult(0), i));
+      }
+    }
+    return results;
+  }
+
   int numWarps{0};
   ModuleAllocation &allocation;
 };
@@ -301,7 +352,7 @@ private:
         funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
       }
       auto ptrTy =
-          LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()), 
+          LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()),
                                      NVVM::NVVMMemorySpace::kSharedMemorySpace);
       funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
       allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);

@@ -20,7 +20,7 @@ tt.func @test_func(%lb : index, %A : !tt.ptr<f16>) {
 }
 
 tt.func @test_kernel(%lb : index, %A : !tt.ptr<f16>) {
-
+  tt.call @test_func(%lb, %A) { noinline = true } : (index, !tt.ptr<f16>) -> ()
   tt.return
 }
 
