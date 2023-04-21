@@ -482,8 +482,6 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
-  // llvm::outs() << sharedLayout.getVec() << " " << perPhase << " " << maxPhase
-  //              << "\n";
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 
@@ -593,12 +591,6 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
 
   SmallVector<int64_t> shape(tensorTy.getShape().begin(),
                              tensorTy.getShape().end());
-
-  // TODO[Superjomn]: transB cannot be accessed in ConvertLayoutOp.
-  bool transB = false;
-  if (transB) {
-    std::swap(shape[0], shape[1]);
-  }
 
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
