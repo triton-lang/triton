@@ -89,7 +89,7 @@ jobs:
         run: |
           python3 -m pip install lit
           cd python
-          LIT_TEST_DIR="build/$(ls build | grep -i temp)/test"
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
           if [ ! -d "${LIT_TEST_DIR}" ]; then
             echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
           fi
@@ -105,7 +105,7 @@ jobs:
         if: ${{ env.BACKEND != 'ROCM'}}
         run: |
           cd python
-          cd "build/$(ls build | grep -i temp)"
+          cd "build/$(ls build | grep -i cmake)"
           ctest
 
       - name: Run python tests on ROCM
