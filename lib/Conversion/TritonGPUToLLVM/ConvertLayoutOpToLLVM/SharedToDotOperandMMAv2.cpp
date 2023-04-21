@@ -195,7 +195,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   int quadHeight = laneHeight;
   int numQuadI = 2;
 
-  // inner index base
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
 
@@ -203,6 +202,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < vecWidth; ++elemId) {
         int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
+        // inner index base
         Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
         jBase = add(jBase, i32_val(elemId));
         // inner index offset
