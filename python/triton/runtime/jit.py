@@ -342,9 +342,13 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
         self.has_defaults = any(v.default != inspect._empty for v in signature.parameters.values())
+        # annotations
+        normalize_ty = lambda ty: ty.__name__ if isinstance(ty, type) else ty
+        self.__annotations__ = {name: normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         # specialization hints
-        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
-        self.do_not_specialize = {self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize}
+        self.do_not_specialize = {self.arg_names.index(name) for name, ty in self.__annotations__.items() if 'do_not_specialize' in ty}
+        if do_not_specialize is not None:
+            self.do_not_specialize |= {self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in do_not_specialize}
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]
@@ -356,9 +360,6 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.kernel_decorators = []
         self.kernel = None
         self.debug = os.environ.get("TRITON_DEBUG", "0") == "1" if debug is None else debug
-        # annotations
-        normalize_ty = lambda ty: ty.__name__ if isinstance(ty, type) else ty
-        self.__annotations__ = {name: normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         # index of constexprs
         self.constexprs = [self.arg_names.index(name) for name, ty in self.__annotations__.items() if 'constexpr' in ty]
         # launcher
@@ -423,7 +424,7 @@ def jit(fn: T) -> JITFunction[T]:
 def jit(
     *,
     version=None,
-    do_not_specialize: Optional[Iterable[int]] = None,
+    do_not_specialize: Optional[Iterable[Union[int, str]]] = None,
     debug: Optional[bool] = None,
 ) -> Callable[[T], JITFunction[T]]:
     ...
@@ -433,7 +434,7 @@ def jit(
     fn: Optional[T] = None,
     *,
     version=None,
-    do_not_specialize: Optional[Iterable[int]] = None,
+    do_not_specialize: Optional[Iterable[Union[int, str]]] = None,
     debug: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """

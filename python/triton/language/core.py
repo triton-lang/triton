@@ -1610,3 +1610,12 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
+
+
+# -----------------------
+# Annotations
+# -----------------------
+
+
+class do_not_specialize:
+    pass

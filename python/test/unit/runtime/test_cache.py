@@ -40,6 +40,13 @@ def kernel_nospec(X, i, BLOCK: tl.constexpr):
     tl.store(X, i)
 
 
+@triton.jit()
+def kernel_nospec_ann(X, i: tl.do_not_specialize, BLOCK: tl.constexpr):
+    i = i + 1
+    i = function_1(i)
+    tl.store(X, i)
+
+
 def apply_src_change(target, old, new):
     kernel.hash = None
     function_1.hash = None
@@ -89,7 +96,7 @@ def test_reuse():
     assert counter == 1
 
 
-@pytest.mark.parametrize('mode', ['enable', 'disable'])
+@pytest.mark.parametrize('mode', ['enable', 'disable_list', 'disable_annotation'])
 def test_specialize(mode):
     counter = 0
 
@@ -99,8 +106,11 @@ def test_specialize(mode):
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
-    function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 3, 'disable': 1}[mode]
+    function, target = {
+        'enable': (kernel, 3),
+        'disable_list': (kernel_nospec, 1),
+        'disable_annotation': (kernel_nospec_ann, 1),
+    }[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1,)](x, i, BLOCK=512)
     assert counter == target
