@@ -485,13 +485,8 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 
-  // the original register_lds2, but discard the prefetch logic.
-  auto ld2 = [](ValueTable &vals, int mn, int k, Value val) {
-    vals[{mn, k}] = val;
-  };
-
   // (a, b) is the coordinate.
-  auto load = [=, &rewriter, &vals, &ld2](int a, int b) {
+  auto load = [=, &rewriter, &vals](int a, int b) {
     MMA16816SmemLoader loader(
         wpt, sharedLayout.getOrder(), kOrder, smemObj.strides,
         tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
@@ -499,32 +494,24 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs =
         loader.computeOffsets(warpId, lane, cSwizzleOffset);
+    // initialize pointers
     const int numPtrs = loader.getNumPtrs();
     SmallVector<Value> ptrs(numPtrs);
-
     Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-
     Type smemPtrTy = getShemPtrTy(eltTy);
-    for (int i = 0; i < numPtrs; ++i) {
-      ptrs[i] =
-          bitcast(gep(smemPtrTy, smemBase, ValueRange({offs[i]})), smemPtrTy);
-    }
-
+    for (int i = 0; i < numPtrs; ++i)
+      ptrs[i] = bitcast(gep(smemPtrTy, smemBase, offs[i]), smemPtrTy);
+    // actually load from shared memory
     auto [ha0, ha1, ha2, ha3] = loader.loadX4(
         (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
         ptrs, getMatType(eltTy), getShemPtrTy(eltTy));
-
-    if (isA) {
-      ld2(vals, a, b, ha0);
-      ld2(vals, a + 1, b, ha1);
-      ld2(vals, a, b + 1, ha2);
-      ld2(vals, a + 1, b + 1, ha3);
-    } else {
-      ld2(vals, a, b, ha0);
-      ld2(vals, a + 1, b, ha2);
-      ld2(vals, a, b + 1, ha1);
-      ld2(vals, a + 1, b + 1, ha3);
-    }
+    if (!isA)
+      std::swap(ha1, ha2);
+    // update user-provided values in-place
+    vals[{a, b}] = ha0;
+    vals[{a + 1, b}] = ha1;
+    vals[{a, b + 1}] = ha2;
+    vals[{a + 1, b + 1}] = ha3;
   };
 
   return load;
