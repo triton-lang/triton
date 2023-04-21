@@ -41,7 +41,7 @@ void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
 // All the rights are reserved by the LLVM community.
 
 struct FuncOpConversionBase : public ConvertOpToLLVMPattern<triton::FuncOp> {
-private:
+protected:
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
   /// attributes.

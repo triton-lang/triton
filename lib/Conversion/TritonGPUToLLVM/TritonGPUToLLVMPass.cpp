@@ -85,38 +85,49 @@ struct FuncOpConversion : public FuncOpConversionBase {
       : FuncOpConversionBase(converter, benefit), allocation(allocation),
         numWarps(numWarps) {}
 
-  LLVM::LLVMFuncOp
-  amendFunctionArgs(LLVM::LLVMFuncOp funcOp,
-                    ConversionPatternRewriter &rewriter) const {
+  triton::FuncOp amendFunctionArgs(triton::FuncOp funcOp,
+                                   ConversionPatternRewriter &rewriter) const {
     // Push back a variable that indicates the current stack pointer of shared
     // memory to the function arguments.
+    auto loc = funcOp.getLoc();
     auto ctx = funcOp->getContext();
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
+    // 1. Modify the function type to add the new argument.
     auto funcTy = funcOp.getFunctionType();
-    // Modify the function type to add the new argument.
-    auto amendedInputTy = llvm::to_vector<4>(funcTy.getParams());
+    auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
     amendedInputTy.push_back(ptrTy);
     auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
-                                           funcTy.getReturnTypes());
-    // Modify the function attributes to disable inline
-    auto amendedAttrs = llvm::to_vector(funcOp->getAttrs());
+                                           funcTy.getResults());
+    // 2. Modify the function attributes to disable inline
+    SmallVector<NamedAttribute, 4> amendedAttrs;
     amendedAttrs.push_back(
         rewriter.getNamedAttr("noinline", rewriter.getBoolAttr(true)));
-    // Modify the argument attributes to add the new argument.
-    SmallVector<DictionaryAttr> amendedArgAttrs;
-    funcOp.getAllArgAttrs(amendedArgAttrs);
+    filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
+    // 3. Modify the argument attributes to add the new argument.
+    auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    auto amendedFuncOp = rewriter.create<LLVM::LLVMFuncOp>(
-        funcOp.getLoc(), funcOp.getName(), amendedFuncTy, funcOp.getLinkage(),
-        /*dsoLocal=*/false, LLVM::CConv::C, amendedAttrs, amendedArgAttrs);
+    amendedAttrs.push_back(rewriter.getNamedAttr(
+        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
+    // 4. Add a new argument to the region
+    auto amendedFuncOp = rewriter.create<triton::FuncOp>(
+        funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
+    auto &region = funcOp.getBody();
+    region.addArgument(ptrTy, loc);
+    rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
+                                amendedFuncOp.end());
     return amendedFuncOp;
   }
 
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
+    // Prevent LLVM's inliner to inline this function
+    auto amendedFuncOp = funcOp;
+    if (!allocation.isRoot(funcOp))
+      amendedFuncOp = amendFunctionArgs(funcOp, rewriter);
+
+    auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
     }
@@ -131,11 +142,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
 
-    // Prevent LLVM's inliner to inline this function
-    if (!allocation.isRoot(funcOp))
-      newFuncOp = amendFunctionArgs(newFuncOp, rewriter);
     // The call graph is updated by mapping the old function to the new one.
-    allocation.mapFuncOp(funcOp, newFuncOp);
+    allocation.mapFuncOp(funcOp, amendedFuncOp);
 
     rewriter.eraseOp(funcOp);
     return success();
