@@ -193,8 +193,6 @@ private:
     // Build graph
     moduleOp.walk([&](Operation *op) {
       auto caller = op->getParentOfType<FunctionOpInterface>();
-      if (caller)
-        graph[caller] = {};
       if (auto callOp = dyn_cast<CallOpInterface>(op)) {
         auto *callee = callOp.resolveCallable(&symbolTable);
         auto funcOp = dyn_cast_or_null<FunctionOpInterface>(callee);
@@ -206,11 +204,11 @@ private:
       }
     });
     // Find roots
-    for (auto &kv : graph) {
-      if (!visited.count(kv.first)) {
-        roots.push_back(kv.first);
+    moduleOp.walk([&](FunctionOpInterface funcOp) {
+      if (!visited.count(funcOp)) {
+        roots.push_back(funcOp);
       }
-    }
+    });
   }
 
   template <WalkOrder UpdateEdgeOrder = WalkOrder::PreOrder,

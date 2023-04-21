@@ -13,4 +13,15 @@ tt.func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
   tt.return
 }
 
+tt.func @test_func(%lb : index, %A : !tt.ptr<f16>) {
+  %0 = arith.constant 1.0 : f16
+  tt.store %A, %0 : f16
+  tt.return
+}
+
+tt.func @test_kernel(%lb : index, %A : !tt.ptr<f16>) {
+
+  tt.return
+}
+
 }

@@ -107,10 +107,10 @@ struct FuncOpConversion : public FuncOpConversionBase {
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     triton::FuncOp amendedFuncOp = funcOp;
-    //if (!allocation.isRoot(funcOp)) {
-    //  amendedFuncOp = amendFunctionArgs(funcOp, rewriter);
-    //  rewriter.eraseOp(funcOp);
-    //}
+    if (!allocation.isRoot(funcOp)) {
+      amendedFuncOp = amendFunctionArgs(funcOp, rewriter);
+      rewriter.eraseOp(funcOp);
+    }
     auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
@@ -126,6 +126,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
 
+    // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
 
     rewriter.eraseOp(funcOp);
