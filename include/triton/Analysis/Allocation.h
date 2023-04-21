@@ -233,7 +233,7 @@ public:
     sharedMemoryValue[funcOp] = value;
   }
 
-  Value getFunctionSharedMemoryValue(FunctionOpInterface funcOp) {
+  Value getFunctionSharedMemoryBase(FunctionOpInterface funcOp) {
     return sharedMemoryValue[funcOp];
   }
 

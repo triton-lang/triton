@@ -239,7 +239,7 @@ public:
       funcOp = value.getParentRegion()
                    ->template getParentOfType<FunctionOpInterface>();
     auto *funcAllocation = allocation->getFuncData(funcOp);
-    auto smem = allocation->getFunctionSharedMemoryValue(funcOp);
+    auto smem = allocation->getFunctionSharedMemoryBase(funcOp);
     auto bufferId = funcAllocation->getBufferId(value);
     assert(bufferId != Allocation::InvalidBufferId && "BufferId not found");
     size_t offset = funcAllocation->getOffset(bufferId);
