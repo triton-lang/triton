@@ -329,10 +329,9 @@ b = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
 b = b.T
 # b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 
-triton_output = matmul(a, b, activation=None)
-# torch_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
+# triton_output = matmul(f8_to_f16(a), b, activation=None)
+triton_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
 torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
-print((triton_output - torch_output))
 # # print(triton_output[0, 1933], torch_output[0, 1933])
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")

@@ -339,15 +339,9 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
         retElems[m] = insert_element(retElems[m].getType(), retElems[m],
                                      vals[m][e], i32_val(e));
     }
-    if (elemBytes == 1)
-      return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
-              bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
-    else
-      return {retElems[0], retElems[1], retElems[2], retElems[3]};
+    return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
+            bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
   }
-
-  assert(false && "Invalid smem load");
-  return {Value{}, Value{}, Value{}, Value{}};
 }
 
 MMA16816SmemLoader::MMA16816SmemLoader(
@@ -415,36 +409,6 @@ Type getShemPtrTy(Type argType) {
     llvm::report_fatal_error("mma16816 data type not supported");
 }
 
-Type getMatType(Type argType) {
-  MLIRContext *ctx = argType.getContext();
-  // floating point types
-  Type fp32x1Ty = vec_ty(type::f32Ty(ctx), 1);
-  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-  Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
-  Type fp16x2Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
-  // LLVM 14.0 does not support bf16 type, so we use i16 instead.
-  Type bf16x2Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
-  Type fp32Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32x1Ty));
-  // integer types
-  Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
-  Type i8x4Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
-
-  if (argType.isF16())
-    return fp16x2Pack4Ty;
-  else if (argType.isBF16())
-    return bf16x2Pack4Ty;
-  else if (argType.isF32())
-    return fp32Pack4Ty;
-  else if (argType.isInteger(8))
-    return i8x4Pack4Ty;
-  else
-    llvm::report_fatal_error("mma16816 data type not supported");
-}
-
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int n0, int n1,
     TritonGPUToLLVMTypeConverter *typeConverter, Location loc,
@@ -502,9 +466,11 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
     for (int i = 0; i < numPtrs; ++i)
       ptrs[i] = bitcast(gep(smemPtrTy, smemBase, offs[i]), smemPtrTy);
     // actually load from shared memory
+    auto matTy = LLVM::LLVMStructType::getLiteral(eltTy.getContext(),
+                                                  SmallVector<Type>(4, i32_ty));
     auto [ha0, ha1, ha2, ha3] = loader.loadX4(
         (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
-        ptrs, getMatType(eltTy), getShemPtrTy(eltTy));
+        ptrs, matTy, getShemPtrTy(eltTy));
     if (!isA)
       std::swap(ha1, ha2);
     // update user-provided values in-place
