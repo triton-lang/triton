@@ -269,7 +269,7 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    h = matmul_kernel[grid](
+    matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -278,8 +278,8 @@ def matmul(a, b, activation=None):
         ACTIVATION=activation,
         IS_INT8=b.dtype == torch.int8,
     )
-    if b.dtype == torch.int8:
-        print(h.asm["ttir"])
+    # if b.dtype == torch.int8:
+    #     print(h.asm["ptx"])
     return c
 
 
@@ -328,7 +328,6 @@ a = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
 # a = a*0 + a[:,0][:,None]
 b = torch.randint(10, 50, (2048, 2048), dtype=torch.int8, device='cuda')
 b = b.T
-# b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 # for i in range(0, a.shape[1], 16):
 #     a[:, i:i+16] = a[:, :16]
 
@@ -360,9 +359,9 @@ else:
         ],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['cublas', 'triton'],
+        line_vals=['triton'],
         # label name for the lines
-        line_names=["cuBLAS", "Triton"],
+        line_names=["Triton"],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel="TFLOPS",  # label name for the y-axis
@@ -371,14 +370,18 @@ else:
     )
 )
 def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    # a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+    # b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    a = torch.randint(10, 50, (M, K), dtype=torch.int8, device='cuda')
+    b = torch.randint(10, 50, (K, N), dtype=torch.int8, device='cuda')
+    b = b.T
+    a = f8_to_f16(a)
     if provider == 'cublas':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=[0.2, 0.5, 0.8], rep=100)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-# benchmark.run(show_plots=True, print_data=True)
+benchmark.run(show_plots=True, print_data=True)

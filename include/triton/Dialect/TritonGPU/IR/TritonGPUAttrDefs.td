@@ -82,7 +82,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         if(!mmaEnc)
           return $_get(context, 1, 1, 1, order);
-        return $_get(context, 1, 1, 1, order);
+        return $_get(context, 16, 2, 4, order);
 
         int opIdx = dotOpEnc.getOpIdx();
 
