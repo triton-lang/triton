@@ -156,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
     ],
     key=['M', 'N', 'K'],
 )
@@ -223,7 +223,7 @@ def matmul_kernel(
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         if IS_INT8:
-            # a = a.to(tl.float8e5, bitcast=True).to(tl.float16)
+            a = a.to(tl.float8e5, bitcast=True).to(tl.float16)
             b = b.to(tl.float8e5, bitcast=True).to(tl.float16)
         # b = b * 2
         # We accumulate along the K dimension
@@ -269,7 +269,7 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    matmul_kernel[grid](
+    h = matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -278,8 +278,8 @@ def matmul(a, b, activation=None):
         ACTIVATION=activation,
         IS_INT8=b.dtype == torch.int8,
     )
-    # if b.dtype == torch.int8:
-    #     print(h.asm["ptx"])
+    if b.dtype == torch.int8:
+        print(h.asm["ttgir"])
     return c
 
 
@@ -331,7 +331,7 @@ b = b.T
 # for i in range(0, a.shape[1], 16):
 #     a[:, i:i+16] = a[:, :16]
 
-triton_output = matmul(f8_to_f16(a), b, activation=None)
+triton_output = matmul(a, b, activation=None)
 # triton_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
 torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
 # # print(triton_output[0, 1933], torch_output[0, 1933])
@@ -370,12 +370,12 @@ else:
     )
 )
 def benchmark(M, N, K, provider):
-    # a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    # b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-    a = torch.randint(10, 50, (M, K), dtype=torch.int8, device='cuda')
-    b = torch.randint(10, 50, (K, N), dtype=torch.int8, device='cuda')
-    b = b.T
-    a = f8_to_f16(a)
+    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    # a = torch.randint(10, 50, (M, K), dtype=torch.int8, device='cuda')
+    # b = torch.randint(10, 50, (K, N), dtype=torch.int8, device='cuda')
+    # b = b.T
+    # a = f8_to_f16(a)
     if provider == 'cublas':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100)
     if provider == 'triton':
@@ -384,4 +384,4 @@ def benchmark(M, N, K, provider):
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+# benchmark.run(show_plots=True, print_data=True)

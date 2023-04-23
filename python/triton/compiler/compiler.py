@@ -83,6 +83,7 @@ def optimize_ttgir(mod, num_stages, arch):
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
     pm.run(mod)
+    print(str(mod))
     return mod
 
 

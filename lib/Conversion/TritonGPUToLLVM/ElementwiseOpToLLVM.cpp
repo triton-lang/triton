@@ -37,7 +37,6 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
     return ret;
   }
   if (inBitWidth == 8 && ouBitWidth == 16) {
-    llvm::outs() << values.size() << "\n";
     SmallVector<Value> ret;
     for (unsigned i = 0; i < values.size(); i += 16) {
       ret.push_back(values[i + 0]);
