@@ -686,8 +686,9 @@ def test_index1d(expr, dtype_str, device='cuda'):
 # test tuples
 # ---------------
 
+
 @triton.jit
-def fn(a, b):
+def tuples_fn(a, b):
     return a + b, \
         a - b, \
         a * b
@@ -700,7 +701,7 @@ def test_tuples():
     def with_fn(X, Y, A, B, C):
         x = tl.load(X)
         y = tl.load(Y)
-        a, b, c = fn(x, y)
+        a, b, c = tuples_fn(x, y)
         tl.store(A, a)
         tl.store(B, b)
         tl.store(C, c)
@@ -728,9 +729,10 @@ def test_tuples():
 
 
 @triton.jit(noinline=True)
-def device_fn(x, y, Z):
+def noinline_fn(x, y, Z):
     z = x + y
     tl.store(Z, z)
+
 
 def test_noinline():
     device = 'cuda'
@@ -739,7 +741,7 @@ def test_noinline():
     def kernel(X, Y, Z):
         x = tl.load(X)
         y = tl.load(Y)
-        device_fn(x, y, Z)
+        noinline_fn(x, y, Z)
 
     x = torch.tensor([1.0], device=device, dtype=torch.float32)
     y = torch.tensor([2.0], device=device, dtype=torch.float32)
