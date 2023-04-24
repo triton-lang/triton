@@ -201,17 +201,15 @@ public:
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
           warpsPerTile);
-    }
 #ifdef USE_ROCM
-    else if (versionMajor == 3) {
+    } else if (versionMajor == 3) {
       auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
       mmaEnc = triton::gpu::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, 0 /*versionMinor*/,
           warpsPerTile);
 
-    }
 #endif
-    else {
+    } else {
       llvm_unreachable("Mma layout only supports versionMajor in {1, 2}");
     }
     auto newRetType =

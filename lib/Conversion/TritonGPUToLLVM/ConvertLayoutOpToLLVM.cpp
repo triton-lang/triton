@@ -168,9 +168,8 @@ private:
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
         // Volta doesn't follow the pattern here."
-      }
 #ifdef USE_ROCM
-      else if (mmaLayout.isMI200()) {
+      } else if (mmaLayout.isMI200()) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 32));
         multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 32));
         Value halfOffset = select(icmp_uge(laneId, _32), _4, _0);
@@ -186,9 +185,8 @@ private:
         }
         Value colWarpOffset = mul(multiDimWarpId[1], _32);
         mmaColIdx[0] = add(mfmaGroup32, colWarpOffset);
-      }
 #endif
-      else {
+      } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
 
@@ -208,9 +206,8 @@ private:
             threadId, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
             isARow, isBRow, isAVec4, isBVec4);
         return coords[elemId];
-      }
 #ifdef USE_ROCM
-      else if (mmaLayout.isMI200()) {
+      } else if (mmaLayout.isMI200()) {
         multiDimOffset[0] = mmaRowIdx[elemId % 16];
 
         multiDimOffset[1] = mmaColIdx[0];
@@ -218,9 +215,8 @@ private:
             multiDimOffset[0], i32_val(multiDimCTAInRepId[0] * shapePerCTA[0]));
         multiDimOffset[1] = add(
             multiDimOffset[1], i32_val(multiDimCTAInRepId[1] * shapePerCTA[1]));
-      }
 #endif
-      else {
+      } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
       return multiDimOffset;
@@ -666,6 +662,7 @@ private:
         reorderedVals.push_back(vecVals[i + 1]);
         reorderedVals.push_back(vecVals[i + 3]);
       }
+
       Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
                                                       rewriter, dstTy);
       rewriter.replaceOp(op, view);
@@ -695,6 +692,7 @@ private:
     Value res;
 
     if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2
+
       res = SharedToDotOperandMMAv2::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
           smemObj, getTypeConverter(), tid_val());
@@ -712,6 +710,7 @@ private:
         llvm::errs() << "Unsupported Shared -> DotOperand[MMAv1] conversion\n";
         return Value();
       }
+
       res = SharedToDotOperandMMAv1::convertLayout(
           dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
           loc, getTypeConverter(), rewriter, dst.getType());
@@ -727,7 +726,7 @@ private:
     }
     return res;
   }
-};
+}; // namespace triton::gpu::ConvertLayoutOp>
 
 void populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
