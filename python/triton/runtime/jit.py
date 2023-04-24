@@ -435,6 +435,7 @@ def jit(
     version=None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
+    interpreter: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -456,12 +457,16 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        return JITFunction(
-            fn,
-            version=version,
-            do_not_specialize=do_not_specialize,
-            debug=debug,
-        )
+        if interpreter:
+            from ..debugger.debugger import GridSelector
+            return GridSelector(fn)
+        else:
+            return JITFunction(
+                fn,
+                version=version,
+                do_not_specialize=do_not_specialize,
+                debug=debug,
+            )
 
     if fn is not None:
         return decorator(fn)
