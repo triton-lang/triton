@@ -2087,7 +2087,7 @@ def test_num_warps_pow2():
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'math.ffs', ''),
                           ('float32', 'math.log2', ''),
-                          ('float32', 'math.pow', tl.math.LIBDEVICE_PATH),
+                          ('float32', 'math.pow', tl.math.libdevice_path()),
                           ('float64', 'math.norm4d', '')])
 def test_math_tensor(dtype_str, expr, lib_path):
 
@@ -2132,7 +2132,7 @@ def test_math_tensor(dtype_str, expr, lib_path):
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('float32', 'math.pow', ''),
-                          ('float64', 'math.pow', tl.math.LIBDEVICE_PATH)])
+                          ('float64', 'math.pow', tl.math.libdevice_path())])
 def test_math_scalar(dtype_str, expr, lib_path):
 
     @triton.jit
