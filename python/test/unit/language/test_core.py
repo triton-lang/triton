@@ -752,7 +752,15 @@ def noinline_call_graph_fn(x, y, Z):
     tl.store(Z, z)
 
 
-@pytest.mark.parametrize("mode", ["simple", "call_graph"])
+@triton.jit(noinline=True)
+def noinline_shared_fn(x, y, Z):
+    offs = tl.arange(0, 16)[:, None] * 16 + tl.arange(0, 16)[None, :]
+    z = tl.load(Z + offs)
+    z = tl.dot(z, z) + x + y
+    tl.store(Z + offs, z)
+
+
+@pytest.mark.parametrize("mode", ["simple", "call_graph", "shared"])
 def test_noinline(mode):
     device = 'cuda'
 
@@ -766,12 +774,18 @@ def test_noinline(mode):
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': func_name})
     x = torch.tensor([1.0], device=device, dtype=torch.float32)
     y = torch.tensor([2.0], device=device, dtype=torch.float32)
-    z = torch.tensor([0.0], device=device, dtype=torch.float32)
+    if mode == "shared":
+        z = torch.ones((16, 16), device=device, dtype=torch.float32)
+    else:
+        z = torch.tensor([0.0], device=device, dtype=torch.float32)
     kernel[(1,)](x, y, z, num_warps=1)
     if mode == "simple":
         assert torch.equal(z, x + y)
     elif mode == "call_graph":
         assert torch.equal(z, x + 1 + y + 2)
+    elif mode == "shared":
+        ref = torch.full((16, 16), 16, device=device, dtype=torch.float32)
+        assert torch.equal(z, ref + x + y)
 
 
 # ---------------
