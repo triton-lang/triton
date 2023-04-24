@@ -140,7 +140,41 @@ class UnsupportedDriver(DriverBase):
 # -----------------------------
 
 
-def create_driver():
+class LazyProxy:
+    def __init__(self, init_fn):
+        self._init_fn = init_fn
+        self._obj = None
+
+    def _initialize_obj(self):
+        if self._obj is None:
+            self._obj = self._init_fn()
+
+    def __getattr__(self, name):
+        self._initialize_obj()
+        return getattr(self._obj, name)
+
+    def __setattr__(self, name, value):
+        if name in ['_init_fn', '_obj']:
+            super().__setattr__(name, value)
+        else:
+            self._initialize_obj()
+            setattr(self._obj, name, value)
+
+    def __delattr__(self, name):
+        self._initialize_obj()
+        delattr(self._obj, name)
+
+    def __repr__(self):
+        if self._obj is None:
+            return f"<{self.__class__.__name__} for {self._init_fn} not yet initialized>"
+        return repr(self._obj)
+
+    def __str__(self):
+        self._initialize_obj()
+        return str(self._obj)
+
+
+def initialize_driver():
     import torch
     if torch.version.hip is not None:
         return HIPDriver()
@@ -150,4 +184,4 @@ def create_driver():
         return UnsupportedDriver()
 
 
-driver = create_driver()
+driver = LazyProxy(initialize_driver)
