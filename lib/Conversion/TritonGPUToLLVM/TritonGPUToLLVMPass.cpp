@@ -61,17 +61,21 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
   LogicalResult
   matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    unsigned numArguments = op.getNumOperands();
-
-    // Currently, Triton kernel function always return nothing.
-    // TODO(Superjomn) add support for non-inline device function
-    if (numArguments > 0) {
-      return rewriter.notifyMatchFailure(
-          op, "Only kernel function with nothing returned is supported.");
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    // Check if the funcOp has the "nvvm.kernel" attribute
+    if (funcOp->hasAttr("nvvm.kernel")) {
+      if (op.getNumOperands() > 0) {
+        return rewriter.notifyMatchFailure(
+            op, "Kernel functions do not support return with operands");
+      }
+      rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
+                                                  op->getAttrs());
+    } else {
+      auto newOp =
+          rewriter.create<LLVM::ReturnOp>(op.getLoc(), adaptor.getOperands());
+      newOp->setAttrs(op->getAttrs());
+      rewriter.replaceOp(op, newOp->getResults());
     }
-
-    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
-                                                op->getAttrs());
     return success();
   }
 };
@@ -302,7 +306,6 @@ public:
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -312,16 +315,17 @@ public:
 
     initSharedMemory(allocation, typeConverter);
 
-    // Amend call ops
+    // Convert call and ret ops
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
-      RewritePatternSet callPatterns(context);
-      callPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
+      RewritePatternSet funcPatterns(context);
+      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
+      funcPatterns.add<ReturnOpConversion>(typeConverter);
       if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(callPatterns))))
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
     }
 

@@ -729,25 +729,49 @@ def test_tuples():
 
 
 @triton.jit(noinline=True)
-def noinline_fn(x, y, Z):
+def noinline_simple_fn(x, y, Z):
     z = x + y
     tl.store(Z, z)
 
 
-def test_noinline():
+@triton.jit(noinline=True)
+def noinline_call_graph_fn1(x):
+    return x + 1
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn2(y):
+    return y + 2
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn(x, y, Z):
+    t0 = noinline_call_graph_fn1(x)
+    t1 = noinline_call_graph_fn2(y)
+    z = t0 + t1
+    tl.store(Z, z)
+
+
+@pytest.mark.parametrize("mode", ["simple", "call_graph"])
+def test_noinline(mode):
     device = 'cuda'
 
     @triton.jit
     def kernel(X, Y, Z):
         x = tl.load(X)
         y = tl.load(Y)
-        noinline_fn(x, y, Z)
+        GENERATE_TEST_HERE(x, y, Z)
 
+    func_name = f'noinline_{mode}_fn'
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': func_name})
     x = torch.tensor([1.0], device=device, dtype=torch.float32)
     y = torch.tensor([2.0], device=device, dtype=torch.float32)
     z = torch.tensor([0.0], device=device, dtype=torch.float32)
     kernel[(1,)](x, y, z, num_warps=1)
-    assert torch.equal(z, x + y)
+    if mode == "simple":
+        assert torch.equal(z, x + y)
+    elif mode == "call_graph":
+        assert torch.equal(z, x + 1 + y + 2)
 
 
 # ---------------

@@ -239,7 +239,8 @@ private:
       if constexpr (UpdateEdgeOrder == WalkOrder::PreOrder) {
         updateEdgeFn(callOp, callee);
       }
-      doWalk(callee, visited, updateEdgeFn, updateNodeFn);
+      doWalk<UpdateEdgeOrder, UpdateNodeOrder>(callee, visited, updateEdgeFn,
+                                               updateNodeFn);
       if constexpr (UpdateEdgeOrder == WalkOrder::PostOrder) {
         updateEdgeFn(callOp, callee);
       }
