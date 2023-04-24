@@ -99,17 +99,17 @@ struct FuncOpConversion : public FuncOpConversionBase {
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
     // 1. Modify the function type to add the new argument.
     auto funcTy = funcOp.getFunctionType();
-    auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
+    auto amendedInputTy = llvm::to_vector(funcTy.getInputs());
     amendedInputTy.push_back(ptrTy);
     auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
                                            funcTy.getResults());
     // 2. Modify the function attributes to disable inline
-    SmallVector<NamedAttribute, 4> amendedAttrs;
+    SmallVector<NamedAttribute> amendedAttrs;
     amendedAttrs.push_back(
         rewriter.getNamedAttr("noinline", rewriter.getBoolAttr(true)));
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
     // 3. Modify the argument attributes to add the new argument.
-    auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
+    auto amendedArgAttrs = llvm::to_vector(funcOp.getAllArgAttrs());
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
     amendedAttrs.push_back(rewriter.getNamedAttr(
         funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
@@ -216,7 +216,7 @@ private:
     // Pack the result types into a struct.
     Type packedResult = nullptr;
     unsigned numResults = callOp.getNumResults();
-    auto resultTypes = llvm::to_vector<4>(callOp.getResultTypes());
+    auto resultTypes = llvm::to_vector(callOp.getResultTypes());
 
     if (numResults != 0) {
       if (!(packedResult =
@@ -234,7 +234,7 @@ private:
   getCallOpResults(triton::CallOp callOp, LLVM::CallOp newCallOp,
                    ConversionPatternRewriter &rewriter) const {
     auto numResults = callOp.getNumResults();
-    SmallVector<Value, 4> results;
+    SmallVector<Value> results;
     if (numResults < 2) {
       // If < 2 results, packing did not do anything and we can just return.
       results.append(newCallOp.result_begin(), newCallOp.result_end());
