@@ -89,16 +89,16 @@ struct DotOpMFMAConversionHelper {
     }
   }
 
-  static ArrayRef<int> getMFMAInstrShape(MatrixCoreType matrixCoreType) {
+  static ArrayRef<int64_t> getMFMAInstrShape(MatrixCoreType matrixCoreType) {
     assert(matrixCoreType != MatrixCoreType::NOT_APPLICABLE &&
            "Unknown MFMA type found.");
-    static const std::map<MatrixCoreType, const llvm::SmallVector<int>>
-    mfmaInstrShape = { // m, n, k
-        {MatrixCoreType::FP32_FP16_FP16_FP32, {32, 32, 8}},
-        {MatrixCoreType::FP32_BF16_BF16_FP32, {32, 32, 4}},
-        {MatrixCoreType::FP32_FP32_FP32_FP32, {32, 32, 2}},
-        {MatrixCoreType::INT32_INT8_INT8_INT32, {32, 32, 8}},
-        {MatrixCoreType::FP64_FP64_FP64_FP64, {16, 16, 4}}};
+    static const std::map<MatrixCoreType, const llvm::SmallVector<int64_t>>
+        mfmaInstrShape = { // m, n, k
+        {MatrixCoreType::FP32_FP16_FP16_FP32, {32l, 32l, 8l}},
+        {MatrixCoreType::FP32_BF16_BF16_FP32, {32l, 32l, 4l}},
+        {MatrixCoreType::FP32_FP32_FP32_FP32, {32l, 32l, 2l}},
+        {MatrixCoreType::INT32_INT8_INT8_INT32, {32l, 32l, 8l}},
+        {MatrixCoreType::FP64_FP64_FP64_FP64, {16l, 16l, 4l}}};
     return mfmaInstrShape.at(matrixCoreType);
   }
 
@@ -119,23 +119,6 @@ struct DotOpMFMAConversionHelper {
     return MatrixCoreType::NOT_APPLICABLE;
   }
 
-  static int getNumRepM(const ArrayRef<int> &instrSize,
-                        int M, const ArrayRef<unsigned> &warpsPerCTA) {
-    int instrM = instrSize[0];
-    return std::max<int>(M / (warpsPerCTA[0] * instrM), 1);
-  }
-
-  static int getNumRepN(const ArrayRef<int> &instrSize,
-                        int N, const ArrayRef<unsigned> & warpsPerCTA) {
-    int instrN = instrSize[1];
-    return std::max<int>(N / (warpsPerCTA[1] * instrN), 1);
-  }
-
-  static int getNumRepK(const ArrayRef<int> &instrSize, int K) {
-    int instrK = instrSize[2];
-    return std::max<int>(K / instrK, 1);
-  }
-
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
 
@@ -147,22 +130,27 @@ struct DotOpMFMAConversionHelper {
     auto instrShape = getMFMAInstrShape(mfmaTy);
 
     Value a = op.getA();
+    Value b = op.getB();
     Value d = op.getD();
     auto aTensorTy = a.getType().cast<RankedTensorType>();
+    auto bTensorTy = b.getType().cast<RankedTensorType>();
     auto dTensorTy = d.getType().cast<RankedTensorType>();
-  
+
+    auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+    auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+
+    auto repA = aEncoding.getMMAv3Rep(aTensorTy.getShape(), instrShape);
+    auto repB = bEncoding.getMMAv3Rep(bTensorTy.getShape(), instrShape);
+
+    assert(repA[1] == repB[0]);
+
     Value loadedA = adaptor.getA();
     Value loadedB = adaptor.getB();
     Value loadedC = adaptor.getC();
   
-    SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
-                                aTensorTy.getShape().end());
-  
-    auto dShape = dTensorTy.getShape();
-  
-    int numRepM = getNumRepM(instrShape, dShape[0], warpsPerCTA);
-    int numRepN = getNumRepN(instrShape, dShape[1], warpsPerCTA);
-    int numRepK = getNumRepK(instrShape, aShape[1]);
+    auto numRepM = repA[0];
+    auto numRepN = repB[1];
+    auto numRepK = repA[1];
 
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepM, numRepK, aTensorTy.getElementType());

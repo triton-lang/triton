@@ -15,84 +15,30 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 namespace {
 
-enum class MatrixCoreType : uint8_t {
-  // D = AB + C
-  FP32_FP16_FP16_FP32 = 0, // default
-  FP32_BF16_BF16_FP32,
-  FP32_FP32_FP32_FP32,
-  FP64_FP64_FP64_FP64,
-  INT32_INT8_INT8_INT32,
-  NOT_APPLICABLE,
-};
-
-MatrixCoreType
-getMatrixCoreTypeFromOperand(Type operandTy) {
+// TODO merge this function with same function from SharedToDotOperandMMAv3
+SmallVector<int64_t> getMFMAInstrShape(Type operandTy) {
   auto tensorTy = operandTy.cast<RankedTensorType>();
   auto elemTy = tensorTy.getElementType();
   if (elemTy.isF16())
-    return MatrixCoreType::FP32_FP16_FP16_FP32;
+    return {32l, 32l, 8l}; // FP32_FP16_FP16_FP32
   if (elemTy.isF32())
-    return MatrixCoreType::FP32_FP32_FP32_FP32;
+    return {32l, 32l, 2l}; // FP32_FP32_FP32_FP32;
   if (elemTy.isBF16())
-    return MatrixCoreType::FP32_BF16_BF16_FP32;
+    return {32l, 32l, 4l}; // FP32_BF16_BF16_FP32;
   if (elemTy.isInteger(8))
-    return MatrixCoreType::INT32_INT8_INT8_INT32;
+    return {32l, 32l, 8l}; // INT32_INT8_INT8_INT32;
   if (elemTy.isF64())
-    return MatrixCoreType::FP64_FP64_FP64_FP64;
-  return MatrixCoreType::NOT_APPLICABLE;
-}
-
-inline static const std::map<MatrixCoreType, llvm::SmallVector<int>>
-    mfmaInstrShape = { // m, n, k
-        {MatrixCoreType::FP32_FP16_FP16_FP32, {32, 32, 8}},
-        {MatrixCoreType::FP32_BF16_BF16_FP32, {32, 32, 4}},
-        {MatrixCoreType::FP32_FP32_FP32_FP32, {32, 32, 2}},
-        {MatrixCoreType::INT32_INT8_INT8_INT32, {32, 32, 8}},
-        {MatrixCoreType::FP64_FP64_FP64_FP64, {16, 16, 4}}};
-
-ArrayRef<int> getMFMAInstrShape(MatrixCoreType matrixCoreType) {
-  assert(matrixCoreType != MatrixCoreType::NOT_APPLICABLE &&
-         "Unknown MFMA type found.");
-  return mfmaInstrShape.at(matrixCoreType);
-}
-
-static int getNumRepM(Type operand, int M, int wpt) {
-  auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
-  int instrM = getMFMAInstrShape(matrixCoreType)[0];
-  return std::max<int>(M / (wpt * instrM), 1);
-}
-static int getNumRepN(Type operand, int N, int wpt) {
-  auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
-  int instrN = getMFMAInstrShape(matrixCoreType)[1];
-  return std::max<int>(N / (wpt * instrN), 1);
-}
-static int getNumRepK(Type operand, int K) {
-  auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
-  int instrK = getMFMAInstrShape(matrixCoreType)[2];
-  return std::max<int>(K / instrK, 1);
-}
-static int getNumOfElems(Type operand) {
-  auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
-  int instrM = getMFMAInstrShape(matrixCoreType)[0];
-  int instrK = getMFMAInstrShape(matrixCoreType)[2];
-  return std::max<int>(instrM * instrK / 64, 1);
+    return {16l, 16l, 4l}; // FP64_FP64_FP64_FP64;
+  assert(false && "unsupported operand data type");
+  return {};
 }
 
 // Get number of elements per thread for $a operand.
-static size_t getANumElemsPerThread(RankedTensorType operand, int wpt) {
-  auto shape = operand.getShape();
-  int numOfElem = getNumOfElems(operand);
-  int repM = getNumRepM(operand, shape[0], wpt);
-  int repK = getNumRepK(operand, shape[1]);
-  return repM * repK;
-}
-// Get number of elements per thread for $b operand.
-static size_t getBNumElemsPerThread(RankedTensorType operand, int wpt) {
-  auto shape = operand.getShape();
-  int numOfElem = getNumOfElems(operand);
-  int repK = getNumRepK(operand, shape[0]);
-  int repN = getNumRepN(operand, shape[1], wpt);
-  return repN * repK;
+static size_t getMFMAOperandNumElemsPerThread(RankedTensorType operand) {
+  auto encoding = operand.getEncoding().cast<DotOperandEncodingAttr>();
+  auto mfmaInstrShape = getMFMAInstrShape(operand);
+  auto reps = encoding.getMMAv3Rep(operand.getShape(), mfmaInstrShape);
+  return reps[0] * reps[1];
 }
 
 } // namespace
@@ -210,19 +156,8 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
         {8, IntegerType::get(ctx, 32)},
     };
     Type targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
-    auto wpt = mmaParent.getWarpsPerCTA();
-    if (dotOpLayout.getOpIdx() == 0) { // $a
-      auto elems =
-          getANumElemsPerThread(type, wpt[0]);
-      return struct_ty(SmallVector<Type>(elems, targetTy));
-    }
-    if (dotOpLayout.getOpIdx() == 1) { // $b
-      auto elems =
-          getBNumElemsPerThread(type, wpt[1]);
-      return struct_ty(SmallVector<Type>(elems, targetTy));
-    }
-    return Type();
-  // llvm_unreachable("if (mmaLayout.isMI200()) not implemented");
+    auto elems = getMFMAOperandNumElemsPerThread(type);
+    return struct_ty(SmallVector<Type>(elems, targetTy));
 #endif
   } else {
     assert(mmaParent.isVolta());

@@ -516,6 +516,25 @@ DotOperandEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
   }
 }
 
+#ifdef USE_ROCM
+SmallVector<int64_t>
+DotOperandEncodingAttr::getMMAv3Rep(ArrayRef<int64_t> operandShape,
+                                    ArrayRef<int64_t> instrSize) const {
+  auto mmaParent = getParent().cast<MmaEncodingAttr>();
+  auto warpsPerCTA = getParent().cast<MmaEncodingAttr>().getWarpsPerCTA();
+  assert(mmaParent.isMI200());
+  if (getOpIdx() == 0)
+    return {std::max<int64_t>(1, operandShape[0] / (instrSize[0] * warpsPerCTA[0])),
+            std::max<int64_t>(1, operandShape[1] / instrSize[2])};
+  else {
+    assert(getOpIdx() == 1);
+    return {
+        std::max<int64_t>(1, operandShape[0] / instrSize[2]),
+        std::max<int64_t>(1, operandShape[1] / (instrSize[1] * warpsPerCTA[1]))};
+  }
+}
+#endif
+
 SmallVector<unsigned>
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                           Type eltTy) const {

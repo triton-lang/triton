@@ -1,108 +1,44 @@
 #include "../ConvertLayoutOpToLLVM.h"
 #include "../Utility.h"
 
-using CoordTy = SmallVector<Value>;
-using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getContigPerThread;
-using ::mlir::triton::gpu::getElemsPerThread;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getSizePerThread;
-using ::mlir::triton::gpu::isaDistributedLayout;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
 
-enum class MatrixCoreType : uint8_t {
-  // D = AB + C
-  FP32_FP16_FP16_FP32 = 0, // default
-  FP32_BF16_BF16_FP32,
-  FP32_FP32_FP32_FP32,
-  FP64_FP64_FP64_FP64,
-  INT32_INT8_INT8_INT32,
-  NOT_APPLICABLE,
-};
+Type getShemPtrTy(Type operandTy) {
+  auto tensorTy = operandTy.cast<RankedTensorType>();
+  auto elemTy = tensorTy.getElementType();
+  if (elemTy.isBF16()) {
+    auto ctx = elemTy.getContext();
+    return ptr_ty(type::i16Ty(ctx), 3);
+  }
+  return ptr_ty(elemTy, 3);
+}
 
-MatrixCoreType
-getMatrixCoreTypeFromOperand(Type operandTy) {
+SmallVector<int64_t> getMFMAInstrShape(Type operandTy) {
   auto tensorTy = operandTy.cast<RankedTensorType>();
   auto elemTy = tensorTy.getElementType();
   if (elemTy.isF16())
-    return MatrixCoreType::FP32_FP16_FP16_FP32;
+    return {32l, 32l, 8l}; // FP32_FP16_FP16_FP32
   if (elemTy.isF32())
-    return MatrixCoreType::FP32_FP32_FP32_FP32;
+    return {32l, 32l, 2l}; // FP32_FP32_FP32_FP32;
   if (elemTy.isBF16())
-    return MatrixCoreType::FP32_BF16_BF16_FP32;
+    return {32l, 32l, 4l}; // FP32_BF16_BF16_FP32;
   if (elemTy.isInteger(8))
-    return MatrixCoreType::INT32_INT8_INT8_INT32;
+    return {32l, 32l, 8l}; // INT32_INT8_INT8_INT32;
   if (elemTy.isF64())
-    return MatrixCoreType::FP64_FP64_FP64_FP64;
-  return MatrixCoreType::NOT_APPLICABLE;
+    return {16l, 16l, 4l}; // FP64_FP64_FP64_FP64;
+  assert(false && "unsupported operand data type");
+  return {};
 }
 
-Type getShemPtrTy(MLIRContext *ctx, MatrixCoreType mfmaType) {
-  switch (mfmaType) {
-  case MatrixCoreType::FP32_FP16_FP16_FP32:
-    return ptr_ty(type::f16Ty(ctx), 3);
-  case MatrixCoreType::FP32_BF16_BF16_FP32:
-    return ptr_ty(type::i16Ty(ctx), 3);
-  case MatrixCoreType::FP32_FP32_FP32_FP32:
-    return ptr_ty(type::f32Ty(ctx), 3);
-  case MatrixCoreType::INT32_INT8_INT8_INT32:
-    return ptr_ty(type::i8Ty(ctx), 3);
-  case MatrixCoreType::FP64_FP64_FP64_FP64:
-    return ptr_ty(type::f64Ty(ctx), 3);
-  default:
-    llvm::report_fatal_error("MFMA data type not supported");
-  }
-  return Type{};
-}
-
-inline static const std::map<MatrixCoreType, llvm::SmallVector<int>>
-    mfmaInstrShape = { // m, n, k
-        {MatrixCoreType::FP32_FP16_FP16_FP32, {32, 32, 8}},
-        {MatrixCoreType::FP32_BF16_BF16_FP32, {32, 32, 4}},
-        {MatrixCoreType::FP32_FP32_FP32_FP32, {32, 32, 2}},
-        {MatrixCoreType::INT32_INT8_INT8_INT32, {32, 32, 8}},
-        {MatrixCoreType::FP64_FP64_FP64_FP64, {16, 16, 4}}};
-
-ArrayRef<int> getMFMAInstrShape(MatrixCoreType matrixCoreType) {
-  assert(matrixCoreType != MatrixCoreType::NOT_APPLICABLE &&
-         "Unknown MFMA type found.");
-  return mfmaInstrShape.at(matrixCoreType);
-}
-
-std::tuple<int, int, int> getMFMAInstrShape(Type operandTy) {
-  auto coreType = getMatrixCoreTypeFromOperand(operandTy);
-  auto instrShape = getMFMAInstrShape(coreType);
-  int instrM = instrShape[0];
-  int instrN = instrShape[1];
-  int instrK = instrShape[2];
-  return std::make_tuple(instrM, instrN, instrK);
-}
-
-static int getNumRepM(Type operand, int M, int wpt) {
-  auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
-  int instrM = getMFMAInstrShape(matrixCoreType)[0];
-  return std::max<int>(M / (wpt * instrM), 1);
-}
-static int getNumRepN(Type operand, int N, int wpt) {
-  auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
-  int instrN = getMFMAInstrShape(matrixCoreType)[1];
-  return std::max<int>(N / (wpt * instrN), 1);
-}
-static int getNumRepK(Type operand, int K) {
-  auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
-  int instrK = getMFMAInstrShape(matrixCoreType)[2];
-  return std::max<int>(K / instrK, 1);
-}
 static int getNumOfElems(Type operand) {
-  auto matrixCoreType = getMatrixCoreTypeFromOperand(operand);
-  int instrM = getMFMAInstrShape(matrixCoreType)[0];
-  int instrK = getMFMAInstrShape(matrixCoreType)[2];
+  auto mfmainstrShape = getMFMAInstrShape(operand);
+  int instrM = mfmainstrShape[0];
+  int instrK = mfmainstrShape[2];
   return std::max<int>(instrM * instrK / 64, 1);
 }
 
@@ -121,10 +57,13 @@ Value getWaveN(ConversionPatternRewriter &rewriter, Location loc, Value wave, co
 namespace SharedToDotOperandMMAv3 {
 
 llvm::SmallVector<Value> computeOffsetsA(ConversionPatternRewriter &rewriter,
-                                         Location loc, const ArrayRef<int> &mfmaShape,
+                                         Location loc,
+                                         const ArrayRef<int64_t> &mfmaShape,
                                          Value waveM, Value laneId, int wptA,
-                                         int numOfElems, int numM, int numK,
+                                         int numOfElems, ArrayRef<int64_t> reps,
                                          Value cSwizzleOffset) {
+  auto numM = reps[0];
+  auto numK = reps[1];
   SmallVector<Value> offsets(numM * numK * numOfElems);
   int lineSize = mfmaShape[2] * numK;
   int blockSize = mfmaShape[0] * numM * lineSize;
@@ -157,11 +96,14 @@ llvm::SmallVector<Value> computeOffsetsA(ConversionPatternRewriter &rewriter,
 }
 
 llvm::SmallVector<Value> computeOffsetsB(ConversionPatternRewriter &rewriter,
-                                         Location loc, const ArrayRef<int> &mfmaShape,
+                                         Location loc,
+                                         const ArrayRef<int64_t> &mfmaShape,
                                          int warpsPerGroupN,
                                          Value waveN, Value laneId, int wptB,
-                                         int numOfElems, int numK, int numN,
+                                         int numOfElems, ArrayRef<int64_t> reps,
                                          Value cSwizzleOffset) {
+  auto numK = reps[0];
+  auto numN = reps[1];
   SmallVector<Value> offsets(numK * numN * numOfElems);
 
   int lineSize = warpsPerGroupN * mfmaShape[1] * numN;
@@ -197,7 +139,6 @@ Value loadA(ConversionPatternRewriter &rewriter,
     TritonGPUToLLVMTypeConverter *typeConverter,
     Value tensor, const SharedMemoryObject &smemObj) {
   auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
-  MLIRContext *ctx = mmaLayout.getContext();
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
 
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
@@ -208,10 +149,11 @@ Value loadA(ConversionPatternRewriter &rewriter,
 
   SmallVector<Value> ha;
   auto mfmaInstrShape = getMFMAInstrShape(aTensorTy);
-  auto [mfmaInstrM, mfmaInstrN, mfmaInstrK] = mfmaInstrShape;
+  auto mfmaInstrM = mfmaInstrShape[0];
 
-  int numRepM = getNumRepM(aTensorTy, shape[0], warpsPerCTA[0]);
-  int numRepK = getNumRepK(aTensorTy, shape[1]);
+  auto numReps = encoding.getMMAv3Rep(shape, mfmaInstrShape);
+  auto numRepM = numReps[0];
+  auto numRepK = numReps[1];
 
   Value waveSize = i32_val(64);
   Value wave = udiv(thread, waveSize);
@@ -228,13 +170,14 @@ Value loadA(ConversionPatternRewriter &rewriter,
       std::max<int>(shape[1] / (mmaLayout.getWarpsPerCTA()[1] * 32), 1);
   int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
   int wpt = std::max<int>(wptM, wptN);
-  auto mfmaShape = getMFMAInstrShape(getMatrixCoreTypeFromOperand(aTensorTy));
-  auto offsets = computeOffsetsA(rewriter, loc, mfmaShape, waveM, lane, wpt, numOfElems, numRepM, numRepK,
+  auto mfmaShape = getMFMAInstrShape(aTensorTy);
+  auto offsets = computeOffsetsA(rewriter, loc, mfmaShape, waveM, lane, wpt, numOfElems, numReps,
                                  cSwizzleOffset);
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
-  Type smemPtrTy = getShemPtrTy(ctx, getMatrixCoreTypeFromOperand(aTensorTy));
+  Type smemPtrTy = getShemPtrTy(aTensorTy);
+
   Type elemTy = aTensorTy.getElementType();
   for (int m = 0; m < numRepM; ++m) {
     for (int k = 0; k < numRepK; ++k) {
@@ -256,6 +199,7 @@ Value loadA(ConversionPatternRewriter &rewriter,
   }
 
   elemTy = ha[0].getType();
+  MLIRContext *ctx = mmaLayout.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(ha.size(), elemTy));
   auto result = typeConverter->packLLElements(loc, ha, rewriter, structTy);
@@ -267,21 +211,20 @@ Value loadB(ConversionPatternRewriter &rewriter,
     TritonGPUToLLVMTypeConverter *typeConverter,
     Value tensor, const SharedMemoryObject &smemObj) {
   auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
-  MLIRContext *ctx = mmaLayout.getContext();
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
 
   auto bTensorTy = tensor.getType().cast<RankedTensorType>();
-  SmallVector<int64_t> shape(bTensorTy.getShape().begin(),
-                             bTensorTy.getShape().end());
+  ArrayRef<int64_t> shape = bTensorTy.getShape();
   auto sharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto order = sharedLayout.getOrder();
 
   SmallVector<Value> hb;
   auto mfmaInstrShape = getMFMAInstrShape(bTensorTy);
-  auto [mfmaInstrM, mfmaInstrN, mfmaInstrK] = mfmaInstrShape;
+  auto mfmaInstrN = mfmaInstrShape[1];
 
-  int numRepK = getNumRepK(bTensorTy, shape[0]);
-  int numRepN = getNumRepN(bTensorTy, shape[1], warpsPerCTA[1]);
+  auto numReps = encoding.getMMAv3Rep(shape, mfmaInstrShape);
+  auto numRepK = numReps[0];
+  auto numRepN = numReps[1];
 
   Value waveSize = i32_val(64);
   Value wave = udiv(thread, waveSize);
@@ -299,14 +242,14 @@ Value loadB(ConversionPatternRewriter &rewriter,
   int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
   int wpt = std::max<int>(wptM, wptN);
 
-  auto mfmaShape = getMFMAInstrShape(getMatrixCoreTypeFromOperand(bTensorTy));
+  auto mfmaShape = getMFMAInstrShape(bTensorTy);
   int warpsPerGroupN = mmaLayout.getWarpsPerCTA()[1];
-  auto offsets = computeOffsetsB(rewriter, loc, mfmaShape, warpsPerGroupN, waveN, lane, wpt, numOfElems, numRepK, numRepN,
+  auto offsets = computeOffsetsB(rewriter, loc, mfmaShape, warpsPerGroupN, waveN, lane, wpt, numOfElems, numReps,
                                  cSwizzleOffset);
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
-  Type smemPtrTy = getShemPtrTy(ctx, getMatrixCoreTypeFromOperand(bTensorTy));
+  Type smemPtrTy = getShemPtrTy(bTensorTy);
 
   Type elemTy = bTensorTy.getElementType();
   for (int n = 0; n < numRepN; ++n) {
@@ -329,6 +272,7 @@ Value loadB(ConversionPatternRewriter &rewriter,
   }
 
   elemTy = hb[0].getType();
+  MLIRContext *ctx = mmaLayout.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(hb.size(), elemTy));
   auto result = typeConverter->packLLElements(loc, hb, rewriter, structTy);
