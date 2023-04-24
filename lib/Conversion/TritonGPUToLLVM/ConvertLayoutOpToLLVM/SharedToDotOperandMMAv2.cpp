@@ -231,8 +231,8 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
         Value i = add(iBase, mul(iOff, i32_val(quadHeight)));
         Value j = add(jBase, mul(jOff, i32_val(quadWidth)));
         // wrap around the bounds
-        i = urem(i, i32_val(cTileShape));
-        j = urem(j, i32_val(sTileShape));
+        // i = urem(i, i32_val(cTileShape));
+        // j = urem(j, i32_val(sTileShape));
         if (needTrans) {
           offs[idx] = add(i, mul(j, sStride));
         } else {

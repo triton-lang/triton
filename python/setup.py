@@ -108,7 +108,7 @@ def get_thirdparty_packages(triton_cache_path):
 def download_and_copy_ptxas():
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
-    url = "https://conda.anaconda.org/nvidia/label/cuda-12.0.0/linux-64/cuda-nvcc-12.0.76-0.tar.bz2"
+    url = "https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-64/cuda-nvcc-12.1.105-0.tar.bz2"
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
