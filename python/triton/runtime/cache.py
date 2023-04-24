@@ -1,10 +1,9 @@
 import json
 import os
+import random
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, Optional
-
-from filelock import FileLock
 
 
 def default_cache_dir():
@@ -96,12 +95,18 @@ class FileCacheManager(CacheManager):
             data = str(data)
         assert self.lock_path is not None
         filepath = self._make_path(filename)
-        with FileLock(self.lock_path):
-            # use tempfile to be robust against program interruptions
-            mode = "wb" if binary else "w"
-            with open(filepath + ".tmp", mode) as f:
-                f.write(data)
-            os.rename(filepath + ".tmp", filepath)
+        # Random ID to avoid any collisions
+        rnd_id = random.randint(0, 1000000)
+        # we use the PID incase a bunch of these around so we can see what PID made it
+        pid = os.getpid()
+        # use tempfile to be robust against program interruptions
+        temp_path = f"{filepath}.tmp.pid_{pid}_{rnd_id}"
+        mode = "wb" if binary else "w"
+        with open(temp_path, mode) as f:
+            f.write(data)
+        # Replace is guaranteed to be atomic on POSIX systems if it succeeds
+        # so filepath cannot see a partial write
+        os.replace(temp_path, filepath)
         return filepath
 
 
