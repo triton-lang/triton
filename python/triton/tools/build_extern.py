@@ -291,9 +291,13 @@ class Libdevice(ExternLibrary):
         import_str = "from . import core\n"
         import_str += "from ..runtime import driver\n"
         import_str += "import os\n"
+        import_str += "import functools\n"
+        
 
         header_str = ""
-        header_str += "LIBDEVICE_PATH = os.getenv(\"TRITON_LIBDEVICE_PATH\", driver.libdevice_path)\n"
+        header_str += "@functools.lru_cache()\n"
+        header_str += "def libdevice_path():\n"
+        header_str += "    return os.getenv(\"TRITON_LIBDEVICE_PATH\", driver().libdevice_path)\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@core.extern\n"

@@ -280,8 +280,8 @@ def get_dram_gbps(backend=None, device=None):
         backend = _triton.runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
-    mem_clock_khz = driver.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
-    bus_width = driver.utils.get_device_properties(device)["mem_bus_width"]
+    mem_clock_khz = driver().utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
+    bus_width = driver().utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
     return bw_gbps
 
@@ -295,9 +295,9 @@ def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None)
     if not device:
         device = torch.cuda.current_device()
 
-    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4
+    num_subcores = driver().utils.get_device_properties(device)["multiprocessor_count"] * 4
     if not clock_rate:
-        clock_rate = driver.utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+        clock_rate = driver().utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
     capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         assert dtype == torch.float16
@@ -398,8 +398,8 @@ def get_max_simd_tflops(dtype, backend=None, device=None):
     if not device:
         device = torch.cuda.current_device()
 
-    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4
-    clock_rate = driver.utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
+    num_subcores = driver().utils.get_device_properties(device)["multiprocessor_count"] * 4
+    clock_rate = driver().utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         if dtype == torch.float32:

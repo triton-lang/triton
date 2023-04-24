@@ -1,4 +1,5 @@
 import abc
+import functools
 import hashlib
 import os
 import tempfile
@@ -18,7 +19,16 @@ class DriverBase(metaclass=abc.ABCMeta):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "third_party")
 
     def __init__(self) -> None:
-        pass
+        self.__utils = None
+
+    @abc.abstractmethod
+    def _build_utils(self) -> None:
+        ...
+
+    def utils(self):
+        if self.__utils is not None:
+            self.__utils = self._build_utils()
+        return self.__utils
 # -----------------------------
 # CUDA
 # -----------------------------
@@ -67,8 +77,10 @@ class CudaDriver(DriverBase):
     def get_libdevice_path(self):
         return os.path.join(self.third_party_dir(), "cuda", "lib", "libdevice.10.bc")
 
+    def _build_utils(self) -> None:
+        return CudaUtils()
+    
     def __init__(self):
-        self.utils = CudaUtils()
         self.backend = self.CUDA
         self.libdevice_path = self.get_libdevice_path()
         self.extern_path = self.get_extern_path()
@@ -117,8 +129,10 @@ class HIPDriver(DriverBase):
     def get_libdevice_path(self):
         return os.path.join(self.third_party_dir(), "third_party", "rocm", "lib", "libdevice.10.bc")
 
+    def _build_utils(self) -> None:
+        return HIPUtils()
+    
     def __init__(self):
-        self.utils = HIPUtils()
         self.backend = self.HIP
         self.libdevice_path = self.get_libdevice_path()
 
@@ -130,8 +144,10 @@ class UnsupportedDriver(DriverBase):
             cls.instance = super(UnsupportedDriver, cls).__new__(cls)
         return cls.instance
 
+    def _build_utils(self) -> None:
+        return None
+    
     def __init__(self):
-        self.utils = None
         self.backend = None
         self.libdevice_path = ''
 
@@ -140,7 +156,8 @@ class UnsupportedDriver(DriverBase):
 # -----------------------------
 
 
-def create_driver():
+@functools.lru_cache()
+def driver():
     import torch
     if torch.version.hip is not None:
         return HIPDriver()
@@ -148,6 +165,3 @@ def create_driver():
         return CudaDriver()
     else:
         return UnsupportedDriver()
-
-
-driver = create_driver()

@@ -525,14 +525,15 @@ class CompiledKernel:
         if self.cu_module is not None:
             return
         device = triton.runtime.jit.get_current_device()
+        d = driver()
         bin_path = {
-            driver.HIP: "hsaco_path",
-            driver.CUDA: "cubin"
-        }[driver.backend]
-        max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
+            d.HIP: "hsaco_path",
+            d.CUDA: "cubin"
+        }[d.backend]
+        max_shared = d.utils.get_device_properties(device)["max_shared_mem"]
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
-        mod, func, n_regs, n_spills = driver.utils.load_binary(self.metadata["name"], self.asm[bin_path], self.shared, device)
+        mod, func, n_regs, n_spills = d.utils.load_binary(self.metadata["name"], self.asm[bin_path], self.shared, device)
 
         self.n_spills = n_spills
         self.n_regs = n_regs
