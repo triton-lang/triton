@@ -533,6 +533,15 @@ static SmallVector<int64_t> getMFMAInstrShape(Type abElemType) {
 }
 
 SmallVector<int64_t>
+DotOperandEncodingAttr::getMMAv3ElemsPerThread(Type elemType) {
+  auto instrSize = getMFMAInstrShape(elemType);
+  if (getOpIdx() == 0)
+    return {instrSize[0], instrSize[2]};
+  else
+    return {instrSize[2], instrSize[1]};
+}
+
+SmallVector<int64_t>
 DotOperandEncodingAttr::getMMAv3Rep(ArrayRef<int64_t> operandShape,
                                     Type elemType) const {
   auto instrSize = getMFMAInstrShape(elemType);

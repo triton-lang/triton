@@ -538,6 +538,7 @@ section 9.7.13.4.1 for more details.
     SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
                                      int bitwidth) const;
 #ifdef USE_ROCM
+    SmallVector<int64_t> getMMAv3ElemsPerThread(Type elemTy);
     SmallVector<int64_t> getMMAv3Rep(ArrayRef<int64_t> operandShape,
                                      Type elemType) const;
 #endif

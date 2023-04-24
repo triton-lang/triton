@@ -10,37 +10,12 @@ using ::mlir::triton::gpu::getShapePerCTA;
 
 namespace {
 
-Type getShemPtrTy(Type operandTy) {
-  auto tensorTy = operandTy.cast<RankedTensorType>();
-  auto elemTy = tensorTy.getElementType();
+Type getShemPtrTy(Type elemTy) {
   if (elemTy.isBF16()) {
     auto ctx = elemTy.getContext();
     return ptr_ty(type::i16Ty(ctx), 3);
   }
   return ptr_ty(elemTy, 3);
-}
-
-SmallVector<int64_t> getMFMAInstrShape(RankedTensorType operandTy) {
-  auto elemTy = operandTy.getElementType();
-  if (elemTy.isF16())
-    return {32l, 32l, 8l}; // FP32_FP16_FP16_FP32
-  if (elemTy.isF32())
-    return {32l, 32l, 2l}; // FP32_FP32_FP32_FP32;
-  if (elemTy.isBF16())
-    return {32l, 32l, 4l}; // FP32_BF16_BF16_FP32;
-  if (elemTy.isInteger(8))
-    return {32l, 32l, 8l}; // INT32_INT8_INT8_INT32;
-  if (elemTy.isF64())
-    return {16l, 16l, 4l}; // FP64_FP64_FP64_FP64;
-  assert(false && "unsupported operand data type");
-  return {};
-}
-
-static int getNumOfElems(RankedTensorType operand) {
-  auto mfmainstrShape = getMFMAInstrShape(operand);
-  int instrM = mfmainstrShape[0];
-  int instrK = mfmainstrShape[2];
-  return std::max<int>(instrM * instrK / 64, 1);
 }
 
 // Get a waveId for M axis.
@@ -59,30 +34,29 @@ namespace SharedToDotOperandMMAv3 {
 
 llvm::SmallVector<Value> computeOffsetsA(ConversionPatternRewriter &rewriter,
                                          Location loc,
-                                         const ArrayRef<int64_t> &mfmaShape,
+                                         const ArrayRef<int64_t> &aElemsPerThread,
                                          Value waveM, Value laneId, int wptA,
                                          int numOfElems, ArrayRef<int64_t> reps,
                                          Value cSwizzleOffset) {
   auto numM = reps[0];
   auto numK = reps[1];
   SmallVector<Value> offsets(numM * numK * numOfElems);
-  int lineSize = mfmaShape[2] * numK;
-  int blockSize = mfmaShape[0] * numM * lineSize;
+  int lineSize = aElemsPerThread[1] * numK;
+  int blockSize = aElemsPerThread[0] * numM * lineSize;
   Value _0 = i32_val(0);
   Value _32 = i32_val(32);
   Value waveHalf = udiv(laneId, _32);
 
   // Value waveOffset = mul(waveM, i32_val(blockSize));
-  Value waveOffset = wptA > 1 ? mul(waveM, i32_val(mfmaShape[0] * lineSize))
+  Value waveOffset = wptA > 1 ? mul(waveM, i32_val(aElemsPerThread[0] * lineSize))
                               : mul(waveM, i32_val(blockSize));
   Value colOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
 
   for (int block = 0; block < numM; ++block) {
-    // Value blockOffset = i32_val(block * mfmaShape[0] * lineSize);
     Value blockOffset = wptA > 1 ? i32_val(block * blockSize)
-                                 : i32_val(block * mfmaShape[0] * lineSize);
+                                 : i32_val(block * aElemsPerThread[0] * lineSize);
     for (int tile = 0; tile < numK; ++tile) {
-      Value tileOffset = i32_val(tile * mfmaShape[2]);
+      Value tileOffset = i32_val(tile * aElemsPerThread[1]);
       for (int elem = 0; elem < numOfElems; ++elem) {
         Value rowOffset =
             add(mul(urem(laneId, _32), i32_val(lineSize)), i32_val(elem));
@@ -98,7 +72,7 @@ llvm::SmallVector<Value> computeOffsetsA(ConversionPatternRewriter &rewriter,
 
 llvm::SmallVector<Value> computeOffsetsB(ConversionPatternRewriter &rewriter,
                                          Location loc,
-                                         const ArrayRef<int64_t> &mfmaShape,
+                                         const ArrayRef<int64_t> &bElemsPerThread,
                                          int warpsPerGroupN,
                                          Value waveN, Value laneId, int wptB,
                                          int numOfElems, ArrayRef<int64_t> reps,
@@ -107,20 +81,20 @@ llvm::SmallVector<Value> computeOffsetsB(ConversionPatternRewriter &rewriter,
   auto numN = reps[1];
   SmallVector<Value> offsets(numK * numN * numOfElems);
 
-  int lineSize = warpsPerGroupN * mfmaShape[1] * numN;
+  int lineSize = warpsPerGroupN * bElemsPerThread[1] * numN;
   Value _0 = i32_val(0);
   Value _32 = i32_val(32);
-  Value waveOffset = wptB > 1 ? mul(waveN, i32_val(mfmaShape[1]))
-                              : mul(waveN, i32_val(mfmaShape[1] * numN));
+  Value waveOffset = wptB > 1 ? mul(waveN, i32_val(bElemsPerThread[1]))
+                              : mul(waveN, i32_val(bElemsPerThread[1] * numN));
   // Value waveOffset = mul(waveN, i32_val(mfmaShape[1] * numN));
   Value colOffset = urem(laneId, _32);
 
   for (int block = 0; block < numN; ++block) {
     // Value blockOffset = i32_val(block * mfmaShape[1]);
-    Value blockOffset = wptB > 1 ? i32_val(block * mfmaShape[1] * numN)
-                                 : i32_val(block * mfmaShape[1]);
+    Value blockOffset = wptB > 1 ? i32_val(block * bElemsPerThread[1] * numN)
+                                 : i32_val(block * bElemsPerThread[1]);
     for (int tile = 0; tile < numK; ++tile) {
-      Value tileOffset = i32_val(tile * mfmaShape[2] * lineSize);
+      Value tileOffset = i32_val(tile * bElemsPerThread[0] * lineSize);
       for (int elem = 0; elem < numOfElems; ++elem) {
         Value halfOffset =
             select(icmp_uge(laneId, _32), i32_val(numOfElems * lineSize), _0);
@@ -148,11 +122,11 @@ Value loadA(ConversionPatternRewriter &rewriter,
   auto sharedLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto order = sharedLayout.getOrder();
 
-  SmallVector<Value> ha;
-  auto mfmaInstrShape = getMFMAInstrShape(aTensorTy);
-  auto mfmaInstrM = mfmaInstrShape[0];
-
   auto aElemTy = aTensorTy.getElementType();
+  auto aElemsPerThread = encoding.getMMAv3ElemsPerThread(aElemTy);
+  auto mfmaInstrM = aElemsPerThread[0];
+  auto mfmaInstrK = aElemsPerThread[1];
+
   auto numReps = encoding.getMMAv3Rep(shape, aElemTy);
   auto numRepM = numReps[0];
   auto numRepK = numReps[1];
@@ -162,7 +136,7 @@ Value loadA(ConversionPatternRewriter &rewriter,
   Value lane = urem(thread, waveSize);
 
   Value waveM = getWaveM(rewriter, loc, wave, warpsPerCTA, mfmaInstrM, shape[0]);
-  int numOfElems = getNumOfElems(aTensorTy);
+  int numOfElems = std::max<int>(mfmaInstrM * mfmaInstrK / 64 /*wave size*/, 1);
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
   // TODO make macro tile size granilarity configurable
   int macroTileM =
@@ -172,18 +146,17 @@ Value loadA(ConversionPatternRewriter &rewriter,
       std::max<int>(shape[1] / (mmaLayout.getWarpsPerCTA()[1] * 32), 1);
   int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
   int wpt = std::max<int>(wptM, wptN);
-  auto mfmaShape = getMFMAInstrShape(aTensorTy);
-  auto offsets = computeOffsetsA(rewriter, loc, mfmaShape, waveM, lane, wpt, numOfElems, numReps,
+  auto offsets = computeOffsetsA(rewriter, loc, aElemsPerThread, waveM, lane, wpt, numOfElems, numReps,
                                  cSwizzleOffset);
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
-  Type smemPtrTy = getShemPtrTy(aTensorTy);
+  Type smemPtrTy = getShemPtrTy(aElemTy);
 
-  Type elemTy = aTensorTy.getElementType();
+  SmallVector<Value> ha;
   for (int m = 0; m < numRepM; ++m) {
     for (int k = 0; k < numRepK; ++k) {
-      auto vecTy = vec_ty(elemTy, numOfElems);
+      auto vecTy = vec_ty(aElemTy, numOfElems);
       Value valVec = undef(vecTy);
       for (unsigned elem = 0; elem < numOfElems; ++elem) {
         Value elemOffset =
@@ -194,16 +167,15 @@ Value loadA(ConversionPatternRewriter &rewriter,
         else
           valVec = elemValue;
       }
-      if (elemTy == i8_ty)
+      if (aElemTy == i8_ty)
         valVec = bitcast(valVec, i32_ty);
       ha.push_back(valVec);
     }
   }
 
-  elemTy = ha[0].getType();
   MLIRContext *ctx = mmaLayout.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(ha.size(), elemTy));
+      ctx, SmallVector<Type>(ha.size(), ha[0].getType()));
   auto result = typeConverter->packLLElements(loc, ha, rewriter, structTy);
   return result;
 }
@@ -220,11 +192,11 @@ Value loadB(ConversionPatternRewriter &rewriter,
   auto sharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto order = sharedLayout.getOrder();
 
-  SmallVector<Value> hb;
-  auto mfmaInstrShape = getMFMAInstrShape(bTensorTy);
-  auto mfmaInstrN = mfmaInstrShape[1];
-
   auto bElemTy = bTensorTy.getElementType();
+  auto bElemsPerThread = encoding.getMMAv3ElemsPerThread(bElemTy);
+  auto mfmaInstrK = bElemsPerThread[0];
+  auto mfmaInstrN = bElemsPerThread[1];
+
   auto numReps = encoding.getMMAv3Rep(shape, bElemTy);
   auto numRepK = numReps[0];
   auto numRepN = numReps[1];
@@ -234,7 +206,7 @@ Value loadB(ConversionPatternRewriter &rewriter,
   Value lane = urem(thread, waveSize);
 
   Value waveN = getWaveN(rewriter, loc, wave, mmaLayout.getWarpsPerCTA(), mfmaInstrN, shape[1]);
-  int numOfElems = getNumOfElems(bTensorTy);
+  int numOfElems = std::max<int>(mfmaInstrK * mfmaInstrN / 64 /*wave size*/, 1);
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
 
   int macroTileM =
@@ -245,16 +217,15 @@ Value loadB(ConversionPatternRewriter &rewriter,
   int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
   int wpt = std::max<int>(wptM, wptN);
 
-  auto mfmaShape = getMFMAInstrShape(bTensorTy);
   int warpsPerGroupN = mmaLayout.getWarpsPerCTA()[1];
-  auto offsets = computeOffsetsB(rewriter, loc, mfmaShape, warpsPerGroupN, waveN, lane, wpt, numOfElems, numReps,
+  auto offsets = computeOffsetsB(rewriter, loc, bElemsPerThread, warpsPerGroupN, waveN, lane, wpt, numOfElems, numReps,
                                  cSwizzleOffset);
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
-  Type smemPtrTy = getShemPtrTy(bTensorTy);
+  Type smemPtrTy = getShemPtrTy(bElemTy);
 
-  Type elemTy = bTensorTy.getElementType();
+  SmallVector<Value> hb;
   for (int n = 0; n < numRepN; ++n) {
     for (int k = 0; k < numRepK; ++k) {
       auto vecTy = vec_ty(bTensorTy.getElementType(), numOfElems);
@@ -268,16 +239,15 @@ Value loadB(ConversionPatternRewriter &rewriter,
         else
           valVec = elemValue;
       }
-      if (elemTy == i8_ty)
+      if (bElemTy == i8_ty)
         valVec = bitcast(valVec, i32_ty);
       hb.push_back(valVec);
     }
   }
 
-  elemTy = hb[0].getType();
   MLIRContext *ctx = mmaLayout.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(hb.size(), elemTy));
+      ctx, SmallVector<Type>(hb.size(), hb[0].getType()));
   auto result = typeConverter->packLLElements(loc, hb, rewriter, structTy);
   return result;
 }
