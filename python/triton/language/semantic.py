@@ -3,10 +3,11 @@ from __future__ import annotations  # remove after python 3.11
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
+import torch
+
+import triton
 from . import core as tl
 from triton._C.libtriton.triton import ir
-import torch
-import triton
 
 T = TypeVar('T')
 
