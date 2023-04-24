@@ -4,9 +4,11 @@ import os
 from ..runtime import driver
 from . import core
 
+
 @functools.lru_cache()
 def libdevice_path():
     return os.getenv("TRITON_LIBDEVICE_PATH", driver().libdevice_path)
+
 
 @core.extern
 def clz(arg0, _builder=None):

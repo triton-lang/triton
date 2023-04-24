@@ -292,7 +292,6 @@ class Libdevice(ExternLibrary):
         import_str += "from ..runtime import driver\n"
         import_str += "import os\n"
         import_str += "import functools\n"
-        
 
         header_str = ""
         header_str += "@functools.lru_cache()\n"

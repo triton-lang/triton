@@ -79,7 +79,7 @@ class CudaDriver(DriverBase):
 
     def _build_utils(self) -> None:
         return CudaUtils()
-    
+
     def __init__(self):
         self.backend = self.CUDA
         self.libdevice_path = self.get_libdevice_path()
@@ -131,7 +131,7 @@ class HIPDriver(DriverBase):
 
     def _build_utils(self) -> None:
         return HIPUtils()
-    
+
     def __init__(self):
         self.backend = self.HIP
         self.libdevice_path = self.get_libdevice_path()
@@ -146,7 +146,7 @@ class UnsupportedDriver(DriverBase):
 
     def _build_utils(self) -> None:
         return None
-    
+
     def __init__(self):
         self.backend = None
         self.libdevice_path = ''
