@@ -114,7 +114,8 @@ def download_and_copy_ptxas():
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
     download = True
-    if os.path.exists(dst_path):
+    if os.path.exists(dst_path) and\
+       os.access(dst_path, os.X_OK):
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = curr_version != version
