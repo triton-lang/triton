@@ -99,7 +99,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
         this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
     // 1. Modify the function type to add the new argument.
     auto funcTy = funcOp.getFunctionType();
-    auto amendedInputTy = llvm::to_vector(funcTy.getInputs());
+    auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
     amendedInputTy.push_back(ptrTy);
     auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
                                            funcTy.getResults());
@@ -109,7 +109,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
         rewriter.getNamedAttr("noinline", rewriter.getBoolAttr(true)));
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
     // 3. Modify the argument attributes to add the new argument.
-    auto amendedArgAttrs = llvm::to_vector(funcOp.getAllArgAttrs());
+    auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
     amendedAttrs.push_back(rewriter.getNamedAttr(
         funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
@@ -188,7 +188,7 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
   }
 
 private:
-  SmallVector<Value>
+  SmallVector<Value, 4>
   promoteOperands(triton::CallOp callOp,
                   typename triton::CallOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const {
@@ -216,7 +216,7 @@ private:
     // Pack the result types into a struct.
     Type packedResult = nullptr;
     unsigned numResults = callOp.getNumResults();
-    auto resultTypes = llvm::to_vector(callOp.getResultTypes());
+    auto resultTypes = llvm::to_vector<4>(callOp.getResultTypes());
 
     if (numResults != 0) {
       if (!(packedResult =
