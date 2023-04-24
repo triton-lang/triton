@@ -113,11 +113,14 @@ def download_and_copy_ptxas():
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
-    download = platform.system() == "Linux"
-    if os.path.exists(dst_path):
-        curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
-        curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
-        download = curr_version != version
+    is_linux = platform.system() == "Linux"
+    download = False
+    if is_linux:
+        download = True
+        if os.path.exists(dst_path):
+            curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
+            curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
+            download = curr_version != version
     if download:
         print(f'downloading and extracting {url} ...')
         ftpstream = urllib.request.urlopen(url)
