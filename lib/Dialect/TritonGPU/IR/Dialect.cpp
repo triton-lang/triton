@@ -517,9 +517,25 @@ DotOperandEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
 }
 
 #ifdef USE_ROCM
+static SmallVector<int64_t> getMFMAInstrShape(Type abElemType) {
+  if (abElemType.isF16())
+    return {32l, 32l, 8l}; // FP32_FP16_FP16_FP32
+  if (abElemType.isF32())
+    return {32l, 32l, 2l}; // FP32_FP32_FP32_FP32;
+  if (abElemType.isBF16())
+    return {32l, 32l, 4l}; // FP32_BF16_BF16_FP32;
+  if (abElemType.isInteger(8))
+    return {32l, 32l, 8l}; // INT32_INT8_INT8_INT32;
+  if (abElemType.isF64())
+    return {16l, 16l, 4l}; // FP64_FP64_FP64_FP64;
+  assert(false && "unsupported operand data type");
+  return {};
+}
+
 SmallVector<int64_t>
 DotOperandEncodingAttr::getMMAv3Rep(ArrayRef<int64_t> operandShape,
-                                    ArrayRef<int64_t> instrSize) const {
+                                    Type elemType) const {
+  auto instrSize = getMFMAInstrShape(elemType);
   auto mmaParent = getParent().cast<MmaEncodingAttr>();
   auto warpsPerCTA = getParent().cast<MmaEncodingAttr>().getWarpsPerCTA();
   assert(mmaParent.isMI200());

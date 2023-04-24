@@ -1,3 +1,5 @@
+#ifdef USE_ROCM
+
 #include "../ConvertLayoutOpToLLVM.h"
 #include "../Utility.h"
 
@@ -18,9 +20,8 @@ Type getShemPtrTy(Type operandTy) {
   return ptr_ty(elemTy, 3);
 }
 
-SmallVector<int64_t> getMFMAInstrShape(Type operandTy) {
-  auto tensorTy = operandTy.cast<RankedTensorType>();
-  auto elemTy = tensorTy.getElementType();
+SmallVector<int64_t> getMFMAInstrShape(RankedTensorType operandTy) {
+  auto elemTy = operandTy.getElementType();
   if (elemTy.isF16())
     return {32l, 32l, 8l}; // FP32_FP16_FP16_FP32
   if (elemTy.isF32())
@@ -35,7 +36,7 @@ SmallVector<int64_t> getMFMAInstrShape(Type operandTy) {
   return {};
 }
 
-static int getNumOfElems(Type operand) {
+static int getNumOfElems(RankedTensorType operand) {
   auto mfmainstrShape = getMFMAInstrShape(operand);
   int instrM = mfmainstrShape[0];
   int instrK = mfmainstrShape[2];
@@ -151,7 +152,8 @@ Value loadA(ConversionPatternRewriter &rewriter,
   auto mfmaInstrShape = getMFMAInstrShape(aTensorTy);
   auto mfmaInstrM = mfmaInstrShape[0];
 
-  auto numReps = encoding.getMMAv3Rep(shape, mfmaInstrShape);
+  auto aElemTy = aTensorTy.getElementType();
+  auto numReps = encoding.getMMAv3Rep(shape, aElemTy);
   auto numRepM = numReps[0];
   auto numRepK = numReps[1];
 
@@ -222,7 +224,8 @@ Value loadB(ConversionPatternRewriter &rewriter,
   auto mfmaInstrShape = getMFMAInstrShape(bTensorTy);
   auto mfmaInstrN = mfmaInstrShape[1];
 
-  auto numReps = encoding.getMMAv3Rep(shape, mfmaInstrShape);
+  auto bElemTy = bTensorTy.getElementType();
+  auto numReps = encoding.getMMAv3Rep(shape, bElemTy);
   auto numRepK = numReps[0];
   auto numRepN = numReps[1];
 
@@ -297,3 +300,5 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 }
 
 } // namespace SharedToDotOperandMMAv3
+
+#endif // ifdef USE_ROCM

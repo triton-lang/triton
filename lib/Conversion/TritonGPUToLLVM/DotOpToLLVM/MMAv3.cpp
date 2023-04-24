@@ -1,3 +1,5 @@
+#ifdef USE_ROCM
+
 #include "../DotOpToLLVM.h"
 #include "../Utility.h"
 
@@ -89,19 +91,6 @@ struct DotOpMFMAConversionHelper {
     }
   }
 
-  static ArrayRef<int64_t> getMFMAInstrShape(MatrixCoreType matrixCoreType) {
-    assert(matrixCoreType != MatrixCoreType::NOT_APPLICABLE &&
-           "Unknown MFMA type found.");
-    static const std::map<MatrixCoreType, const llvm::SmallVector<int64_t>>
-        mfmaInstrShape = { // m, n, k
-        {MatrixCoreType::FP32_FP16_FP16_FP32, {32l, 32l, 8l}},
-        {MatrixCoreType::FP32_BF16_BF16_FP32, {32l, 32l, 4l}},
-        {MatrixCoreType::FP32_FP32_FP32_FP32, {32l, 32l, 2l}},
-        {MatrixCoreType::INT32_INT8_INT8_INT32, {32l, 32l, 8l}},
-        {MatrixCoreType::FP64_FP64_FP64_FP64, {16l, 16l, 4l}}};
-    return mfmaInstrShape.at(matrixCoreType);
-  }
-
   static MatrixCoreType getMatrixCoreTypeFromDot(DotOp op){
     auto aOperandTy = op.getA().getType();
     auto tensorTy = aOperandTy.cast<RankedTensorType>();
@@ -127,20 +116,19 @@ struct DotOpMFMAConversionHelper {
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
     auto mfmaTy = getMatrixCoreTypeFromDot(op);
 
-    auto instrShape = getMFMAInstrShape(mfmaTy);
-
     Value a = op.getA();
     Value b = op.getB();
     Value d = op.getD();
     auto aTensorTy = a.getType().cast<RankedTensorType>();
     auto bTensorTy = b.getType().cast<RankedTensorType>();
     auto dTensorTy = d.getType().cast<RankedTensorType>();
+    auto elemTy = aTensorTy.getElementType();
 
     auto aEncoding = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     auto bEncoding = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
 
-    auto repA = aEncoding.getMMAv3Rep(aTensorTy.getShape(), instrShape);
-    auto repB = bEncoding.getMMAv3Rep(bTensorTy.getShape(), instrShape);
+    auto repA = aEncoding.getMMAv3Rep(aTensorTy.getShape(), elemTy);
+    auto repB = bEncoding.getMMAv3Rep(bTensorTy.getShape(), elemTy);
 
     assert(repA[1] == repB[0]);
 
@@ -233,3 +221,5 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return helper.convertDot(op, adaptor);
 }
+
+#endif // ifdef USE_ROCM

@@ -539,7 +539,7 @@ section 9.7.13.4.1 for more details.
                                      int bitwidth) const;
 #ifdef USE_ROCM
     SmallVector<int64_t> getMMAv3Rep(ArrayRef<int64_t> operandShape,
-                                     ArrayRef<int64_t> instrSize) const;
+                                     Type elemType) const;
 #endif
   }];
 }

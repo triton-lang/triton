@@ -15,29 +15,11 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 namespace {
 
-// TODO merge this function with same function from SharedToDotOperandMMAv3
-SmallVector<int64_t> getMFMAInstrShape(Type operandTy) {
-  auto tensorTy = operandTy.cast<RankedTensorType>();
-  auto elemTy = tensorTy.getElementType();
-  if (elemTy.isF16())
-    return {32l, 32l, 8l}; // FP32_FP16_FP16_FP32
-  if (elemTy.isF32())
-    return {32l, 32l, 2l}; // FP32_FP32_FP32_FP32;
-  if (elemTy.isBF16())
-    return {32l, 32l, 4l}; // FP32_BF16_BF16_FP32;
-  if (elemTy.isInteger(8))
-    return {32l, 32l, 8l}; // INT32_INT8_INT8_INT32;
-  if (elemTy.isF64())
-    return {16l, 16l, 4l}; // FP64_FP64_FP64_FP64;
-  assert(false && "unsupported operand data type");
-  return {};
-}
-
-// Get number of elements per thread for $a operand.
+// Get number of elements per thread for $a and $b operand of MFMA dot op.
 static size_t getMFMAOperandNumElemsPerThread(RankedTensorType operand) {
   auto encoding = operand.getEncoding().cast<DotOperandEncodingAttr>();
-  auto mfmaInstrShape = getMFMAInstrShape(operand);
-  auto reps = encoding.getMMAv3Rep(operand.getShape(), mfmaInstrShape);
+  auto elemTy = operand.getElementType();
+  auto reps = encoding.getMMAv3Rep(operand.getShape(), elemTy);
   return reps[0] * reps[1];
 }
 
