@@ -531,7 +531,7 @@ static SmallVector<int64_t> getMFMAInstrShape(Type abElemType) {
 }
 
 SmallVector<int64_t>
-DotOperandEncodingAttr::getMMAv3ElemsPerThread(Type elemType) {
+DotOperandEncodingAttr::getMMAv3ElemsPerThread(Type elemType) const {
   auto instrSize = getMFMAInstrShape(elemType);
   if (getOpIdx() == 0)
     return {instrSize[0], instrSize[2]};
@@ -570,6 +570,14 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
+#ifdef USE_ROCM
+    if (mmaParent.isMI200()) {
+      constexpr int waveSize = 64;
+      auto tileSize = getMMAv3ElemsPerThread(eltTy);
+      auto rep = getMMAv3Rep(shape, eltTy);
+      return (tileSize[0] * tileSize[1] * rep[0] * rep[1]) / waveSize;
+    }
+#endif
     // A100
     if (mmaParent.isAmpere()) {
       auto rep = getMMAv2Rep(shape, eltTy.getIntOrFloatBitWidth());
