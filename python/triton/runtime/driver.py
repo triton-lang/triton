@@ -61,9 +61,6 @@ class CudaDriver(DriverBase):
             cls.instance = super(CudaDriver, cls).__new__(cls)
         return cls.instance
 
-    def get_extern_path(self):
-        return os.path.join(self.third_party_dir(), "cuda", "lib")
-
     def get_libdevice_path(self):
         return os.path.join(self.third_party_dir(), "cuda", "lib", "libdevice.10.bc")
 
