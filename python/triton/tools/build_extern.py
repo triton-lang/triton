@@ -287,13 +287,17 @@ class Libdevice(ExternLibrary):
         # @extern.extern
         # def <op_name>(<args>, _builder=None):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
-        #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
+        #   return core.extern_elementwise("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core\n"
         import_str += "from ..runtime import driver\n"
         import_str += "import os\n"
+        import_str += "import functools\n"
 
         header_str = ""
-        header_str += "LIBDEVICE_PATH = os.getenv(\"TRITON_LIBDEVICE_PATH\", driver.libdevice_path)\n"
+        header_str += "@functools.lru_cache()\n"
+        header_str += "def libdevice_path():\n"
+        header_str += "    return os.getenv(\"TRITON_LIBDEVICE_PATH\", driver().libdevice_path)\n\n"
+
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@core.extern\n"
@@ -302,7 +306,7 @@ class Libdevice(ExternLibrary):
                 func_name_str += f"{arg_name}, "
             func_name_str += "_builder=None):\n"
 
-            return_str = f"\treturn core.extern_elementwise(\"{self._name}\", LIBDEVICE_PATH, ["
+            return_str = f"\treturn core.extern_elementwise(\"{self._name}\", libdevice_path(), ["
             for arg_name in symbols[0].arg_names:
                 return_str += f"{arg_name}, "
             return_str += "], \n"
