@@ -287,7 +287,7 @@ class Libdevice(ExternLibrary):
         # @extern.extern
         # def <op_name>(<args>, _builder=None):
         #   arg_type_symbol_dict = {[arg_type]: {(symbol, ret_type)}}
-        #   return extern.dispatch("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
+        #   return core.extern_elementwise("libdevice", <path>, <args>, <arg_type_symbol_dict>, _builder)
         import_str = "from . import core\n"
         import_str += "import os\n"
         import_str += "import functools\n"
