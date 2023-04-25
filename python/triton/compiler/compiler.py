@@ -291,6 +291,8 @@ arg_type_pattern = {
     "ptx": ptx_arg_type_pattern,
 }
 
+ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
+
 
 def _get_jsonable_constants(constants):
     def _is_jsonable(x):
@@ -404,6 +406,8 @@ def compile(fn, **kwargs):
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
         types = re.findall(arg_type_pattern[ir], signature)
+        if ir == 'ttgir':
+            num_warps = int(re.search(ttgir_num_warps_pattern, src).group(1))
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
