@@ -105,8 +105,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
                                            funcTy.getResults());
     // 2. Modify the function attributes to disable inline
     SmallVector<NamedAttribute> amendedAttrs;
-    amendedAttrs.push_back(
-        rewriter.getNamedAttr("noinline", rewriter.getBoolAttr(true)));
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
     // 3. Modify the argument attributes to add the new argument.
     auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
