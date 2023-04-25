@@ -2124,6 +2124,10 @@ def test_math_tensor(dtype_str, expr, lib_path):
         x = np.abs(x)
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x)'})
         y_ref = np.power(x, x)
+    elif expr == 'math.pow_dtype':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
+        y_ref = np.power(x, 0.5)
     elif expr == 'math.norm4d':
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x, x, x)'})
         y_ref = np.sqrt(4 * np.power(x, 2))

@@ -296,7 +296,7 @@ class Libdevice(ExternLibrary):
         header_str = ""
         header_str += "@functools.lru_cache()\n"
         header_str += "def libdevice_path():\n"
-        header_str += "    return os.getenv(\"TRITON_LIBDEVICE_PATH\", driver().libdevice_path)\n\n"
+        header_str += "    return os.getenv(\"TRITON_LIBDEVICE_PATH\", driver.libdevice_path)\n\n"
 
         func_str = ""
         for symbols in self._symbol_groups.values():
