@@ -61,14 +61,9 @@ class CudaDriver(DriverBase):
             cls.instance = super(CudaDriver, cls).__new__(cls)
         return cls.instance
 
-    def get_libdevice_path(self):
-        return os.path.join(self.third_party_dir(), "cuda", "lib", "libdevice.10.bc")
-
     def __init__(self):
         self.utils = CudaUtils()
         self.backend = self.CUDA
-        self.libdevice_path = self.get_libdevice_path()
-        self.extern_path = self.get_extern_path()
 
 # -----------------------------
 # HIP
@@ -111,13 +106,9 @@ class HIPDriver(DriverBase):
             cls.instance = super(HIPDriver, cls).__new__(cls)
         return cls.instance
 
-    def get_libdevice_path(self):
-        return os.path.join(self.third_party_dir(), "third_party", "rocm", "lib", "libdevice.10.bc")
-
     def __init__(self):
         self.utils = HIPUtils()
         self.backend = self.HIP
-        self.libdevice_path = self.get_libdevice_path()
 
 
 class UnsupportedDriver(DriverBase):
@@ -130,7 +121,6 @@ class UnsupportedDriver(DriverBase):
     def __init__(self):
         self.utils = None
         self.backend = None
-        self.libdevice_path = ''
 
 # -----------------------------
 # Driver
