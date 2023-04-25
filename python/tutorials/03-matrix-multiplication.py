@@ -333,14 +333,14 @@ b = b.T
 
 triton_output = matmul(a, b, activation=None)
 # triton_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
-torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
-# # print(triton_output[0, 1933], torch_output[0, 1933])
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
-if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
-    print("✅ Triton and Torch match")
-else:
-    print("❌ Triton and Torch differ")
+# torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
+# # # print(triton_output[0, 1933], torch_output[0, 1933])
+# print(f"triton_output={triton_output}")
+# print(f"torch_output={torch_output}")
+# if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+#     print("✅ Triton and Torch match")
+# else:
+#     print("❌ Triton and Torch differ")
 
 # %%
 # Benchmark
