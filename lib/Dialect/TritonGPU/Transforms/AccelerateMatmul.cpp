@@ -170,14 +170,15 @@ public:
                          .cast<triton::gpu::BlockedEncodingAttr>()
                          .getOrder();
 
+    auto newAEncoding = triton::gpu::DotOperandEncodingAttr::get(
+        oldAType.getContext(), 0, newRetType.getEncoding());
+    auto newBEncoding = triton::gpu::DotOperandEncodingAttr::get(
+        oldBType.getContext(), 1, newRetType.getEncoding());
+
     auto newAType = RankedTensorType::get(
-        oldAType.getShape(), oldAType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(oldAType.getContext(), 0,
-                                                 newRetType.getEncoding()));
+        oldAType.getShape(), oldAType.getElementType(), newAEncoding);
     auto newBType = RankedTensorType::get(
-        oldBType.getShape(), oldBType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(oldBType.getContext(), 1,
-                                                 newRetType.getEncoding()));
+        oldBType.getShape(), oldBType.getElementType(), newBEncoding);
 
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
