@@ -300,7 +300,7 @@ class Libdevice(ExternLibrary):
         header_str += "    if torch.version.hip is None:\n"
         header_str += "        default = os.path.join(third_party_dir, \"cuda\", \"lib\", \"libdevice.10.bc\")\n"
         header_str += "    else:\n"
-        header_str += "        assert False, \"libdevice not yet supported on AMD GPUs\"\n"
+        header_str += "        default = ''\n"
         header_str += "    return os.getenv(\"TRITON_LIBDEVICE_PATH\", default)\n"
         func_str = ""
         for symbols in self._symbol_groups.values():
