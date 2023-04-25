@@ -991,7 +991,6 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
   for (auto entry : llvm::enumerate(callOp->getOperands())) {
     auto index = entry.index();
     auto value = entry.value();
-    // Only accepts scalar arguments
     auto setAttrFn = [&](StringRef attrName, int64_t prevValue) {
       auto curValue = highestPowOf2Divisor<int64_t>(0);
       if (callee.getArgAttrOfType<IntegerAttr>(index, attrName)) {
@@ -1003,6 +1002,7 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
       callee.setArgAttr(index, attrName, attr);
     };
     auto axisInfo = axisInfoMap->lookup(value);
+    assert(axisInfo.getRank() == 1 && "only scalar arguments are supported");
     setAttrFn("tt.contiguity", axisInfo.getContiguity(0));
     setAttrFn("tt.divisibility", axisInfo.getDivisibility(0));
     setAttrFn("tt.constancy", axisInfo.getConstancy(0));

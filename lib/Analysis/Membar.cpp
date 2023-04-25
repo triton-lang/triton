@@ -68,6 +68,7 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
     }
   }
 
+  // Update the final dangling buffers that haven't been synced
   auto &funcBlockInfo = (*funcBlockInfoMap)[funcOp];
   funcOp.walk<WalkOrder::PreOrder>([&](Block *block) {
     block->walk([&](triton::ReturnOp returnOp) {

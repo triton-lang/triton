@@ -134,6 +134,9 @@ public:
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
+    /// Explicit: triton_gpu.alloc_tensor
+    /// Scratch: triton_gpu.convert_layout
+    /// Virtual: triton.call
     enum class BufferKind { Explicit, Scratch, Virtual };
 
     /// MT: thread-safe
@@ -195,7 +198,7 @@ private:
 };
 
 /// Static analysis that computes the allocation of shared memory buffers
-/// across the call graph.
+/// of the entire call graph.
 /// The allocation is performed in a post-order walk of the call graph.
 /// Each call op is treated like convert_layout that allocates a scratch buffer.
 /// At each call, we compute the start offset of the scratch buffer and pass it
@@ -204,7 +207,8 @@ class ModuleAllocation : public CallGraph<Allocation> {
 public:
   using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
 
-  ModuleAllocation(ModuleOp moduleOp) : CallGraph<Allocation>(moduleOp) {
+  explicit ModuleAllocation(ModuleOp moduleOp)
+      : CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},

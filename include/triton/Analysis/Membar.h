@@ -28,7 +28,7 @@ struct BlockInfo {
     return *this;
   }
 
-  /// Returns true if buffers in two BlockInfo objects are intersected.
+  /// Returns true if intervals in two BlockInfo objects are intersected.
   bool isIntersected(const BlockInfo &other) const {
     return /*RAW*/ isIntersected(syncWriteIntervals, other.syncReadIntervals) ||
            /*WAR*/
@@ -37,7 +37,7 @@ struct BlockInfo {
            isIntersected(syncWriteIntervals, other.syncWriteIntervals);
   }
 
-  /// Clears the buffers because a barrier is inserted.
+  /// Clears the intervals because a barrier is inserted.
   void sync() {
     syncReadIntervals.clear();
     syncWriteIntervals.clear();
@@ -81,9 +81,6 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  /// The following circumstances are not considered yet:
-  /// - Double buffers
-  /// - N buffers
   MembarAnalysis() = default;
   explicit MembarAnalysis(Allocation *allocation) : allocation(allocation) {}
 

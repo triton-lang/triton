@@ -131,7 +131,7 @@ public:
   using FuncDataMapT = DenseMap<FunctionOpInterface, T>;
 
   /// Constructor that builds the call graph for the given moduleOp.
-  CallGraph(ModuleOp moduleOp) : moduleOp(moduleOp) { build(); }
+  explicit CallGraph(ModuleOp moduleOp) : moduleOp(moduleOp) { build(); }
 
   /// Walks the call graph and applies the provided update functions
   /// to the edges and nodes.
@@ -163,7 +163,8 @@ public:
     return llvm::is_contained(roots, funcOp);
   }
 
-  /// Maps the data associated with a FunctionOpInterface to a targetFuncOp.
+  /// Maps the data and the graph nodes associated with a funcOp to a
+  /// targetFuncOp.
   template <typename FROM, typename TO>
   void mapFuncOp(FROM funcOp, TO targetFuncOp) {
     // Iterate over graph and replace
@@ -186,6 +187,7 @@ public:
     funcMap[targetFuncOp] = funcMap[funcOp];
   }
 
+  /// Maps the graph edges associated with a callOp to a targetCallOp.
   template <typename FROM, typename TO>
   void mapCallOp(FROM callOp, TO targetCallOp) {
     // Iterate over graph and replace

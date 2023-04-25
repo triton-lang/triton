@@ -62,8 +62,8 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
   matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-    // Check if the funcOp has the "nvvm.kernel" attribute
     if (funcOp->hasAttr("nvvm.kernel")) {
+      // A GPU kernel
       if (op.getNumOperands() > 0) {
         return rewriter.notifyMatchFailure(
             op, "Kernel functions do not support return with operands");
@@ -71,6 +71,7 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
       rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
                                                   op->getAttrs());
     } else {
+      // A device function
       auto newOp =
           rewriter.create<LLVM::ReturnOp>(op.getLoc(), adaptor.getOperands());
       newOp->setAttrs(op->getAttrs());
@@ -103,15 +104,14 @@ struct FuncOpConversion : public FuncOpConversionBase {
     amendedInputTy.push_back(ptrTy);
     auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
                                            funcTy.getResults());
-    // 2. Modify the function attributes to disable inline
+    // 2. Modify the argument attributes to add the new argument.
     SmallVector<NamedAttribute> amendedAttrs;
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
-    // 3. Modify the argument attributes to add the new argument.
     auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
     amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
     amendedAttrs.push_back(rewriter.getNamedAttr(
         funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
-    // 4. Add a new argument to the region
+    // 3. Add a new argument to the region
     auto amendedFuncOp = rewriter.create<triton::FuncOp>(
         funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
     auto &region = funcOp.getBody();
@@ -141,6 +141,9 @@ struct FuncOpConversion : public FuncOpConversionBase {
       newFuncOp->setAttr("nvvm.kernel",
                          rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
     } else {
+      // The noinline attribute will be used by the LLVM codegen to prevent
+      // inlining.
+      // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/LLVMIR/IR/LLVMInlining.cpp#L267
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
@@ -172,8 +175,6 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
   matchAndRewrite(triton::CallOp callOp,
                   typename triton::CallOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Get the last argument of the caller, which is the current stack pointer
-    // of shared memory and append it to the operands of the callOp.
     auto promotedOperands = promoteOperands(callOp, adaptor, rewriter);
     auto newCallOp =
         convertCallOpToLLVMCallOp(callOp, promotedOperands, rewriter);
@@ -190,6 +191,8 @@ private:
   promoteOperands(triton::CallOp callOp,
                   typename triton::CallOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const {
+    // Get the last argument of the caller, which is the current stack pointer
+    // of shared memory and append it to the operands of the callOp.
     auto loc = callOp.getLoc();
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
     auto base = allocation.getFunctionSharedMemoryBase(caller);
@@ -311,6 +314,9 @@ public:
         return signalPassFailure();
     }
 
+    // initSharedMemory is run before the conversion of call and ret ops,
+    // because the call op has to know the shared memory base address of each
+    // function
     initSharedMemory(allocation, typeConverter);
 
     // Convert call and ret ops
@@ -321,7 +327,7 @@ public:
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter);
+      funcPatterns.add<ReturnOpConversion>(typeConverter, /*benefit=*/1);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();

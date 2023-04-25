@@ -293,15 +293,16 @@ public:
                       ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
 };
 
-/// Module level axis info analysis based on call graph, assuming that we
+/// Module level axis info analysis based on the call graph, assuming that we
 /// do not have recursive functions.
 /// Since each function will be called multiple times, we need to
 /// calculate the axis info based on the axis info of all the callers.
-/// In the future, we can perform optimization using function cloning.
+/// In the future, we can perform optimization using function cloning so that
+/// each call site will have unique axis info.
 using AxisInfoMapT = DenseMap<Value, AxisInfo>;
 class ModuleAxisInfoAnalysis : public CallGraph<AxisInfoMapT> {
 public:
-  ModuleAxisInfoAnalysis(ModuleOp moduleOp)
+  explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp)
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
     for (auto root : getRoots()) {
