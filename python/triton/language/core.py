@@ -1595,22 +1595,23 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
         arg_types.append(dispatch_args[i].dtype)
         if dispatch_args[i].type.is_block():
             all_scalar = False
-    arg_types = tuple(arg_types)
-    arithmetic_check = True
-    # If there's a type tuple that is not supported by the library, we will do arithmetic check
-    if arg_types in arg_type_symbol_dict:
-        arithmetic_check = False
-    broadcast_arg = dispatch_args[0]
-    # Get the broadcast shape over all the arguments
-    for i, item in enumerate(dispatch_args):
-        _, broadcast_arg = semantic.binary_op_type_checking_impl(
-            item, broadcast_arg, _builder, arithmetic_check=arithmetic_check)
-    # Change the shape of each argument based on the broadcast shape
-    for i in range(len(dispatch_args)):
-        dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
-            dispatch_args[i], broadcast_arg, _builder, arithmetic_check=arithmetic_check)
-    if not all_scalar:
-        ret_shape = broadcast_arg.shape
+    if len(arg_types) > 0:
+        arg_types = tuple(arg_types)
+        arithmetic_check = True
+        # If there's a type tuple that is not supported by the library, we will do arithmetic check
+        if arg_types in arg_type_symbol_dict:
+            arithmetic_check = False
+        broadcast_arg = dispatch_args[0]
+        # Get the broadcast shape over all the arguments
+        for i, item in enumerate(dispatch_args):
+            _, broadcast_arg = semantic.binary_op_type_checking_impl(
+                item, broadcast_arg, _builder, arithmetic_check=arithmetic_check)
+        # Change the shape of each argument based on the broadcast shape
+        for i in range(len(dispatch_args)):
+            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
+                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=arithmetic_check)
+        if not all_scalar:
+            ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
 
