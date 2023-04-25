@@ -1,4 +1,6 @@
 import itertools
+import random
+from typing import Tuple
 
 import torch
 
@@ -38,9 +40,17 @@ def detach_triton(module):
         setattr(module, name, method)
 
 
-def program_ids_from_grid(grid):
-    iterator = itertools.product(*[range(v) for v in tuple(reversed(grid))])
-    return map(lambda v: tuple(reversed(v)), iterator)
+def program_ids_from_grid(grid: Tuple[int, ...]) -> Tuple[int, ...]:
+    # reverse the grid dimensions and generate the range for each dimension
+    reversed_grid = reversed(grid)
+    ranges_for_each_dimension = [range(dim) for dim in reversed_grid]
+
+    # gen all combinations
+    index_combinations = list(itertools.product(*ranges_for_each_dimension))
+    random.shuffle(index_combinations)
+
+    for index_combination in index_combinations:
+        yield index_combination
 
 
 class DebuggerFunction:
