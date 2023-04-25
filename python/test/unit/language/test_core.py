@@ -2088,6 +2088,7 @@ def test_num_warps_pow2():
                          [('int32', 'math.ffs', ''),
                           ('float32', 'math.log2', ''),
                           ('float32', 'math.pow', tl.math.libdevice_path()),
+                          ('float64', 'math.pow_dtype', tl.math.libdevice_path()),
                           ('float64', 'math.norm4d', '')])
 def test_math_tensor(dtype_str, expr, lib_path):
 
@@ -2115,6 +2116,10 @@ def test_math_tensor(dtype_str, expr, lib_path):
         x = np.abs(x)
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
         y_ref = np.power(x, x)
+    elif expr == 'math.pow_dtype':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
+        y_ref = np.power(x, 0.5)
     elif expr == 'math.norm4d':
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.norm4d(x, x, x, x)'})
         y_ref = np.sqrt(4 * np.power(x, 2))
