@@ -407,7 +407,10 @@ def compile(fn, **kwargs):
         name, signature = match.group(1), match.group(2)
         types = re.findall(arg_type_pattern[ir], signature)
         if ir == 'ttgir':
-            num_warps = int(re.search(ttgir_num_warps_pattern, src).group(1))
+            num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
+            assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
+            assert "num_warps" not in kwargs or int(num_warps_matches[0]) == num_warps, "num_warps in ttgir does not match num_warps in compile"
+            num_warps = int(num_warps_matches[0])
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
