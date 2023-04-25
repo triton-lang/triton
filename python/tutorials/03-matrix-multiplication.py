@@ -269,7 +269,7 @@ def matmul(a, b, activation=None):
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
-    h = matmul_kernel[grid](
+    matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -278,9 +278,9 @@ def matmul(a, b, activation=None):
         ACTIVATION=activation,
         IS_INT8=b.dtype == torch.int8,
     )
-    if b.dtype == torch.int8:
-        print(h.asm["ptx"])
-        print(h.n_spills)
+    # if b.dtype == torch.int8:
+    #     print(h.asm["ptx"])
+    #     print(h.n_spills)
     return c
 
 

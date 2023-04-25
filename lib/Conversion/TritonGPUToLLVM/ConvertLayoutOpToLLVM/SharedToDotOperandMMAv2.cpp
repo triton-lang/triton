@@ -516,6 +516,12 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
         ptrs, matTy, getShemPtrTy(eltTy));
     if (!isA)
       std::swap(ha1, ha2);
+    // the following is incorrect
+    // but causes dramatically better performance in ptxas
+    // although it only changes the order of operands in
+    // `mma.sync`
+    // if(isA)
+    //   std::swap(ha1, ha2);
     // update user-provided values in-place
     vals[{a, b}] = ha0;
     vals[{a + 1, b}] = ha1;
