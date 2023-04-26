@@ -774,14 +774,16 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
   unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
   Attribute parent = attrs.get("parent");
+  unsigned kBitWidth = attrs.get("kBitWidth").cast<IntegerAttr>().getInt();
   return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
-                                                   parent);
+                                                   parent, kBitWidth);
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", "
-          << "parent = " << getParent();
+          << "parent = " << getParent() << ","
+          << "kBitWidth = " << getMMAv2kWidth();
   printer << "}>";
 }
 

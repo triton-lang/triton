@@ -42,6 +42,9 @@ class LoopPipeliner {
 
   /// Loads to be pipelined
   SetVector<Value> loads;
+  /// Smallest data-type for each load (used to optimize swizzle and
+  /// (create DotOpEncoding layout)
+  DenseMap<Value, Type> loadsSmallestType;
   /// The value that each load will be mapped to (after layout conversion)
   DenseMap<Value, Value> loadsMapping;
   /// load => buffer
@@ -291,6 +294,9 @@ LogicalResult LoopPipeliner::initialize() {
       smallestType = eltTy;
   }
 
+  for (auto loadCvt : loadsMapping)
+    loadsSmallestType[loadCvt.first] = smallestType;
+
   for (auto loadCvt : loadsMapping) {
     auto loadOp = loadCvt.first;
     Value cvt = loadCvt.second;
@@ -304,7 +310,7 @@ LogicalResult LoopPipeliner::initialize() {
     bufferShape.insert(bufferShape.begin(), numStages);
     auto sharedEnc = ttg::SharedEncodingAttr::get(
         ty.getContext(), dotOpEnc, ty.getShape(),
-        triton::gpu::getOrder(ty.getEncoding()), smallestType);
+        triton::gpu::getOrder(ty.getEncoding()), loadsSmallestType[loadOp]);
     loadsBufferType[loadOp] =
         RankedTensorType::get(bufferShape, ty.getElementType(), sharedEnc);
   }
@@ -592,10 +598,13 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     // auto cvtSrcTy =
     // cvtArg.getType().cast<RankedTensorType>().getEncoding().cast<ttg::SharedEncodingAttr>();
     auto cvtDstTy = loadUse.getType().cast<RankedTensorType>();
-    // auto newType = RankedTensorType::get(
-    //     oldType.getShape(), oldType.getElementType(),
-    //     ttg::DotOperandEncodingAttr::get
-    auto cvt = builder.create<ttg::ConvertLayoutOp>(loadUse.getLoc(), cvtDstTy,
+    auto cvtDstEnc = cvtDstTy.getEncoding().cast<ttg::DotOperandEncodingAttr>();
+    auto newDstTy = RankedTensorType::get(
+        cvtDstTy.getShape(), cvtDstTy.getElementType(),
+        ttg::DotOperandEncodingAttr::get(
+            cvtDstEnc.getContext(), cvtDstEnc.getOpIdx(), cvtDstEnc.getParent(),
+            loadsSmallestType[load]));
+    auto cvt = builder.create<ttg::ConvertLayoutOp>(loadUse.getLoc(), newDstTy,
                                                     cvtArg);
 
     // replace uses

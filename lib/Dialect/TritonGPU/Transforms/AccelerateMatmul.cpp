@@ -171,9 +171,11 @@ public:
                          .getOrder();
 
     auto newAEncoding = triton::gpu::DotOperandEncodingAttr::get(
-        oldAType.getContext(), 0, newRetType.getEncoding());
+        oldAType.getContext(), 0, newRetType.getEncoding(),
+        oldAType.getElementType());
     auto newBEncoding = triton::gpu::DotOperandEncodingAttr::get(
-        oldBType.getContext(), 1, newRetType.getEncoding());
+        oldBType.getContext(), 1, newRetType.getEncoding(),
+        oldBType.getElementType());
 
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(), newAEncoding);

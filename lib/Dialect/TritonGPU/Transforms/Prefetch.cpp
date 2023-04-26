@@ -110,7 +110,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
       SmallVector<OpFoldResult>{intAttr(1), intAttr(1)});
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
-      builder.getContext(), opIdx, dotEncoding);
+      builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
   Value prefetchSlice = builder.create<triton::gpu::ConvertLayoutOp>(
       v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
       newSmem);
@@ -156,12 +156,19 @@ LogicalResult Prefetcher::initialize() {
   };
 
   for (triton::DotOp dot : dotsInFor) {
-    auto kSize = dot.getA().getType().cast<RankedTensorType>().getShape()[1];
+    auto aType = dot.getA().getType().cast<RankedTensorType>();
+    auto bType = dot.getB().getType().cast<RankedTensorType>();
+    auto aEnc = aType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+    auto bEnc = bType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+    int aKWidth = aEnc.getMMAv2kWidth();
+    int bKWidth = bEnc.getMMAv2kWidth();
+    assert(aKWidth == bKWidth);
+
+    auto kSize = aType.getShape()[1];
 
     // works better with nvidia tensor cores
-    unsigned elementWidth =
-        dot.getA().getType().cast<RankedTensorType>().getElementTypeBitWidth();
-    prefetchWidth = 256 / elementWidth;
+    unsigned elementWidth = aType.getElementTypeBitWidth();
+    prefetchWidth = 8 * aKWidth;
 
     // Skip prefetching if kSize is less than prefetchWidth
     if (kSize < prefetchWidth)

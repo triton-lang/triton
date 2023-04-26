@@ -533,6 +533,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
               bool isA) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   int bitwidth = tensorTy.getElementTypeBitWidth();
+  llvm::outs() << encoding.getMMAv2kWidth() << "\n";
   auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
 
   SmallVector<int64_t> shape(tensorTy.getShape().begin(),
