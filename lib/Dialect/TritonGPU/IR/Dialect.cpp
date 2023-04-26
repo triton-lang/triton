@@ -782,7 +782,7 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", "
-          << "parent = " << getParent() << ","
+          << "parent = " << getParent() << ", "
           << "kBitWidth = " << getMMAv2kWidth();
   printer << "}>";
 }

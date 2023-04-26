@@ -580,8 +580,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     auto it = std::find(loads.begin(), loads.end(), op.getOperand(0));
     if (it == loads.end()) {
       Operation *newOp = cloneWithInferType(builder, &op, mapping);
-      // Operation *newOp = builder.clone(op, mapping);
-      llvm::outs() << *newOp << "\n";
       continue;
     }
     // we replace the use new load use with a convert layout
@@ -597,7 +595,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         op.getResult(0).getLoc(), newDstTy,
         newForOp.getRegionIterArgs()[loadIdx + i]);
     mapping.map(op.getResult(0), cvt.getResult());
-    llvm::outs() << cvt.getResult() << "\n";
   }
 
   // 3. prefetch the next iteration
