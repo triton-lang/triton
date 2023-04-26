@@ -1818,7 +1818,9 @@ def test_num_warps_pow2():
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'math.ffs', ''),
                           ('float32', 'math.log2', ''),
-                          ('float32', 'math.pow', tl.math.LIBDEVICE_PATH),
+                          ('float32', 'math.scalbn', ''),
+                          ('float32', 'math.pow', tl.math.libdevice_path()),
+                          ('float64', 'math.pow_dtype', tl.math.libdevice_path()),
                           ('float64', 'math.norm4d', '')])
 def test_math_tensor(dtype_str, expr, lib_path):
 

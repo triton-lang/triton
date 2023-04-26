@@ -646,7 +646,7 @@ struct AtomicRMWOpConversion
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                 : opResult.getType();
     const size_t valueElemNbits = valueElemTy.getIntOrFloatBitWidth();
-    auto elemsPerThread = getElemsPerThread(val.getType());
+    auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
     auto vec = getVectorSize(ptr);
     int numElems = 1;

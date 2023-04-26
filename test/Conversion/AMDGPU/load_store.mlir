@@ -3,7 +3,7 @@
 // Check load instruction doesn't generate incorrect bitcast.
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: @test_float16_bitcast
-  func.func public @test_float16_bitcast(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  tt.func public @test_float16_bitcast(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %true = arith.constant true
     %0 = tt.get_program_id {axis = 0 : i32} : i32
     %1 = tt.addptr %arg0, %0 : !tt.ptr<f16>, i32
@@ -17,6 +17,6 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // GCN: llvm.bitcast {{.*}} : vector<1xf16> to i16
     // GCN: llvm.store {{.*}} : !llvm.ptr<f16, 1>
     tt.store %1, %2 : f16
-    return
+    tt.return
   }
 }
