@@ -21,7 +21,7 @@ int simulateBackwardRematerialization(
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
     Attribute targetEncoding);
 
-Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
+Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
 
 void rematerializeConversionChain(

@@ -1,3 +1,4 @@
+#include "Utility.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -573,48 +574,33 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
-  // 2.1 clone the loop body, replace original args with args of the new ForOp
+  // 2. clone the loop body, replace original args with args of the new ForOp
   // Insert async wait if necessary.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    Operation *newOp = builder.clone(op, mapping);
-    // update mapping of results
-    for (unsigned dstIdx : llvm::seq(unsigned(0), op.getNumResults()))
-      mapping.map(op.getResult(dstIdx), newOp->getResult(dstIdx));
-  }
-
-  // 3. replace loads with block args (from prologue)
-  for (size_t idx = 0; idx < loads.size(); ++idx) {
-    OpBuilder::InsertionGuard guard(builder);
-    Value load = loads[idx];
-    assert(load.hasOneUse() &&
-           "we assume that this load has one use (ConvertLayout)");
-    Value loadUse = load.getUsers().begin()->getResult(0);
-    // set insertion point
-    Value newLoad = mapping.lookup(load);
-    Value newLoadUse = mapping.lookup(loadUse);
-    builder.setInsertionPoint(newLoadUse.getDefiningOp());
-    // create conversion
-    auto cvtArg = newForOp.getRegionIterArgs()[loadIdx + idx];
-    // auto cvtSrcTy =
-    // cvtArg.getType().cast<RankedTensorType>().getEncoding().cast<ttg::SharedEncodingAttr>();
-    auto cvtDstTy = loadUse.getType().cast<RankedTensorType>();
+    auto it = std::find(loads.begin(), loads.end(), op.getOperand(0));
+    if (it == loads.end()) {
+      Operation *newOp = cloneWithInferType(builder, &op, mapping);
+      // Operation *newOp = builder.clone(op, mapping);
+      llvm::outs() << *newOp << "\n";
+      continue;
+    }
+    // we replace the use new load use with a convert layout
+    size_t i = std::distance(loads.begin(), it);
+    auto cvtDstTy = op.getResult(0).getType().cast<RankedTensorType>();
     auto cvtDstEnc = cvtDstTy.getEncoding().cast<ttg::DotOperandEncodingAttr>();
     auto newDstTy = RankedTensorType::get(
         cvtDstTy.getShape(), cvtDstTy.getElementType(),
         ttg::DotOperandEncodingAttr::get(
             cvtDstEnc.getContext(), cvtDstEnc.getOpIdx(), cvtDstEnc.getParent(),
-            loadsSmallestType[load]));
-    auto cvt = builder.create<ttg::ConvertLayoutOp>(loadUse.getLoc(), newDstTy,
-                                                    cvtArg);
-
-    // replace uses
-    newLoadUse.replaceAllUsesWith(cvt.getResult());
-    // delete old load and layout conversion
-    newLoadUse.getDefiningOp()->erase();
-    newLoad.getDefiningOp()->erase();
+            loadsSmallestType[op.getOperand(0)]));
+    auto cvt = builder.create<ttg::ConvertLayoutOp>(
+        op.getResult(0).getLoc(), newDstTy,
+        newForOp.getRegionIterArgs()[loadIdx + i]);
+    mapping.map(op.getResult(0), cvt.getResult());
+    llvm::outs() << cvt.getResult() << "\n";
   }
 
-  // 4. prefetch the next iteration
+  // 3. prefetch the next iteration
   SmallVector<Operation *> orderedDeps;
   for (Operation &op : forOp.getLoopBody().front()) {
     if (depOps.contains(&op))
