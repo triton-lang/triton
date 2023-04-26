@@ -541,39 +541,23 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
-  // 2.1 clone the loop body, replace original args with args of the new ForOp
+  // 2. clone the loop body, replace original args with args of the new ForOp
   // Insert async wait if necessary.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    Operation *newOp = builder.clone(op, mapping);
-    // update mapping of results
-    for (unsigned dstIdx : llvm::seq(unsigned(0), op.getNumResults()))
-      mapping.map(op.getResult(dstIdx), newOp->getResult(dstIdx));
-  }
-
-  // 3. replace loads with block args (from prologue)
-  for (size_t idx = 0; idx < loads.size(); ++idx) {
-    OpBuilder::InsertionGuard guard(builder);
-    Value load = loads[idx];
-    assert(load.hasOneUse() &&
-           "we assume that this load has one use (ConvertLayout)");
-    Value loadUse = load.getUsers().begin()->getResult(0);
-    // set insertion point
-    Value newLoad = mapping.lookup(load);
-    Value newLoadUse = mapping.lookup(loadUse);
-    builder.setInsertionPoint(newLoadUse.getDefiningOp());
-    // create conversion
+    auto it = std::find(loads.begin(), loads.end(), op.getOperand(0));
+    if (it == loads.end()) {
+      Operation *newOp = builder.clone(op, mapping);
+      continue;
+    }
+    // we replace the use new load use with a convert layout
+    size_t i = std::distance(loads.begin(), it);
     auto cvt = builder.create<ttg::ConvertLayoutOp>(
-        loadUse.getLoc(), loadUse.getType(),
-        newForOp.getRegionIterArgs()[loadIdx + idx]);
-
-    // replace uses
-    newLoadUse.replaceAllUsesWith(cvt.getResult());
-    // delete old load and layout conversion
-    newLoadUse.getDefiningOp()->erase();
-    newLoad.getDefiningOp()->erase();
+        op.getLoc(), op.getResult(0).getType(),
+        newForOp.getRegionIterArgs()[loadIdx + i]);
+    mapping.map(op.getResult(0), cvt.getResult());
   }
 
-  // 4. prefetch the next iteration
+  // 3. prefetch the next iteration
   SmallVector<Operation *> orderedDeps;
   for (Operation &op : forOp.getLoopBody().front()) {
     if (depOps.contains(&op))
