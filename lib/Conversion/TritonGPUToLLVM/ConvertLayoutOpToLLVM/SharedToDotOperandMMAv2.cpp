@@ -19,10 +19,10 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 class MMA16816SmemLoader {
 public:
   MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, uint32_t kOrder,
-                     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
-                     ArrayRef<int> instrShape, ArrayRef<int> matShape,
-                     int perPhase, int maxPhase, int elemBytes,
-                     ConversionPatternRewriter &rewriter,
+                     uint32_t kWidth, ArrayRef<Value> smemStrides,
+                     ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
+                     ArrayRef<int> matShape, int perPhase, int maxPhase,
+                     int elemBytes, ConversionPatternRewriter &rewriter,
                      TritonGPUToLLVMTypeConverter *typeConverter,
                      const Location &loc);
 
@@ -383,7 +383,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
 }
 
 MMA16816SmemLoader::MMA16816SmemLoader(
-    int wpt, ArrayRef<uint32_t> order, uint32_t kOrder,
+    int wpt, ArrayRef<uint32_t> order, uint32_t kOrder, uint32_t kWidth,
     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
     ArrayRef<int> instrShape, ArrayRef<int> matShape, int perPhase,
     int maxPhase, int elemBytes, ConversionPatternRewriter &rewriter,
@@ -401,9 +401,8 @@ MMA16816SmemLoader::MMA16816SmemLoader(
 
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
-  // canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
-  // canUseLdmatrix = false;
-  canUseLdmatrix = elemBytes == 1 && !needTrans;
+  canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
+  canUseLdmatrix = canUseLdmatrix && (kWidth == 4 / elemBytes);
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwpt] if not transposed,
@@ -472,13 +471,12 @@ Value composeValuesToDotOperandLayoutStruct(
   return result;
 }
 
-std::function<void(int, int)>
-getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
-                MmaEncodingAttr mmaLayout, int wpt, uint32_t kOrder,
-                SmallVector<int> instrShape, SmallVector<int> matShape,
-                Value warpId, Value lane, ValueTable &vals, bool isA,
-                TritonGPUToLLVMTypeConverter *typeConverter,
-                ConversionPatternRewriter &rewriter, Location loc) {
+std::function<void(int, int)> getLoadMatrixFn(
+    Value tensor, const SharedMemoryObject &smemObj, MmaEncodingAttr mmaLayout,
+    int wpt, uint32_t kOrder, uint32_t kWidth, SmallVector<int> instrShape,
+    SmallVector<int> matShape, Value warpId, Value lane, ValueTable &vals,
+    bool isA, TritonGPUToLLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   Type eltTy = tensorTy.getElementType();
   // We assumes that the input operand of Dot should be from shared layout.
@@ -495,7 +493,7 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int a, int b) {
     MMA16816SmemLoader loader(
-        wpt, sharedLayout.getOrder(), kOrder, smemObj.strides,
+        wpt, sharedLayout.getOrder(), kOrder, kWidth, smemObj.strides,
         tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
         maxPhase, elemBytes, rewriter, typeConverter, loc);
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
@@ -543,6 +541,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
 
   auto numRep = encoding.getMMAv2Rep(tensorTy.getShape(), bitwidth);
+  int kWidth = encoding.getMMAv2kWidth();
 
   int wpt0 = mmaLayout.getWarpsPerCTA()[0];
   int wpt1 = mmaLayout.getWarpsPerCTA()[1];
@@ -561,14 +560,14 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   std::function<void(int, int)> loadFn;
   if (isA)
     loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
+        tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/, kWidth,
         {mmaInstrM, mmaInstrK} /*instrShape*/,
         {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, lane /*laneId*/,
         vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
         rewriter /*rewriter*/, loc /*loc*/);
   else
     loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
+        tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/, kWidth,
         {mmaInstrK, mmaInstrN} /*instrShape*/,
         {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, lane /*laneId*/,
         vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
