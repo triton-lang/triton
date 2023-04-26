@@ -146,9 +146,26 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    return getContigPerThread(parentLayout);
   } else {
     return getSizePerThread(layout);
   }
+}
+
+SmallVector<unsigned> getUniqueContigPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+    return SmallVector<unsigned>(1, 1);
+  auto tensorType = type.cast<RankedTensorType>();
+  auto shape = tensorType.getShape();
+  auto rank = shape.size();
+  SmallVector<unsigned> ret(rank);
+  auto contigPerThread = getContigPerThread(tensorType.getEncoding());
+  for (int d = 0; d < rank; ++d) {
+    ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
+  }
+  return ret;
 }
 
 SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {

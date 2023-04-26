@@ -33,6 +33,8 @@ SmallVector<unsigned> getSizePerThread(Attribute layout);
 
 SmallVector<unsigned> getContigPerThread(Attribute layout);
 
+SmallVector<unsigned> getUniqueContigPerThread(Type type);
+
 SmallVector<unsigned> getThreadsPerCTA(Attribute layout);
 
 SmallVector<unsigned>
