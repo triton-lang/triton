@@ -14,7 +14,7 @@ Value loadC(Value tensor, Value llTensor,
             ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = tensor.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  size_t fcSize = triton::gpu::getElemsPerThread(tensor.getType());
+  size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
 
   assert(tensorTy.getEncoding().isa<MmaEncodingAttr>() &&
          "Currently, we only support $c with a mma layout.");

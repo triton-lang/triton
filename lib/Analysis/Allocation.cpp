@@ -33,7 +33,7 @@ namespace triton {
 constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
-getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
+getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
   auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
@@ -59,10 +59,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute dstLayout = dstTy.getEncoding();
 
   // MmaToDotShortcut doesn't use shared mem
-  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>())
-    if (auto dotOperandLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>())
-      if (isMmaToDotShortcut(mmaLayout, dotOperandLayout))
-        return {};
+  if (srcLayout.isa<MmaEncodingAttr>() &&
+      dstLayout.isa<DotOperandEncodingAttr>())
+    if (isMmaToDotShortcut(srcTy, dstTy))
+      return {};
 
   assert(srcLayout && dstLayout &&
          "Unexpected layout in getScratchConfigForCvtLayout()");
@@ -389,7 +389,9 @@ private:
     //  | ******t1 ^^^^^^^^^v1^^^^^^^^^ ************t3
     //  |---------------------------------------------| liveness range
     //    1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 ...
-    /// Start -> Liveness Range
+    // If the available triple's range is less than a given buffer range,
+    // we won't know if there has been an overlap without using graph coloring.
+    // Start -> Liveness Range
     using TripleMapT = std::multimap<size_t, Interval<size_t>>;
     TripleMapT tripleMap;
     tripleMap.insert(std::make_pair(0, Interval<size_t>()));
@@ -415,6 +417,10 @@ private:
         tripleMap.insert(
             {size + xSize, Interval{std::max(range.start(), xRange.start()),
                                     std::min(range.end(), xRange.end())}});
+        // We could either insert (range.start, xRange.start) or (range.start,
+        // xRange.end), both are correct and determine the potential buffer
+        // offset, and the graph coloring algorithm will solve the interference,
+        // if any
         if (range.start() < xRange.start())
           tripleMap.insert({size, Interval{range.start(), xRange.end()}});
         if (xRange.end() < range.end())

@@ -7,8 +7,11 @@ than PyTorch's native op for a particular class of matrices: those whose rows ca
 the GPU's SRAM.
 
 In doing so, you will learn about:
-- The benefits of kernel fusion for bandwidth-bound operations.
-- Reduction operators in Triton.
+
+* The benefits of kernel fusion for bandwidth-bound operations.
+
+* Reduction operators in Triton.
+
 """
 
 # %%
@@ -177,12 +180,13 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 )
 def benchmark(M, N, provider):
     x = torch.randn(M, N, device='cuda', dtype=torch.float32)
+    quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-native':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x))
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x), quantiles=quantiles)
     if provider == 'torch-jit':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x))
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x), quantiles=quantiles)
     gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 

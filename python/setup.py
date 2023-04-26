@@ -68,7 +68,7 @@ def get_llvm_package_info():
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
     name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
-    version = "llvm-17.0.0-2538e550420f"
+    version = "llvm-17.0.0-f733b4fb9b8b"
     url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
@@ -108,11 +108,20 @@ def get_thirdparty_packages(triton_cache_path):
 def download_and_copy_ptxas():
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
-    url = "https://conda.anaconda.org/nvidia/label/cuda-12.0.0/linux-64/cuda-nvcc-12.0.76-0.tar.bz2"
+    version = "12.1.105"
+    url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-64/cuda-nvcc-{version}-0.tar.bz2"
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
-    if not os.path.exists(dst_path):
+    is_linux = platform.system() == "Linux"
+    download = False
+    if is_linux:
+        download = True
+        if os.path.exists(dst_path):
+            curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
+            curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
+            download = curr_version != version
+    if download:
         print(f'downloading and extracting {url} ...')
         ftpstream = urllib.request.urlopen(url)
         file = tarfile.open(fileobj=ftpstream, mode="r|*")
@@ -161,6 +170,14 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
+    def get_cmake_dir(self):
+        plat_name = sysconfig.get_platform()
+        python_version = sysconfig.get_python_version()
+        dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
+        cmake_dir = Path(self.base_dir) / "python" / "build" / dir_name
+        cmake_dir.mkdir(parents=True, exist_ok=True)
+        return cmake_dir
+
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
@@ -203,9 +220,18 @@ class CMakeBuild(build_ext):
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
             build_args += ['-j' + max_jobs]
 
+        if check_env_flag("TRITON_BUILD_WITH_CLANG_LLD"):
+            cmake_args += ["-DCMAKE_C_COMPILER=clang",
+                           "-DCMAKE_CXX_COMPILER=clang++",
+                           "-DCMAKE_LINKER=lld",
+                           "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld",
+                           "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld",
+                           "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld"]
+
         env = os.environ.copy()
-        subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
-        subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
+        cmake_dir = self.get_cmake_dir()
+        subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
+        subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
 
 
 download_and_copy_ptxas()
@@ -224,10 +250,14 @@ setup(
         "triton/common",
         "triton/compiler",
         "triton/language",
+        "triton/language/extra",
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",
-        "triton/runtime/driver",
+        "triton/runtime/backends",
+        "triton/third_party/cuda/bin",
+        "triton/third_party/cuda/include",
+        "triton/third_party/cuda/lib",
         "triton/tools",
     ],
     install_requires=[

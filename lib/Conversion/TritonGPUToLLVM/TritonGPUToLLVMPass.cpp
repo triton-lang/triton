@@ -51,16 +51,15 @@ public:
     } else {
       addLegalDialect<NVVM::NVVMDialect>();
     }
-    addIllegalOp<mlir::func::FuncOp>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
 
-struct ReturnOpConversion : public ConvertOpToLLVMPattern<func::ReturnOp> {
-  using ConvertOpToLLVMPattern<func::ReturnOp>::ConvertOpToLLVMPattern;
+struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
+  using ConvertOpToLLVMPattern<triton::ReturnOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     unsigned numArguments = op.getNumOperands();
 
@@ -86,7 +85,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
       : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
 
   LogicalResult
-  matchAndRewrite(func::FuncOp funcOp, OpAdaptor adaptor,
+  matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
     if (!newFuncOp) {
@@ -267,7 +266,7 @@ private:
           srcType.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-      if (srcMma && dstDotOp && !isMmaToDotShortcut(srcMma, dstDotOp)) {
+      if (srcMma && dstDotOp && !isMmaToDotShortcut(srcType, dstType)) {
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(

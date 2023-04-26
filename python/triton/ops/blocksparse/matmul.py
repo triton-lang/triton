@@ -29,7 +29,7 @@ def _sdd_kernel(
     # ------------ #
     # - Prologue - #
     # ------------ #
-    block_id = tl.program_id(1) + grid_offset
+    block_id = tl.program_id(0) + grid_offset
     lut += block_id * 3
     # offsets
     off_z = tl.program_id(2)  # batch
@@ -102,7 +102,7 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
     else:
         assert out.shape == (a.shape[0], lut.shape[0], block, block)
         c = out
-    grid = [1, c.shape[1], c.shape[0]]
+    grid = [c.shape[1], 1, c.shape[0]]
     _sdd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),

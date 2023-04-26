@@ -79,20 +79,21 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
   // Some ops from SCF are illegal
   addIllegalOp<scf::ExecuteRegionOp, scf::ParallelOp, scf::ReduceOp,
                scf::ReduceReturnOp>();
+  // We have custom versions of some arith operators
+  addIllegalOp<arith::CmpIOp, arith::CmpFOp>();
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
-                             func::FuncDialect, triton::TritonDialect,
-                             cf::ControlFlowDialect, scf::SCFDialect>(
-      [&](Operation *op) {
-        bool hasLegalRegions = true;
-        for (auto &region : op->getRegions()) {
-          hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
-        }
-        if (hasLegalRegions && typeConverter.isLegal(op)) {
-          return true;
-        }
-        return false;
-      });
+                             triton::TritonDialect, cf::ControlFlowDialect,
+                             scf::SCFDialect>([&](Operation *op) {
+    bool hasLegalRegions = true;
+    for (auto &region : op->getRegions()) {
+      hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
+    }
+    if (hasLegalRegions && typeConverter.isLegal(op)) {
+      return true;
+    }
+    return false;
+  });
 
   // We have requirements for the data layouts
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {

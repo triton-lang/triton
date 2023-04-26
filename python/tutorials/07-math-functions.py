@@ -1,6 +1,6 @@
 """
 Libdevice (`tl.math`) function
-===============
+==============================
 Triton can invoke a custom function from an external library.
 In this example, we will use the `libdevice` library (a.k.a `math` in triton) to apply `asin` on a tensor.
 Please refer to https://docs.nvidia.com/cuda/libdevice-users-guide/index.html regarding the semantics of all available libdevice functions.
@@ -12,7 +12,7 @@ Triton automatically selects the correct underlying device function to invoke ba
 
 # %%
 #  asin Kernel
-# --------------------------
+# ------------
 
 import torch
 
@@ -37,7 +37,7 @@ def asin_kernel(
 
 # %%
 #  Using the default libdevice library path
-# --------------------------
+# -----------------------------------------
 # We can use the default libdevice library path encoded in `triton/language/math.py`
 
 
@@ -59,7 +59,7 @@ print(
 
 # %%
 #  Customize the libdevice library path
-# --------------------------
+# -------------------------------------
 # We can also customize the libdevice library path by passing the path to the `libdevice` library to the `asin` kernel.
 
 output_triton = torch.empty_like(x)
