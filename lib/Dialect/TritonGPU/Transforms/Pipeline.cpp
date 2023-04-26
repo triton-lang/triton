@@ -256,31 +256,57 @@ LogicalResult LoopPipeliner::initialize() {
         use = *use->getResult(0).getUsers().begin();
       }
 
-      if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-        if (auto tensorType = convertLayout.getResult()
-                                  .getType()
-                                  .dyn_cast<RankedTensorType>()) {
-          if (auto dotOpEnc = tensorType.getEncoding()
-                                  .dyn_cast<ttg::DotOperandEncodingAttr>()) {
-            isCandidate = true;
-            loadsMapping[loadOp] = convertLayout;
-            auto ty = loadOp.getType().cast<RankedTensorType>();
-            SmallVector<int64_t> bufferShape(ty.getShape().begin(),
-                                             ty.getShape().end());
-            bufferShape.insert(bufferShape.begin(), numStages);
-            auto sharedEnc = ttg::SharedEncodingAttr::get(
-                ty.getContext(), dotOpEnc, ty.getShape(),
-                triton::gpu::getOrder(ty.getEncoding()), ty.getElementType());
-            loadsBufferType[loadOp] = RankedTensorType::get(
-                bufferShape, ty.getElementType(), sharedEnc);
-          }
-        }
-      }
-    } else
+      auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use);
+      if (!convertLayout)
+        continue;
+      auto tensorType =
+          convertLayout.getResult().getType().dyn_cast<RankedTensorType>();
+      if (!tensorType)
+        continue;
+      auto dotOpEnc =
+          tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
+      if (!dotOpEnc)
+        continue;
+      isCandidate = true;
+      loadsMapping[loadOp] = convertLayout;
+    }
+
+    else
       isCandidate = false;
 
     if (isCandidate)
       loads.insert(loadOp);
+  }
+
+  // we need to find the smallest ocmmon dtype
+  // since this determines the layout of `mma.sync` operands
+  // in mixed-precision mode
+  Type smallestType;
+  for (auto loadCvt : loadsMapping) {
+    auto loadOp = loadCvt.first;
+    auto ty = loadOp.getType().cast<RankedTensorType>();
+    Type eltTy = ty.getElementType();
+    if (!smallestType ||
+        (eltTy.getIntOrFloatBitWidth() < smallestType.getIntOrFloatBitWidth()))
+      smallestType = eltTy;
+  }
+
+  for (auto loadCvt : loadsMapping) {
+    auto loadOp = loadCvt.first;
+    Value cvt = loadCvt.second;
+    auto dotOpEnc = cvt.getType()
+                        .cast<RankedTensorType>()
+                        .getEncoding()
+                        .cast<ttg::DotOperandEncodingAttr>();
+    auto ty = loadOp.getType().cast<RankedTensorType>();
+    SmallVector<int64_t> bufferShape(ty.getShape().begin(),
+                                     ty.getShape().end());
+    bufferShape.insert(bufferShape.begin(), numStages);
+    auto sharedEnc = ttg::SharedEncodingAttr::get(
+        ty.getContext(), dotOpEnc, ty.getShape(),
+        triton::gpu::getOrder(ty.getEncoding()), smallestType);
+    loadsBufferType[loadOp] =
+        RankedTensorType::get(bufferShape, ty.getElementType(), sharedEnc);
   }
 
   // We have some loads to pipeline
@@ -562,9 +588,15 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     Value newLoadUse = mapping.lookup(loadUse);
     builder.setInsertionPoint(newLoadUse.getDefiningOp());
     // create conversion
-    auto cvt = builder.create<ttg::ConvertLayoutOp>(
-        loadUse.getLoc(), loadUse.getType(),
-        newForOp.getRegionIterArgs()[loadIdx + idx]);
+    auto cvtArg = newForOp.getRegionIterArgs()[loadIdx + idx];
+    // auto cvtSrcTy =
+    // cvtArg.getType().cast<RankedTensorType>().getEncoding().cast<ttg::SharedEncodingAttr>();
+    auto cvtDstTy = loadUse.getType().cast<RankedTensorType>();
+    // auto newType = RankedTensorType::get(
+    //     oldType.getShape(), oldType.getElementType(),
+    //     ttg::DotOperandEncodingAttr::get
+    auto cvt = builder.create<ttg::ConvertLayoutOp>(loadUse.getLoc(), cvtDstTy,
+                                                    cvtArg);
 
     // replace uses
     newLoadUse.replaceAllUsesWith(cvt.getResult());

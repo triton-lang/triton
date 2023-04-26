@@ -223,7 +223,7 @@ def matmul_kernel(
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         if IS_INT8:
-            a = a.to(tl.float8e5, bitcast=True).to(tl.float16)
+            # a = a.to(tl.float8e5, bitcast=True).to(tl.float16)
             b = b.to(tl.float8e5, bitcast=True).to(tl.float16)
         # b = b * 2
         # We accumulate along the K dimension
@@ -331,7 +331,7 @@ b = b.T
 # for i in range(0, a.shape[1], 16):
 #     a[:, i:i+16] = a[:, :16]
 
-triton_output = matmul(a, b, activation=None)
+triton_output = matmul(f8_to_f16(a), b, activation=None)
 # triton_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
 # torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
 # # # print(triton_output[0, 1933], torch_output[0, 1933])
