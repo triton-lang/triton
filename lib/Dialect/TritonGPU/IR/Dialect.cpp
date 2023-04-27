@@ -159,6 +159,20 @@ SmallVector<unsigned> getUniqueContigPerThread(Type type) {
     return SmallVector<unsigned>(1, 1);
   auto tensorType = type.cast<RankedTensorType>();
   auto shape = tensorType.getShape();
+  // If slice layout, call recursively on parent layout, and drop
+  // sliced dim
+  if (auto sliceLayout =
+          tensorType.getEncoding().dyn_cast<SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    auto parentShape = sliceLayout.paddedShape(shape);
+    auto parentTy = RankedTensorType::get(
+        parentShape, tensorType.getElementType(), parentLayout);
+    auto parentUniqueContigPerThread = getUniqueContigPerThread(parentTy);
+    parentUniqueContigPerThread.erase(parentUniqueContigPerThread.begin() +
+                                      sliceLayout.getDim());
+    return parentUniqueContigPerThread;
+  }
+  // Base case
   auto rank = shape.size();
   SmallVector<unsigned> ret(rank);
   auto contigPerThread = getContigPerThread(tensorType.getEncoding());
