@@ -1603,9 +1603,9 @@ void init_triton_translation(py::module &m) {
             ofs.close();
             std::string cmd;
             int err;
-            cmd = ptxasPath + " -v --gpu-name=sm_" + std::to_string(capability) +
-                  (capability == 90 ? "a " : " ") + _fsrc + " -o " + _fsrc +
-                  ".o 2> " + _flog;
+            cmd = ptxasPath + " -v --gpu-name=sm_" +
+                  std::to_string(capability) + (capability == 90 ? "a " : " ") +
+                  _fsrc + " -o " + _fsrc + ".o 2> " + _flog;
 
             err = system(cmd.c_str());
             if (err != 0) {
@@ -1613,10 +1613,11 @@ void init_triton_translation(py::module &m) {
               std::ifstream _log(_flog);
               std::string log(std::istreambuf_iterator<char>(_log), {});
               if (err == 255) {
-                throw std::runtime_error("Internal Triton PTX codegen error: \n" +
-                                         log);
+                throw std::runtime_error(
+                    "Internal Triton PTX codegen error: \n" + log);
               } else if (err == 128 + SIGSEGV) {
-                throw std::runtime_error("Please run `ptxas " + fsrc.str().str() +
+                throw std::runtime_error("Please run `ptxas " +
+                                         fsrc.str().str() +
                                          "` to confirm that this is a "
                                          "bug in `ptxas`\n" +
                                          log);
