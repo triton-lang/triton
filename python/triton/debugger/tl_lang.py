@@ -6,6 +6,9 @@ from .memory_map import MemoryMap
 
 
 def _primitive_to_tensor(x):
+    """
+    Converts various Python primitive data types to PyTorch tensor.
+    """
     tensor_args = {"device": "cuda"}
     if isinstance(x, bool):
         return torch.tensor([x], dtype=torch.bool, **tensor_args)
@@ -28,10 +31,15 @@ def _primitive_to_tensor(x):
         return _primitive_to_tensor(x.value)
     elif x is None:
         return None
-    assert False, f"cannot convert {x} to tensor"
+    assert False, f"cannot convert {x} of type {type(x)} to tensor"
 
 
 def _infer_tensor(func):
+    """
+    A decorator function to harmonize function args:
+        - converts primitives to PyTorch tensors
+        - wraps PyTorch tensors with WrappedTensors
+    """
     def wrapper(*args):
         new_args = tuple(map(lambda v: _primitive_to_tensor(v), args))
         new_args = tuple(map(lambda v: WrappedTensor(v) if torch.is_tensor(v) else v, new_args))
@@ -42,9 +50,13 @@ def _infer_tensor(func):
 
 
 def _tensor_operation(func):
+    """
+    A decorator function to unwrap WrappedTensors and debugger_constexpr before calling the function.
+    Can be combined with _infer_tensor decorator to harmonize args (everything to torch tensor).
+    """
     def wrapper(*args, **kwargs):
         for arg in args:
-            assert not torch.is_tensor(arg)
+            assert not torch.is_tensor(arg), "unexpected tensor argument"
 
         def unwrap_tensor(v):
             if isinstance(v, WrappedTensor):
@@ -332,16 +344,6 @@ class TritonLangProxy:
     # Types
     # Removed void, int1, float8, uint16, uint32, uint64, pi32_t
 
-    int8 = torch.int8
-    int16 = torch.int16
-    int32 = torch.int32
-    int64 = torch.int64
-    uint8 = torch.uint8
-    bfloat16 = torch.bfloat16
-    float32 = torch.float32
-    float64 = torch.float64
-    float16 = torch.float16
-
     # constexpr = debugger_constexpr
 
     # Program functions
@@ -402,7 +404,7 @@ class TritonLangProxy:
         return torch.zeros(size=shape, dtype=dtype, device="cuda")
 
     @_tensor_operation
-    def dequantize(self, input, scale, shift, nbit, dst_ty=float16):
+    def dequantize(self, input, scale, shift, nbit, dst_ty=torch.float16):
         raise NotImplementedError()
 
     @_tensor_operation
@@ -434,16 +436,20 @@ class TritonLangProxy:
     def atomic_cas(self, pointer, cmp, val):
         stored = self._memory_map.load(pointer, None, 0.0)
         if not isinstance(cmp, torch.Tensor):
-            cmp = torch.tensor(cmp, dtype=stored.dtype, device="cuda")
+            cmp = torch.tensor([cmp], dtype=stored.dtype, device="cuda")
         if not isinstance(val, torch.Tensor):
-            val = torch.tensor(val, dtype=stored.dtype, device="cuda")
+            val = torch.tensor([val], dtype=stored.dtype, device="cuda")
         if stored == cmp:
             self._memory_map.store(pointer, val, None)
         return stored
 
     @_tensor_operation
     def atomic_xchg(self, pointer, val, mask=None):
-        raise NotImplementedError()
+        if isinstance(val, int):
+            val = torch.tensor([val], dtype=torch.int32, device="cuda")
+        stored = self._memory_map.load(pointer, mask, 0.0)
+        self._memory_map.store(pointer, val, mask)
+        return stored
 
     @_tensor_operation
     def atomic_add(self, pointer, val, mask=None):
@@ -455,23 +461,38 @@ class TritonLangProxy:
 
     @_tensor_operation
     def atomic_max(self, pointer, val, mask=None):
-        raise NotImplementedError()
+        stored = self._memory_map.load(pointer, mask, 0.0)
+        result = torch.maximum(stored, val)
+        self._memory_map.store(pointer, result, mask)
+        return stored
 
     @_tensor_operation
     def atomic_min(self, pointer, val, mask=None):
-        raise NotImplementedError()
+        stored = self._memory_map.load(pointer, mask, 0.0)
+        result = torch.minimum(stored, val)
+        self._memory_map.store(pointer, result, mask)
+        return stored
 
     @_tensor_operation
     def atomic_and(self, pointer, val, mask=None):
-        raise NotImplementedError()
+        stored = self._memory_map.load(pointer, mask, 0)
+        result = torch.bitwise_and(stored, val)
+        self._memory_map.store(pointer, result, mask)
+        return stored
 
     @_tensor_operation
     def atomic_or(self, pointer, val, mask=None):
-        raise NotImplementedError()
+        stored = self._memory_map.load(pointer, mask, 0)
+        result = torch.bitwise_or(stored, val)
+        self._memory_map.store(pointer, result, mask)
+        return stored
 
     @_tensor_operation
     def atomic_xor(self, pointer, val, mask=None):
-        raise NotImplementedError()
+        stored = self._memory_map.load(pointer, mask, 0)
+        result = torch.bitwise_xor(stored, val)
+        self._memory_map.store(pointer, result, mask)
+        return stored
 
     @_tensor_operation
     def where(self, condition, x, y):

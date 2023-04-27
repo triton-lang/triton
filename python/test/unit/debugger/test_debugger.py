@@ -49,3 +49,21 @@ def test_program_ids_from_grid():
     first_run = list(program_ids_from_grid(grid))
     second_run = list(program_ids_from_grid(grid))
     assert first_run != second_run
+
+
+def test_atomic():
+    @triton.jit(interpret=True)
+    def atomic(
+        x_ptr,
+    ):
+        pid = tl.program_id(axis=0)
+        tl.atomic_add(x_ptr + pid, 1)
+        t = tl.atomic_xchg(x_ptr + pid, 3)
+        t += 1  # 2
+        tl.atomic_cas(x_ptr + pid, 3, t)  # match
+        tl.atomic_cas(x_ptr + pid, 40, 9)  # no match
+    nb_dim = 16
+    a = torch.zeros((nb_dim, ), dtype=torch.int32, device="cuda")
+
+    atomic[(nb_dim, )](a)
+    assert torch.allclose(a, torch.full_like(a, 2))
