@@ -1,7 +1,7 @@
+import multiprocessing
 import os
 import shutil
 from collections import namedtuple
-from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import torch
@@ -177,30 +177,25 @@ def add_fn(a, b, o, N: tl.constexpr):
 
 
 def test_jit_noinline() -> None:
-    """
-    This test is temporarily disabled because it will crash the test_compile_in_subproc
-    test for unknown reasons only on the CI (not locally).
-    # @triton.jit
-    # def kernel_add_device(a, b, o, N: tl.constexpr):
-    #     add_fn(a, b, o, N)
+    @triton.jit
+    def kernel_add_device(a, b, o, N: tl.constexpr):
+        add_fn(a, b, o, N)
 
-    # device = torch.cuda.current_device()
-    # assert len(kernel_add_device.cache[device]) == 0
-    # kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
-    # assert len(kernel_add_device.cache[device]) == 1
-    # bins = list(kernel_add_device.cache[device].values())
-    # inline_ttir = bins[0].asm['ttir']
-    # add_fn.noinline = True
-    # add_fn.hash = None
-    # kernel_add_device.hash = None
-    # kernel_add_device.cache[device].clear()
-    # kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
-    # assert len(kernel_add_device.cache[device]) == 1
-    # bins = list(kernel_add_device.cache[device].values())
-    # noinline_ttir = bins[0].asm['ttir']
-    # assert inline_ttir != noinline_ttir
-    """
-    pass
+    device = torch.cuda.current_device()
+    assert len(kernel_add_device.cache[device]) == 0
+    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add_device.cache[device]) == 1
+    bins = list(kernel_add_device.cache[device].values())
+    inline_ttir = bins[0].asm['ttir']
+    add_fn.noinline = True
+    add_fn.hash = None
+    kernel_add_device.hash = None
+    kernel_add_device.cache[device].clear()
+    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add_device.cache[device]) == 1
+    bins = list(kernel_add_device.cache[device].values())
+    noinline_ttir = bins[0].asm['ttir']
+    assert inline_ttir != noinline_ttir
 
 
 def test_compile_in_subproc() -> None:
@@ -217,9 +212,9 @@ def test_compile_in_subproc() -> None:
         tuple(range(4)),
         ())
 
-    # Define a function to run in the thread
-    def compile_kernel():
-        triton.compile(
+    proc = multiprocessing.Process(
+        target=triton.compile,
+        kwargs=dict(
             fn=kernel_sub,
             signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
             device=0,
@@ -227,14 +222,10 @@ def test_compile_in_subproc() -> None:
             configs=[config],
             warm_cache_only=True,
             cc=cc,
-        )
-
-    # Create a ThreadPoolExecutor and submit the function to run in a separate thread
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(compile_kernel)
-        future.result()  # Wait for the function to complete and retrieve the result (if any)
-
-    # No need to check exit code as exceptions in the thread will be propagated to the main thread
+        ))
+    proc.start()
+    proc.join()
+    assert proc.exitcode == 0
 
 
 def test_memory_leak() -> None:
