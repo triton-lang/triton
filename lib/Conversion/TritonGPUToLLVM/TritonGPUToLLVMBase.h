@@ -726,11 +726,11 @@ private:
     Value _fpw1 = i32_val(fpw[1]);
 
     // A info
-    auto aEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaLayout);
+    auto aEncoding = DotOperandEncodingAttr::get(ctx, 0, mmaLayout, 0);
     auto aRep = aEncoding.getMMAv1Rep();
     auto aSpw = aEncoding.getMMAv1ShapePerWarp();
     // B info
-    auto bEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaLayout);
+    auto bEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaLayout, 0);
     auto bSpw = bEncoding.getMMAv1ShapePerWarp();
     auto bRep = bEncoding.getMMAv1Rep();
 
@@ -787,12 +787,12 @@ private:
     // TODO: seems like the apttern below to get `rep`/`spw` appears quite often
     // A info
     auto aEncoding =
-        DotOperandEncodingAttr::get(type.getContext(), 0, mmaLayout);
+        DotOperandEncodingAttr::get(type.getContext(), 0, mmaLayout, 0);
     auto aRep = aEncoding.getMMAv1Rep();
     auto aSpw = aEncoding.getMMAv1ShapePerWarp();
     // B info
     auto bEncoding =
-        DotOperandEncodingAttr::get(type.getContext(), 1, mmaLayout);
+        DotOperandEncodingAttr::get(type.getContext(), 1, mmaLayout, 0);
     auto bSpw = bEncoding.getMMAv1ShapePerWarp();
     auto bRep = bEncoding.getMMAv1Rep();
 

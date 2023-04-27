@@ -8,8 +8,8 @@
 #BLs0 = #triton_gpu.slice<{parent=#BL, dim=0}>
 #BLs1 = #triton_gpu.slice<{parent=#BL, dim=1}>
 #C = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
-#A = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
-#B = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
+#A = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
 // CHECK: tt.func @matmul_loop
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32

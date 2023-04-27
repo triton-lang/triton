@@ -206,11 +206,15 @@ int simulateBackwardRematerialization(
 
 //
 
-Operation *cloneWithInferType(mlir::PatternRewriter &rewriter, Operation *op,
+Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping) {
   Operation *newOp = rewriter.clone(*op, mapping);
-  auto origType = op->getResult(0).getType().cast<RankedTensorType>();
-  auto argType = newOp->getOperand(0).getType().cast<RankedTensorType>();
+  if (newOp->getNumResults() == 0)
+    return newOp;
+  auto origType = op->getResult(0).getType().dyn_cast<RankedTensorType>();
+  auto argType = newOp->getOperand(0).getType().dyn_cast<RankedTensorType>();
+  if (!origType || !argType)
+    return newOp;
   auto newType = RankedTensorType::get(
       origType.getShape(), origType.getElementType(), argType.getEncoding());
   newOp->getResult(0).setType(newType);
