@@ -46,6 +46,8 @@ def mangle_fn(name, arg_tys, constants):
     mangled_constants = '_'.join([f'{i}c{repr(constants[i])}' for i in sorted(constants)])
     mangled_constants = mangled_constants.replace('.', '_d_')
     mangled_constants = mangled_constants.replace("'", '_sq_')
+    # [ and ] are not allowed in LLVM identifiers
+    mangled_constants = mangled_constants.replace('[', '_').replace(']', '_')
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
 

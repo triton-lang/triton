@@ -83,7 +83,8 @@ class DependenciesFinder(ast.NodeVisitor):
             finder = DependenciesFinder(func.__globals__, func.src)
             finder.visit(tree)
             func.hash = finder.ret
-        self.ret = (self.ret + func.hash).encode("utf-8")
+        noinline = str(getattr(func, 'noinline', False))
+        self.ret = (self.ret + func.hash + noinline).encode("utf-8")
         self.ret = hashlib.md5(self.ret).hexdigest()
 
 # -----------------------------------------------------------------------------

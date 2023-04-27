@@ -170,6 +170,36 @@ def test_jit_debug() -> None:
     assert bins[0].asm['ttir'] != bins[1].asm['ttir']
 
 
+@triton.jit
+def add(a, b, o, N: tl.constexpr):
+    idx = tl.arange(0, N)
+    aa = tl.load(a + idx)
+    bb = tl.load(b + idx)
+    tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
+
+
+def test_jit_noinline() -> None:
+    @triton.jit
+    def kernel_add(a, b, o, N: tl.constexpr):
+        add(a, b, o, N)
+
+    device = torch.cuda.current_device()
+    assert len(kernel_add.cache[device]) == 0
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add.cache[device]) == 1
+    bins = list(kernel_add.cache[device].values())
+    inline_ttir = bins[0].asm['ttir']
+    add.noinline = True
+    add.hash = None
+    kernel_add.hash = None
+    kernel_add.cache[device] = {}
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add.cache[device]) == 1
+    bins = list(kernel_add.cache[device].values())
+    noinline_ttir = bins[0].asm['ttir']
+    assert inline_ttir != noinline_ttir
+
+
 def test_compile_in_subproc() -> None:
     @triton.jit
     def kernel_sub(a, b, o, N: tl.constexpr):
