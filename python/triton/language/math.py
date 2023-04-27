@@ -1,13 +1,18 @@
 import functools
 import os
 
-from ..runtime import driver
 from . import core
 
 
 @functools.lru_cache()
 def libdevice_path():
-    return os.getenv("TRITON_LIBDEVICE_PATH", driver.libdevice_path)
+    import torch
+    third_party_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "third_party")
+    if torch.version.hip is None:
+        default = os.path.join(third_party_dir, "cuda", "lib", "libdevice.10.bc")
+    else:
+        default = ''
+    return os.getenv("TRITON_LIBDEVICE_PATH", default)
 
 
 @core.extern
