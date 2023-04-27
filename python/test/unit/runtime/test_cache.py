@@ -173,8 +173,6 @@ def test_jit_debug() -> None:
 @triton.jit
 def add(a, b, o, N: tl.constexpr):
     idx = tl.arange(0, N)
-    aa = tl.load(a + idx)
-    bb = tl.load(b + idx)
     tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
 
