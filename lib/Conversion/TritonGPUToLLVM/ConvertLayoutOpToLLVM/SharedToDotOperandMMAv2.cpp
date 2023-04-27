@@ -33,8 +33,7 @@ public:
     if (canUseLdmatrix)
       return computeLdmatrixMatOffs(warpOff, lane, cSwizzleOffset);
     else
-      return computeLdsMatOffs(warpOff, lane, cSwizzleOffset,
-                               2 * 4 / elemBytes);
+      return computeLdsMatOffs(warpOff, lane, cSwizzleOffset, elemBytes);
     return {};
   }
 
@@ -82,6 +81,8 @@ private:
   int matArrStride;
   int warpOffStride;
 };
+
+Type getMatType(Type argType);
 
 SmallVector<Value>
 MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
@@ -178,7 +179,9 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
                                                          Value lane,
                                                          Value cSwizzleOffset,
-                                                         int vecWidth) {
+                                                         int elemBytes) {
+  assert(elemBytes <= 4);
+
   int cTileShape = tileShape[order[0]];
   int sTileShape = tileShape[order[1]];
   if (!needTrans) {
@@ -190,6 +193,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   int threadsPerQuad[2] = {8, 4};
   int laneWidth = 4;
   int laneHeight = 8;
+  int vecWidth = 4 / elemBytes;
   int quadWidth = laneWidth * vecWidth;
   int quadHeight = laneHeight;
   int numQuadI = 2;
@@ -241,36 +245,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
       }
 
   return offs;
-}
-
-Type getMatType(Type argType) {
-  MLIRContext *ctx = argType.getContext();
-  // floating point types
-  Type fp32x1Ty = vec_ty(type::f32Ty(ctx), 1);
-  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-  Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
-  Type fp16x2Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
-  // LLVM 14.0 does not support bf16 type, so we use i16 instead.
-  Type bf16x2Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
-  Type fp32Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32x1Ty));
-  // integer types
-  Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
-  Type i8x4Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
-
-  if (argType.isF16())
-    return fp16x2Pack4Ty;
-  else if (argType.isBF16())
-    return bf16x2Pack4Ty;
-  else if (argType.isF32())
-    return fp32Pack4Ty;
-  else if (argType.isInteger(8))
-    return i8x4Pack4Ty;
-  else
-    llvm::report_fatal_error("mma16816 data type not supported");
 }
 
 std::tuple<Value, Value, Value, Value>
@@ -352,33 +326,26 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     std::array<Value, 2> ii = {i0, i1};
     // load 4 32-bit values from shared memory
     // (equivalent to ldmatrix.x4)
-    // SmallVector<SmallVector<Value>> vals(4, SmallVector<Value>(vecWidth));
-    // for (int i = 0; i < 4; ++i)
-    //   for (int j = 0; j < vecWidth; ++j)
-    //     vals[i][j] = load(gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]));
-    // // row + trans and col + no-trans are equivalent
-    // if ((needTrans && kOrder == 1) || (!needTrans && kOrder == 0))
-    //   std::swap(vals[1], vals[2]);
-    // // pack loaded vectors into 4 32-bit values
-    // elemTy = getMatType(vals[0][0].getType())
-    //              .cast<LLVM::LLVMStructType>()
-    //              .getBody()[0];
-    // std::array<Value, 4> retElems;
-    // retElems.fill(undef(elemTy));
-    // for (int m = 0; m < 4; ++m) {
-    //   for (int e = 0; e < vecWidth; ++e)
-    //     retElems[m] = insert_element(retElems[m].getType(), retElems[m],
-    //                                  vals[m][e], i32_val(e));
-    // }
-    // return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
-    //         bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
-
-    Value ptr0 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[0]);
-    Value ptr1 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[1]);
-    Value v0 = load(ptr0);
-    Value v1 = load(ptr1);
-    return {extract_element(v0, i32_val(0)), extract_element(v1, i32_val(0)),
-            extract_element(v0, i32_val(1)), extract_element(v1, i32_val(1))};
+    SmallVector<SmallVector<Value>> vals(4, SmallVector<Value>(vecWidth));
+    for (int i = 0; i < 4; ++i)
+      for (int j = 0; j < vecWidth; ++j)
+        vals[i][j] = load(gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]));
+    // row + trans and col + no-trans are equivalent
+    if ((needTrans && kOrder == 1) || (!needTrans && kOrder == 0))
+      std::swap(vals[1], vals[2]);
+    // pack loaded vectors into 4 32-bit values
+    elemTy = getMatType(vals[0][0].getType())
+                 .cast<LLVM::LLVMStructType>()
+                 .getBody()[0];
+    std::array<Value, 4> retElems;
+    retElems.fill(undef(elemTy));
+    for (int m = 0; m < 4; ++m) {
+      for (int e = 0; e < vecWidth; ++e)
+        retElems[m] = insert_element(retElems[m].getType(), retElems[m],
+                                     vals[m][e], i32_val(e));
+    }
+    return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
+            bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
   }
 }
 
@@ -448,6 +415,36 @@ Type getShemPtrTy(Type argType) {
     llvm::report_fatal_error("mma16816 data type not supported");
 }
 
+Type getMatType(Type argType) {
+  MLIRContext *ctx = argType.getContext();
+  // floating point types
+  Type fp32x1Ty = vec_ty(type::f32Ty(ctx), 1);
+  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
+  Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
+  Type fp16x2Pack4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
+  // LLVM 14.0 does not support bf16 type, so we use i16 instead.
+  Type bf16x2Pack4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
+  Type fp32Pack4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32x1Ty));
+  // integer types
+  Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
+  Type i8x4Pack4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
+
+  if (argType.isF16())
+    return fp16x2Pack4Ty;
+  else if (argType.isBF16())
+    return bf16x2Pack4Ty;
+  else if (argType.isF32())
+    return fp32Pack4Ty;
+  else if (argType.isInteger(8))
+    return i8x4Pack4Ty;
+  else
+    llvm::report_fatal_error("mma16816 data type not supported");
+}
+
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int n0, int n1,
     TritonGPUToLLVMTypeConverter *typeConverter, Location loc,
@@ -484,9 +481,6 @@ std::function<void(int, int)> getLoadMatrixFn(
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
-  llvm::outs() << isA << " " << sharedLayout.getVec() << " "
-               << sharedLayout.getPerPhase() << " "
-               << sharedLayout.getMaxPhase() << "\n";
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 

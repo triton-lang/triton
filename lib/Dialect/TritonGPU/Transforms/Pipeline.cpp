@@ -579,7 +579,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     auto it = std::find(loads.begin(), loads.end(), op.getOperand(0));
     if (it == loads.end()) {
-      Operation *newOp = cloneWithInferType(builder, &op, mapping);
+      Operation *newOp = builder.clone(op, mapping);
       continue;
     }
     // we replace the use new load use with a convert layout
