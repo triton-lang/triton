@@ -170,6 +170,9 @@ def test_jit_debug() -> None:
     assert bins[0].asm['ttir'] != bins[1].asm['ttir']
 
 
+instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])
+
+
 def test_compile_in_subproc() -> None:
     @triton.jit
     def kernel_sub(a, b, o, N: tl.constexpr):
@@ -179,10 +182,7 @@ def test_compile_in_subproc() -> None:
 
     major, minor = torch.cuda.get_device_capability(0)
     cc = major * 10 + minor
-    config = namedtuple("instance_descriptor", [
-        "divisible_by_16", "equal_to_1"])(
-        tuple(range(4)),
-        ())
+    config = instance_descriptor(tuple(range(4)), ())
 
     proc = multiprocessing.Process(
         target=triton.compile,
