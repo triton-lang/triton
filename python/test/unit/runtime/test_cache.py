@@ -171,29 +171,29 @@ def test_jit_debug() -> None:
 
 
 @triton.jit
-def add(a, b, o, N: tl.constexpr):
+def add_fn(a, b, o, N: tl.constexpr):
     idx = tl.arange(0, N)
     tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
 
 def test_jit_noinline() -> None:
     @triton.jit
-    def kernel_add(a, b, o, N: tl.constexpr):
-        add(a, b, o, N)
+    def kernel_add_device(a, b, o, N: tl.constexpr):
+        add_fn(a, b, o, N)
 
     device = torch.cuda.current_device()
-    assert len(kernel_add.cache[device]) == 0
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
-    assert len(kernel_add.cache[device]) == 1
-    bins = list(kernel_add.cache[device].values())
+    assert len(kernel_add_device.cache[device]) == 0
+    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add_device.cache[device]) == 1
+    bins = list(kernel_add_device.cache[device].values())
     inline_ttir = bins[0].asm['ttir']
-    add.noinline = True
-    add.hash = None
-    kernel_add.hash = None
-    kernel_add.cache[device] = {}
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
-    assert len(kernel_add.cache[device]) == 1
-    bins = list(kernel_add.cache[device].values())
+    add_fn.noinline = True
+    add_fn.hash = None
+    kernel_add_device.hash = None
+    kernel_add_device.cache[device].clear()
+    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add_device.cache[device]) == 1
+    bins = list(kernel_add_device.cache[device].values())
     noinline_ttir = bins[0].asm['ttir']
     assert inline_ttir != noinline_ttir
 
