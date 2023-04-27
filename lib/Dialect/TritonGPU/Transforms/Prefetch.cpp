@@ -168,7 +168,10 @@ LogicalResult Prefetcher::initialize() {
 
     // works better with nvidia tensor cores
     unsigned elementWidth = aType.getElementTypeBitWidth();
-    prefetchWidth = 8 * aKWidth;
+    if (aKWidth == 0)
+      prefetchWidth = 256 / elementWidth;
+    else
+      prefetchWidth = 8 * aKWidth;
 
     // Skip prefetching if kSize is less than prefetchWidth
     if (kSize < prefetchWidth)
