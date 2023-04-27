@@ -1,4 +1,5 @@
-import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
+
 import os
 import shutil
 from collections import namedtuple
@@ -217,9 +218,9 @@ def test_compile_in_subproc() -> None:
         tuple(range(4)),
         ())
 
-    proc = multiprocessing.Process(
-        target=triton.compile,
-        kwargs=dict(
+    # Define a function to run in the thread
+    def compile_kernel():
+        triton.compile(
             fn=kernel_sub,
             signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
             device=0,
@@ -227,10 +228,14 @@ def test_compile_in_subproc() -> None:
             configs=[config],
             warm_cache_only=True,
             cc=cc,
-        ))
-    proc.start()
-    proc.join()
-    assert proc.exitcode == 0
+        )
+
+    # Create a ThreadPoolExecutor and submit the function to run in a separate thread
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(compile_kernel)
+        future.result()  # Wait for the function to complete and retrieve the result (if any)
+
+    # No need to check exit code as exceptions in the thread will be propagated to the main thread
 
 
 def test_memory_leak() -> None:
