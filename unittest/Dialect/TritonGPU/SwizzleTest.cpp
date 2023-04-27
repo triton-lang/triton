@@ -30,7 +30,7 @@ TEST_P(SwizzleDotOperandTestFixture, DotOperands) {
   // create encoding
   auto parent = triton::gpu::MmaEncodingAttr::get(&ctx, 2, 0, {1, 1});
   auto encoding =
-      triton::gpu::DotOperandEncodingAttr::get(&ctx, params.opIdx, parent);
+      triton::gpu::DotOperandEncodingAttr::get(&ctx, params.opIdx, parent, 0);
 
   // create element type
   Type eltType = IntegerType::get(&ctx, params.typeWidth);

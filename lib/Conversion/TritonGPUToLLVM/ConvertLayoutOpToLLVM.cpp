@@ -325,7 +325,8 @@ private:
 
       if (needTrans) {
         // do transpose
-        auto aEncoding = DotOperandEncodingAttr::get(mma.getContext(), 0, mma);
+        auto aEncoding =
+            DotOperandEncodingAttr::get(mma.getContext(), 0, mma, 0);
         int numM = aEncoding.getMMAv1NumOuter(shape);
         int numN = accumSizePerThread / numM;
 

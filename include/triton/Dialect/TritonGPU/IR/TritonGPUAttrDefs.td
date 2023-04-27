@@ -501,10 +501,22 @@ section 9.7.13.4.1 for more details.
   let parameters = (
     ins
     "unsigned":$opIdx,
-    "Attribute":$parent
+    "Attribute":$parent,
+    "unsigned":$MMAv2kWidth
   );
 
   let builders = [
+        // Specially for MMAV1(Volta)
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent,
+                     "Type":$eltTy), [{
+      MmaEncodingAttr parentAttr = parent.dyn_cast<MmaEncodingAttr>();
+      if (!parentAttr || !parentAttr.isAmpere())
+        return $_get(context, opIdx, parent, 0);
+      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned MMAv2kWidth = 32 / bitwidth;
+      return $_get(context, opIdx, parent, MMAv2kWidth);
+    }]>
   ];
 
   let hasCustomAssemblyFormat = 1;
