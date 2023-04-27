@@ -575,7 +575,7 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
       constexpr int waveSize = 64;
       auto tileSize = getMMAv3ElemsPerThread(eltTy);
       auto rep = getMMAv3Rep(shape, eltTy);
-      return (tileSize[0] * tileSize[1] * rep[0] * rep[1]) / waveSize;
+      return rep[0] * rep[1];
     }
 #endif
     // A100

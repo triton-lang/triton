@@ -138,8 +138,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
         {8, IntegerType::get(ctx, 32)},
     };
     Type targetTy = targetTyMap.lookup(elemTy.getIntOrFloatBitWidth());
-    auto elems = getMFMAOperandNumElemsPerThread(type);
-    return struct_ty(SmallVector<Type>(elems, targetTy));
+    return targetTy;
 #endif
   } else {
     assert(mmaParent.isVolta());
