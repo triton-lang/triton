@@ -774,14 +774,27 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
   unsigned opIdx = attrs.get("opIdx").cast<IntegerAttr>().getInt();
   Attribute parent = attrs.get("parent");
+  auto mmaParent = parent.dyn_cast<MmaEncodingAttr>();
+  unsigned kWidth = 0;
+  Attribute _kWidth = attrs.get("kWidth");
+  if (_kWidth) {
+    if (!mmaParent || mmaParent.isVolta()) {
+      auto loc = parser.getNameLoc();
+      parser.emitError(loc, "kWidth only supported for MMAv2+ parent");
+      return Attribute();
+    }
+    kWidth = _kWidth.cast<IntegerAttr>().getInt();
+  }
   return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
-                                                   parent);
+                                                   parent, kWidth);
 }
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>();
   printer << "<{"
-          << "opIdx = " << getOpIdx() << ", "
-          << "parent = " << getParent();
+          << "opIdx = " << getOpIdx() << ", parent = " << getParent();
+  if (mmaParent && mmaParent.isAmpere())
+    printer << ", kWidth = " << getMMAv2kWidth();
   printer << "}>";
 }
 

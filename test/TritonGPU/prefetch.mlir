@@ -7,8 +7,8 @@
 #A = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #B = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C = #triton_gpu.mma<{version = 2, warpsPerCTA = [4, 1]}>
-#A_OP = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
-#B_OP = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
+#A_OP = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
+#B_OP = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 
 
 // CHECK: tt.func @matmul_loop
