@@ -176,7 +176,7 @@ def add_fn(a, b, o, N: tl.constexpr):
     tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
 
-#def test_jit_noinline() -> None:
+# def test_jit_noinline() -> None:
 #    @triton.jit
 #    def kernel_add_device(a, b, o, N: tl.constexpr):
 #        add_fn(a, b, o, N)
