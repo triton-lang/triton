@@ -176,6 +176,7 @@ SmallVector<unsigned> getUniqueContigPerThread(Type type) {
   auto rank = shape.size();
   SmallVector<unsigned> ret(rank);
   auto contigPerThread = getContigPerThread(tensorType.getEncoding());
+  assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
   for (int d = 0; d < rank; ++d) {
     ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
   }
