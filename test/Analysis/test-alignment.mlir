@@ -402,8 +402,6 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
 
 // -----
 
-module {
-
 // This is a tiny test for verifying StoreOp-related alignment, It simply store a constant to a buffer.
 // CHECK-LABEL: @store_constant_align
 tt.func @store_constant_align(%addr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 16 : i32}) {
@@ -431,8 +429,6 @@ tt.func @store_constant_align(%addr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   %cst = arith.constant dense<0.0> : tensor<128xf32>
   tt.store %5, %cst, %mask : tensor<128xf32>
   tt.return
-}
-
 }
 
 // -----
@@ -490,4 +486,89 @@ tt.func @vecadd_mask_align_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
   %15 = tt.addptr %14, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   tt.store %15, %13, %10 : tensor<64xf32>
   tt.return
+}
+
+// -----
+
+module {
+
+// We don't use function cloning here, so the alignment info is the gcd of all call sites.
+// CHECK-LABEL: @addptr_hints
+tt.func @addptr_hints(%arg0: !tt.ptr<i32>) {
+  // CHECK: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
+  %cst1 = arith.constant 1 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>
+  %1 = tt.addptr %arg0, %cst1 : !tt.ptr<i32>, i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [1], constant_value = 4
+  %cst4 = arith.constant 4 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>
+  %2 = tt.addptr %arg0, %cst4 : !tt.ptr<i32>, i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [16], constancy = [1], constant_value = 16
+  %cst16 = arith.constant 16 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>
+  %3 = tt.addptr %arg0, %cst4 : !tt.ptr<i32>, i32
+  tt.return
+}
+
+// CHECK-LABEL: @kernel_div16
+tt.func @kernel_div16(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+  tt.call @addptr_hints(%arg0) : (!tt.ptr<i32>) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @kernel_div8
+tt.func @kernel_div8(%arg0: !tt.ptr<i32> {tt.divisibility = 8 : i32}) {
+  tt.call @addptr_hints(%arg0) : (!tt.ptr<i32>) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @kernel_div4
+tt.func @kernel_div4(%arg0: !tt.ptr<i32> {tt.divisibility = 4 : i32}) {
+  tt.call @addptr_hints(%arg0) : (!tt.ptr<i32>) -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+module {
+
+// We don't use function cloning here, so the alignment info is the gcd of all call sites.
+// CHECK-LABEL: @mul
+tt.func @mul(%arg0: i32) {
+  // CHECK: contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1
+  %cst1 = arith.constant 1 : i32
+  // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>
+  %1 = arith.muli %arg0, %cst1 : i32
+  tt.return
+}
+
+// CHECK-LABEL: @bar
+tt.func @bar(%arg0: i32) {
+  tt.call @mul(%arg0) : (i32) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @foo
+tt.func @foo(%arg0: i32) {
+  tt.call @mul(%arg0) : (i32) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @call_graph
+tt.func @call_graph(%arg0: i32) {
+  // CHECK: contiguity = [1], divisibility = [4], constancy = [1], constant_value = 12
+  %cst12 = arith.constant 12 : i32
+  // CHECK: contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>
+  %0 = arith.muli %arg0, %cst12 : i32
+  tt.call @foo(%0) : (i32) -> ()
+  // CHECK: contiguity = [1], divisibility = [8], constancy = [1], constant_value = 8
+  %cst8 = arith.constant 8 : i32
+  // CHECK: contiguity = [1], divisibility = [8], constancy = [1], constant_value = <none>
+  %1 = arith.muli %arg0, %cst8 : i32
+  tt.call @bar(%1) : (i32) -> ()
+  tt.return
+}
+
 }

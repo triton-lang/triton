@@ -676,14 +676,13 @@ private:
     }
     return res;
   }
-}; // namespace triton::gpu::ConvertLayoutOp>
+}; // namespace triton::gpu::ConvertLayoutOp
 
 void populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
+    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation,
                                           indexCacheInfo, benefit);
 }
