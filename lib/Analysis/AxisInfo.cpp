@@ -919,11 +919,13 @@ unsigned AxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
-  unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
-  contigPerThread = std::min(align, contigPerThread);
-  contigPerThread = std::min<unsigned>(shape[order[0]], contigPerThread);
+  auto uniqueContigPerThread = triton::gpu::getUniqueContigPerThread(tensorTy);
+  assert(order[0] < uniqueContigPerThread.size() &&
+         "Unxpected uniqueContigPerThread size");
+  unsigned contiguity = uniqueContigPerThread[order[0]];
+  contiguity = std::min(align, contiguity);
 
-  return contigPerThread;
+  return contiguity;
 }
 
 unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {

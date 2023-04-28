@@ -106,13 +106,17 @@ private:
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
       unsigned dim = sliceLayout.getDim();
       auto parentEncoding = sliceLayout.getParent();
+      auto parentSizePerThread = getSizePerThread(parentEncoding);
+      unsigned stride = 1;
+      if (getOrder(parentEncoding)[0] == dim)
+        stride = parentSizePerThread[dim];
       auto parentShape = sliceLayout.paddedShape(shape);
       auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
                                             parentEncoding);
-      auto multiDimOffsetParent =
-          getMultiDimOffset(parentEncoding, loc, rewriter, elemId, parentTy,
-                            sliceLayout.paddedShape(multiDimCTAInRepId),
-                            sliceLayout.paddedShape(shapePerCTA));
+      auto multiDimOffsetParent = getMultiDimOffset(
+          parentEncoding, loc, rewriter, elemId * stride, parentTy,
+          sliceLayout.paddedShape(multiDimCTAInRepId),
+          sliceLayout.paddedShape(shapePerCTA));
       SmallVector<Value> multiDimOffset(rank);
       for (unsigned d = 0; d < rank + 1; ++d) {
         if (d == dim)
