@@ -156,7 +156,7 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -279,7 +279,8 @@ def matmul(a, b, activation=None):
         IS_INT8=b.dtype == torch.int8,
     )
     # if b.dtype == torch.int8:
-    #     print(h.asm["ttgir"])
+    #     print(h.asm["ptx"])
+    #     print(h.n_spills)
     return c
 
 
@@ -334,7 +335,7 @@ b = b.T
 triton_output = matmul(f8_to_f16(a), b, activation=None)
 # triton_output = matmul(f8_to_f16(a), f8_to_f16(b).T, activation=None)
 torch_output = torch.matmul(f8_to_f16(a), f8_to_f16(b).T)
-# # # print(triton_output[0, 1933], torch_output[0, 1933])
+# # print(triton_output[0, 1933], torch_output[0, 1933])
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
 if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
@@ -377,9 +378,9 @@ def benchmark(M, N, K, provider):
     b = b.T
     a = f8_to_f16(a)
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=1000)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=[0.2, 0.5, 0.8], rep=500)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=[0.2, 0.5, 0.8], rep=1000)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=[0.2, 0.5, 0.8], rep=500)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
