@@ -154,9 +154,10 @@ public:
     return nullptr;
   }
 
-  /// Getters for moduleOp and roots.
+  /// Getters
   ModuleOp getModuleOp() const { return moduleOp; }
   SmallVector<FunctionOpInterface> getRoots() const { return roots; }
+  size_t getNumFunctions() const { return funcMap.size(); }
 
   /// Returns true if the given function is a root.
   bool isRoot(FunctionOpInterface funcOp) const {

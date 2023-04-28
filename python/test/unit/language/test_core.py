@@ -760,7 +760,21 @@ def noinline_shared_fn(x, y, Z):
     tl.store(Z + offs, z)
 
 
-@pytest.mark.parametrize("mode", ["simple", "call_graph", "shared"])
+@triton.jit(noinline=True)
+def noinline_dynamic_fn(x, y, Z):
+    if x >= 1:
+        x = noinline_call_graph_fn1(x)
+    else:
+        x = noinline_call_graph_fn2(x)
+    if y >= 2:
+        y = noinline_call_graph_fn2(y)
+    else:
+        y = noinline_call_graph_fn1(y)
+    z = x + y
+    tl.store(Z, z)
+
+
+@pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic"])
 def test_noinline(mode):
     device = 'cuda'
 
@@ -781,7 +795,7 @@ def test_noinline(mode):
     kernel[(1,)](x, y, z, num_warps=1)
     if mode == "simple":
         assert torch.equal(z, x + y)
-    elif mode == "call_graph":
+    elif mode == "call_graph" or mode == "dynamic":
         assert torch.equal(z, x + 1 + y + 2)
     elif mode == "shared":
         ref = torch.full((16, 16), 16, device=device, dtype=torch.float32)

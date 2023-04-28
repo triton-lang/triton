@@ -340,6 +340,10 @@ public:
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
         &baseIndexCache, &indexCache, &indexInsertPoint};
+    // TODO: enable index cache if there are multiple functions
+    if (axisInfoAnalysis.getNumFunctions() > 1) {
+      indexCacheInfo = {nullptr, nullptr, nullptr};
+    }
     populateTritonGPUToLLVMPatterns(typeConverter, patterns, allocation,
                                     indexCacheInfo, /*benefit=*/1);
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, allocation,

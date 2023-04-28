@@ -517,13 +517,13 @@ public:
                                             RankedTensorType type) const {
     IndexCacheKeyT key = std::make_pair(layout, type);
     auto cache = indexCacheInfo.baseIndexCache;
-    assert(cache && "baseIndexCache is nullptr");
     auto insertPt = indexCacheInfo.indexInsertPoint;
-    if (cache->count(key) > 0) {
+    if (cache && cache->count(key) > 0) {
       return cache->lookup(key);
     } else {
       ConversionPatternRewriter::InsertionGuard guard(rewriter);
-      restoreInsertionPointIfSet(insertPt, rewriter);
+      if (cache)
+        restoreInsertionPointIfSet(insertPt, rewriter);
       SmallVector<Value> result;
       if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
         result =
@@ -536,8 +536,10 @@ public:
       } else {
         llvm_unreachable("unsupported emitBaseIndexForLayout");
       }
-      cache->insert(std::make_pair(key, result));
-      *insertPt = rewriter.saveInsertionPoint();
+      if (cache) {
+        cache->insert(std::make_pair(key, result));
+        *insertPt = rewriter.saveInsertionPoint();
+      }
       return result;
     }
   }
@@ -564,13 +566,13 @@ public:
                                               RankedTensorType type) const {
     IndexCacheKeyT key(layout, type);
     auto cache = indexCacheInfo.indexCache;
-    assert(cache && "indexCache is nullptr");
     auto insertPt = indexCacheInfo.indexInsertPoint;
-    if (cache->count(key) > 0) {
+    if (cache && cache->count(key) > 0) {
       return cache->lookup(key);
     } else {
       ConversionPatternRewriter::InsertionGuard guard(b);
-      restoreInsertionPointIfSet(insertPt, b);
+      if (cache)
+        restoreInsertionPointIfSet(insertPt, b);
       SmallVector<SmallVector<Value>> result;
       if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
         result = emitIndicesForDistributedLayout(loc, b, blocked, type);
@@ -583,8 +585,10 @@ public:
             "emitIndices for layouts other than blocked & slice not "
             "implemented yet");
       }
-      cache->insert(std::make_pair(key, result));
-      *insertPt = b.saveInsertionPoint();
+      if (cache) {
+        cache->insert(std::make_pair(key, result));
+        *insertPt = b.saveInsertionPoint();
+      }
       return result;
     }
   }
