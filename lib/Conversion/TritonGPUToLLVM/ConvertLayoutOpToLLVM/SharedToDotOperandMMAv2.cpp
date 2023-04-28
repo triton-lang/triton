@@ -19,10 +19,10 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 class MMA16816SmemLoader {
 public:
   MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, uint32_t kOrder,
-                     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
-                     ArrayRef<int> instrShape, ArrayRef<int> matShape,
-                     int perPhase, int maxPhase, int elemBytes,
-                     ConversionPatternRewriter &rewriter,
+                     uint32_t kWidth, ArrayRef<Value> smemStrides,
+                     ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
+                     ArrayRef<int> matShape, int perPhase, int maxPhase,
+                     int elemBytes, ConversionPatternRewriter &rewriter,
                      TritonGPUToLLVMTypeConverter *typeConverter,
                      const Location &loc);
 
@@ -33,7 +33,7 @@ public:
     if (canUseLdmatrix)
       return computeLdmatrixMatOffs(warpOff, lane, cSwizzleOffset);
     else
-      return computeLdsMatOffs(warpOff, lane, cSwizzleOffset, elemBytes);
+      return computeLdsMatOffs(warpOff, lane, cSwizzleOffset);
     return {};
   }
 
@@ -45,7 +45,7 @@ public:
                                             Value cSwizzleOffset);
   // compute 8-bit matrix offset.
   SmallVector<Value> computeLdsMatOffs(Value warpOff, Value lane,
-                                       Value cSwizzleOffset, int elemBytes);
+                                       Value cSwizzleOffset);
 
   // Load 4 matrices and returns 4 vec<2> elements.
   std::tuple<Value, Value, Value, Value>
@@ -55,6 +55,7 @@ public:
 private:
   SmallVector<uint32_t> order;
   int kOrder;
+  int kWidth;
   SmallVector<int64_t> tileShape;
   SmallVector<int> instrShape;
   SmallVector<int> matShape;
@@ -176,9 +177,7 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 
 SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
                                                          Value lane,
-                                                         Value cSwizzleOffset,
-                                                         int elemBytes) {
-  assert(elemBytes <= 4);
+                                                         Value cSwizzleOffset) {
   int cTileShape = tileShape[order[0]];
   int sTileShape = tileShape[order[1]];
   if (!needTrans) {
@@ -190,20 +189,19 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   int threadsPerQuad[2] = {8, 4};
   int laneWidth = 4;
   int laneHeight = 8;
-  int vecWidth = 4 / elemBytes;
-  int quadWidth = laneWidth * vecWidth;
+  int quadWidth = laneWidth * kWidth;
   int quadHeight = laneHeight;
   int numQuadI = 2;
 
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
 
-  for (int rep = 0; rep < numPtrs / (2 * vecWidth); ++rep)
+  for (int rep = 0; rep < numPtrs / (2 * kWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
-      for (int elemId = 0; elemId < vecWidth; ++elemId) {
-        int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
+      for (int elemId = 0; elemId < kWidth; ++elemId) {
+        int idx = rep * 2 * kWidth + quadId * kWidth + elemId;
         // inner index base
-        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
+        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(kWidth));
         jBase = add(jBase, i32_val(elemId));
         // inner index offset
         Value jOff = i32_val(0);
@@ -242,6 +240,36 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
       }
 
   return offs;
+}
+
+Type getMatType(Type argType) {
+  MLIRContext *ctx = argType.getContext();
+  // floating point types
+  Type fp32x1Ty = vec_ty(type::f32Ty(ctx), 1);
+  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
+  Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
+  Type fp16x2Pack4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
+  // LLVM 14.0 does not support bf16 type, so we use i16 instead.
+  Type bf16x2Pack4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
+  Type fp32Pack4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32x1Ty));
+  // integer types
+  Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
+  Type i8x4Pack4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
+
+  if (argType.isF16())
+    return fp16x2Pack4Ty;
+  else if (argType.isBF16())
+    return bf16x2Pack4Ty;
+  else if (argType.isF32())
+    return fp32Pack4Ty;
+  else if (argType.isInteger(8))
+    return i8x4Pack4Ty;
+  else
+    llvm::report_fatal_error("mma16816 data type not supported");
 }
 
 std::tuple<Value, Value, Value, Value>
@@ -304,7 +332,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else {
-    elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
     // base pointers
     std::array<std::array<Value, 4>, 2> ptrs;
     int vecWidth = 4 / elemBytes;
@@ -332,6 +359,9 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     if ((needTrans && kOrder == 1) || (!needTrans && kOrder == 0))
       std::swap(vals[1], vals[2]);
     // pack loaded vectors into 4 32-bit values
+    elemTy = getMatType(vals[0][0].getType())
+                 .cast<LLVM::LLVMStructType>()
+                 .getBody()[0];
     std::array<Value, 4> retElems;
     retElems.fill(undef(elemTy));
     for (int m = 0; m < 4; ++m) {
@@ -339,24 +369,26 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
         retElems[m] = insert_element(retElems[m].getType(), retElems[m],
                                      vals[m][e], i32_val(e));
     }
-    if (elemBytes == 1)
-      return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
-              bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
-    else
-      return {retElems[0], retElems[1], retElems[2], retElems[3]};
-  }
+    return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
+            bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
 
-  assert(false && "Invalid smem load");
-  return {Value{}, Value{}, Value{}, Value{}};
+    // Value ptr0 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[0]);
+    // Value ptr1 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[1]);
+    // Value v0 = load(ptr0);
+    // Value v1 = load(ptr1);
+    // return {extract_element(v0, i32_val(0)), extract_element(v1, i32_val(0)),
+    //         extract_element(v0, i32_val(1)), extract_element(v1,
+    //         i32_val(1))};
+  }
 }
 
 MMA16816SmemLoader::MMA16816SmemLoader(
-    int wpt, ArrayRef<uint32_t> order, uint32_t kOrder,
+    int wpt, ArrayRef<uint32_t> order, uint32_t kOrder, uint32_t kWidth,
     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
     ArrayRef<int> instrShape, ArrayRef<int> matShape, int perPhase,
     int maxPhase, int elemBytes, ConversionPatternRewriter &rewriter,
     TritonGPUToLLVMTypeConverter *typeConverter, const Location &loc)
-    : order(order.begin(), order.end()), kOrder(kOrder),
+    : order(order.begin(), order.end()), kOrder(kOrder), kWidth(kWidth),
       tileShape(tileShape.begin(), tileShape.end()),
       instrShape(instrShape.begin(), instrShape.end()),
       matShape(matShape.begin(), matShape.end()), perPhase(perPhase),
@@ -370,6 +402,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
+  canUseLdmatrix = canUseLdmatrix && (kWidth == 4 / elemBytes);
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwpt] if not transposed,
@@ -415,36 +448,6 @@ Type getShemPtrTy(Type argType) {
     llvm::report_fatal_error("mma16816 data type not supported");
 }
 
-Type getMatType(Type argType) {
-  MLIRContext *ctx = argType.getContext();
-  // floating point types
-  Type fp32x1Ty = vec_ty(type::f32Ty(ctx), 1);
-  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-  Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
-  Type fp16x2Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
-  // LLVM 14.0 does not support bf16 type, so we use i16 instead.
-  Type bf16x2Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
-  Type fp32Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32x1Ty));
-  // integer types
-  Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
-  Type i8x4Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
-
-  if (argType.isF16())
-    return fp16x2Pack4Ty;
-  else if (argType.isBF16())
-    return bf16x2Pack4Ty;
-  else if (argType.isF32())
-    return fp32Pack4Ty;
-  else if (argType.isInteger(8))
-    return i8x4Pack4Ty;
-  else
-    llvm::report_fatal_error("mma16816 data type not supported");
-}
-
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int n0, int n1,
     TritonGPUToLLVMTypeConverter *typeConverter, Location loc,
@@ -468,13 +471,12 @@ Value composeValuesToDotOperandLayoutStruct(
   return result;
 }
 
-std::function<void(int, int)>
-getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
-                MmaEncodingAttr mmaLayout, int wpt, uint32_t kOrder,
-                SmallVector<int> instrShape, SmallVector<int> matShape,
-                Value warpId, Value lane, ValueTable &vals, bool isA,
-                TritonGPUToLLVMTypeConverter *typeConverter,
-                ConversionPatternRewriter &rewriter, Location loc) {
+std::function<void(int, int)> getLoadMatrixFn(
+    Value tensor, const SharedMemoryObject &smemObj, MmaEncodingAttr mmaLayout,
+    int wpt, uint32_t kOrder, uint32_t kWidth, SmallVector<int> instrShape,
+    SmallVector<int> matShape, Value warpId, Value lane, ValueTable &vals,
+    bool isA, TritonGPUToLLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   Type eltTy = tensorTy.getElementType();
   // We assumes that the input operand of Dot should be from shared layout.
@@ -482,146 +484,105 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
+  llvm::outs() << isA << " " << sharedLayout.getVec() << " "
+               << sharedLayout.getPerPhase() << " "
+               << sharedLayout.getMaxPhase() << "\n";
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 
-  // the original register_lds2, but discard the prefetch logic.
-  auto ld2 = [](ValueTable &vals, int mn, int k, Value val) {
-    vals[{mn, k}] = val;
-  };
-
   // (a, b) is the coordinate.
-  auto load = [=, &rewriter, &vals, &ld2](int a, int b) {
+  auto load = [=, &rewriter, &vals](int a, int b) {
     MMA16816SmemLoader loader(
-        wpt, sharedLayout.getOrder(), kOrder, smemObj.strides,
+        wpt, sharedLayout.getOrder(), kOrder, kWidth, smemObj.strides,
         tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
         maxPhase, elemBytes, rewriter, typeConverter, loc);
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs =
         loader.computeOffsets(warpId, lane, cSwizzleOffset);
+    // initialize pointers
     const int numPtrs = loader.getNumPtrs();
     SmallVector<Value> ptrs(numPtrs);
-
     Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
-
     Type smemPtrTy = getShemPtrTy(eltTy);
-    for (int i = 0; i < numPtrs; ++i) {
-      ptrs[i] =
-          bitcast(gep(smemPtrTy, smemBase, ValueRange({offs[i]})), smemPtrTy);
-    }
-
+    for (int i = 0; i < numPtrs; ++i)
+      ptrs[i] = bitcast(gep(smemPtrTy, smemBase, offs[i]), smemPtrTy);
+    // actually load from shared memory
+    auto matTy = LLVM::LLVMStructType::getLiteral(eltTy.getContext(),
+                                                  SmallVector<Type>(4, i32_ty));
     auto [ha0, ha1, ha2, ha3] = loader.loadX4(
         (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, offs,
-        ptrs, getMatType(eltTy), getShemPtrTy(eltTy));
-
-    if (isA) {
-      ld2(vals, a, b, ha0);
-      ld2(vals, a + 1, b, ha1);
-      ld2(vals, a, b + 1, ha2);
-      ld2(vals, a + 1, b + 1, ha3);
-    } else {
-      ld2(vals, a, b, ha0);
-      ld2(vals, a + 1, b, ha2);
-      ld2(vals, a, b + 1, ha1);
-      ld2(vals, a + 1, b + 1, ha3);
-    }
+        ptrs, matTy, getShemPtrTy(eltTy));
+    if (!isA)
+      std::swap(ha1, ha2);
+    // update user-provided values in-place
+    vals[{a, b}] = ha0;
+    vals[{a + 1, b}] = ha1;
+    vals[{a, b + 1}] = ha2;
+    vals[{a + 1, b + 1}] = ha3;
   };
 
   return load;
 }
 
-Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
-            DotOperandEncodingAttr aEncoding, const SharedMemoryObject &smemObj,
-            TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
-  auto aTensorTy = tensor.getType().cast<RankedTensorType>();
-  int bitwidth = aTensorTy.getElementTypeBitWidth();
-  auto mmaLayout = aEncoding.getParent().cast<MmaEncodingAttr>();
-
-  SmallVector<int64_t> shape(aTensorTy.getShape().begin(),
-                             aTensorTy.getShape().end());
-
-  ValueTable ha;
-  std::function<void(int, int)> loadFn;
-  int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
-  int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
-
-  auto numRep = aEncoding.getMMAv2Rep(aTensorTy.getShape(), bitwidth);
-  int numRepM = numRep[0];
-  int numRepK = numRep[1];
-
-  if (aTensorTy.getEncoding().isa<SharedEncodingAttr>()) {
-    int wpt0 = mmaLayout.getWarpsPerCTA()[0];
-    Value warp = udiv(thread, i32_val(32));
-    Value lane = urem(thread, i32_val(32));
-    Value warpM = urem(urem(warp, i32_val(wpt0)), i32_val(shape[0] / 16));
-    // load from smem
-    // we use ldmatrix.x4 so each warp processes 16x16 elements.
-    int wpt = std::min<int>(wpt0, shape[0] / 16);
-    loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/,
-        {mmaInstrM, mmaInstrK} /*instrShape*/,
-        {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, lane /*laneId*/,
-        ha /*vals*/, true /*isA*/, typeConverter /* typeConverter */,
-        rewriter /*rewriter*/, loc /*loc*/);
-  } else if (aTensorTy.getEncoding().isa<BlockedEncodingAttr>()) {
-    // load from registers, used in gemm fuse
-    // TODO(Superjomn) Port the logic.
-    assert(false && "Loading A from register is not supported yet.");
-  } else {
-    assert(false && "A's layout is not supported.");
-  }
-
-  // step1. Perform loading.
-  for (int m = 0; m < numRepM; ++m)
-    for (int k = 0; k < numRepK; ++k)
-      loadFn(2 * m, 2 * k);
-
-  // step2. Format the values to LLVM::Struct to passing to mma codegen.
-  return composeValuesToDotOperandLayoutStruct(ha, numRepM, numRepK,
-                                               typeConverter, loc, rewriter);
-}
-
-Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
-            DotOperandEncodingAttr bEncoding, const SharedMemoryObject &smemObj,
-            TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
-  ValueTable hb;
+Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
+              DotOperandEncodingAttr encoding,
+              const SharedMemoryObject &smemObj,
+              TritonGPUToLLVMTypeConverter *typeConverter, Value thread,
+              bool isA) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   int bitwidth = tensorTy.getElementTypeBitWidth();
-  auto mmaLayout = bEncoding.getParent().cast<MmaEncodingAttr>();
+  auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
 
   SmallVector<int64_t> shape(tensorTy.getShape().begin(),
                              tensorTy.getShape().end());
 
+  ValueTable vals;
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
 
-  auto numRep = bEncoding.getMMAv2Rep(tensorTy.getShape(), bitwidth);
-  int numRepK = numRep[0];
-  int numRepN = numRep[1];
+  auto numRep = encoding.getMMAv2Rep(tensorTy.getShape(), bitwidth);
+  int kWidth = encoding.getMMAv2kWidth();
 
   int wpt0 = mmaLayout.getWarpsPerCTA()[0];
   int wpt1 = mmaLayout.getWarpsPerCTA()[1];
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
+  Value warpM = urem(urem(warp, i32_val(wpt0)), i32_val(shape[0] / 16));
   Value warpMN = udiv(warp, i32_val(wpt0));
   Value warpN = urem(urem(warpMN, i32_val(wpt1)), i32_val(shape[1] / 8));
-  // we use ldmatrix.x4 so each warp processes 16x16 elements.
-  int wpt = std::min<int>(wpt1, shape[1] / 16);
-  auto loadFn = getLoadMatrixFn(
-      tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/,
-      {mmaInstrK, mmaInstrN} /*instrShape*/,
-      {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, lane /*laneId*/,
-      hb /*vals*/, false /*isA*/, typeConverter /* typeConverter */,
-      rewriter /*rewriter*/, loc /*loc*/);
 
-  for (int n = 0; n < std::max(numRepN / 2, 1); ++n) {
+  int wpt;
+  if (isA)
+    wpt = std::min<int>(wpt0, shape[0] / 16);
+  else
+    wpt = std::min<int>(wpt1, shape[1] / 16);
+
+  std::function<void(int, int)> loadFn;
+  if (isA)
+    loadFn = getLoadMatrixFn(
+        tensor, smemObj, mmaLayout, wpt /*wpt*/, 1 /*kOrder*/, kWidth,
+        {mmaInstrM, mmaInstrK} /*instrShape*/,
+        {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, lane /*laneId*/,
+        vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
+        rewriter /*rewriter*/, loc /*loc*/);
+  else
+    loadFn = getLoadMatrixFn(
+        tensor, smemObj, mmaLayout, wpt /*wpt*/, 0 /*kOrder*/, kWidth,
+        {mmaInstrK, mmaInstrN} /*instrShape*/,
+        {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, lane /*laneId*/,
+        vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
+        rewriter /*rewriter*/, loc /*loc*/);
+
+  // Perform loading.
+  int numRepOuter = isA ? numRep[0] : std::max<int>(numRep[1] / 2, 1);
+  int numRepK = isA ? numRep[1] : numRep[0];
+  for (int m = 0; m < numRepOuter; ++m)
     for (int k = 0; k < numRepK; ++k)
-      loadFn(2 * n, 2 * k);
-  }
+      loadFn(2 * m, 2 * k);
 
-  Value result = composeValuesToDotOperandLayoutStruct(
-      hb, std::max(numRepN / 2, 1), numRepK, typeConverter, loc, rewriter);
-  return result;
+  // Format the values to LLVM::Struct to passing to mma codegen.
+  return composeValuesToDotOperandLayoutStruct(vals, numRepOuter, numRepK,
+                                               typeConverter, loc, rewriter);
 }
 
 namespace SharedToDotOperandMMAv2 {
@@ -630,12 +591,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
   if (opIdx == 0)
-    return loadA(rewriter, loc, tensor, encoding, smemObj, typeConverter,
-                 thread);
+    return loadArg(rewriter, loc, tensor, encoding, smemObj, typeConverter,
+                   thread, true);
   else {
     assert(opIdx == 1);
-    return loadB(rewriter, loc, tensor, encoding, smemObj, typeConverter,
-                 thread);
+    return loadArg(rewriter, loc, tensor, encoding, smemObj, typeConverter,
+                   thread, false);
   }
 }
 } // namespace SharedToDotOperandMMAv2
