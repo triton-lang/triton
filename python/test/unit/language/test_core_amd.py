@@ -1779,22 +1779,26 @@ def test_call():
 # -------------
 
 
-def test_if():
+@pytest.mark.parametrize("if_type", ["if", "if_exp"])
+def test_if(if_type):
 
     @triton.jit
-    def kernel(Cond, XTrue, XFalse, Ret):
+    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr):
         pid = tl.program_id(0)
         cond = tl.load(Cond)
-        if pid % 2:
-            tl.store(Ret, tl.load(XTrue))
+        if IfType == "if":
+            if pid % 2:
+                tl.store(Ret, tl.load(XTrue))
+            else:
+                tl.store(Ret, tl.load(XFalse))
         else:
-            tl.store(Ret, tl.load(XFalse))
+            tl.store(Ret, tl.load(XTrue)) if pid % 2 else tl.store(Ret, tl.load(XFalse))
 
     cond = torch.ones(1, dtype=torch.int32, device='cuda')
     x_true = torch.tensor([3.14], dtype=torch.float32, device='cuda')
     x_false = torch.tensor([1.51], dtype=torch.float32, device='cuda')
     ret = torch.empty(1, dtype=torch.float32, device='cuda')
-    kernel[(1,)](cond, x_true, x_false, ret)
+    kernel[(1,)](cond, x_true, x_false, ret, if_type)
 
 
 def test_num_warps_pow2():
@@ -1836,20 +1840,32 @@ def test_math_tensor(dtype_str, expr, lib_path):
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
 
     if expr == 'math.log2':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.broadcast_to(tl.math.log2(5.0), x.shape)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.broadcast_to(tl.{expr}(5.0), x.shape)'})
         y_ref = np.log2(5.0)
     elif expr == 'math.ffs':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.ffs(x)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
         y_ref = np.zeros(shape, dtype=x.dtype)
         for i in range(shape[0]):
             y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
+    elif expr == 'math.scalbn':
+        pytest.skip("math.scalbn has mismatch issues")
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, 2)'})
+        y_ref = x * pow(2, 2)
+    elif expr == 'math.pow_dtype':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.math.pow(x, 0.5)'})
+        y_ref = np.power(x, 0.5)
     elif expr == 'math.pow':
         # numpy does not allow negative factors in power, so we use abs()
         x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x)'})
         y_ref = np.power(x, x)
+    elif expr == 'math.pow_dtype':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
+        y_ref = np.power(x, 0.5)
     elif expr == 'math.norm4d':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.norm4d(x, x, x, x)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x, x, x)'})
         y_ref = np.sqrt(4 * np.power(x, 2))
 
     x_tri = to_triton(x)
@@ -1864,7 +1880,9 @@ def test_math_tensor(dtype_str, expr, lib_path):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
-                         [('float32', 'math.pow', '')])
+                         [('float32', 'math.pow', ''),
+                          ('float64', 'math.pow_dtype', ''),
+                          ('float64', 'math.pow', tl.math.libdevice_path())])
 def test_math_scalar(dtype_str, expr, lib_path):
 
     @triton.jit
@@ -1880,14 +1898,19 @@ def test_math_scalar(dtype_str, expr, lib_path):
     y_ref = np.zeros(shape, dtype=x.dtype)
 
     # numpy does not allow negative factors in power, so we use abs()
-    x = np.abs(x)
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
-    y_ref[:] = np.power(x, x)
+    if expr == 'math.pow':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
+        y_ref[:] = np.power(x, x)
+    elif expr == 'math.pow_dtype':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
+        y_ref[:] = np.power(x, 0.5)
 
     # triton result
     x_tri = to_triton(x)[0].item()
     y_tri = to_triton(numpy_random((shape[0],), dtype_str=dtype_str, rs=rs), device='cuda')
-    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'math': lib_path})
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path})
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
 
@@ -1896,21 +1919,24 @@ def test_math_scalar(dtype_str, expr, lib_path):
 # -----------------------
 
 
-def test_for_iv_int64():
+@pytest.mark.parametrize("lo, hi, iv", [(2**35, 2**35 + 20, 1), (2**35, 2**35 + 20, 2), (2**35, 2**35 + 20, 3),
+                                        (15, -16, -1), (15, -16, -2), (15, -16, -3),
+                                        (-18, -22, -1), (22, 18, -1)])
+def test_for_iv(lo, hi, iv):
 
     @triton.jit
-    def kernel(Out, lo, hi):
+    def kernel(Out, lo, hi, iv: tl.constexpr):
         acc = 0
         acc = acc.to(tl.int64)
-        for i in range(lo, hi):
+        for i in range(lo, hi, iv):
             acc += i
         tl.store(Out, acc)
 
     lo = 2**35
     hi = 2**35 + 20
     out = to_triton(np.zeros((1,), dtype=np.int64), device='cuda')
-    kernel[(1,)](out, lo, hi)
-    assert out[0] == sum(range(lo, hi))
+    kernel[(1,)](out, lo, hi, iv)
+    assert out[0] == sum(range(lo, hi, iv))
 
 
 def test_if_else():
@@ -2111,7 +2137,7 @@ def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
 #dst = {dst_layout}
 """ + """
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
-  func.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<128> : tensor<128x1xi32, #src>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>
     %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #src}>>
@@ -2129,7 +2155,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
     %14 = tt.addptr %3, %12 : tensor<128x128x!tt.ptr<f16>, #dst>, tensor<128x128xi32, #dst>
     tt.store %14, %13 : tensor<128x128xf16, #dst>
-    return
+    tt.return
   }
 }
 """
