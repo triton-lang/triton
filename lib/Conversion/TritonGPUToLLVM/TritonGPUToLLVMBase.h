@@ -11,7 +11,7 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
-
+#include <set>
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -521,6 +521,13 @@ public:
           result = emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, type);
         if (mmaLayout.isAmpere())
           result = emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, type);
+      } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+        auto parentLayout = sliceLayout.getParent();
+        auto parentShape = sliceLayout.paddedShape(type.getShape());
+        RankedTensorType parentTy = RankedTensorType::get(
+            parentShape, type.getElementType(), parentLayout);
+        result = emitBaseIndexForLayout(loc, rewriter, parentLayout, parentTy);
+        result.erase(result.begin() + sliceLayout.getDim());
       } else {
         llvm_unreachable("unsupported emitBaseIndexForLayout");
       }
@@ -540,6 +547,8 @@ public:
       if (mmaLayout.isAmpere())
         return emitOffsetForMmaLayoutV2(mmaLayout, type);
     }
+    if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
+      return emitOffsetForSliceLayout(sliceLayout, type);
     llvm_unreachable("unsupported emitOffsetForLayout");
   }
 
@@ -565,7 +574,7 @@ public:
       } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
         result = emitIndicesForDistributedLayout(loc, b, mma, type);
       } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
-        result = emitIndicesForSliceLayout(loc, b, slice, type);
+        result = emitIndicesForDistributedLayout(loc, b, slice, type);
       } else {
         llvm_unreachable(
             "emitIndices for layouts other than blocked & slice not "
@@ -879,24 +888,29 @@ private:
     return multiDimIdx;
   }
 
-  SmallVector<SmallVector<Value>>
-  emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
-                            const SliceEncodingAttr &sliceLayout,
-                            RankedTensorType type) const {
+  SmallVector<SmallVector<unsigned>>
+  emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
+                           RankedTensorType type) const {
     auto parentEncoding = sliceLayout.getParent();
     unsigned dim = sliceLayout.getDim();
     auto parentShape = sliceLayout.paddedShape(type.getShape());
     RankedTensorType parentTy = RankedTensorType::get(
         parentShape, type.getElementType(), parentEncoding);
-    auto parentIndices = emitIndices(loc, rewriter, parentEncoding, parentTy);
-    unsigned numIndices = parentIndices.size();
-    SmallVector<SmallVector<Value>> resultIndices;
-    for (unsigned i = 0; i < numIndices; ++i) {
-      SmallVector<Value> indices = parentIndices[i];
-      indices.erase(indices.begin() + dim);
-      resultIndices.push_back(indices);
+    auto parentOffsets = emitOffsetForLayout(parentEncoding, parentTy);
+
+    unsigned numOffsets = parentOffsets.size();
+    SmallVector<SmallVector<unsigned>> resultOffsets;
+    std::set<SmallVector<unsigned>> uniqueOffsets;
+
+    for (unsigned i = 0; i < numOffsets; ++i) {
+      SmallVector<unsigned> offsets = parentOffsets[i];
+      offsets.erase(offsets.begin() + dim);
+      if (uniqueOffsets.find(offsets) == uniqueOffsets.end()) {
+        resultOffsets.push_back(offsets);
+        uniqueOffsets.insert(offsets);
+      }
     }
-    return resultIndices;
+    return resultOffsets;
   }
 
 protected:
