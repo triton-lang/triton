@@ -116,23 +116,64 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
   }
 };
 
-template <typename SourceOp>
-struct ViewLikeOpConversion : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
-  using OpAdaptor = typename SourceOp::Adaptor;
-  explicit ViewLikeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                                PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
+struct ViewOpConversion : public ConvertTritonGPUOpToLLVMPattern<ViewOp> {
+  using OpAdaptor = typename ViewOp::Adaptor;
+  explicit ViewOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<ViewOp>(typeConverter, benefit) {}
 
   LogicalResult
-  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+  matchAndRewrite(ViewOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto vals = this->getTypeConverter()->unpackLLElements(
         loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
-    Value view =
+    Value ret =
         this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
-    rewriter.replaceOp(op, view);
+    rewriter.replaceOp(op, ret);
+    return success();
+  }
+};
+
+struct ExpandDimsOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp> {
+  using OpAdaptor = typename ExpandDimsOp::Adaptor;
+  explicit ExpandDimsOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                                  PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto srcVals = this->getTypeConverter()->unpackLLElements(
+        loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
+
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+    auto resultTy = op.getType().template cast<RankedTensorType>();
+
+    assert(srcTy.getEncoding().isa<SliceEncodingAttr>() &&
+           "ExpandDimsOp only support SliceEncodingAttr");
+    auto srcLayout = srcTy.getEncoding().dyn_cast<SliceEncodingAttr>();
+    auto resultLayout = resultTy.getEncoding();
+
+    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
+    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
+    DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
+    for (size_t i = 0; i < srcOffsets.size(); i++) {
+      srcValues[srcOffsets[i]] = srcVals[i];
+    }
+
+    SmallVector<Value> resultVals;
+    for (size_t i = 0; i < resultOffsets.size(); i++) {
+      auto offset = resultOffsets[i];
+      offset.erase(offset.begin() + srcLayout.getDim());
+      resultVals.push_back(srcValues.lookup(offset));
+    }
+    Value ret = this->getTypeConverter()->packLLElements(loc, resultVals,
+                                                         rewriter, resultTy);
+    rewriter.replaceOp(op, ret);
     return success();
   }
 };
@@ -163,9 +204,8 @@ struct TransOpConversion
 void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   PatternBenefit benefit) {
-  patterns.add<ViewLikeOpConversion<triton::ViewOp>>(typeConverter, benefit);
-  patterns.add<ViewLikeOpConversion<triton::ExpandDimsOp>>(typeConverter,
-                                                           benefit);
+  patterns.add<ViewOpConversion>(typeConverter, benefit);
+  patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<CatOpConversion>(typeConverter, benefit);
