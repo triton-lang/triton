@@ -574,7 +574,7 @@ public:
       } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
         result = emitIndicesForDistributedLayout(loc, b, mma, type);
       } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
-        result = emitIndicesForSliceLayout(loc, b, slice, type);
+        result = emitIndicesForDistributedLayout(loc, b, slice, type);
       } else {
         llvm_unreachable(
             "emitIndices for layouts other than blocked & slice not "
@@ -911,34 +911,6 @@ private:
       }
     }
     return resultOffsets;
-  }
-
-  SmallVector<SmallVector<Value>>
-  emitIndicesForSliceLayout(Location loc, ConversionPatternRewriter &rewriter,
-                            const SliceEncodingAttr &sliceLayout,
-                            RankedTensorType type) const {
-    auto parentEncoding = sliceLayout.getParent();
-    auto parentShape = sliceLayout.paddedShape(type.getShape());
-    RankedTensorType parentTy = RankedTensorType::get(
-        parentShape, type.getElementType(), parentEncoding);
-
-    unsigned dim = sliceLayout.getDim();
-    // step 1, delinearize threadId to get the base index
-    auto multiDimBase =
-        emitBaseIndexForLayout(loc, rewriter, sliceLayout, type);
-    // step 2, get offset of each element
-    auto offset = emitOffsetForSliceLayout(sliceLayout, type);
-    // step 3, add offset to base, and reorder the sequence of indices to
-    // guarantee that elems in the same sizePerThread are adjacent in order
-    auto shape = type.getShape();
-    unsigned rank = shape.size();
-    unsigned elemsPerThread = offset.size();
-    SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
-                                                SmallVector<Value>(rank));
-    for (unsigned n = 0; n < elemsPerThread; ++n)
-      for (unsigned k = 0; k < rank; ++k)
-        multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
-    return multiDimIdx;
   }
 
 protected:

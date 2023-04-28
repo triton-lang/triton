@@ -107,7 +107,9 @@ private:
       unsigned dim = sliceLayout.getDim();
       auto parentEncoding = sliceLayout.getParent();
       auto parentSizePerThread = getSizePerThread(parentEncoding);
-      unsigned stride = parentSizePerThread[dim];
+      unsigned stride = 1;
+      if (getOrder(parentEncoding)[0] == dim)
+        stride = parentSizePerThread[dim];
       auto parentShape = sliceLayout.paddedShape(shape);
       auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
                                             parentEncoding);

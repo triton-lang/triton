@@ -103,7 +103,6 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    // TODO: maybe should not be supported
     auto sizePerThread = getSizePerThread(sliceLayout.getParent());
     sizePerThread.erase(sizePerThread.begin() + sliceLayout.getDim());
     return sizePerThread;
