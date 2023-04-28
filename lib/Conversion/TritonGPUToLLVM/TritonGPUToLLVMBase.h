@@ -900,14 +900,14 @@ private:
 
     unsigned numOffsets = parentOffsets.size();
     SmallVector<SmallVector<unsigned>> resultOffsets;
-    std::set<SmallVector<unsigned>> unique_offsets;
+    std::set<SmallVector<unsigned>> uniqueOffsets;
 
     for (unsigned i = 0; i < numOffsets; ++i) {
       SmallVector<unsigned> offsets = parentOffsets[i];
       offsets.erase(offsets.begin() + dim);
-      if (unique_offsets.find(offsets) == unique_offsets.end()) {
+      if (uniqueOffsets.find(offsets) == uniqueOffsets.end()) {
         resultOffsets.push_back(offsets);
-        unique_offsets.insert(offsets);
+        uniqueOffsets.insert(offsets);
       }
     }
     return resultOffsets;
