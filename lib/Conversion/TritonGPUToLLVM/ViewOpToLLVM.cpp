@@ -202,9 +202,7 @@ struct TransOpConversion
 };
 
 void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns, int numWarps,
-                                  AxisInfoAnalysis &axisInfoAnalysis,
-                                  const Allocation *allocation, Value smem,
+                                  RewritePatternSet &patterns,
                                   PatternBenefit benefit) {
   patterns.add<ViewOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);

@@ -688,7 +688,7 @@ def test_index1d(expr, dtype_str, device='cuda'):
 
 
 @triton.jit
-def fn(a, b):
+def tuples_fn(a, b):
     return a + b, \
         a - b, \
         a * b
@@ -701,7 +701,7 @@ def test_tuples():
     def with_fn(X, Y, A, B, C):
         x = tl.load(X)
         y = tl.load(Y)
-        a, b, c = fn(x, y)
+        a, b, c = tuples_fn(x, y)
         tl.store(A, a)
         tl.store(B, b)
         tl.store(C, c)
@@ -726,6 +726,80 @@ def test_tuples():
         assert a_tri == a_ref
         assert b_tri == b_ref
         assert c_tri == c_ref
+
+
+@triton.jit(noinline=True)
+def noinline_simple_fn(x, y, Z):
+    z = x + y
+    tl.store(Z, z)
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn1(x):
+    return x + 1
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn2(y):
+    return y + 2
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn(x, y, Z):
+    t0 = noinline_call_graph_fn1(x)
+    t1 = noinline_call_graph_fn2(y)
+    z = t0 + t1
+    tl.store(Z, z)
+
+
+@triton.jit(noinline=True)
+def noinline_shared_fn(x, y, Z):
+    offs = tl.arange(0, 16)[:, None] * 16 + tl.arange(0, 16)[None, :]
+    z = tl.load(Z + offs)
+    z = tl.dot(z, z) + x + y
+    tl.store(Z + offs, z)
+
+
+@triton.jit(noinline=True)
+def noinline_dynamic_fn(x, y, Z):
+    if x >= 1:
+        x = noinline_call_graph_fn1(x)
+    else:
+        x = noinline_call_graph_fn2(x)
+    if y >= 2:
+        y = noinline_call_graph_fn2(y)
+    else:
+        y = noinline_call_graph_fn1(y)
+    z = x + y
+    tl.store(Z, z)
+
+
+@pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic"])
+def test_noinline(mode):
+    device = 'cuda'
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        x = tl.load(X)
+        y = tl.load(Y)
+        GENERATE_TEST_HERE(x, y, Z)
+
+    func_name = f'noinline_{mode}_fn'
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': func_name})
+    x = torch.tensor([1.0], device=device, dtype=torch.float32)
+    y = torch.tensor([2.0], device=device, dtype=torch.float32)
+    if mode == "shared":
+        z = torch.ones((16, 16), device=device, dtype=torch.float32)
+    else:
+        z = torch.tensor([0.0], device=device, dtype=torch.float32)
+    kernel[(1,)](x, y, z, num_warps=1)
+    if mode == "simple":
+        assert torch.equal(z, x + y)
+    elif mode == "call_graph" or mode == "dynamic":
+        assert torch.equal(z, x + 1 + y + 2)
+    elif mode == "shared":
+        ref = torch.full((16, 16), 16, device=device, dtype=torch.float32)
+        assert torch.equal(z, ref + x + y)
 
 
 # ---------------
