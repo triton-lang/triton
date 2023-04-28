@@ -4,9 +4,9 @@
 #include "../Utility.h"
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
 
@@ -19,11 +19,13 @@ Type getShemPtrTy(Type elemTy) {
 }
 
 // Get a waveId for M axis.
-Value getWaveM(ConversionPatternRewriter &rewriter, Location loc, Value wave, const ArrayRef<unsigned int> &wpt, int elemPerInstr, int M) {
+Value getWaveM(ConversionPatternRewriter &rewriter, Location loc, Value wave,
+               const ArrayRef<unsigned int> &wpt, int elemPerInstr, int M) {
   return urem(urem(wave, i32_val(wpt[0])), i32_val(M / elemPerInstr));
 }
 // Get a waveId for N axis.
-Value getWaveN(ConversionPatternRewriter &rewriter, Location loc, Value wave, const ArrayRef<unsigned int> &wpt, int elemPerInstr, int N) {
+Value getWaveN(ConversionPatternRewriter &rewriter, Location loc, Value wave,
+               const ArrayRef<unsigned int> &wpt, int elemPerInstr, int N) {
   Value waveMN = udiv(wave, i32_val(wpt[0]));
   return urem(urem(waveMN, i32_val(wpt[1])), i32_val(N / elemPerInstr));
 }
@@ -32,12 +34,11 @@ Value getWaveN(ConversionPatternRewriter &rewriter, Location loc, Value wave, co
 
 namespace SharedToDotOperandMMAv3 {
 
-llvm::SmallVector<Value> computeOffsetsA(ConversionPatternRewriter &rewriter,
-                                         Location loc,
-                                         const ArrayRef<int64_t> &aElemsPerThread,
-                                         Value waveM, Value laneId, int wptA,
-                                         int numOfElems, ArrayRef<int64_t> reps,
-                                         Value cSwizzleOffset) {
+llvm::SmallVector<Value>
+computeOffsetsA(ConversionPatternRewriter &rewriter, Location loc,
+                const ArrayRef<int64_t> &aElemsPerThread, Value waveM,
+                Value laneId, int wptA, int numOfElems, ArrayRef<int64_t> reps,
+                Value cSwizzleOffset) {
   auto numM = reps[0];
   auto numK = reps[1];
   SmallVector<Value> offsets(numM * numK * numOfElems);
@@ -48,13 +49,15 @@ llvm::SmallVector<Value> computeOffsetsA(ConversionPatternRewriter &rewriter,
   Value waveHalf = udiv(laneId, _32);
 
   // Value waveOffset = mul(waveM, i32_val(blockSize));
-  Value waveOffset = wptA > 1 ? mul(waveM, i32_val(aElemsPerThread[0] * lineSize))
-                              : mul(waveM, i32_val(blockSize));
+  Value waveOffset = wptA > 1
+                         ? mul(waveM, i32_val(aElemsPerThread[0] * lineSize))
+                         : mul(waveM, i32_val(blockSize));
   Value colOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
 
   for (int block = 0; block < numM; ++block) {
-    Value blockOffset = wptA > 1 ? i32_val(block * blockSize)
-                                 : i32_val(block * aElemsPerThread[0] * lineSize);
+    Value blockOffset = wptA > 1
+                            ? i32_val(block * blockSize)
+                            : i32_val(block * aElemsPerThread[0] * lineSize);
     for (int tile = 0; tile < numK; ++tile) {
       Value tileOffset = i32_val(tile * aElemsPerThread[1]);
       for (int elem = 0; elem < numOfElems; ++elem) {
@@ -70,13 +73,11 @@ llvm::SmallVector<Value> computeOffsetsA(ConversionPatternRewriter &rewriter,
   return offsets;
 }
 
-llvm::SmallVector<Value> computeOffsetsB(ConversionPatternRewriter &rewriter,
-                                         Location loc,
-                                         const ArrayRef<int64_t> &bElemsPerThread,
-                                         int warpsPerGroupN,
-                                         Value waveN, Value laneId, int wptB,
-                                         int numOfElems, ArrayRef<int64_t> reps,
-                                         Value cSwizzleOffset) {
+llvm::SmallVector<Value>
+computeOffsetsB(ConversionPatternRewriter &rewriter, Location loc,
+                const ArrayRef<int64_t> &bElemsPerThread, int warpsPerGroupN,
+                Value waveN, Value laneId, int wptB, int numOfElems,
+                ArrayRef<int64_t> reps, Value cSwizzleOffset) {
   auto numK = reps[0];
   auto numN = reps[1];
   SmallVector<Value> offsets(numK * numN * numOfElems);
@@ -109,10 +110,10 @@ llvm::SmallVector<Value> computeOffsetsB(ConversionPatternRewriter &rewriter,
   return offsets;
 }
 
-Value loadA(ConversionPatternRewriter &rewriter,
-    Location loc, Value thread, DotOperandEncodingAttr encoding,
-    TritonGPUToLLVMTypeConverter *typeConverter,
-    Value tensor, const SharedMemoryObject &smemObj) {
+Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
+            DotOperandEncodingAttr encoding,
+            TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
+            const SharedMemoryObject &smemObj) {
   auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
 
@@ -135,7 +136,8 @@ Value loadA(ConversionPatternRewriter &rewriter,
   Value wave = udiv(thread, waveSize);
   Value lane = urem(thread, waveSize);
 
-  Value waveM = getWaveM(rewriter, loc, wave, warpsPerCTA, mfmaInstrM, shape[0]);
+  Value waveM =
+      getWaveM(rewriter, loc, wave, warpsPerCTA, mfmaInstrM, shape[0]);
   int numOfElems = std::max<int>(mfmaInstrM * mfmaInstrK / 64 /*wave size*/, 1);
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
   // TODO make macro tile size granilarity configurable
@@ -146,8 +148,8 @@ Value loadA(ConversionPatternRewriter &rewriter,
       std::max<int>(shape[1] / (mmaLayout.getWarpsPerCTA()[1] * 32), 1);
   int wptN = std::min<int>(mmaLayout.getWarpsPerCTA()[1], macroTileN);
   int wpt = std::max<int>(wptM, wptN);
-  auto offsets = computeOffsetsA(rewriter, loc, aElemsPerThread, waveM, lane, wpt, numOfElems, numReps,
-                                 cSwizzleOffset);
+  auto offsets = computeOffsetsA(rewriter, loc, aElemsPerThread, waveM, lane,
+                                 wpt, numOfElems, numReps, cSwizzleOffset);
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
@@ -180,10 +182,10 @@ Value loadA(ConversionPatternRewriter &rewriter,
   return result;
 }
 
-Value loadB(ConversionPatternRewriter &rewriter,
-    Location loc, Value thread, DotOperandEncodingAttr encoding,
-    TritonGPUToLLVMTypeConverter *typeConverter,
-    Value tensor, const SharedMemoryObject &smemObj) {
+Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
+            DotOperandEncodingAttr encoding,
+            TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
+            const SharedMemoryObject &smemObj) {
   auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
 
@@ -205,7 +207,8 @@ Value loadB(ConversionPatternRewriter &rewriter,
   Value wave = udiv(thread, waveSize);
   Value lane = urem(thread, waveSize);
 
-  Value waveN = getWaveN(rewriter, loc, wave, mmaLayout.getWarpsPerCTA(), mfmaInstrN, shape[1]);
+  Value waveN = getWaveN(rewriter, loc, wave, mmaLayout.getWarpsPerCTA(),
+                         mfmaInstrN, shape[1]);
   int numOfElems = std::max<int>(mfmaInstrK * mfmaInstrN / 64 /*wave size*/, 1);
   Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
 
@@ -218,8 +221,9 @@ Value loadB(ConversionPatternRewriter &rewriter,
   int wpt = std::max<int>(wptM, wptN);
 
   int warpsPerGroupN = mmaLayout.getWarpsPerCTA()[1];
-  auto offsets = computeOffsetsB(rewriter, loc, bElemsPerThread, warpsPerGroupN, waveN, lane, wpt, numOfElems, numReps,
-                                 cSwizzleOffset);
+  auto offsets =
+      computeOffsetsB(rewriter, loc, bElemsPerThread, warpsPerGroupN, waveN,
+                      lane, wpt, numOfElems, numReps, cSwizzleOffset);
 
   Value smemBase = smemObj.getBaseBeforeSwizzle(order[0], loc, rewriter);
 
@@ -259,10 +263,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   switch (opIdx) {
   case 0:
     // operand $a
-    return loadA(rewriter, loc, thread, encoding, typeConverter, tensor, smemObj);
+    return loadA(rewriter, loc, thread, encoding, typeConverter, tensor,
+                 smemObj);
   case 1:
     // operand $b
-    return loadB(rewriter, loc, thread, encoding, typeConverter, tensor, smemObj);
+    return loadB(rewriter, loc, thread, encoding, typeConverter, tensor,
+                 smemObj);
   default:
     assert(false && "unexpected operand idx");
     return Value();

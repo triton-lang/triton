@@ -39,12 +39,10 @@ struct DotOpMFMAConversionHelper {
   MLIRContext *ctx{};
 
   explicit DotOpMFMAConversionHelper(
-      MmaEncodingAttr mmaLayout,
-      ConversionPatternRewriter &rewriter,
+      MmaEncodingAttr mmaLayout, ConversionPatternRewriter &rewriter,
       TritonGPUToLLVMTypeConverter *typeConverter, Location loc)
-      : mmaLayout(mmaLayout),
-        rewriter(rewriter), typeConverter(typeConverter), loc(loc),
-        ctx(mmaLayout.getContext()) { }
+      : mmaLayout(mmaLayout), rewriter(rewriter), typeConverter(typeConverter),
+        loc(loc), ctx(mmaLayout.getContext()) {}
 
   Value getThreadId() const {
     auto llvmIndexTy = typeConverter->getIndexType();
@@ -62,7 +60,8 @@ struct DotOpMFMAConversionHelper {
     return gd;
   }
 
-  Value generateMFMAOp(MatrixCoreType mfmaTy, Value valA, Value valB, Value valC) const {
+  Value generateMFMAOp(MatrixCoreType mfmaTy, Value valA, Value valB,
+                       Value valC) const {
     auto resType = valC.getType();
     Value zeroFlag = i32_val(0);
     switch (mfmaTy) {
@@ -91,7 +90,7 @@ struct DotOpMFMAConversionHelper {
     }
   }
 
-  static MatrixCoreType getMatrixCoreTypeFromDot(DotOp op){
+  static MatrixCoreType getMatrixCoreTypeFromDot(DotOp op) {
     auto aOperandTy = op.getA().getType();
     auto tensorTy = aOperandTy.cast<RankedTensorType>();
     auto elemTy = tensorTy.getElementType();
@@ -135,7 +134,7 @@ struct DotOpMFMAConversionHelper {
     Value loadedA = adaptor.getA();
     Value loadedB = adaptor.getB();
     Value loadedC = adaptor.getC();
-  
+
     auto numRepM = repA[0];
     auto numRepN = repB[1];
     auto numRepK = repA[1];
@@ -145,8 +144,9 @@ struct DotOpMFMAConversionHelper {
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, numRepN, numRepK, aTensorTy.getElementType());
     auto dstElemTy = dTensorTy.getElementType();
-    auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter, dstElemTy);
-  
+    auto fc =
+        typeConverter->unpackLLElements(loc, loadedC, rewriter, dstElemTy);
+
     auto vecTy = vec_ty(dstElemTy, 16);
     for (int m = 0; m < numRepM; ++m) {
       for (int n = 0; n < numRepN; ++n) {
@@ -155,7 +155,7 @@ struct DotOpMFMAConversionHelper {
           acc = insert_element(vecTy, acc, fc[m * numRepN * 16 + n * 16 + v],
                                i32_val(v));
         }
-  
+
         for (size_t k = 0; k < numRepK; k++) {
           acc = generateMFMAOp(mfmaTy, ha[{m, k}], hb[{n, k}], acc);
         }
@@ -165,13 +165,13 @@ struct DotOpMFMAConversionHelper {
         }
       }
     }
-  
+
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
     Value res = typeConverter->packLLElements(loc, fc, rewriter, structTy);
     rewriter.replaceOp(op, res);
-  
+
     return success();
   }
 
@@ -190,12 +190,12 @@ struct DotOpMFMAConversionHelper {
 
 } // namespace
 
-
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
-  auto rankedTType =
-      [](Value tensor) { return tensor.getType().cast<RankedTensorType>(); };
+  auto rankedTType = [](Value tensor) {
+    return tensor.getType().cast<RankedTensorType>();
+  };
 
   assert(rankedTType(op.getA()).getEncoding().isa<DotOperandEncodingAttr>() &&
          rankedTType(op.getB()).getEncoding().isa<DotOperandEncodingAttr>() &&
@@ -212,10 +212,10 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   auto loc = op.getLoc();
   auto mmaLayout = op.getResult()
-                     .getType()
-                     .cast<RankedTensorType>()
-                     .getEncoding()
-                     .cast<MmaEncodingAttr>();
+                       .getType()
+                       .cast<RankedTensorType>()
+                       .getEncoding()
+                       .cast<MmaEncodingAttr>();
 
   DotOpMFMAConversionHelper helper(mmaLayout, rewriter, typeConverter, loc);
 
