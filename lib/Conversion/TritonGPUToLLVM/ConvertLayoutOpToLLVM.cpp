@@ -40,6 +40,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
 }
 
+#ifdef USE_ROCM
 namespace SharedToDotOperandMMAv3 {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
@@ -47,6 +48,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
 } // SharedToDotOperandMMAv3
+#endif
 
 namespace SharedToDotOperandFMA {
 Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
@@ -145,13 +147,17 @@ private:
       SmallVector<Value> multiDimWarpId(2);
       multiDimWarpId[0] = urem(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
       multiDimWarpId[1] = udiv(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
+#ifdef USE_ROCM
       Value _0 = i32_val(0);
+#endif
       Value _1 = i32_val(1);
       Value _2 = i32_val(2);
       Value _4 = i32_val(4);
       Value _8 = i32_val(8);
       Value _16 = i32_val(16);
+#ifdef USE_ROCM
       Value _32 = i32_val(32);
+#endif
       if (mmaLayout.isAmpere()) {
         multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
         multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));

@@ -13,19 +13,6 @@ using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
-namespace {
-
-// Get number of elements per thread for $a and $b operand of MFMA dot op.
-static size_t getMFMAOperandNumElemsPerThread(RankedTensorType operand) {
-  auto encoding = operand.getEncoding().cast<DotOperandEncodingAttr>();
-  auto elemTy = operand.getElementType();
-  auto reps = encoding.getMMAv3Rep(operand.getShape(), elemTy);
-  return reps[0] * reps[1];
-}
-
-} // namespace
-
-
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const DataLayoutAnalysis *analysis)
