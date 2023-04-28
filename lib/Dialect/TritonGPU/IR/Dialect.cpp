@@ -103,10 +103,9 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto ret = getSizePerThread(sliceLayout.getParent());
-    return ret;
-    // ret.erase(ret.begin() + sliceLayout.getDim());
-    return ret;
+    auto sizePerThread = getSizePerThread(sliceLayout.getParent());
+    sizePerThread.erase(sizePerThread.begin() + sliceLayout.getDim());
+    return sizePerThread;
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     if (mmaLayout.isAmpere()) {
       return {2, 2};
@@ -146,9 +145,41 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     assert(mmaLayout.isVolta() || mmaLayout.isAmpere());
     return {1, 2};
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    return getContigPerThread(parentLayout);
   } else {
     return getSizePerThread(layout);
   }
+}
+
+SmallVector<unsigned> getUniqueContigPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
+    return SmallVector<unsigned>(1, 1);
+  auto tensorType = type.cast<RankedTensorType>();
+  auto shape = tensorType.getShape();
+  // If slice layout, call recursively on parent layout, and drop
+  // sliced dim
+  if (auto sliceLayout =
+          tensorType.getEncoding().dyn_cast<SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    auto parentShape = sliceLayout.paddedShape(shape);
+    auto parentTy = RankedTensorType::get(
+        parentShape, tensorType.getElementType(), parentLayout);
+    auto parentUniqueContigPerThread = getUniqueContigPerThread(parentTy);
+    parentUniqueContigPerThread.erase(parentUniqueContigPerThread.begin() +
+                                      sliceLayout.getDim());
+    return parentUniqueContigPerThread;
+  }
+  // Base case
+  auto rank = shape.size();
+  SmallVector<unsigned> ret(rank);
+  auto contigPerThread = getContigPerThread(tensorType.getEncoding());
+  assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
+  for (int d = 0; d < rank; ++d) {
+    ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
+  }
+  return ret;
 }
 
 SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
@@ -375,6 +406,7 @@ SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   auto parent = getParent();
   auto parentElemsPerThread =
       ::getElemsPerThread(parent, paddedShape(shape), eltTy);
+  parentElemsPerThread.erase(parentElemsPerThread.begin() + getDim());
   return parentElemsPerThread;
 }
 unsigned SliceEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
