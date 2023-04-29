@@ -332,7 +332,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     if (isActualTrans)
       std::swap(vptrs[1], vptrs[2]);
     // pack loaded vectors into 4 32-bit values
-    int inc = isActualTrans ? 1 : kWidth;
+    int inc = needTrans ? 1 : kWidth;
     VectorType packedTy = vec_ty(int_ty(8 * elemBytes), inc);
     int canonBits = std::min(32, 8 * elemBytes * inc);
     int canonWidth = (8 * elemBytes * inc) / canonBits;
@@ -462,9 +462,6 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
-  llvm::outs() << isA << " " << sharedLayout.getVec() << " "
-               << sharedLayout.getPerPhase() << " "
-               << sharedLayout.getMaxPhase() << "\n";
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 
