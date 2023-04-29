@@ -706,7 +706,6 @@ public:
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto argTy = op->getOperand(0).getType();
     auto resultTy = op.getType();
     Location loc = op->getLoc();
     // element type
@@ -716,6 +715,7 @@ public:
     //
     SmallVector<SmallVector<Value>> allOperands;
     for (auto operand : adaptor.getOperands()) {
+      auto argTy = op->getOperand(0).getType();
       auto sub_operands = this->getTypeConverter()->unpackLLElements(
           loc, operand, rewriter, argTy);
       sub_operands = unpackI32(sub_operands, argTy, rewriter, loc,
@@ -724,6 +724,8 @@ public:
       for (auto v : llvm::enumerate(sub_operands))
         allOperands[v.index()].push_back(v.value());
     }
+    if (allOperands.size() == 0)
+      allOperands.push_back({});
     for (const SmallVector<Value> &operands : allOperands) {
       Value curr =
           ((ConcreteT *)(this))
@@ -732,7 +734,10 @@ public:
         return failure();
       resultVals.push_back(curr);
     }
-    resultVals = reorderValues(resultVals, argTy, resultTy);
+    if (op->getNumOperands() > 0) {
+      auto argTy = op->getOperand(0).getType();
+      resultVals = reorderValues(resultVals, argTy, resultTy);
+    }
     resultVals =
         packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
