@@ -100,9 +100,10 @@ private:
       // to map every `axisSizePerThread` to 1 value in smem as:
       // writeIdx[axis] = index[axis] / axisSizePerThread
       writeIdx[axis] = udiv(index[axis], axisSizePerThread);
-    }
-    auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>();
-    if (mmaLayout && mmaLayout.isAmpere()) {
+    } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+      if (!mmaLayout.isAmpere()) {
+        llvm::report_fatal_error("Unsupported layout");
+      }
       if (axis == 0) {
         // Because warpTileSize = [16, 8] and threadsPerWarp = [8, 4], each 8
         // rows in smem would correspond to a warp. The mapping
@@ -113,8 +114,11 @@ private:
         // Same as BlockedEncodingAttr case
         writeIdx[axis] = udiv(index[axis], axisSizePerThread);
       }
-    }
-    if (mmaLayout && !mmaLayout.isAmpere()) {
+    } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+      auto parentLayout = sliceLayout.getParent();
+      getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
+                         axis);
+    } else {
       llvm::report_fatal_error("Unsupported layout");
     }
   }
