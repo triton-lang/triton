@@ -352,33 +352,48 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     std::array<Value, 2> ii = {i0, i1};
     // load 4 32-bit values from shared memory
     // (equivalent to ldmatrix.x4)
-    // SmallVector<SmallVector<Value>> vals(4, SmallVector<Value>(vecWidth));
-    // for (int i = 0; i < 4; ++i)
-    //   for (int j = 0; j < vecWidth; ++j)
-    //     vals[i][j] = load(gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]));
-    // // row + trans and col + no-trans are equivalent
-    // if ((needTrans && kOrder == 1) || (!needTrans && kOrder == 0))
-    //   std::swap(vals[1], vals[2]);
-    // // pack loaded vectors into 4 32-bit values
-    // elemTy = getMatType(vals[0][0].getType())
-    //              .cast<LLVM::LLVMStructType>()
-    //              .getBody()[0];
-    // std::array<Value, 4> retElems;
-    // retElems.fill(undef(elemTy));
-    // for (int m = 0; m < 4; ++m) {
-    //   for (int e = 0; e < vecWidth; ++e)
-    //     retElems[m] = insert_element(retElems[m].getType(), retElems[m],
-    //                                  vals[m][e], i32_val(e));
-    // }
-    // return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
-    //         bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
+    SmallVector<SmallVector<Value>> vptrs(4, SmallVector<Value>(vecWidth));
+    for (int i = 0; i < 4; ++i)
+      for (int j = 0; j < vecWidth; ++j)
+        vptrs[i][j] = gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]);
+    // row + trans and col + no-trans are equivalent
+    bool isActualTrans =
+        (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
+    if (isActualTrans)
+      std::swap(vptrs[1], vptrs[2]);
+    // pack loaded vectors into 4 32-bit values
+    int inc = isActualTrans ? 1 : kWidth;
+    VectorType packedTy = vec_ty(int_ty(8 * elemBytes), inc);
+    int canonBits = std::min(32, 8 * elemBytes * inc);
+    int canonWidth = (8 * elemBytes * inc) / canonBits;
+    Type canonInt = int_ty(canonBits);
+    std::array<Value, 4> retElems;
+    retElems.fill(undef(vec_ty(canonInt, 32 / canonBits)));
+    for (int r = 0; r < 2; ++r) {
+      for (int em = 0; em < 2 * vecWidth; em += inc) {
+        int e = em % vecWidth;
+        int m = em / vecWidth;
+        int idx = m * 2 + r;
+        Value ptr = bitcast(vptrs[idx][e], ptr_ty(packedTy, 3));
+        Value val = load(ptr);
+        Value canonval = bitcast(val, vec_ty(canonInt, canonWidth));
+        for (int w = 0; w < canonWidth; ++w) {
+          retElems[idx + w * 2] =
+              insert_element(retElems[idx + w * 2],
+                             extract_element(canonval, i32_val(w)), i32_val(e));
+        }
+      }
+    }
+    return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
+            bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
 
-    Value ptr0 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[0]);
-    Value ptr1 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[1]);
-    Value v0 = load(ptr0);
-    Value v1 = load(ptr1);
-    return {extract_element(v0, i32_val(0)), extract_element(v1, i32_val(0)),
-            extract_element(v0, i32_val(1)), extract_element(v1, i32_val(1))};
+    // Value ptr0 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[0]);
+    // Value ptr1 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[1]);
+    // Value v0 = load(ptr0);
+    // Value v1 = load(ptr1);
+    // return {extract_element(v0, i32_val(0)), extract_element(v1, i32_val(0)),
+    //         extract_element(v0, i32_val(1)), extract_element(v1,
+    //         i32_val(1))};
   }
 }
 
