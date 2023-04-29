@@ -1495,8 +1495,8 @@ def test_sum_kernel():
         tl.store(y_ptr, x_sum)
 
     BLOCK_SIZE = 128
-    x = np.ones((BLOCK_SIZE, BLOCK_SIZE), dtype=np.long)
-    y = np.zeros((1,), dtype=np.long)
+    x = np.ones((BLOCK_SIZE, BLOCK_SIZE), dtype=np.int32)
+    y = np.zeros((1,), dtype=np.int32)
     x_tri = torch.tensor(x, device='cuda')
     y_tri = torch.tensor(y, device='cuda')
 
