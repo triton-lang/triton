@@ -11,7 +11,7 @@ using namespace mlir;
 namespace {
 
 struct TestMembarPass
-    : public PassWrapper<TestMembarPass, OperationPass<triton::FuncOp>> {
+    : public PassWrapper<TestMembarPass, OperationPass<ModuleOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestMembarPass);
 
@@ -22,17 +22,11 @@ struct TestMembarPass
 
   void runOnOperation() override {
     Operation *operation = getOperation();
-    auto &os = llvm::errs();
-    // Convert to std::string can remove quotes from op_name
-    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
-    os << opName << "\n";
-
+    ModuleOp moduleOp = cast<ModuleOp>(operation);
     // Print all ops after membar pass
-    Allocation allocation(operation);
-    MembarAnalysis membarPass(&allocation);
+    ModuleAllocation allocation(moduleOp);
+    ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
-
-    os << *operation << "\n";
   }
 };
 

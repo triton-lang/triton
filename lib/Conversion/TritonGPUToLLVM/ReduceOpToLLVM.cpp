@@ -486,10 +486,9 @@ private:
 
 void populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
+    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, allocation, smem,
-                                   indexCacheInfo, benefit);
+  patterns.add<ReduceOpConversion>(typeConverter, allocation, indexCacheInfo,
+                                   benefit);
 }
