@@ -571,12 +571,29 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   // 2. clone the loop body, replace original args with args of the new ForOp
   // Insert async wait if necessary.
+  DenseSet<Value> isModified;
   for (Operation &op : forOp.getBody()->without_terminator()) {
+    // is modified
+    bool preserveTypes =
+        std::any_of(op.operand_begin(), op.operand_end(), [&](Value v) {
+          return !mapping.contains(v) ||
+                 v.getType() == mapping.lookup(v).getType();
+        });
     auto it = std::find(loads.begin(), loads.end(), op.getOperand(0));
     if (it == loads.end()) {
-      Operation *newOp = cloneWithInferType(builder, &op, mapping);
+      // if (isModified.contains(op.getResult(0)))
+      if (preserveTypes)
+        builder.clone(op, mapping);
+      else
+        Operation *newOp = cloneWithInferType(builder, &op, mapping);
+      // else
+      //   builder.clone(op, mapping);
+      // llvm::outs() << "PRINT    :   " << op.getResult(0) << " "
+      //              << isModified.contains(op.getResult(0)) << " "
+      //              << mapping.lookup(op.getResult(0)) << "\n";
       continue;
     }
+
     // we replace the use new load use with a convert layout
     size_t i = std::distance(loads.begin(), it);
     auto cvtDstTy = op.getResult(0).getType().cast<RankedTensorType>();
@@ -590,6 +607,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
         op.getResult(0).getLoc(), newDstTy,
         newForOp.getRegionIterArgs()[loadIdx + i]);
     mapping.map(op.getResult(0), cvt.getResult());
+    isModified.insert(op.getResult(0));
   }
 
   // 3. prefetch the next iteration
