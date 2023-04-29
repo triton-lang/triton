@@ -243,36 +243,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   return offs;
 }
 
-Type getMatType(Type argType) {
-  MLIRContext *ctx = argType.getContext();
-  // floating point types
-  Type fp32x1Ty = vec_ty(type::f32Ty(ctx), 1);
-  Type fp16x2Ty = vec_ty(type::f16Ty(ctx), 2);
-  Type i16x2Ty = vec_ty(type::i16Ty(ctx), 2);
-  Type fp16x2Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp16x2Ty));
-  // LLVM 14.0 does not support bf16 type, so we use i16 instead.
-  Type bf16x2Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i16x2Ty));
-  Type fp32Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32x1Ty));
-  // integer types
-  Type i8x4Ty = vec_ty(type::i8Ty(ctx), 4);
-  Type i8x4Pack4Ty =
-      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i8x4Ty));
-
-  if (argType.isF16())
-    return fp16x2Pack4Ty;
-  else if (argType.isBF16())
-    return bf16x2Pack4Ty;
-  else if (argType.isF32())
-    return fp32Pack4Ty;
-  else if (argType.isInteger(8))
-    return i8x4Pack4Ty;
-  else
-    llvm::report_fatal_error("mma16816 data type not supported");
-}
-
 std::tuple<Value, Value, Value, Value>
 MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
                            ArrayRef<Value> ptrs, Type matTy,
@@ -378,22 +348,14 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
         Value val = load(ptr);
         Value canonval = bitcast(val, vec_ty(canonInt, canonWidth));
         for (int w = 0; w < canonWidth; ++w) {
-          retElems[idx + w * 2] =
-              insert_element(retElems[idx + w * 2],
+          retElems[idx + w * kWidth / vecWidth] =
+              insert_element(retElems[idx + w * kWidth / vecWidth],
                              extract_element(canonval, i32_val(w)), i32_val(e));
         }
       }
     }
     return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
             bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
-
-    // Value ptr0 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[0]);
-    // Value ptr1 = gep(ptr_ty(vec_ty(i32_ty, 2), 3), ptrs[0][0], ii[1]);
-    // Value v0 = load(ptr0);
-    // Value v1 = load(ptr1);
-    // return {extract_element(v0, i32_val(0)), extract_element(v1, i32_val(0)),
-    //         extract_element(v0, i32_val(1)), extract_element(v1,
-    //         i32_val(1))};
   }
 }
 
@@ -416,9 +378,8 @@ MMA16816SmemLoader::MMA16816SmemLoader(
 
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
-  // canUseLdmatrix = elemBytes == 2 || (!needTrans); // b16
-  // canUseLdmatrix = false;
-  canUseLdmatrix = elemBytes == 1 && !needTrans;
+  canUseLdmatrix = elemBytes == 2 || (!needTrans);
+  canUseLdmatrix = canUseLdmatrix && (kWidth == 4 / elemBytes);
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwpt] if not transposed,
