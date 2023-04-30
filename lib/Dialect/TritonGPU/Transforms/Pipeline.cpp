@@ -574,23 +574,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   DenseSet<Value> isModified;
   for (Operation &op : forOp.getBody()->without_terminator()) {
     // is modified
-    bool preserveTypes =
-        std::any_of(op.operand_begin(), op.operand_end(), [&](Value v) {
-          return !mapping.contains(v) ||
-                 v.getType() == mapping.lookup(v).getType();
-        });
     auto it = std::find(loads.begin(), loads.end(), op.getOperand(0));
     if (it == loads.end()) {
-      // if (isModified.contains(op.getResult(0)))
-      if (preserveTypes)
-        builder.clone(op, mapping);
-      else
-        Operation *newOp = cloneWithInferType(builder, &op, mapping);
-      // else
-      //   builder.clone(op, mapping);
-      // llvm::outs() << "PRINT    :   " << op.getResult(0) << " "
-      //              << isModified.contains(op.getResult(0)) << " "
-      //              << mapping.lookup(op.getResult(0)) << "\n";
+      Operation *newOp = cloneWithInferType(builder, &op, mapping);
       continue;
     }
 

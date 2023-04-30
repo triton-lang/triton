@@ -620,10 +620,10 @@ private:
       // is implemented
       SmallVector<Value> reorderedVals;
       for (unsigned i = 0; i < vecVals.size(); i += 4) {
-        reorderedVals.push_back(vecVals[i]);
-        reorderedVals.push_back(vecVals[i + 2]);
-        reorderedVals.push_back(vecVals[i + 1]);
-        reorderedVals.push_back(vecVals[i + 3]);
+        reorderedVals.push_back(bitcast(vecVals[i], i32_ty));
+        reorderedVals.push_back(bitcast(vecVals[i + 2], i32_ty));
+        reorderedVals.push_back(bitcast(vecVals[i + 1], i32_ty));
+        reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
       }
 
       Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
