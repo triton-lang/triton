@@ -162,15 +162,16 @@ LogicalResult Prefetcher::initialize() {
   // returns source of cvt
   auto getPrefetchSrc = [](Value v) -> SmallVector<Value> {
     // walk back to conversion
-    SmallVector<Value> rets;
     Operation *op = v.getDefiningOp();
     bool foundConvertFromShared = false;
+    SmallVector<Value> rets;
+    rets.push_back(op->getResult(0));
     while (op) {
       if (op->getNumOperands() != 1)
         break;
       if (!op->getResult(0).hasOneUse())
         break;
-      rets.insert(rets.begin(), op->getOperand(0));
+      rets.push_back(op->getOperand(0));
       if (auto cvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op))
         if (isSharedEncoding(cvt.getOperand())) {
           foundConvertFromShared = true;
@@ -178,6 +179,7 @@ LogicalResult Prefetcher::initialize() {
         }
       op = op->getOperand(0).getDefiningOp();
     }
+    std::reverse(rets.begin(), rets.end());
 
     if (foundConvertFromShared)
       return rets;
@@ -220,6 +222,7 @@ LogicalResult Prefetcher::initialize() {
       continue;
     auto aVals = getPrefetchSrc(dot.getA());
     auto bVals = getPrefetchSrc(dot.getB());
+
     if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
       Value bSmem = bVals.front();
