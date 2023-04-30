@@ -87,9 +87,15 @@ public:
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
     auto srcTy = cvt.getOperand().getType().cast<RankedTensorType>();
     auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
+    auto retEncoding =
+        retTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
     if (!retTy)
       return failure();
-    if (!isa<triton::gpu::DotOperandEncodingAttr>(retTy.getEncoding()))
+    if (!retEncoding)
+      return failure();
+    auto retEncodingParent =
+        retEncoding.getParent().dyn_cast<triton::gpu::MmaEncodingAttr>();
+    if (!retEncodingParent || retEncodingParent.isVolta())
       return failure();
     if (isa<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding()))
       return failure();
@@ -102,8 +108,8 @@ public:
     SetVector<Operation *> processed;
     SetVector<Attribute> layout;
     llvm::MapVector<Value, Attribute> toConvert;
-    int numCvts = simulateBackwardRematerialization(
-        cvt, processed, layout, toConvert, retTy.getEncoding());
+    int numCvts = simulateBackwardRematerialization(cvt, processed, layout,
+                                                    toConvert, retEncoding);
     if (numCvts > 1 || toConvert.size() == 1)
       return failure();
     for (Operation *op : processed) {
