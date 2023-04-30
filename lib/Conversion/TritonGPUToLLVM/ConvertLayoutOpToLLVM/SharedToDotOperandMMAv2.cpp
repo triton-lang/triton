@@ -419,7 +419,7 @@ Type getShemPtrTy(Type argType) {
     return ptr_ty(type::i16Ty(ctx), 3);
   else if (argType.isF32())
     return ptr_ty(type::f32Ty(ctx), 3);
-  else if (argType.isInteger(8))
+  else if (argType.getIntOrFloatBitWidth() == 8)
     return ptr_ty(type::i8Ty(ctx), 3);
   else
     llvm::report_fatal_error("mma16816 data type not supported");
