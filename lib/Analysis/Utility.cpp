@@ -16,22 +16,24 @@ bool ReduceOpHelper::isFastReduction() {
 unsigned ReduceOpHelper::getInterWarpSize() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSize();
-  return std::min(
-      srcReduceDimSize / sizeIntraWarps,
-      triton::gpu::getWarpsPerCTAWithUniqueData(getSrcLayout())[axis]);
+  return std::min(srcReduceDimSize / sizeIntraWarps,
+                  triton::gpu::getWarpsPerCTAWithUniqueData(
+                      getSrcLayout(), getSrcShape())[axis]);
 }
 
 unsigned ReduceOpHelper::getIntraWarpSize() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  return std::min(
-      srcReduceDimSize,
-      triton::gpu::getThreadsPerWarpWithUniqueData(getSrcLayout())[axis]);
+  return std::min(srcReduceDimSize,
+                  triton::gpu::getThreadsPerWarpWithUniqueData(
+                      getSrcLayout(), getSrcShape())[axis]);
 }
 
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
   auto srcLayout = getSrcLayout();
-  return triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout)[axis] *
-         triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout)[axis];
+  auto srcShape = getSrcShape();
+  return triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout,
+                                                      srcShape)[axis] *
+         triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {

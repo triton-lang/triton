@@ -32,8 +32,14 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 SmallVector<unsigned> getSizePerThread(Attribute layout);
 
 SmallVector<unsigned> getContigPerThread(Attribute layout);
-SmallVector<unsigned> getThreadsPerWarpWithUniqueData(Attribute layout);
-SmallVector<unsigned> getWarpsPerCTAWithUniqueData(Attribute layout);
+
+SmallVector<unsigned>
+getThreadsPerWarpWithUniqueData(Attribute layout,
+                                ArrayRef<int64_t> tensorShape);
+
+SmallVector<unsigned>
+getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
+
 SmallVector<unsigned> getUniqueContigPerThread(Type type);
 
 SmallVector<unsigned> getThreadsPerCTA(Attribute layout);

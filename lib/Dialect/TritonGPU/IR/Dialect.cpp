@@ -94,15 +94,26 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   return {};
 }
 
-SmallVector<unsigned> getThreadsPerWarpWithUniqueData(Attribute layout) {
+SmallVector<unsigned>
+getThreadsPerWarpWithUniqueData(Attribute layout,
+                                ArrayRef<int64_t> tensorShape) {
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto parent = sliceLayout.getParent();
-    auto parentThreadsPerWarp = getThreadsPerWarpWithUniqueData(parent);
+    auto parentLayout = sliceLayout.getParent();
+    auto parentShape = sliceLayout.paddedShape(tensorShape);
+    auto parentThreadsPerWarp =
+        getThreadsPerWarpWithUniqueData(parentLayout, parentShape);
     SmallVector<unsigned> threadsPerWarp = parentThreadsPerWarp;
     threadsPerWarp.erase(threadsPerWarp.begin() + sliceLayout.getDim());
     return threadsPerWarp;
   }
-  return getThreadsPerWarp(layout);
+  auto threadsPerWarp = getThreadsPerWarp(layout);
+  assert(threadsPerWarp.size() == tensorShape.size() &&
+         "layout and tensor shape must have the same rank");
+  for (unsigned i = 0; i < threadsPerWarp.size(); i++) {
+    threadsPerWarp[i] = std::min<unsigned>(threadsPerWarp[i], tensorShape[i]);
+  }
+
+  return threadsPerWarp;
 }
 
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
@@ -127,15 +138,28 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   return {};
 }
 
-SmallVector<unsigned> getWarpsPerCTAWithUniqueData(Attribute layout) {
+SmallVector<unsigned>
+getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape) {
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto parent = sliceLayout.getParent();
-    auto parentWarpsPerCTA = getWarpsPerCTAWithUniqueData(parent);
+    auto parentLayout = sliceLayout.getParent();
+    auto parentShape = sliceLayout.paddedShape(tensorShape);
+    auto parentWarpsPerCTA =
+        getWarpsPerCTAWithUniqueData(parentLayout, parentShape);
     SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
     warpsPerCTA.erase(warpsPerCTA.begin() + sliceLayout.getDim());
     return warpsPerCTA;
   }
-  return getWarpsPerCTA(layout);
+  auto warpsPerCTA = getWarpsPerCTA(layout);
+  assert(warpsPerCTA.size() == tensorShape.size() &&
+         "layout and tensor shape must have the same rank");
+  for (unsigned i = 0; i < warpsPerCTA.size(); i++) {
+    auto sizePerWarp =
+        getSizePerThread(layout)[i] * getThreadsPerWarp(layout)[i];
+    auto maxWarpsPerDim = ceil<unsigned>(tensorShape[i], sizePerWarp);
+    warpsPerCTA[i] = std::min<unsigned>(warpsPerCTA[i], maxWarpsPerDim);
+  }
+
+  return warpsPerCTA;
 }
 
 SmallVector<unsigned> getSizePerThread(Attribute layout) {
@@ -1114,9 +1138,9 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
       return mlir::failure();
     }
     auto newType = op->getResult(0).getType().cast<RankedTensorType>();
-    // Ensure that the new insert_slice op is placed in the same place as the
-    // old insert_slice op. Otherwise, the new insert_slice op may be placed
-    // after the async_wait op, which is not allowed.
+    // Ensure that the new insert_slice op is placed in the same place as
+    // the old insert_slice op. Otherwise, the new insert_slice op may be
+    // placed after the async_wait op, which is not allowed.
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(insert_slice);
     auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -1144,9 +1168,9 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
     auto resType = RankedTensorType::get(
         origResType.getShape(), origResType.getElementType(),
         extract_slice.getType().cast<RankedTensorType>().getEncoding());
-    // Ensure that the new extract_slice op is placed in the same place as the
-    // old extract_slice op. Otherwise, the new extract_slice op may be placed
-    // after the async_wait op, which is not allowed.
+    // Ensure that the new extract_slice op is placed in the same place as
+    // the old extract_slice op. Otherwise, the new extract_slice op may be
+    // placed after the async_wait op, which is not allowed.
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(extract_slice);
     auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
