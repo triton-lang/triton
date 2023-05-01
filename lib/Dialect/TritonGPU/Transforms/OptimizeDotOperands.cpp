@@ -89,6 +89,8 @@ public:
     auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
     auto retEncoding =
         retTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+    auto srcEncoding =
+        srcTy.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
     if (!retTy)
       return failure();
     if (!retEncoding)
@@ -97,11 +99,10 @@ public:
         retEncoding.getParent().dyn_cast<triton::gpu::MmaEncodingAttr>();
     if (!retEncodingParent || retEncodingParent.isVolta())
       return failure();
-    if (isa<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding()))
+    if (!srcEncoding)
       return failure();
-    //
+    // don't move things around when cvt operand is a block arg
     Operation *argOp = cvt.getOperand().getDefiningOp();
-    //
     if (!argOp)
       return failure();
     //
@@ -125,6 +126,13 @@ public:
       // we only push back when the first op in the chain has a load operand
       if ((op == processed.back()) &&
           !isa<triton::LoadOp>(op->getOperand(0).getDefiningOp()))
+        return failure();
+      // we don't want to use ldmatrix for 8-bit data that requires trans
+      // since Nvidia GPUs can't do it efficiently
+      bool isTrans =
+          (retEncoding.getOpIdx() == 1) ^ (srcEncoding.getOrder()[0] == 0);
+      bool isInt8 = srcTy.getElementType().getIntOrFloatBitWidth() == 8;
+      if (isTrans && isInt8)
         return failure();
     }
     IRMapping mapping;
