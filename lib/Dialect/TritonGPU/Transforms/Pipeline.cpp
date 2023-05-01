@@ -364,10 +364,6 @@ Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value mappedMask,
 }
 
 void LoopPipeliner::emitPrologue() {
-  // llvm::errs() << "loads to pipeline...:\n";
-  // for (Value load : loads)
-  //   llvm::errs() << load << "\n";
-
   OpBuilder builder(forOp);
   for (BlockArgument &arg : forOp.getRegionIterArgs()) {
     OpOperand &operand = forOp.getOpOperandForRegionIterArg(arg);
@@ -392,7 +388,7 @@ void LoopPipeliner::emitPrologue() {
     for (Operation &op : forOp.getLoopBody().front()) {
       if (depOps.contains(&op))
         orderedDeps.push_back(&op);
-      else if (loads.contains(op.getResult(0)))
+      else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
         orderedDeps.push_back(&op);
     }
     assert(depOps.size() + loads.size() == orderedDeps.size() &&
@@ -601,7 +597,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   for (Operation &op : forOp.getLoopBody().front()) {
     if (depOps.contains(&op))
       orderedDeps.push_back(&op);
-    else if (loads.contains(op.getResult(0)))
+    else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
