@@ -209,6 +209,15 @@ int simulateBackwardRematerialization(
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping) {
   Operation *newOp = rewriter.clone(*op, mapping);
+  // if input types haven't changed, we're done
+  bool preserveTypes =
+      std::all_of(op->operand_begin(), op->operand_end(), [&](Value v) {
+        return !mapping.contains(v) ||
+               v.getType() == mapping.lookup(v).getType();
+      });
+  if (preserveTypes)
+    return newOp;
+
   if (newOp->getNumResults() == 0)
     return newOp;
   auto origType = op->getResult(0).getType().dyn_cast<RankedTensorType>();
