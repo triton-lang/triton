@@ -253,7 +253,7 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
       threads.push_back(blockedLayout.getThreadsPerWarp()[d] *
                         blockedLayout.getWarpsPerCTA()[d]);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.getVersionMajor() == 2) {
+    if (mmaLayout.isAmpere()) {
       threads = {8 * mmaLayout.getWarpsPerCTA()[0],
                  4 * mmaLayout.getWarpsPerCTA()[1]};
     } else

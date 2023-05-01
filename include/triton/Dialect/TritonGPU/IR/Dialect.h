@@ -31,16 +31,30 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
 SmallVector<unsigned> getSizePerThread(Attribute layout);
 
+// Returns the number of contiguous elements that each thread
+// has access to, on each dimension of the tensor. E.g.
+// for a blocked layout with sizePerThread = [1, 4], returns [1, 4],
+// regardless of the shape of the tensor.
 SmallVector<unsigned> getContigPerThread(Attribute layout);
 
+// Returns the number of unique (distinct) contiguous elements that each thread
+// has access to, on each dimension of the tensor. E.g. for a blocked layout
+// with sizePerThread = [1, 4] and tensor shape = [128, 1], returns [1, 1].
+SmallVector<unsigned> getUniqueContigPerThread(Type type);
+
+// Returns the number of threads per warp that have access to unique (distinct)
+// elements of the tensor. E.g. for a blocked layout with threadsPerWarp = [2,
+// 16] and tensor shape = [2, 2], returns [2, 1].
 SmallVector<unsigned>
 getThreadsPerWarpWithUniqueData(Attribute layout,
                                 ArrayRef<int64_t> tensorShape);
 
+// Returns the number of warps per CTA that have access to unique (distinct)
+// elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
+// 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4] and tensor shape = [2, 2],
+// returns [1, 1].
 SmallVector<unsigned>
 getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
-
-SmallVector<unsigned> getUniqueContigPerThread(Type type);
 
 SmallVector<unsigned> getThreadsPerCTA(Attribute layout);
 
