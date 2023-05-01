@@ -16,6 +16,11 @@ DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
 #######################
 
 
+def print_perf(cur_ms, cur_util, ref_util):
+    # print on the same line cur_ms, cur_util and ref_util with 3 decimal places
+    print(f'{cur_ms:.3f} ms \t cur: {cur_util:.3f} \t ref: {ref_util:.3f} \t dif={cur_util - ref_util:.3f}', end='\t')
+
+
 def nvsmi(attrs):
     attrs = ','.join(attrs)
     cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
@@ -55,21 +60,21 @@ matmul_data = {
     # A100 in the CI server is slow-ish for some reason.
     # On some other servers, we are getting about 90% peak for 8kx8x8k float16
     'a100': {
-        (512, 512, 512): {'float16': 0.08, 'float32': 0.13, 'int8': 0.05},
-        (1024, 1024, 1024): {'float16': 0.33, 'float32': 0.35, 'int8': 0.169},
-        (2048, 2048, 2048): {'float16': 0.62, 'float32': 0.57, 'int8': 0.34},
-        (4096, 4096, 4096): {'float16': 0.81, 'float32': 0.75, 'int8': 0.46},
-        (8192, 8192, 8192): {'float16': 0.77, 'float32': 0.85, 'int8': 0.51},
+        (512, 512, 512): {'float16': 0.084, 'float32': 0.13, 'int8': 0.05},
+        (1024, 1024, 1024): {'float16': 0.332, 'float32': 0.35, 'int8': 0.169},
+        (2048, 2048, 2048): {'float16': 0.641, 'float32': 0.57, 'int8': 0.34},
+        (4096, 4096, 4096): {'float16': 0.785, 'float32': 0.75, 'int8': 0.46},
+        (8192, 8192, 8192): {'float16': 0.805, 'float32': 0.85, 'int8': 0.51},
         # tall-skinny
         (16, 1024, 1024): {'float16': 0.0077, 'float32': 0.0127, 'int8': 0.005},
-        (16, 4096, 4096): {'float16': 0.0363, 'float32': 0.0457, 'int8': 0.0259},
+        (16, 4096, 4096): {'float16': 0.044, 'float32': 0.0457, 'int8': 0.0259},
         (16, 8192, 8192): {'float16': 0.07, 'float32': 0.0648, 'int8': 0.0431},
-        (64, 1024, 1024): {'float16': 0.0271, 'float32': 0.0509, 'int8': 0.0169},
-        (64, 4096, 4096): {'float16': 0.16, 'float32': 0.162, 'int8': 0.097},
-        (64, 8192, 8192): {'float16': 0.30, 'float32': 0.257, 'int8': 0.174},
-        (1024, 64, 1024): {'float16': 0.0263, 'float32': 0.0458, 'int8': 0.017},
+        (64, 1024, 1024): {'float16': 0.030, 'float32': 0.0509, 'int8': 0.0169},
+        (64, 4096, 4096): {'float16': 0.163, 'float32': 0.162, 'int8': 0.097},
+        (64, 8192, 8192): {'float16': 0.285, 'float32': 0.257, 'int8': 0.174},
+        (1024, 64, 1024): {'float16': 0.033, 'float32': 0.0458, 'int8': 0.017},
         (4096, 64, 4096): {'float16': 0.16, 'float32': 0.177, 'int8': 0.102},
-        (8192, 64, 8192): {'float16': 0.25, 'float32': 0.230, 'int8': 0.177},
+        (8192, 64, 8192): {'float16': 0.254, 'float32': 0.230, 'int8': 0.177},
     }
 }
 
@@ -94,10 +99,11 @@ def test_matmul(M, N, K, dtype_str):
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=300)
+    ms = triton.testing.do_bench(fn, return_mode="min", warmup=100, rep=300)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
-    torch.testing.assert_allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
+    print_perf(ms, cur_gpu_util, ref_gpu_util)
+    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
 
 
 #######################
@@ -129,12 +135,12 @@ elementwise_data = {
         1024 * 65536: 0.939,
     },
     'a100': {
-        1024 * 16: 0.008,
-        1024 * 64: 0.034,
-        1024 * 256: 0.114,
-        1024 * 1024: 0.315,
-        1024 * 4096: 0.580,
-        1024 * 16384: 0.782,
+        1024 * 16: 0.010,
+        1024 * 64: 0.040,
+        1024 * 256: 0.132,
+        1024 * 1024: 0.353,
+        1024 * 4096: 0.605,
+        1024 * 16384: 0.758,
         1024 * 65536: 0.850,
     }
 }
@@ -150,10 +156,11 @@ def test_elementwise(N):
     y = torch.randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=500)
+    ms = triton.testing.do_bench(fn, return_mode="min", warmup=100, rep=500)
     cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
-    torch.testing.assert_allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
+    print_perf(ms, cur_gpu_util, ref_gpu_util)
+    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
 
 #######################
 # Flash-Attention
@@ -189,7 +196,7 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, mode, dtype_str):
         o = fn()
         do = torch.randn_like(o)
         fn = lambda: o.backward(do, retain_graph=True)
-    ms = triton.testing.do_bench(fn, percentiles=None, warmup=100, rep=500)
+    ms = triton.testing.do_bench(fn, return_mode="min", warmup=100, rep=500)
     # compute flops
     flops_per_matmul = 2. * Z * H * N_CTX * N_CTX * D_HEAD * 0.5
     total_flops = 2 * flops_per_matmul
@@ -201,4 +208,5 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, mode, dtype_str):
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     ref_gpu_util = flash_attention_data[DEVICE_NAME][(Z, H, N_CTX, D_HEAD, mode, dtype_str)]
-    torch.testing.assert_allclose(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
+    print_perf(ms, cur_gpu_util, ref_gpu_util)
+    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)

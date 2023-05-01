@@ -35,7 +35,8 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
   }];
 
   code extraBaseClassDeclaration = [{
-    unsigned getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
+    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
+    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     ::mlir::LogicalResult verifyLayoutForArg(::mlir::Operation* op, unsigned argNo) const;
   }];
 }
@@ -350,7 +351,7 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html
 (mma.16816 section, FP32 accumulator).
 
 For example, the matrix L corresponding to blockTileSize=[32,16] is:
-                warp 0                          warp 1
+                warp 0                          warp 2
 -----------------/\-------------  ----------------/\-------------
 [ 0   0   1   1   2   2   3   3   32  32  33  33  34  34  35  35
 [ 4   4   5   5   6   6   7   7   36  36  37  37  38  38  39  39
@@ -361,7 +362,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 [ ..............................  ..............................
 [ 28  28  29  29  30  30  31  31  60  60  61  61  62  62  63  63
 
-              warp 3                           warp 4
+              warp 1                           warp 3
 ----------------/\-------------   ----------------/\-------------
 [ 64  64  65  65  66  66  67  67  96  96  97  97  98  98  99  99
 [ 68  68  69  69  70  70  71  71  100 100 101 101 102 102 103 103

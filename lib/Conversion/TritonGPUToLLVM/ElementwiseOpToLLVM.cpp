@@ -2,7 +2,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using ::mlir::triton::gpu::getElemsPerThread;
+using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 struct FpToFpOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::FpToFpOp> {
@@ -756,7 +756,7 @@ struct FpToFpOpConversion
     auto srcEltType = srcTensorType.getElementType();
     auto dstEltType = dstTensorType.getElementType();
     auto loc = op->getLoc();
-    auto elems = getElemsPerThread(dstTensorType);
+    auto elems = getTotalElemsPerThread(dstTensorType);
     SmallVector<Value> resultVals;
     bool isSrcFP8 =
         srcEltType.isa<mlir::Float8E4M3FNType, mlir::Float8E5M2Type>();
@@ -850,7 +850,7 @@ public:
     auto resultTy = op.getType();
     Location loc = op->getLoc();
 
-    unsigned elems = getElemsPerThread(resultTy);
+    unsigned elems = getTotalElemsPerThread(resultTy);
     auto resultElementTy = getElementTypeOrSelf(resultTy);
     Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
     SmallVector<Type> types(elems, elemTy);
@@ -1001,20 +1001,20 @@ struct CmpFOpConversion
   }
 };
 
-struct ExtElemwiseOpConversion
-    : public ElementwiseOpConversionBase<triton::ExtElemwiseOp,
-                                         ExtElemwiseOpConversion> {
-  using Base = ElementwiseOpConversionBase<triton::ExtElemwiseOp,
-                                           ExtElemwiseOpConversion>;
+template <class T>
+struct ExternElementwiseOpConversion
+    : public ElementwiseOpConversionBase<T, ExternElementwiseOpConversion<T>> {
+  using Base = ElementwiseOpConversionBase<T, ExternElementwiseOpConversion<T>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
+  typedef typename Base::OpAdaptor OpAdaptor;
 
-  Value createDestOp(triton::ExtElemwiseOp op, OpAdaptor adaptor,
+  Value createDestOp(T op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
     StringRef funcName = op.getSymbol();
     if (funcName.empty())
-      llvm::errs() << "ExtElemwiseOpConversion";
+      llvm::errs() << "ExternElementwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands);
     LLVM::LLVMFuncOp funcOp =
@@ -1028,8 +1028,7 @@ private:
     return LLVM::LLVMFunctionType::get(resultType, operandTypes);
   }
 
-  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                     triton::ExtElemwiseOp op,
+  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter, T op,
                                      StringRef funcName, Type funcType) const {
     using LLVM::LLVMFuncOp;
 
@@ -1038,7 +1037,8 @@ private:
     if (funcOp)
       return cast<LLVMFuncOp>(*funcOp);
 
-    mlir::OpBuilder b(op->getParentOfType<LLVMFuncOp>());
+    auto parent = ((Operation *)op)->getParentOfType<mlir::LLVM::LLVMFuncOp>();
+    mlir::OpBuilder b(parent);
     auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
     ret.getOperation()->setAttr(
         "libname", StringAttr::get(op->getContext(), op.getLibname()));
@@ -1362,12 +1362,14 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
   POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
   POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
-  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
-  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
-  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
-  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)    // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)      // |
+  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)    // ^
+  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)    // <<
+  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)  // >>
+  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)  // >>
+  POPULATE_BINARY_OP(arith::MinFOp, LLVM::MinNumOp) // fmin
+  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)  // smin
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
@@ -1404,7 +1406,11 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<FpToFpOpConversion>(typeConverter, benefit);
 
-  patterns.add<ExtElemwiseOpConversion>(typeConverter, benefit);
+  patterns.add<ExternElementwiseOpConversion<triton::PureExternElementwiseOp>>(
+      typeConverter, benefit);
+  patterns
+      .add<ExternElementwiseOpConversion<triton::ImpureExternElementwiseOp>>(
+          typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call

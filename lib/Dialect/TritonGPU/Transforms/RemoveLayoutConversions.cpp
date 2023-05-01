@@ -101,29 +101,60 @@ public:
     auto convert = llvm::cast<triton::gpu::ConvertLayoutOp>(op);
     triton::ReduceOp reduce;
     for (auto &use : convert.getResult().getUses()) {
-      auto owner = use.getOwner();
-      if (llvm::isa_and_nonnull<triton::ReduceOp>(owner)) {
-        reduce = llvm::cast<triton::ReduceOp>(owner);
-        break;
+      auto owner = llvm::dyn_cast<triton::ReduceOp>(use.getOwner());
+      if (!owner) {
+        continue;
       }
+
+      // TODO: This only moves conversions from the first argument which is
+      // fine for argmin/argmax but may not be optimal generally
+      if (convert.getResult() != owner.getOperands()[0]) {
+        continue;
+      }
+      reduce = owner;
+      break;
     }
     if (!reduce)
       return mlir::failure();
+
+    SmallVector<Value> newOperands = reduce.getOperands();
+
+    newOperands[0] = convert.getOperand();
+    auto newEncoding =
+        newOperands[0].getType().cast<RankedTensorType>().getEncoding();
+
     // this may generate unsupported conversions in the LLVM codegen
-    if (convert.getOperand()
-            .getType()
-            .cast<RankedTensorType>()
-            .getEncoding()
-            .isa<triton::gpu::MmaEncodingAttr>())
-      return mlir::failure();
+    if (newEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
+      return failure();
+    }
+
+    for (unsigned i = 1; i < newOperands.size(); ++i) {
+      auto oldTy = newOperands[i].getType().cast<RankedTensorType>();
+      RankedTensorType newTy =
+          RankedTensorType::Builder(oldTy).setEncoding(newEncoding);
+
+      newOperands[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), newTy, newOperands[i]);
+    }
+
+    rewriter.setInsertionPoint(reduce);
     auto newReduce = rewriter.create<triton::ReduceOp>(
-        op->getLoc(), reduce.getRedOp(), convert.getOperand(),
-        reduce.getAxis());
-    Value newRet = newReduce.getResult();
-    if (newRet.getType() != reduce.getResult().getType())
-      newRet = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), reduce.getResult().getType(), newRet);
-    rewriter.replaceAllUsesWith(reduce, newRet);
+        op->getLoc(), newOperands, reduce.getAxis());
+    auto &newCombineOp = newReduce.getCombineOp();
+    rewriter.cloneRegionBefore(reduce.getCombineOp(), newCombineOp,
+                               newCombineOp.end());
+
+    SmallVector<Value> newRet = newReduce.getResult();
+    auto oldTypes = reduce.getResult().getType();
+    for (unsigned i = 0; i < reduce.getNumOperands(); ++i) {
+      // it's still beneficial to move the conversion
+      // to after the reduce if necessary since it will be
+      // done on a rank-reduced tensor hence cheaper
+      if (newRet[i].getType() != oldTypes[i])
+        newRet[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+            op->getLoc(), oldTypes[i], newRet[i]);
+    }
+    rewriter.replaceAllUsesWith(reduce.getResult(), newRet);
 
     return success();
   }
