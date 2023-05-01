@@ -95,16 +95,6 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
 }
 
 SmallVector<unsigned> getThreadsPerWarpWithUniqueData(Attribute layout) {
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    return SmallVector<unsigned>(blockedLayout.getThreadsPerWarp().begin(),
-                                 blockedLayout.getThreadsPerWarp().end());
-  }
-  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.isVolta())
-      return {4, 8};
-    if (mmaLayout.isAmpere())
-      return {8, 4};
-  }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
     auto parentThreadsPerWarp = getThreadsPerWarpWithUniqueData(parent);
@@ -112,8 +102,7 @@ SmallVector<unsigned> getThreadsPerWarpWithUniqueData(Attribute layout) {
     threadsPerWarp.erase(threadsPerWarp.begin() + sliceLayout.getDim());
     return threadsPerWarp;
   }
-  assert(0 && "getThreadsPerWarp not implemented");
-  return {};
+  return getThreadsPerWarp(layout);
 }
 
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
@@ -139,14 +128,6 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
 }
 
 SmallVector<unsigned> getWarpsPerCTAWithUniqueData(Attribute layout) {
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    return SmallVector<unsigned>(blockedLayout.getWarpsPerCTA().begin(),
-                                 blockedLayout.getWarpsPerCTA().end());
-  }
-  if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    return SmallVector<unsigned>(mmaLayout.getWarpsPerCTA().begin(),
-                                 mmaLayout.getWarpsPerCTA().end());
-  }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
     auto parentWarpsPerCTA = getWarpsPerCTAWithUniqueData(parent);
@@ -154,8 +135,7 @@ SmallVector<unsigned> getWarpsPerCTAWithUniqueData(Attribute layout) {
     warpsPerCTA.erase(warpsPerCTA.begin() + sliceLayout.getDim());
     return warpsPerCTA;
   }
-  assert(0 && "getWarpsPerCTA not implemented");
-  return {};
+  return getWarpsPerCTA(layout);
 }
 
 SmallVector<unsigned> getSizePerThread(Attribute layout) {

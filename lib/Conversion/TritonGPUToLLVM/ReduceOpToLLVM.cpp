@@ -87,6 +87,15 @@ private:
                           Attribute layout, SmallVector<Value> &index,
                           SmallVector<Value> &writeIdx,
                           std::map<int, Value> &ints, unsigned axis) const {
+    if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+      auto dim = sliceLayout.getDim();
+      assert(dim != axis && "Reduction axis cannot be sliced");
+      auto parentLayout = sliceLayout.getParent();
+      getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
+                         axis);
+      return;
+    }
+
     writeIdx = index;
     auto sizePerThread = triton::gpu::getSizePerThread(layout);
     Value axisSizePerThread = ints[sizePerThread[axis]];
@@ -114,10 +123,6 @@ private:
         // Same as BlockedEncodingAttr case
         writeIdx[axis] = udiv(index[axis], axisSizePerThread);
       }
-    } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      auto parentLayout = sliceLayout.getParent();
-      getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
-                         axis);
     } else {
       llvm::report_fatal_error("Unsupported layout");
     }
