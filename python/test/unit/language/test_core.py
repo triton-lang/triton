@@ -2322,6 +2322,33 @@ def test_if_return():
     assert to_numpy(out)[0] == 1
 
 
+@triton.jit
+def add_fn(x):
+    return x + 1
+
+
+@pytest.mark.parametrize("call_type", ["attribute", "jit_function"])
+def test_if_call(call_type):
+    @triton.jit
+    def kernel(Out, call_type: tl.constexpr):
+        pid = tl.program_id(0)
+        o = tl.load(Out)
+        if pid == 0:
+            if call_type == "attribute":
+                a = o + 1
+                a = a.to(tl.int32)
+                o = a
+            else:
+                a = o
+                a = add_fn(a)
+                o = a
+        tl.store(Out, o)
+
+    out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    kernel[(1,)](out, call_type)
+    assert to_numpy(out)[0] == 1
+
+
 @pytest.mark.parametrize("_cond1", [True, False])
 @pytest.mark.parametrize("_cond2", [True, False])
 @pytest.mark.parametrize("_cond3", [True, False])

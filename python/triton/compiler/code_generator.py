@@ -168,6 +168,8 @@ class CodeGenerator(ast.NodeVisitor):
             pred = lambda s: self.contains_return_op(s)
             return any(pred(s) for s in node.body)
         elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                return False
             fn = self.visit(node.func)
             if isinstance(fn, JITFunction):
                 old_gscope = self.gscope
