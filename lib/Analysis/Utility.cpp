@@ -17,19 +17,23 @@ unsigned ReduceOpHelper::getInterWarpSize() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSize();
   return std::min(srcReduceDimSize / sizeIntraWarps,
-                  triton::gpu::getWarpsPerCTA(getSrcLayout())[axis]);
+                  triton::gpu::getWarpsPerCTAWithUniqueData(
+                      getSrcLayout(), getSrcShape())[axis]);
 }
 
 unsigned ReduceOpHelper::getIntraWarpSize() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   return std::min(srcReduceDimSize,
-                  triton::gpu::getThreadsPerWarp(getSrcLayout())[axis]);
+                  triton::gpu::getThreadsPerWarpWithUniqueData(
+                      getSrcLayout(), getSrcShape())[axis]);
 }
 
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
   auto srcLayout = getSrcLayout();
-  return triton::gpu::getThreadsPerWarp(srcLayout)[axis] *
-         triton::gpu::getWarpsPerCTA(srcLayout)[axis];
+  auto srcShape = getSrcShape();
+  return triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout,
+                                                      srcShape)[axis] *
+         triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
@@ -87,6 +91,9 @@ bool ReduceOpHelper::isSupportedLayout() {
     if (mmaLayout.isAmpere()) {
       return true;
     }
+  }
+  if (auto sliceLayout = srcLayout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+    return true;
   }
   return false;
 }

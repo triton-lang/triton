@@ -87,6 +87,15 @@ private:
                           Attribute layout, SmallVector<Value> &index,
                           SmallVector<Value> &writeIdx,
                           std::map<int, Value> &ints, unsigned axis) const {
+    if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+      auto dim = sliceLayout.getDim();
+      assert(dim != axis && "Reduction axis cannot be sliced");
+      auto parentLayout = sliceLayout.getParent();
+      getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
+                         axis);
+      return;
+    }
+
     writeIdx = index;
     auto sizePerThread = triton::gpu::getSizePerThread(layout);
     Value axisSizePerThread = ints[sizePerThread[axis]];
@@ -100,9 +109,10 @@ private:
       // to map every `axisSizePerThread` to 1 value in smem as:
       // writeIdx[axis] = index[axis] / axisSizePerThread
       writeIdx[axis] = udiv(index[axis], axisSizePerThread);
-    }
-    auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>();
-    if (mmaLayout && mmaLayout.isAmpere()) {
+    } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+      if (!mmaLayout.isAmpere()) {
+        llvm::report_fatal_error("Unsupported layout");
+      }
       if (axis == 0) {
         // Because warpTileSize = [16, 8] and threadsPerWarp = [8, 4], each 8
         // rows in smem would correspond to a warp. The mapping
@@ -113,8 +123,7 @@ private:
         // Same as BlockedEncodingAttr case
         writeIdx[axis] = udiv(index[axis], axisSizePerThread);
       }
-    }
-    if (mmaLayout && !mmaLayout.isAmpere()) {
+    } else {
       llvm::report_fatal_error("Unsupported layout");
     }
   }
