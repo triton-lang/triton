@@ -10,7 +10,7 @@ from types import ModuleType
 class _Wrapper(ModuleType):
     def __getattr__(self, name):
         if _torch is None:
-            raise ImportError("PyTorch needs to be installed to use Triton Debugger.")
+            raise ImportError("Triton requires PyTorch to be installed")
         return getattr(_torch, name)
 
 
