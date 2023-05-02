@@ -2,7 +2,7 @@
 
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
-#include "mlir/Conversion/ControlFlowToLLVM//ControlFlowToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
@@ -61,17 +61,22 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
   LogicalResult
   matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    unsigned numArguments = op.getNumOperands();
-
-    // Currently, Triton kernel function always return nothing.
-    // TODO(Superjomn) add support for non-inline device function
-    if (numArguments > 0) {
-      return rewriter.notifyMatchFailure(
-          op, "Only kernel function with nothing returned is supported.");
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    if (funcOp->hasAttr("nvvm.kernel")) {
+      // A GPU kernel
+      if (op.getNumOperands() > 0) {
+        return rewriter.notifyMatchFailure(
+            op, "Kernel functions do not support return with operands");
+      }
+      rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
+                                                  op->getAttrs());
+    } else {
+      // A device function
+      auto newOp =
+          rewriter.create<LLVM::ReturnOp>(op.getLoc(), adaptor.getOperands());
+      newOp->setAttrs(op->getAttrs());
+      rewriter.replaceOp(op, newOp->getResults());
     }
-
-    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
-                                                op->getAttrs());
     return success();
   }
 };
@@ -81,26 +86,73 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// information.
 struct FuncOpConversion : public FuncOpConversionBase {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), numWarps(numWarps) {}
+                   ModuleAllocation &allocation, PatternBenefit benefit)
+      : FuncOpConversionBase(converter, benefit), allocation(allocation),
+        numWarps(numWarps) {}
+
+  triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
+                             ConversionPatternRewriter &rewriter) const {
+    // Push back a variable that indicates the current stack pointer of shared
+    // memory to the function arguments.
+    auto loc = funcOp.getLoc();
+    auto ctx = funcOp->getContext();
+    auto ptrTy = LLVM::LLVMPointerType::get(
+        this->getTypeConverter()->convertType(rewriter.getI8Type()), 3);
+    // 1. Modify the function type to add the new argument.
+    auto funcTy = funcOp.getFunctionType();
+    auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
+    amendedInputTy.push_back(ptrTy);
+    auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
+                                           funcTy.getResults());
+    // 2. Modify the argument attributes to add the new argument.
+    SmallVector<NamedAttribute> amendedAttrs;
+    filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
+    auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
+    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+    amendedAttrs.push_back(rewriter.getNamedAttr(
+        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
+    // 3. Add a new argument to the region
+    auto amendedFuncOp = rewriter.create<triton::FuncOp>(
+        funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
+    auto &region = funcOp.getBody();
+    region.addArgument(ptrTy, loc);
+    rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
+                                amendedFuncOp.end());
+    return amendedFuncOp;
+  }
 
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto newFuncOp = convertFuncOpToLLVMFuncOp(funcOp, rewriter);
+    // Prevent LLVM's inliner to inline this function
+    auto amendedFuncOp = funcOp;
+    if (!allocation.isRoot(funcOp))
+      amendedFuncOp = amendFuncOp(funcOp, rewriter);
+
+    auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
     }
 
     auto ctx = funcOp->getContext();
 
-    // Set an attribute to indicate this function is a kernel entry.
-    newFuncOp->setAttr("nvvm.kernel",
-                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-
+    if (allocation.isRoot(funcOp)) {
+      // Set an attribute to indicate this function is a kernel entry.
+      newFuncOp->setAttr("nvvm.kernel",
+                         rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
+    } else {
+      // The noinline attribute will be used by the LLVM codegen to prevent
+      // inlining.
+      // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/LLVMIR/IR/LLVMInlining.cpp#L267
+      newFuncOp.setPassthroughAttr(
+          ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
+      rewriter.eraseOp(amendedFuncOp);
+    }
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
+    // The call graph is updated by mapping the old function to the new one.
+    allocation.mapFuncOp(funcOp, newFuncOp);
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -108,6 +160,99 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
 private:
   int numWarps{0};
+  ModuleAllocation &allocation;
+};
+
+// CallOpInterfaceLowering is adapted from
+// https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
+struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
+  CallOpConversion(LLVMTypeConverter &converter, int numWarps,
+                   ModuleAllocation &allocation, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit),
+        allocation(allocation), numWarps(numWarps) {}
+
+  LogicalResult
+  matchAndRewrite(triton::CallOp callOp,
+                  typename triton::CallOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto promotedOperands = promoteOperands(callOp, adaptor, rewriter);
+    auto newCallOp =
+        convertCallOpToLLVMCallOp(callOp, promotedOperands, rewriter);
+    if (!newCallOp)
+      return failure();
+    allocation.mapCallOp(callOp, newCallOp);
+    auto results = getCallOpResults(callOp, newCallOp, rewriter);
+    rewriter.replaceOp(callOp, results);
+    return success();
+  }
+
+private:
+  SmallVector<Value, 4>
+  promoteOperands(triton::CallOp callOp,
+                  typename triton::CallOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const {
+    // Get the last argument of the caller, which is the current stack pointer
+    // of shared memory and append it to the operands of the callOp.
+    auto loc = callOp.getLoc();
+    auto caller = callOp->getParentOfType<FunctionOpInterface>();
+    auto base = allocation.getFunctionSharedMemoryBase(caller);
+    auto *funcAllocation = allocation.getFuncData(caller);
+    auto bufferId = funcAllocation->getBufferId(callOp);
+    auto offset = funcAllocation->getOffset(bufferId);
+    auto ptrTy = LLVM::LLVMPointerType::get(
+        this->getTypeConverter()->convertType(rewriter.getI8Type()),
+        NVVM::kSharedMemorySpace);
+    auto offsetValue = gep(ptrTy, base, i32_val(offset));
+    auto promotedOperands = this->getTypeConverter()->promoteOperands(
+        callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
+        adaptor.getOperands(), rewriter);
+    promotedOperands.push_back(offsetValue);
+    return promotedOperands;
+  }
+
+  LLVM::CallOp
+  convertCallOpToLLVMCallOp(triton::CallOp callOp,
+                            ArrayRef<Value> promotedOperands,
+                            ConversionPatternRewriter &rewriter) const {
+    // Pack the result types into a struct.
+    Type packedResult = nullptr;
+    unsigned numResults = callOp.getNumResults();
+    auto resultTypes = llvm::to_vector<4>(callOp.getResultTypes());
+
+    if (numResults != 0) {
+      if (!(packedResult =
+                this->getTypeConverter()->packFunctionResults(resultTypes)))
+        return nullptr;
+    }
+
+    auto newCallOp = rewriter.create<LLVM::CallOp>(
+        callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
+        promotedOperands, callOp->getAttrs());
+    return newCallOp;
+  }
+
+  SmallVector<Value>
+  getCallOpResults(triton::CallOp callOp, LLVM::CallOp newCallOp,
+                   ConversionPatternRewriter &rewriter) const {
+    auto numResults = callOp.getNumResults();
+    SmallVector<Value> results;
+    if (numResults < 2) {
+      // If < 2 results, packing did not do anything and we can just return.
+      results.append(newCallOp.result_begin(), newCallOp.result_end());
+    } else {
+      // Otherwise, it had been converted to an operation producing a structure.
+      // Extract individual results from the structure and return them as list.
+      results.reserve(numResults);
+      for (unsigned i = 0; i < numResults; ++i) {
+        results.push_back(rewriter.create<LLVM::ExtractValueOp>(
+            callOp.getLoc(), newCallOp->getResult(0), i));
+      }
+    }
+    return results;
+  }
+
+  int numWarps{0};
+  ModuleAllocation &allocation;
 };
 
 class TritonLLVMConversionTarget : public ConversionTarget {
@@ -143,26 +288,25 @@ public:
     TritonLLVMConversionTarget target(*context, isROCM);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
-    /* preprocess */
+    // Preprocess
     decomposeMmaToDotOperand(mod, numWarps);
     decomposeBlockedToDotOperand(mod);
     if (failed(decomposeInsertSliceAsyncOp(mod)))
       return signalPassFailure();
 
-    /* allocate shared memory and set barrier */
-    Allocation allocation(mod);
-    MembarAnalysis membarPass(&allocation);
+    // Allocate shared memory and set barrier
+    ModuleAllocation allocation(mod);
+    ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
 
-    /* lower functions */
+    // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
-      funcPatterns.add<ReturnOpConversion>(typeConverter);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -170,36 +314,49 @@ public:
         return signalPassFailure();
     }
 
-    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
-    if (failed(solver->initializeAndRun(mod)))
-      return signalPassFailure();
-    initSharedMemory(allocation.getSharedMemorySize(), typeConverter);
-    mod->setAttr("triton_gpu.shared",
-                 mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
-                                        allocation.getSharedMemorySize()));
+    // initSharedMemory is run before the conversion of call and ret ops,
+    // because the call op has to know the shared memory base address of each
+    // function
+    initSharedMemory(allocation, typeConverter);
 
-    /* rewrite ops */
+    // Convert call and ret ops
+    {
+      mlir::LowerToLLVMOptions option(context);
+      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
+      RewritePatternSet funcPatterns(context);
+      funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
+                                         /*benefit=*/1);
+      funcPatterns.add<ReturnOpConversion>(typeConverter, /*benefit=*/1);
+      if (failed(
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+        return signalPassFailure();
+    }
+
+    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    // Rewrite ops
     RewritePatternSet patterns(context);
     // TritonGPU lowering patterns
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
         &baseIndexCache, &indexCache, &indexInsertPoint};
-    auto populatePatterns1 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, numWarps, *axisInfoAnalysis,
-                   &allocation, smem, indexCacheInfo, /*benefit*/ 1);
-    };
-    auto populatePatterns2 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, numWarps, *axisInfoAnalysis,
-                   &allocation, smem, /*benefit*/ 1);
-    };
-    populatePatterns1(populateTritonGPUToLLVMPatterns);
-    populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
-    populatePatterns2(populateDotOpToLLVMPatterns);
-    populatePatterns2(populateElementwiseOpToLLVMPatterns);
-    populatePatterns1(populateLoadStoreOpToLLVMPatterns);
-    populatePatterns1(populateReduceOpToLLVMPatterns);
-    populatePatterns2(populateViewOpToLLVMPatterns);
+    // TODO: enable index cache if there are multiple functions
+    if (axisInfoAnalysis.getNumFunctions() > 1) {
+      indexCacheInfo = {nullptr, nullptr, nullptr};
+    }
+    populateTritonGPUToLLVMPatterns(typeConverter, patterns, allocation,
+                                    indexCacheInfo, /*benefit=*/1);
+    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, allocation,
+                                          indexCacheInfo, /*benefit=*/1);
+    populateDotOpToLLVMPatterns(typeConverter, patterns, allocation,
+                                /*benefit=*/1);
+    populateElementwiseOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
+    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
+                                      allocation, indexCacheInfo,
+                                      /*benefit=*/1);
+    populateReduceOpToLLVMPatterns(typeConverter, patterns, allocation,
+                                   indexCacheInfo, /*benefit=*/1);
+    populateViewOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
 
     // Native lowering patterns
     if (isROCM) {
@@ -216,8 +373,6 @@ public:
   }
 
 private:
-  Value smem;
-
   using IndexCacheKeyT = std::pair<Attribute, RankedTensorType>;
   DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
       baseIndexCache;
@@ -228,10 +383,11 @@ private:
   int computeCapability{};
   bool isROCM{};
 
-  void initSharedMemory(size_t size,
+  void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
+    auto ctx = mod.getContext();
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
     // Set array size 0 and external linkage indicates that we use dynamic
@@ -242,15 +398,23 @@ private:
         "global_smem", /*value=*/Attribute(), /*alignment=*/0,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-    SmallVector<LLVM::LLVMFuncOp> funcs;
-    mod.walk([&](LLVM::LLVMFuncOp func) { funcs.push_back(func); });
-    assert(funcs.size() == 1 &&
-           "Inliner pass is expected before TritonGPUToLLVM");
-    b.setInsertionPointToStart(&funcs[0].getBody().front());
-    smem = b.create<LLVM::AddressOfOp>(loc, global);
-    auto ptrTy =
-        LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()), 3);
-    smem = b.create<LLVM::BitcastOp>(loc, ptrTy, smem);
+    mod.walk([&](FunctionOpInterface funcOp) {
+      Value funcSmem;
+      b.setInsertionPointToStart(&funcOp.getFunctionBody().front());
+      if (allocation.isRoot(funcOp)) {
+        funcSmem = b.create<LLVM::AddressOfOp>(loc, global);
+      } else {
+        funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
+      }
+      auto ptrTy =
+          LLVM::LLVMPointerType::get(typeConverter.convertType(b.getI8Type()),
+                                     NVVM::NVVMMemorySpace::kSharedMemorySpace);
+      funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
+      allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
+    });
+    mod->setAttr("triton_gpu.shared",
+                 mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
+                                        allocation.getSharedMemorySize()));
   }
 
   void decomposeMmaToDotOperand(ModuleOp mod, int numWarps) const {
@@ -308,10 +472,7 @@ private:
   }
 
   LogicalResult decomposeInsertSliceAsyncOp(ModuleOp mod) const {
-    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
-    if (failed(solver->initializeAndRun(mod)))
-      return failure();
+    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
     // have thorough analysis on async wait. Currently, we decompose
@@ -345,7 +506,7 @@ private:
       auto resSharedLayout =
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
-      unsigned inVec = axisInfoAnalysis->getPtrContiguity(src);
+      unsigned inVec = axisInfoAnalysis.getPtrContiguity(src);
       unsigned outVec = resSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       auto maxBitWidth =

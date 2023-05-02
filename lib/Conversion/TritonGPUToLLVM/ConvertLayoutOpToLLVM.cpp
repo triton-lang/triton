@@ -106,13 +106,17 @@ private:
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
       unsigned dim = sliceLayout.getDim();
       auto parentEncoding = sliceLayout.getParent();
+      auto parentSizePerThread = getSizePerThread(parentEncoding);
+      unsigned stride = 1;
+      if (getOrder(parentEncoding)[0] == dim)
+        stride = parentSizePerThread[dim];
       auto parentShape = sliceLayout.paddedShape(shape);
       auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
                                             parentEncoding);
-      auto multiDimOffsetParent =
-          getMultiDimOffset(parentEncoding, loc, rewriter, elemId, parentTy,
-                            sliceLayout.paddedShape(multiDimCTAInRepId),
-                            sliceLayout.paddedShape(shapePerCTA));
+      auto multiDimOffsetParent = getMultiDimOffset(
+          parentEncoding, loc, rewriter, elemId * stride, parentTy,
+          sliceLayout.paddedShape(multiDimCTAInRepId),
+          sliceLayout.paddedShape(shapePerCTA));
       SmallVector<Value> multiDimOffset(rank);
       for (unsigned d = 0; d < rank + 1; ++d) {
         if (d == dim)
@@ -325,7 +329,8 @@ private:
 
       if (needTrans) {
         // do transpose
-        auto aEncoding = DotOperandEncodingAttr::get(mma.getContext(), 0, mma);
+        auto aEncoding =
+            DotOperandEncodingAttr::get(mma.getContext(), 0, mma, 0);
         int numM = aEncoding.getMMAv1NumOuter(shape);
         int numN = accumSizePerThread / numM;
 
@@ -615,10 +620,10 @@ private:
       // is implemented
       SmallVector<Value> reorderedVals;
       for (unsigned i = 0; i < vecVals.size(); i += 4) {
-        reorderedVals.push_back(vecVals[i]);
-        reorderedVals.push_back(vecVals[i + 2]);
-        reorderedVals.push_back(vecVals[i + 1]);
-        reorderedVals.push_back(vecVals[i + 3]);
+        reorderedVals.push_back(bitcast(vecVals[i], i32_ty));
+        reorderedVals.push_back(bitcast(vecVals[i + 2], i32_ty));
+        reorderedVals.push_back(bitcast(vecVals[i + 1], i32_ty));
+        reorderedVals.push_back(bitcast(vecVals[i + 3], i32_ty));
       }
 
       Value view = getTypeConverter()->packLLElements(loc, reorderedVals,
@@ -637,19 +642,19 @@ private:
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
-    bool isHMMA = supportMMA(dst, mmaLayout.getVersionMajor());
 
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
     Value res;
 
-    if (!isOuter && mmaLayout.isAmpere() && isHMMA) { // tensor core v2
+    if (!isOuter && mmaLayout.isAmpere()) { // tensor core v2
 
       res = SharedToDotOperandMMAv2::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
           smemObj, getTypeConverter(), tid_val());
 
-    } else if (!isOuter && mmaLayout.isVolta() && isHMMA) { // tensor core v1
+    } else if (!isOuter && mmaLayout.isVolta() &&
+               supportMMA(dst, mmaLayout.getVersionMajor())) { // tensor core v1
       bool isMMAv1Row = dotOperandLayout.getMMAv1IsRow();
       auto srcSharedLayout = src.getType()
                                  .cast<RankedTensorType>()
@@ -671,14 +676,13 @@ private:
     }
     return res;
   }
-}; // namespace triton::gpu::ConvertLayoutOp>
+}; // namespace triton::gpu::ConvertLayoutOp
 
 void populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, AxisInfoAnalysis &axisInfoAnalysis,
-    const Allocation *allocation, Value smem,
+    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation, smem,
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation,
                                           indexCacheInfo, benefit);
 }

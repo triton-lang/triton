@@ -251,7 +251,7 @@ def convert_type_repr(x):
     return x
 
 
-def make_hash(fn, **kwargs):
+def make_hash(fn, arch, **kwargs):
     if isinstance(fn, triton.runtime.JITFunction):
         configs = kwargs["configs"]
         signature = kwargs["signature"]
@@ -262,7 +262,7 @@ def make_hash(fn, **kwargs):
         # Get unique key for the compiled code
         get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
         configs_key = [get_conf_key(conf) for conf in configs]
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{debug}"
+        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{debug}-{arch}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
@@ -290,6 +290,8 @@ arg_type_pattern = {
     "ttgir": mlir_arg_type_pattern,
     "ptx": ptx_arg_type_pattern,
 }
+
+ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
 
 
 def _get_jsonable_constants(constants):
@@ -404,6 +406,11 @@ def compile(fn, **kwargs):
         match = re.search(prototype_pattern[ir], src, re.MULTILINE)
         name, signature = match.group(1), match.group(2)
         types = re.findall(arg_type_pattern[ir], signature)
+        if ir == 'ttgir':
+            num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
+            assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
+            assert "num_warps" not in kwargs or int(num_warps_matches[0]) == num_warps, "num_warps in ttgir does not match num_warps in compile"
+            num_warps = int(num_warps_matches[0])
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
         first_stage = list(stages.keys()).index(ir)
@@ -411,7 +418,7 @@ def compile(fn, **kwargs):
     # cache manager
     so_path = make_stub(name, signature, constants)
     # create cache manager
-    fn_cache_manager = get_cache_manager(make_hash(fn, **kwargs))
+    fn_cache_manager = get_cache_manager(make_hash(fn, arch, **kwargs))
     # determine name and extension type of provided function
     if isinstance(fn, triton.runtime.JITFunction):
         name, ext = fn.__name__, "ast"

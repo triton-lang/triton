@@ -1,3 +1,4 @@
+#include "Utility.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -42,6 +43,9 @@ class LoopPipeliner {
 
   /// Loads to be pipelined
   SetVector<Value> loads;
+  /// Smallest data-type for each load (used to optimize swizzle and
+  /// (create DotOpEncoding layout)
+  DenseMap<Value, Type> loadsSmallestType;
   /// The value that each load will be mapped to (after layout conversion)
   DenseMap<Value, Value> loadsMapping;
   /// load => buffer
@@ -181,24 +185,19 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
 ///                                                  this pass?)
 LogicalResult LoopPipeliner::initialize() {
   Block *loop = forOp.getBody();
-
-  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *axisInfoAnalysis = solver->load<AxisInfoAnalysis>();
-  if (failed(solver->initializeAndRun(forOp->getParentOfType<ModuleOp>()))) {
-    return failure();
-  }
+  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
+  ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
   // can we use forOp.walk(...) here?
   SmallVector<triton::LoadOp, 2> validLoads;
   for (Operation &op : *loop)
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
       auto ptr = loadOp.getPtr();
-      unsigned vec = axisInfoAnalysis->getPtrContiguity(ptr);
+      unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
 
       if (auto mask = loadOp.getMask())
-        vec = std::min<unsigned>(vec, axisInfoAnalysis->getMaskAlignment(mask));
+        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
-      auto lattice = axisInfoAnalysis->getLatticeElement(ptr)->getValue();
       auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
       if (!tensorTy || tensorTy.getRank() < 2)
         continue;
@@ -256,31 +255,60 @@ LogicalResult LoopPipeliner::initialize() {
         use = *use->getResult(0).getUsers().begin();
       }
 
-      if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
-        if (auto tensorType = convertLayout.getResult()
-                                  .getType()
-                                  .dyn_cast<RankedTensorType>()) {
-          if (auto dotOpEnc = tensorType.getEncoding()
-                                  .dyn_cast<ttg::DotOperandEncodingAttr>()) {
-            isCandidate = true;
-            loadsMapping[loadOp] = convertLayout;
-            auto ty = loadOp.getType().cast<RankedTensorType>();
-            SmallVector<int64_t> bufferShape(ty.getShape().begin(),
-                                             ty.getShape().end());
-            bufferShape.insert(bufferShape.begin(), numStages);
-            auto sharedEnc = ttg::SharedEncodingAttr::get(
-                ty.getContext(), dotOpEnc, ty.getShape(),
-                triton::gpu::getOrder(ty.getEncoding()), ty.getElementType());
-            loadsBufferType[loadOp] = RankedTensorType::get(
-                bufferShape, ty.getElementType(), sharedEnc);
-          }
-        }
-      }
-    } else
+      auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use);
+      if (!convertLayout)
+        continue;
+      auto tensorType =
+          convertLayout.getResult().getType().dyn_cast<RankedTensorType>();
+      if (!tensorType)
+        continue;
+      auto dotOpEnc =
+          tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
+      if (!dotOpEnc)
+        continue;
+      isCandidate = true;
+      loadsMapping[loadOp] = convertLayout;
+    }
+
+    else
       isCandidate = false;
 
     if (isCandidate)
       loads.insert(loadOp);
+  }
+
+  // we need to find the smallest ocmmon dtype
+  // since this determines the layout of `mma.sync` operands
+  // in mixed-precision mode
+  Type smallestType;
+  for (auto loadCvt : loadsMapping) {
+    auto loadOp = loadCvt.first;
+    auto ty = loadOp.getType().cast<RankedTensorType>();
+    Type eltTy = ty.getElementType();
+    if (!smallestType ||
+        (eltTy.getIntOrFloatBitWidth() < smallestType.getIntOrFloatBitWidth()))
+      smallestType = eltTy;
+  }
+
+  for (auto loadCvt : loadsMapping)
+    loadsSmallestType[loadCvt.first] = smallestType;
+
+  for (auto loadCvt : loadsMapping) {
+    auto loadOp = loadCvt.first;
+    Value cvt = loadCvt.second;
+    auto dotOpEnc = cvt.getType()
+                        .cast<RankedTensorType>()
+                        .getEncoding()
+                        .cast<ttg::DotOperandEncodingAttr>();
+    auto ty = loadOp.getType().cast<RankedTensorType>();
+    SmallVector<int64_t> bufferShape(ty.getShape().begin(),
+                                     ty.getShape().end());
+    bufferShape.insert(bufferShape.begin(), numStages);
+    auto sharedEnc = ttg::SharedEncodingAttr::get(
+        ty.getContext(), dotOpEnc, ty.getShape(),
+        triton::gpu::getOrder(ty.getEncoding()), loadsSmallestType[loadOp]);
+    loadsBufferType[loadOp] =
+        RankedTensorType::get(bufferShape, ty.getElementType(), sharedEnc);
   }
 
   // We have some loads to pipeline
@@ -336,10 +364,6 @@ Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value mappedMask,
 }
 
 void LoopPipeliner::emitPrologue() {
-  // llvm::errs() << "loads to pipeline...:\n";
-  // for (Value load : loads)
-  //   llvm::errs() << load << "\n";
-
   OpBuilder builder(forOp);
   for (BlockArgument &arg : forOp.getRegionIterArgs()) {
     OpOperand &operand = forOp.getOpOperandForRegionIterArg(arg);
@@ -364,7 +388,7 @@ void LoopPipeliner::emitPrologue() {
     for (Operation &op : forOp.getLoopBody().front()) {
       if (depOps.contains(&op))
         orderedDeps.push_back(&op);
-      else if (loads.contains(op.getResult(0)))
+      else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
         orderedDeps.push_back(&op);
     }
     assert(depOps.size() + loads.size() == orderedDeps.size() &&
@@ -541,44 +565,39 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
-  // 2.1 clone the loop body, replace original args with args of the new ForOp
+  // 2. clone the loop body, replace original args with args of the new ForOp
   // Insert async wait if necessary.
+  DenseSet<Value> isModified;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    Operation *newOp = builder.clone(op, mapping);
-    // update mapping of results
-    for (unsigned dstIdx : llvm::seq(unsigned(0), op.getNumResults()))
-      mapping.map(op.getResult(dstIdx), newOp->getResult(dstIdx));
-  }
+    // is modified
+    auto it = std::find(loads.begin(), loads.end(), op.getOperand(0));
+    if (it == loads.end()) {
+      Operation *newOp = cloneWithInferType(builder, &op, mapping);
+      continue;
+    }
 
-  // 3. replace loads with block args (from prologue)
-  for (size_t idx = 0; idx < loads.size(); ++idx) {
-    OpBuilder::InsertionGuard guard(builder);
-    Value load = loads[idx];
-    assert(load.hasOneUse() &&
-           "we assume that this load has one use (ConvertLayout)");
-    Value loadUse = load.getUsers().begin()->getResult(0);
-    // set insertion point
-    Value newLoad = mapping.lookup(load);
-    Value newLoadUse = mapping.lookup(loadUse);
-    builder.setInsertionPoint(newLoadUse.getDefiningOp());
-    // create conversion
+    // we replace the use new load use with a convert layout
+    size_t i = std::distance(loads.begin(), it);
+    auto cvtDstTy = op.getResult(0).getType().cast<RankedTensorType>();
+    auto cvtDstEnc = cvtDstTy.getEncoding().cast<ttg::DotOperandEncodingAttr>();
+    auto newDstTy = RankedTensorType::get(
+        cvtDstTy.getShape(), cvtDstTy.getElementType(),
+        ttg::DotOperandEncodingAttr::get(
+            cvtDstEnc.getContext(), cvtDstEnc.getOpIdx(), cvtDstEnc.getParent(),
+            loadsSmallestType[op.getOperand(0)]));
     auto cvt = builder.create<ttg::ConvertLayoutOp>(
-        loadUse.getLoc(), loadUse.getType(),
-        newForOp.getRegionIterArgs()[loadIdx + idx]);
-
-    // replace uses
-    newLoadUse.replaceAllUsesWith(cvt.getResult());
-    // delete old load and layout conversion
-    newLoadUse.getDefiningOp()->erase();
-    newLoad.getDefiningOp()->erase();
+        op.getResult(0).getLoc(), newDstTy,
+        newForOp.getRegionIterArgs()[loadIdx + i]);
+    mapping.map(op.getResult(0), cvt.getResult());
+    isModified.insert(op.getResult(0));
   }
 
-  // 4. prefetch the next iteration
+  // 3. prefetch the next iteration
   SmallVector<Operation *> orderedDeps;
   for (Operation &op : forOp.getLoopBody().front()) {
     if (depOps.contains(&op))
       orderedDeps.push_back(&op);
-    else if (loads.contains(op.getResult(0)))
+    else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
   assert(depOps.size() + loads.size() == orderedDeps.size() &&

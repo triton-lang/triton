@@ -80,6 +80,7 @@
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
 
 // Types
+#define int_ty(width) rewriter.getIntegerType(width)
 #define i64_ty rewriter.getIntegerType(64)
 #define i32_ty rewriter.getIntegerType(32)
 #define i16_ty rewriter.getIntegerType(16)

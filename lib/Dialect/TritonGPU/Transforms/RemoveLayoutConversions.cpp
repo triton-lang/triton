@@ -341,7 +341,10 @@ public:
         cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
     auto dstEncoding =
         cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
-    // XXX: why is this needed?
+    if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>() ||
+        dstEncoding.isa<triton::gpu::SharedEncodingAttr>())
+      return failure();
+    // heuristics for flash attention
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     SetVector<Operation *> cvtSlices;

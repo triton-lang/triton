@@ -46,6 +46,8 @@ def mangle_fn(name, arg_tys, constants):
     mangled_constants = '_'.join([f'{i}c{repr(constants[i])}' for i in sorted(constants)])
     mangled_constants = mangled_constants.replace('.', '_d_')
     mangled_constants = mangled_constants.replace("'", '_sq_')
+    # [ and ] are not allowed in LLVM identifiers
+    mangled_constants = mangled_constants.replace('[', '_').replace(']', '_')
     ret = f'{name}__{mangled_arg_names}__{mangled_constants}'
     return ret
 
@@ -86,7 +88,8 @@ class enter_sub_region:
 
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, function_name,
-                 module=None, is_kernel=False, function_types: Optional[Dict] = None, debug=False):
+                 module=None, is_kernel=False, function_types: Optional[Dict] = None,
+                 debug=False, noinline=False):
         self.builder = ir.builder(context)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
@@ -99,6 +102,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.is_kernel = is_kernel
         self.last_node = None
         self.debug = debug
+        self.noinline = noinline
         self.scf_stack = []
         # SSA-construction
         # name => language.tensor
@@ -164,6 +168,8 @@ class CodeGenerator(ast.NodeVisitor):
             pred = lambda s: self.contains_return_op(s)
             return any(pred(s) for s in node.body)
         elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                return False
             fn = self.visit(node.func)
             if isinstance(fn, JITFunction):
                 old_gscope = self.gscope
@@ -228,7 +234,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit(init_node)
         # initialize function
         visibility = "public" if self.is_kernel else "private"
-        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility)
+        fn = self.builder.get_or_insert_function(self.module, self.function_name, self.prototype.to_ir(self.builder), visibility, self.noinline)
         self.module.push_back(fn)
         entry = fn.add_entry_block()
         arg_values = []
@@ -773,7 +779,7 @@ class CodeGenerator(ast.NodeVisitor):
         if not self.module.has_function(fn_name):
             prototype = language.function_type([], arg_types)
             gscope = sys.modules[fn.fn.__module__].__dict__
-            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=self.debug)
+            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=fn.debug, noinline=fn.noinline)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type

@@ -688,7 +688,7 @@ def test_index1d(expr, dtype_str, device='cuda'):
 
 
 @triton.jit
-def fn(a, b):
+def tuples_fn(a, b):
     return a + b, \
         a - b, \
         a * b
@@ -701,7 +701,7 @@ def test_tuples():
     def with_fn(X, Y, A, B, C):
         x = tl.load(X)
         y = tl.load(Y)
-        a, b, c = fn(x, y)
+        a, b, c = tuples_fn(x, y)
         tl.store(A, a)
         tl.store(B, b)
         tl.store(C, c)
@@ -726,6 +726,80 @@ def test_tuples():
         assert a_tri == a_ref
         assert b_tri == b_ref
         assert c_tri == c_ref
+
+
+@triton.jit(noinline=True)
+def noinline_simple_fn(x, y, Z):
+    z = x + y
+    tl.store(Z, z)
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn1(x):
+    return x + 1
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn2(y):
+    return y + 2
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn(x, y, Z):
+    t0 = noinline_call_graph_fn1(x)
+    t1 = noinline_call_graph_fn2(y)
+    z = t0 + t1
+    tl.store(Z, z)
+
+
+@triton.jit(noinline=True)
+def noinline_shared_fn(x, y, Z):
+    offs = tl.arange(0, 16)[:, None] * 16 + tl.arange(0, 16)[None, :]
+    z = tl.load(Z + offs)
+    z = tl.dot(z, z) + x + y
+    tl.store(Z + offs, z)
+
+
+@triton.jit(noinline=True)
+def noinline_dynamic_fn(x, y, Z):
+    if x >= 1:
+        x = noinline_call_graph_fn1(x)
+    else:
+        x = noinline_call_graph_fn2(x)
+    if y >= 2:
+        y = noinline_call_graph_fn2(y)
+    else:
+        y = noinline_call_graph_fn1(y)
+    z = x + y
+    tl.store(Z, z)
+
+
+@pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic"])
+def test_noinline(mode):
+    device = 'cuda'
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        x = tl.load(X)
+        y = tl.load(Y)
+        GENERATE_TEST_HERE(x, y, Z)
+
+    func_name = f'noinline_{mode}_fn'
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': func_name})
+    x = torch.tensor([1.0], device=device, dtype=torch.float32)
+    y = torch.tensor([2.0], device=device, dtype=torch.float32)
+    if mode == "shared":
+        z = torch.ones((16, 16), device=device, dtype=torch.float32)
+    else:
+        z = torch.tensor([0.0], device=device, dtype=torch.float32)
+    kernel[(1,)](x, y, z, num_warps=1)
+    if mode == "simple":
+        assert torch.equal(z, x + y)
+    elif mode == "call_graph" or mode == "dynamic":
+        assert torch.equal(z, x + 1 + y + 2)
+    elif mode == "shared":
+        ref = torch.full((16, 16), 16, device=device, dtype=torch.float32)
+        assert torch.equal(z, ref + x + y)
 
 
 # ---------------
@@ -1344,6 +1418,70 @@ def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
         m2_1 + m2_2 + delta * delta * weight_1 * w2_over_w,
         new_weight,
     )
+
+
+layouts = [
+    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0]),
+    BlockedLayout([1, 4], [1, 32], [1, 4], [1, 0]),
+    BlockedLayout([1, 4], [8, 4], [2, 2], [0, 1])
+]
+
+
+@pytest.mark.parametrize("M, N", [[32, 128], [128, 128], [128, 32]])
+@pytest.mark.parametrize("src_layout", layouts)
+def test_reduce_2d(M, N, src_layout, device='cuda'):
+    ir = f"""
+    #src = {src_layout}
+    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+    tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
+        %cst = arith.constant dense<{M}> : tensor<{M}x1xi32, #src>
+        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+        %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
+        %2 = arith.muli %1, %cst : tensor<{M}x1xi32, #src>
+        %3 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
+        %4 = tt.expand_dims %3 {{axis = 0 : i32}} : (tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>) -> tensor<1x{N}xi32, #src>
+        %5 = tt.broadcast %2 : (tensor<{M}x1xi32, #src>) -> tensor<{M}x{N}xi32, #src>
+        %6 = tt.broadcast %4 : (tensor<1x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #src>
+        %7 = arith.addi %5, %6 : tensor<{M}x{N}xi32, #src>
+        %8 = tt.splat %arg0 : (!tt.ptr<i32>) -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
+        %9 = tt.addptr %8, %7 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
+        %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #src>
+        %11 = "tt.reduce"(%10) ({{
+        ^bb0(%arg2: i32, %arg3: i32):
+        %13 = arith.addi %arg2, %arg3 : i32
+        tt.reduce.return %13 : i32
+        }}) {{axis = 1 : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+        %12 = "tt.reduce"(%11) ({{
+        ^bb0(%arg2: i32, %arg3: i32):
+        %13 = arith.addi %arg2, %arg3 : i32
+        tt.reduce.return %13 : i32
+        }}) {{axis = 0 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> i32
+        tt.store %arg1, %12 {{cache = 1 : i32, evict = 1 : i32}} : i32
+        tt.return
+    }}
+    }}
+    """
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+
+    rs = RandomState(17)
+    x = rs.randint(0, 4, (M, N)).astype('int32')
+    x = (x.view('uint32') & np.uint32(0xffffe000)).view('int32')
+
+    z = np.zeros((1,)).astype('int32')
+
+    x_tri = torch.tensor(x, device=device)
+    z_tri = torch.tensor(z, device=device)
+
+    pgm = kernel[(1, 1, 1)](x_tri, z_tri)
+
+    z_ref = np.sum(x)
+
+    np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
 def test_generic_reduction(device='cuda'):
@@ -2087,6 +2225,7 @@ def test_num_warps_pow2():
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('int32', 'math.ffs', ''),
                           ('float32', 'math.log2', ''),
+                          ('float32', 'math.scalbn', ''),
                           ('float32', 'math.pow', tl.math.libdevice_path()),
                           ('float64', 'math.pow_dtype', tl.math.libdevice_path()),
                           ('float64', 'math.norm4d', '')])
@@ -2104,24 +2243,31 @@ def test_math_tensor(dtype_str, expr, lib_path):
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
 
     if expr == 'math.log2':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.broadcast_to(tl.math.log2(5.0), x.shape)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.broadcast_to(tl.{expr}(5.0), x.shape)'})
         y_ref = np.log2(5.0)
     elif expr == 'math.ffs':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.ffs(x)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
         y_ref = np.zeros(shape, dtype=x.dtype)
         for i in range(shape[0]):
             y_ref[i] = (int(x[i]) & int(-x[i])).bit_length()
+    elif expr == 'math.scalbn':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, 2)'})
+        y_ref = x * pow(2, 2)
+    elif expr == 'math.pow_dtype':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.math.pow(x, 0.5)'})
+        y_ref = np.power(x, 0.5)
     elif expr == 'math.pow':
         # numpy does not allow negative factors in power, so we use abs()
         x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x)'})
         y_ref = np.power(x, x)
     elif expr == 'math.pow_dtype':
         x = np.abs(x)
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
         y_ref = np.power(x, 0.5)
     elif expr == 'math.norm4d':
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.norm4d(x, x, x, x)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x, x, x)'})
         y_ref = np.sqrt(4 * np.power(x, 2))
 
     x_tri = to_triton(x)
@@ -2137,6 +2283,7 @@ def test_math_tensor(dtype_str, expr, lib_path):
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path",
                          [('float32', 'math.pow', ''),
+                          ('float64', 'math.pow_dtype', ''),
                           ('float64', 'math.pow', tl.math.libdevice_path())])
 def test_math_scalar(dtype_str, expr, lib_path):
 
@@ -2153,9 +2300,14 @@ def test_math_scalar(dtype_str, expr, lib_path):
     y_ref = np.zeros(shape, dtype=x.dtype)
 
     # numpy does not allow negative factors in power, so we use abs()
-    x = np.abs(x)
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
-    y_ref[:] = np.power(x, x)
+    if expr == 'math.pow':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, x)'})
+        y_ref[:] = np.power(x, x)
+    elif expr == 'math.pow_dtype':
+        x = np.abs(x)
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
+        y_ref[:] = np.power(x, 0.5)
 
     # triton result
     x_tri = to_triton(x)[0].item()
@@ -2231,6 +2383,33 @@ def test_if_return():
     # exit early path not taken
     exit_early[0] = 0
     kernel[(1,)](exit_early, out)
+    assert to_numpy(out)[0] == 1
+
+
+@triton.jit
+def add_fn(x):
+    return x + 1
+
+
+@pytest.mark.parametrize("call_type", ["attribute", "jit_function"])
+def test_if_call(call_type):
+    @triton.jit
+    def kernel(Out, call_type: tl.constexpr):
+        pid = tl.program_id(0)
+        o = tl.load(Out)
+        if pid == 0:
+            if call_type == "attribute":
+                a = o + 1
+                a = a.to(tl.int32)
+                o = a
+            else:
+                a = o
+                a = add_fn(a)
+                o = a
+        tl.store(Out, o)
+
+    out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    kernel[(1,)](out, call_type)
     assert to_numpy(out)[0] == 1
 
 

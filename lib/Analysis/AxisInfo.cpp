@@ -77,7 +77,7 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
 
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
-    if (auto fun = dyn_cast<triton::FuncOp>(op))
+    if (auto fun = dyn_cast<FunctionOpInterface>(op))
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
@@ -696,13 +696,13 @@ private:
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
-      if constexpr (std::is_same<OpTy, arith::AndIOp>::value) {
+      if constexpr (std::is_same_v<OpTy, arith::AndIOp>) {
         return {lhs.getConstantValue().value() &
                 rhs.getConstantValue().value()};
-      } else if constexpr (std::is_same<OpTy, arith::OrIOp>::value) {
+      } else if constexpr (std::is_same_v<OpTy, arith::OrIOp>) {
         return {lhs.getConstantValue().value() |
                 rhs.getConstantValue().value()};
-      } else if constexpr (std::is_same<OpTy, arith::XOrIOp>::value) {
+      } else if constexpr (std::is_same_v<OpTy, arith::XOrIOp>) {
         return {lhs.getConstantValue().value() ^
                 rhs.getConstantValue().value()};
       }
@@ -907,7 +907,7 @@ void AxisInfoAnalysis::visitOperation(
     propagateIfChanged(result, result->join(curr));
 }
 
-unsigned AxisInfoAnalysis::getPtrContiguity(Value ptr) {
+unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;
@@ -919,25 +919,26 @@ unsigned AxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
-  unsigned contigPerThread = triton::gpu::getSizePerThread(layout)[order[0]];
-  contigPerThread = std::min(align, contigPerThread);
-  contigPerThread = std::min<unsigned>(shape[order[0]], contigPerThread);
+  auto uniqueContigPerThread = triton::gpu::getUniqueContigPerThread(tensorTy);
+  assert(order[0] < uniqueContigPerThread.size() &&
+         "Unxpected uniqueContigPerThread size");
+  unsigned contiguity = uniqueContigPerThread[order[0]];
+  contiguity = std::min(align, contiguity);
 
-  return contigPerThread;
+  return contiguity;
 }
 
-unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
+unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;
-  dataflow::Lattice<AxisInfo> *latticeElement = getLatticeElement(ptr);
-  if (!latticeElement)
+  auto *axisInfo = getAxisInfo(ptr);
+  if (!axisInfo)
     return 1;
-  auto axisInfo = latticeElement->getValue();
   auto layout = tensorTy.getEncoding();
   auto order = triton::gpu::getOrder(layout);
-  auto maxMultipleBytes = axisInfo.getDivisibility(order[0]);
-  auto maxContig = axisInfo.getContiguity(order[0]);
+  auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
+  auto maxContig = axisInfo->getContiguity(order[0]);
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
@@ -945,17 +946,69 @@ unsigned AxisInfoAnalysis::getPtrAlignment(Value ptr) {
   return alignment;
 }
 
-unsigned AxisInfoAnalysis::getMaskAlignment(Value mask) {
+unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto tensorTy = mask.getType().dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return 1;
-  dataflow::Lattice<AxisInfo> *latticeElement = getLatticeElement(mask);
-  if (!latticeElement)
+  auto *axisInfo = getAxisInfo(mask);
+  if (!axisInfo)
     return 1;
-  auto maskAxis = latticeElement->getValue();
   auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
-  auto alignment = std::max<unsigned>(maskAxis.getConstancy(maskOrder[0]), 1);
+  auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   return alignment;
+}
+
+void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
+  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
+  if (failed(solver->initializeAndRun(funcOp)))
+    return;
+  auto *axisInfoMap = getFuncData(funcOp);
+  auto updateAxisInfoMap = [&](Value value) {
+    auto axisInfo = analysis->getLatticeElement(value)->getValue();
+    AxisInfo curAxisInfo;
+    if (axisInfoMap->count(value)) {
+      curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
+    } else {
+      curAxisInfo = axisInfo;
+    }
+    (*axisInfoMap)[value] = curAxisInfo;
+  };
+  funcOp.walk([&](Operation *op) {
+    for (auto value : op->getResults()) {
+      updateAxisInfoMap(value);
+    }
+  });
+  funcOp.walk([&](Block *block) {
+    for (auto value : block->getArguments()) {
+      updateAxisInfoMap(value);
+    }
+  });
+}
+
+void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
+                                    FunctionOpInterface callee) {
+  auto caller = callOp->getParentOfType<FunctionOpInterface>();
+  auto *axisInfoMap = getFuncData(caller);
+  for (auto entry : llvm::enumerate(callOp->getOperands())) {
+    auto index = entry.index();
+    auto value = entry.value();
+    auto setAttrFn = [&](StringRef attrName, int64_t prevValue) {
+      auto curValue = highestPowOf2Divisor<int64_t>(0);
+      if (callee.getArgAttrOfType<IntegerAttr>(index, attrName)) {
+        curValue =
+            callee.getArgAttrOfType<IntegerAttr>(index, attrName).getInt();
+      }
+      auto attr = IntegerAttr::get(IntegerType::get(callee.getContext(), 64),
+                                   gcd(prevValue, curValue));
+      callee.setArgAttr(index, attrName, attr);
+    };
+    auto axisInfo = axisInfoMap->lookup(value);
+    assert(axisInfo.getRank() == 1 && "only scalar arguments are supported");
+    setAttrFn("tt.contiguity", axisInfo.getContiguity(0));
+    setAttrFn("tt.divisibility", axisInfo.getDivisibility(0));
+    setAttrFn("tt.constancy", axisInfo.getConstancy(0));
+  }
 }
 
 } // namespace mlir
