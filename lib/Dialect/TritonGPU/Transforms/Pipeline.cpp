@@ -579,7 +579,12 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     // we replace the use new load use with a convert layout
     size_t i = std::distance(loads.begin(), it);
     auto cvtDstTy = op.getResult(0).getType().cast<RankedTensorType>();
-    auto cvtDstEnc = cvtDstTy.getEncoding().cast<ttg::DotOperandEncodingAttr>();
+    auto cvtDstEnc =
+        cvtDstTy.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
+    if (!cvtDstEnc) {
+      builder.clone(op, mapping);
+      continue;
+    }
     auto newDstTy = RankedTensorType::get(
         cvtDstTy.getShape(), cvtDstTy.getElementType(),
         ttg::DotOperandEncodingAttr::get(
