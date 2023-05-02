@@ -1,5 +1,6 @@
 import dataclasses
-import torch
+
+from triton.debugger import torch_wrapper as torch
 
 
 @dataclasses.dataclass

@@ -2,10 +2,9 @@ import itertools
 import random
 from typing import Tuple
 
-import torch
-
 import triton
 import triton.language as tl
+from . import torch_wrapper as torch
 from .core import ExecutionContext
 from .memory_map import MemoryMap
 from .tl_lang import (TritonLangProxy, WrappedTensor, _primitive_to_tensor,
