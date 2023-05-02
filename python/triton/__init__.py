@@ -20,6 +20,7 @@ from .runtime.jit import jit
 from .compiler import compile, CompilationError
 from . import language
 from . import testing
+from . import debugger
 
 __all__ = [
     "autotune",
@@ -41,6 +42,7 @@ __all__ = [
     "runtime",
     "TensorWrapper",
     "testing",
+    "debugger",
 ]
 
 
