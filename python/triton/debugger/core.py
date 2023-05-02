@@ -1,7 +1,9 @@
+from typing import Tuple
+
 import dataclasses
 
 
 @dataclasses.dataclass
 class ExecutionContext:
-    program_id: tuple[int]
-    program_size: tuple[int]
+    program_id: Tuple[int]
+    program_size: Tuple[int]
