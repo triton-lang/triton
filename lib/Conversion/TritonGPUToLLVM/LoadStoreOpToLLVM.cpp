@@ -306,34 +306,26 @@ struct StoreOpConversion
     if (tensorTy) {
       auto layout = tensorTy.getEncoding();
       auto shape = tensorTy.getShape();
+      unsigned rank = shape.size();
+      auto sizePerThread = triton::gpu::getSizePerThread(layout);
+      auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
+      auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
+      auto order = triton::gpu::getOrder(layout);
       auto shapePerCTA = triton::gpu::getShapePerCTA(layout, shape);
       bool isUniqueData = true;
-      for (unsigned i = 0; i < shape.size(); ++i) {
+      for (unsigned i = 0; i < rank; ++i) {
         if (shape[i] < shapePerCTA[i]) {
-          isUniqueData = false;
-          break;
-        }
-      }
-      if (!isUniqueData) {
-        Value warpSize = i32_val(32);
-        Value laneId = urem(tid, warpSize);
-        Value warpId = udiv(tid, warpSize);
-        auto sizePerThread = triton::gpu::getSizePerThread(layout);
-        auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
-        auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-        auto order = triton::gpu::getOrder(layout);
-        unsigned rank = shape.size();
-
-        // delinearize threadId to get the base index
-        SmallVector<Value> multiDimWarpId =
-            delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-        SmallVector<Value> multiDimThreadId =
-            delinearize(rewriter, loc, laneId, threadsPerWarp, order);
-        for (unsigned i = 0; i < rank; i++) {
-          Value thread_col =
+          Value warpSize = i32_val(32);
+          Value laneId = urem(tid, warpSize);
+          Value warpId = udiv(tid, warpSize);
+          SmallVector<Value> multiDimWarpId =
+              delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+          SmallVector<Value> multiDimThreadId =
+              delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+          Value thread_i =
               add(mul(multiDimWarpId[i], i32_val(threadsPerWarp[i])),
                   multiDimThreadId[i]);
-          mask = and_(mask, icmp_slt(mul(thread_col, i32_val(sizePerThread[i])),
+          mask = and_(mask, icmp_slt(mul(thread_i, i32_val(sizePerThread[i])),
                                      i32_val(shape[i])));
         }
       }
