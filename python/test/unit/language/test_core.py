@@ -1530,7 +1530,6 @@ def test_store_op(M, src_layout, device='cuda'):
     y_tri = torch.tensor(y, device=device)
 
     pgm = load_kernel[(1, 1, 1)](x_tri, y_tri)
-    torch.cuda.synchronize()
     y_ref = x
 
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
