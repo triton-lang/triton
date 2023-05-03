@@ -89,11 +89,11 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 }
 
 bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
-  // Case 1a: A size 1 tensor is not expensive since all threads will load the
+  // Case 1: A size 1 tensor is not expensive since all threads will load the
   // same
   if (isSingleValue(op->getOperand(0)))
     return false;
-  // Case 1b: Tensor of pointers has more threads than elements
+  // Case 2: Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
   auto ptrType = op->getOperand(0).getType().cast<RankedTensorType>();
   IntegerAttr numWarps =
@@ -104,28 +104,6 @@ bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
     if (ptrType.getNumElements() < numWarps.getInt() * 32)
       return false;
   }
-  // auto ptr = op->getOperand(0);
-  //// Case 2: We assume that `evict_last` loads/stores have high hit rate
-  // if (auto load = dyn_cast<triton::LoadOp>(op))
-  //   if (load.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-  //     return false;
-  // if (auto store = dyn_cast<triton::StoreOp>(op))
-  //   if (store.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-  //     return false;
-  // if (auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>()) {
-  //   auto encoding = tensorTy.getEncoding();
-  //   // Case 3: Different type conversion is expensive (e.g., mma <->
-  //   block) if (encoding.getTypeID() != targetEncoding.getTypeID())
-  //     return true;
-  //   auto sizePerThread = triton::gpu::getSizePerThread(encoding);
-  //   auto targetSizePerThread =
-  //   triton::gpu::getSizePerThread(targetEncoding); auto order =
-  //   triton::gpu::getOrder(encoding); auto targetOrder =
-  //   triton::gpu::getOrder(targetEncoding);
-  //   // Case 4: The targeEncoding may expose more vectorization
-  //   opportunities return sizePerThread[order[0]] >=
-  //   targetSizePerThread[targetOrder[0]];
-  // }
   return true;
 }
 
@@ -142,6 +120,12 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
           op))
     return true;
   return false;
+}
+
+bool canFoldConversion(Operation *op) {
+  return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
+             triton::MakeRangeOp, triton::SplatOp, triton::ViewOp,
+             triton::CatOp>(*op);
 }
 
 int simulateBackwardRematerialization(
@@ -189,10 +173,7 @@ int simulateBackwardRematerialization(
         continue;
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
-      if (isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-              triton::MakeRangeOp, triton::SplatOp>(*opArgI))
-        continue;
-      if (isa<triton::ViewOp, triton::CatOp>(opArgI))
+      if (canFoldConversion(opArgI))
         continue;
 
       // We add one expensive conversion for the current operand
