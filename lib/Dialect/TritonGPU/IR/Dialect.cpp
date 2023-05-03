@@ -81,8 +81,39 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
     if (mmaLayout.isAmpere())
       return {8, 4};
   }
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    auto parent = sliceLayout.getParent();
+    auto parentThreadsPerWarp = getThreadsPerWarp(parent);
+    SmallVector<unsigned> threadsPerWarp = parentThreadsPerWarp;
+    threadsPerWarp.erase(threadsPerWarp.begin() + sliceLayout.getDim());
+    for (unsigned i = 0; i < threadsPerWarp.size(); i++)
+      threadsPerWarp[i] *= parentThreadsPerWarp[sliceLayout.getDim()];
+    return threadsPerWarp;
+  }
   assert(0 && "getThreadsPerWarp not implemented");
   return {};
+}
+
+SmallVector<unsigned>
+getThreadsPerWarpWithUniqueData(Attribute layout,
+                                ArrayRef<int64_t> tensorShape) {
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    auto parentShape = sliceLayout.paddedShape(tensorShape);
+    auto parentThreadsPerWarp =
+        getThreadsPerWarpWithUniqueData(parentLayout, parentShape);
+    SmallVector<unsigned> threadsPerWarp = parentThreadsPerWarp;
+    threadsPerWarp.erase(threadsPerWarp.begin() + sliceLayout.getDim());
+    return threadsPerWarp;
+  }
+  auto threadsPerWarp = getThreadsPerWarp(layout);
+  assert(threadsPerWarp.size() == tensorShape.size() &&
+         "layout and tensor shape must have the same rank");
+  for (unsigned i = 0; i < threadsPerWarp.size(); i++) {
+    threadsPerWarp[i] = std::min<unsigned>(threadsPerWarp[i], tensorShape[i]);
+  }
+
+  return threadsPerWarp;
 }
 
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
@@ -94,8 +125,41 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
     return SmallVector<unsigned>(mmaLayout.getWarpsPerCTA().begin(),
                                  mmaLayout.getWarpsPerCTA().end());
   }
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    auto parent = sliceLayout.getParent();
+    auto parentWarpsPerCTA = getWarpsPerCTA(parent);
+    SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
+    warpsPerCTA.erase(warpsPerCTA.begin() + sliceLayout.getDim());
+    for (unsigned i = 0; i < warpsPerCTA.size(); i++)
+      warpsPerCTA[i] *= parentWarpsPerCTA[sliceLayout.getDim()];
+    return warpsPerCTA;
+  }
   assert(0 && "getWarpsPerCTA not implemented");
   return {};
+}
+
+SmallVector<unsigned>
+getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape) {
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    auto parentShape = sliceLayout.paddedShape(tensorShape);
+    auto parentWarpsPerCTA =
+        getWarpsPerCTAWithUniqueData(parentLayout, parentShape);
+    SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
+    warpsPerCTA.erase(warpsPerCTA.begin() + sliceLayout.getDim());
+    return warpsPerCTA;
+  }
+  auto warpsPerCTA = getWarpsPerCTA(layout);
+  assert(warpsPerCTA.size() == tensorShape.size() &&
+         "layout and tensor shape must have the same rank");
+  for (unsigned i = 0; i < warpsPerCTA.size(); i++) {
+    auto sizePerWarp =
+        getSizePerThread(layout)[i] * getThreadsPerWarp(layout)[i];
+    auto maxWarpsPerDim = ceil<unsigned>(tensorShape[i], sizePerWarp);
+    warpsPerCTA[i] = std::min<unsigned>(warpsPerCTA[i], maxWarpsPerDim);
+  }
+
+  return warpsPerCTA;
 }
 
 SmallVector<unsigned> getSizePerThread(Attribute layout) {
@@ -189,7 +253,7 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
       threads.push_back(blockedLayout.getThreadsPerWarp()[d] *
                         blockedLayout.getWarpsPerCTA()[d]);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.getVersionMajor() == 2) {
+    if (mmaLayout.isAmpere()) {
       threads = {8 * mmaLayout.getWarpsPerCTA()[0],
                  4 * mmaLayout.getWarpsPerCTA()[1]};
     } else
@@ -1074,9 +1138,9 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
       return mlir::failure();
     }
     auto newType = op->getResult(0).getType().cast<RankedTensorType>();
-    // Ensure that the new insert_slice op is placed in the same place as the
-    // old insert_slice op. Otherwise, the new insert_slice op may be placed
-    // after the async_wait op, which is not allowed.
+    // Ensure that the new insert_slice op is placed in the same place as
+    // the old insert_slice op. Otherwise, the new insert_slice op may be
+    // placed after the async_wait op, which is not allowed.
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(insert_slice);
     auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -1104,9 +1168,9 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
     auto resType = RankedTensorType::get(
         origResType.getShape(), origResType.getElementType(),
         extract_slice.getType().cast<RankedTensorType>().getEncoding());
-    // Ensure that the new extract_slice op is placed in the same place as the
-    // old extract_slice op. Otherwise, the new extract_slice op may be placed
-    // after the async_wait op, which is not allowed.
+    // Ensure that the new extract_slice op is placed in the same place as
+    // the old extract_slice op. Otherwise, the new extract_slice op may be
+    // placed after the async_wait op, which is not allowed.
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(extract_slice);
     auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(

@@ -364,10 +364,6 @@ Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value mappedMask,
 }
 
 void LoopPipeliner::emitPrologue() {
-  // llvm::errs() << "loads to pipeline...:\n";
-  // for (Value load : loads)
-  //   llvm::errs() << load << "\n";
-
   OpBuilder builder(forOp);
   for (BlockArgument &arg : forOp.getRegionIterArgs()) {
     OpOperand &operand = forOp.getOpOperandForRegionIterArg(arg);
@@ -392,7 +388,7 @@ void LoopPipeliner::emitPrologue() {
     for (Operation &op : forOp.getLoopBody().front()) {
       if (depOps.contains(&op))
         orderedDeps.push_back(&op);
-      else if (loads.contains(op.getResult(0)))
+      else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
         orderedDeps.push_back(&op);
     }
     assert(depOps.size() + loads.size() == orderedDeps.size() &&
@@ -583,7 +579,12 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     // we replace the use new load use with a convert layout
     size_t i = std::distance(loads.begin(), it);
     auto cvtDstTy = op.getResult(0).getType().cast<RankedTensorType>();
-    auto cvtDstEnc = cvtDstTy.getEncoding().cast<ttg::DotOperandEncodingAttr>();
+    auto cvtDstEnc =
+        cvtDstTy.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
+    if (!cvtDstEnc) {
+      builder.clone(op, mapping);
+      continue;
+    }
     auto newDstTy = RankedTensorType::get(
         cvtDstTy.getShape(), cvtDstTy.getElementType(),
         ttg::DotOperandEncodingAttr::get(
@@ -601,7 +602,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   for (Operation &op : forOp.getLoopBody().front()) {
     if (depOps.contains(&op))
       orderedDeps.push_back(&op);
-    else if (loads.contains(op.getResult(0)))
+    else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
