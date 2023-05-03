@@ -3,8 +3,6 @@ from __future__ import annotations  # remove after python 3.11
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
-import torch
-
 import triton
 from . import core as tl
 from triton._C.libtriton.triton import ir
@@ -1183,6 +1181,10 @@ def dot(lhs: tl.tensor,
         allow_tf32: bool,
         out_dtype: tl.dtype,
         builder: ir.builder) -> tl.tensor:
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("Triton requires PyTorch to be installed")
     if torch.version.hip is None:
         device = triton.runtime.jit.get_current_device()
         capability = triton.runtime.jit.get_device_capability(device)

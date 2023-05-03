@@ -4,11 +4,6 @@ __version__ = '2.1.0'
 # ---------------------------------------
 # Note: import order is significant here.
 
-# TODO: torch needs to be imported first
-# or pybind11 shows `munmap_chunk(): invalid pointer`
-import torch  # noqa: F401
-
-
 # submodules
 from .runtime import (
     autotune,
