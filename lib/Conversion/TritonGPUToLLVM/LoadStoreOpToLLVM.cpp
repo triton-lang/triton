@@ -303,9 +303,46 @@ struct StoreOpConversion
     auto numElems = tensorTy ? tensorTy.getNumElements() : 1;
     Value mask = int_val(1, 1);
     auto tid = tid_val();
-    mask = and_(mask,
-                icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
+    if (tensorTy) {
+      auto layout = tensorTy.getEncoding();
+      auto shape = tensorTy.getShape();
+      auto shapePerCTA = triton::gpu::getShapePerCTA(layout, shape);
+      bool isUniqueData = true;
+      for (unsigned i = 0; i < shape.size(); ++i) {
+        if (shape[i] < shapePerCTA[i]) {
+          isUniqueData = false;
+          break;
+        }
+      }
+      if (!isUniqueData) {
+        Value warpSize = i32_val(32);
+        Value laneId = urem(tid, warpSize);
+        Value warpId = udiv(tid, warpSize);
+        auto sizePerThread = triton::gpu::getSizePerThread(layout);
+        auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
+        auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
+        auto order = triton::gpu::getOrder(layout);
+        unsigned rank = shape.size();
 
+        // delinearize threadId to get the base index
+        SmallVector<Value> multiDimWarpId =
+            delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+        SmallVector<Value> multiDimThreadId =
+            delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+        for (unsigned i = 0; i < rank; i++) {
+          Value thread_col =
+              add(mul(multiDimWarpId[i], i32_val(threadsPerWarp[i])),
+                  multiDimThreadId[i]);
+          mask = and_(mask, icmp_slt(mul(thread_col, i32_val(sizePerThread[i])),
+                                     i32_val(shape[i])));
+        }
+      }
+    } else {
+      mask = and_(mask, icmp_slt(tid, i32_val(1)));
+    }
+    // mask = and_(mask,
+    //             icmp_slt(mul(tid, i32_val(elemsPerThread)),
+    //             i32_val(numElems)));
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
