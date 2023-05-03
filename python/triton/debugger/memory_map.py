@@ -1,6 +1,8 @@
 import dataclasses
 
-from triton.debugger import torch_wrapper as torch
+from triton.debugger import torch_wrapper
+
+torch = torch_wrapper.torch
 
 
 @dataclasses.dataclass

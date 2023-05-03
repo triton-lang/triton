@@ -4,12 +4,13 @@ from typing import Tuple
 
 import triton
 import triton.language as tl
-from . import torch_wrapper as torch
 from .core import ExecutionContext
 from .memory_map import MemoryMap
 from .tl_lang import (TritonLangProxy, WrappedTensor, _primitive_to_tensor,
                       debugger_constexpr)
+from triton.debugger import torch_wrapper
 
+torch = torch_wrapper.torch
 tl_method_backup = {}
 
 
