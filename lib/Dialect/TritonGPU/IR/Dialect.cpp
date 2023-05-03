@@ -162,28 +162,6 @@ getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape) {
   return warpsPerCTA;
 }
 
-SmallVector<unsigned>
-getSizePerThreadWithUniqueData(Attribute layout,
-                               ArrayRef<int64_t> tensorShape) {
-  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto parentLayout = sliceLayout.getParent();
-    auto parentShape = sliceLayout.paddedShape(tensorShape);
-    auto parentSizePerThread =
-        getSizePerThreadWithUniqueData(parentLayout, parentShape);
-    SmallVector<unsigned> sizePerThread = parentSizePerThread;
-    sizePerThread.erase(sizePerThread.begin() + sliceLayout.getDim());
-    return sizePerThread;
-  }
-  auto sizePerThread = getSizePerThread(layout);
-  assert(sizePerThread.size() == tensorShape.size() &&
-         "layout and tensor shape must have the same rank");
-  for (unsigned i = 0; i < sizePerThread.size(); i++) {
-    sizePerThread[i] = std::min<unsigned>(sizePerThread[i], tensorShape[i]);
-  }
-
-  return sizePerThread;
-}
-
 SmallVector<unsigned> getSizePerThread(Attribute layout) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),

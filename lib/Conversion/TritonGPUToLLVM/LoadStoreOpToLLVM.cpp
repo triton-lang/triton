@@ -298,9 +298,7 @@ struct StoreOpConversion
       vec = std::min(vec, maskAlign);
     }
 
-    // numElements = 1 for scalar
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
-    auto numElems = tensorTy ? tensorTy.getNumElements() : 1;
     Value mask = int_val(1, 1);
     auto tid = tid_val();
     if (tensorTy) {
@@ -312,29 +310,31 @@ struct StoreOpConversion
       auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
       auto order = triton::gpu::getOrder(layout);
       auto shapePerCTA = triton::gpu::getShapePerCTA(layout, shape);
-      bool isUniqueData = true;
-      for (unsigned i = 0; i < rank; ++i) {
-        if (shape[i] < shapePerCTA[i]) {
-          Value warpSize = i32_val(32);
-          Value laneId = urem(tid, warpSize);
-          Value warpId = udiv(tid, warpSize);
-          SmallVector<Value> multiDimWarpId =
-              delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-          SmallVector<Value> multiDimThreadId =
-              delinearize(rewriter, loc, laneId, threadsPerWarp, order);
-          Value thread_i =
-              add(mul(multiDimWarpId[i], i32_val(threadsPerWarp[i])),
-                  multiDimThreadId[i]);
-          mask = and_(mask, icmp_slt(mul(thread_i, i32_val(sizePerThread[i])),
-                                     i32_val(shape[i])));
-        }
+      for (unsigned dim = 0; dim < rank; ++dim) {
+        // if there is no data replication across threads on this dimension
+        if (shape[dim] >= shapePerCTA[dim])
+          continue;
+        // Otherwise, we need to mask threads that will replicate data on this
+        // dimension
+        Value warpSize = i32_val(32);
+        Value laneId = urem(tid, warpSize);
+        Value warpId = udiv(tid, warpSize);
+        SmallVector<Value> multiDimWarpId =
+            delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+        SmallVector<Value> multiDimThreadId =
+            delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+        // Calculate the thread index on this dimension for the CTA
+        Value threadDim =
+            add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
+                multiDimThreadId[dim]);
+        mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
+                                   i32_val(shape[dim])));
       }
     } else {
+      // If the tensor is not ranked, then it is a scalar and only thread 0 can
+      // write
       mask = and_(mask, icmp_slt(tid, i32_val(1)));
     }
-    // mask = and_(mask,
-    //             icmp_slt(mul(tid, i32_val(elemsPerThread)),
-    //             i32_val(numElems)));
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
