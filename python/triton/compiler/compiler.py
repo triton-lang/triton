@@ -70,7 +70,7 @@ def optimize_ttgir(mod, num_stages, arch):
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
-    if isinstance(arch, int):
+    if _is_cuda(arch):
         pm.add_tritongpu_accelerate_matmul_pass(arch)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
@@ -322,7 +322,8 @@ instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equ
 
 # TODO: architecture descriptor class
 def _is_cuda(arch):
-    return isinstance(arch, int)
+    # return isinstance(arch, int)
+    return False  # NOTE: assume ROCM device
 
 
 def get_architecture_descriptor(capability):
@@ -333,7 +334,8 @@ def get_architecture_descriptor(capability):
             capability = capability[0] * 10 + capability[1]
         else:
             capability = get_amdgpu_arch_fulldetails()
-    return capability
+    # return capability
+    return get_amdgpu_arch_fulldetails()  # NOTE: assume ROCM device
 
 
 def add_rocm_stages(arch, extern_libs, stages):

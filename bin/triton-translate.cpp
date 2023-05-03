@@ -122,13 +122,9 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   }
 
   llvm::LLVMContext llvmContext;
-#if 1 // USE_ROCM doesnot work here
+  // NOTE: assume ROCM device
   auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module,
                                            SMArch.getValue(), true /*isRocm*/);
-#else
-  auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module,
-                                           SMArch.getValue(), false /*isRocm*/);
-#endif
   if (!llvmir) {
     llvm::errs() << "Translate to LLVM IR failed";
   }
