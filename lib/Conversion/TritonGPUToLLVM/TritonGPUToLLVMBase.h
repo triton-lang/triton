@@ -421,6 +421,47 @@ public:
   // -----------------------------------------------------------------------
   // Utilities
   // -----------------------------------------------------------------------
+  Value getMask(Type valueTy, ConversionPatternRewriter &rewriter,
+                Location loc) const {
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    Value mask = int_val(1, 1);
+    auto tid = tid_val();
+    if (tensorTy) {
+      auto layout = tensorTy.getEncoding();
+      auto shape = tensorTy.getShape();
+      unsigned rank = shape.size();
+      auto sizePerThread = triton::gpu::getSizePerThread(layout);
+      auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
+      auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
+      auto order = triton::gpu::getOrder(layout);
+      auto shapePerCTA = triton::gpu::getShapePerCTA(layout, shape);
+      for (unsigned dim = 0; dim < rank; ++dim) {
+        // if there is no data replication across threads on this dimension
+        if (shape[dim] >= shapePerCTA[dim])
+          continue;
+        // Otherwise, we need to mask threads that will replicate data on this
+        // dimension
+        Value warpSize = i32_val(32);
+        Value laneId = urem(tid, warpSize);
+        Value warpId = udiv(tid, warpSize);
+        SmallVector<Value> multiDimWarpId =
+            delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+        SmallVector<Value> multiDimThreadId =
+            delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+        // Calculate the thread index on this dimension for the CTA
+        Value threadDim =
+            add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
+                multiDimThreadId[dim]);
+        mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
+                                   i32_val(shape[dim])));
+      }
+    } else {
+      // If the tensor is not ranked, then it is a scalar and only thread 0 can
+      // write
+      mask = and_(mask, icmp_slt(tid, i32_val(1)));
+    }
+    return mask;
+  }
 
   // Convert an \param index to a multi-dim coordinate given \param shape and
   // \param order.
