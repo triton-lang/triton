@@ -457,6 +457,86 @@ def test_broadcast(dtype):
     assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
 
 
+# ----------------
+# test expand_dims
+# ----------------
+def test_expand_dims():
+    @triton.jit
+    def expand_dims_kernel(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, 0)
+        tl.static_assert(t.shape == [1, N])
+
+        t = tl.expand_dims(offset1, 1)
+        tl.static_assert(t.shape == [N, 1])
+
+        t = tl.expand_dims(offset1, -1)
+        tl.static_assert(t.shape == [N, 1])
+
+        t = tl.expand_dims(offset1, -2)
+        tl.static_assert(t.shape == [1, N])
+
+        t = tl.expand_dims(offset1, (0, -1))
+        tl.static_assert(t.shape == [1, N, 1])
+
+        t = tl.expand_dims(offset1, (0, 1, 3))
+        tl.static_assert(t.shape == [1, 1, N, 1])
+
+        t = tl.expand_dims(offset1, (-4, 2, -1))
+        tl.static_assert(t.shape == [1, N, 1, 1])
+
+        t = tl.expand_dims(offset1, (3, 1, 2))
+        tl.static_assert(t.shape == [N, 1, 1, 1])
+
+    N = 32
+    dummy_tensor = torch.empty((), device="cuda")
+    expand_dims_kernel[(1,)](dummy_tensor, N)
+
+
+def test_expand_dims_error_cases():
+    @triton.jit
+    def dim_out_of_range1(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, -2)
+        t = tl.expand_dims(offset1, -3)
+
+    @triton.jit
+    def dim_out_of_range2(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, 1)
+        t = tl.expand_dims(offset1, 2)
+
+    @triton.jit
+    def duplicate_dim1(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, (0, 0))
+
+    @triton.jit
+    def duplicate_dim2(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, (0, -3))
+
+    N = 32
+    dummy_tensor = torch.empty((), device="cuda")
+
+    with pytest.raises(triton.CompilationError, match="invalid axis -3"):
+        dim_out_of_range1[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match="invalid axis 2"):
+        dim_out_of_range2[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+        duplicate_dim1[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+        duplicate_dim2[(1,)](dummy_tensor, N)
+
+
 # ---------------
 # test where
 # ---------------
