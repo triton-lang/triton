@@ -105,7 +105,12 @@ class DebuggerFunction:
 
 
 class GridSelector:
+    """
+    Entry point of the debugger
+    """
+
     def __init__(self, func):
+        assert torch.__version__[0] == 2, "Triton Debugger only supports torch >= 2.0"
         self.func = func
 
     def __getitem__(self, grid):
