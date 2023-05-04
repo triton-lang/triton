@@ -1501,7 +1501,7 @@ def test_store_op(M, src_layout, device='cuda'):
     ir = f"""
     #src = {src_layout}
     module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
-        tt.func public @load_kernel(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) {{
+        tt.func public @kernel(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) {{
             %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
             %1 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<{M}x!tt.ptr<f32>, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
             %2 = tt.addptr %1, %0 : tensor<{M}x!tt.ptr<f32>, #triton_gpu.slice<{{dim = 1, parent = #src}}>>, tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
@@ -1521,7 +1521,7 @@ def test_store_op(M, src_layout, device='cuda'):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        load_kernel = triton.compile(f.name)
+        store_kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, 1)).astype('float32')
@@ -1529,7 +1529,7 @@ def test_store_op(M, src_layout, device='cuda'):
     x_tri = torch.tensor(x, device=device)
     y_tri = torch.tensor(y, device=device)
 
-    pgm = load_kernel[(1, 1, 1)](x_tri, y_tri)
+    pgm = store_kernel[(1, 1, 1)](x_tri, y_tri)
     y_ref = x
 
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
