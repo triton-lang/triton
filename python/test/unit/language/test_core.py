@@ -1488,6 +1488,53 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+layouts = [
+    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0]),
+    MmaLayout(version=(2, 0), warps_per_cta=[4, 1])
+]
+
+
+@pytest.mark.parametrize("M", [32, 64, 128, 256])
+@pytest.mark.parametrize("src_layout", layouts)
+def test_store_op(M, src_layout, device='cuda'):
+    ir = f"""
+    #src = {src_layout}
+    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+        tt.func public @kernel(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) {{
+            %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %1 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<{M}x!tt.ptr<f32>, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %2 = tt.addptr %1, %0 : tensor<{M}x!tt.ptr<f32>, #triton_gpu.slice<{{dim = 1, parent = #src}}>>, tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %3 = tt.load %2 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}xf32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %4 = tt.expand_dims %3 {{axis = 1 : i32}} : (tensor<{M}xf32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xf32, #src>
+            %5 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %6 = tt.expand_dims %5 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
+            %7 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<{M}x1x!tt.ptr<f32>, #src>
+            %8 = tt.addptr %7, %6 : tensor<{M}x1x!tt.ptr<f32>, #src>, tensor<{M}x1xi32, #src>
+            tt.store %8, %4 : tensor<{M}x1xf32, #src>
+            tt.return
+        }}
+    }}
+    """
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        store_kernel = triton.compile(f.name)
+
+    rs = RandomState(17)
+    x = rs.randint(0, 4, (M, 1)).astype('float32')
+    y = np.zeros((M, 1), dtype='float32')
+    x_tri = torch.tensor(x, device=device)
+    y_tri = torch.tensor(y, device=device)
+
+    pgm = store_kernel[(1, 1, 1)](x_tri, y_tri)
+    y_ref = x
+
+    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+
+
 @triton.jit
 def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
     delta = mean_2 - mean_1
