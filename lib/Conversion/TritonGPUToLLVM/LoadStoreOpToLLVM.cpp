@@ -298,14 +298,7 @@ struct StoreOpConversion
       vec = std::min(vec, maskAlign);
     }
 
-    // numElements = 1 for scalar
-    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
-    auto numElems = tensorTy ? tensorTy.getNumElements() : 1;
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
-    mask = and_(mask,
-                icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
-
+    Value mask = getMask(valueTy, rewriter, loc);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;

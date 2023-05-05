@@ -11,8 +11,6 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Tuple
 
-import torch
-
 import triton
 import triton._C.libtriton.triton as _triton
 from ..runtime import driver
@@ -324,6 +322,10 @@ def _is_cuda(arch):
 
 
 def get_architecture_descriptor(capability):
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("Triton requires PyTorch to be installed")
     if capability is None:
         if torch.version.hip is None:
             device = triton.runtime.jit.get_current_device()

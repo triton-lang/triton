@@ -457,6 +457,86 @@ def test_broadcast(dtype):
     assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
 
 
+# ----------------
+# test expand_dims
+# ----------------
+def test_expand_dims():
+    @triton.jit
+    def expand_dims_kernel(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, 0)
+        tl.static_assert(t.shape == [1, N])
+
+        t = tl.expand_dims(offset1, 1)
+        tl.static_assert(t.shape == [N, 1])
+
+        t = tl.expand_dims(offset1, -1)
+        tl.static_assert(t.shape == [N, 1])
+
+        t = tl.expand_dims(offset1, -2)
+        tl.static_assert(t.shape == [1, N])
+
+        t = tl.expand_dims(offset1, (0, -1))
+        tl.static_assert(t.shape == [1, N, 1])
+
+        t = tl.expand_dims(offset1, (0, 1, 3))
+        tl.static_assert(t.shape == [1, 1, N, 1])
+
+        t = tl.expand_dims(offset1, (-4, 2, -1))
+        tl.static_assert(t.shape == [1, N, 1, 1])
+
+        t = tl.expand_dims(offset1, (3, 1, 2))
+        tl.static_assert(t.shape == [N, 1, 1, 1])
+
+    N = 32
+    dummy_tensor = torch.empty((), device="cuda")
+    expand_dims_kernel[(1,)](dummy_tensor, N)
+
+
+def test_expand_dims_error_cases():
+    @triton.jit
+    def dim_out_of_range1(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, -2)
+        t = tl.expand_dims(offset1, -3)
+
+    @triton.jit
+    def dim_out_of_range2(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, 1)
+        t = tl.expand_dims(offset1, 2)
+
+    @triton.jit
+    def duplicate_dim1(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, (0, 0))
+
+    @triton.jit
+    def duplicate_dim2(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, (0, -3))
+
+    N = 32
+    dummy_tensor = torch.empty((), device="cuda")
+
+    with pytest.raises(triton.CompilationError, match="invalid axis -3"):
+        dim_out_of_range1[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match="invalid axis 2"):
+        dim_out_of_range2[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+        duplicate_dim1[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+        duplicate_dim2[(1,)](dummy_tensor, N)
+
+
 # ---------------
 # test where
 # ---------------
@@ -1418,6 +1498,53 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
     z_ref = np.max(x, axis=axis, keepdims=True)
 
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+
+
+layouts = [
+    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0]),
+    MmaLayout(version=(2, 0), warps_per_cta=[4, 1])
+]
+
+
+@pytest.mark.parametrize("M", [32, 64, 128, 256])
+@pytest.mark.parametrize("src_layout", layouts)
+def test_store_op(M, src_layout, device='cuda'):
+    ir = f"""
+    #src = {src_layout}
+    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+        tt.func public @kernel(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) {{
+            %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %1 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<{M}x!tt.ptr<f32>, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %2 = tt.addptr %1, %0 : tensor<{M}x!tt.ptr<f32>, #triton_gpu.slice<{{dim = 1, parent = #src}}>>, tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %3 = tt.load %2 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}xf32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %4 = tt.expand_dims %3 {{axis = 1 : i32}} : (tensor<{M}xf32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xf32, #src>
+            %5 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %6 = tt.expand_dims %5 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
+            %7 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<{M}x1x!tt.ptr<f32>, #src>
+            %8 = tt.addptr %7, %6 : tensor<{M}x1x!tt.ptr<f32>, #src>, tensor<{M}x1xi32, #src>
+            tt.store %8, %4 : tensor<{M}x1xf32, #src>
+            tt.return
+        }}
+    }}
+    """
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        store_kernel = triton.compile(f.name)
+
+    rs = RandomState(17)
+    x = rs.randint(0, 4, (M, 1)).astype('float32')
+    y = np.zeros((M, 1), dtype='float32')
+    x_tri = torch.tensor(x, device=device)
+    y_tri = torch.tensor(y, device=device)
+
+    pgm = store_kernel[(1, 1, 1)](x_tri, y_tri)
+    y_ref = x
+
+    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
 @triton.jit
