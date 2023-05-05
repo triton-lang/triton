@@ -1558,7 +1558,7 @@ layouts = [
 @pytest.mark.parametrize("dst_layout", layouts)
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
-def test_convert_layout(M, src_layout, dst_layout, src_dim, dst_dim, device='cuda'):
+def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device='cuda'):
     ir = f"""
     #dst = {dst_layout}
     #src = {src_layout}
