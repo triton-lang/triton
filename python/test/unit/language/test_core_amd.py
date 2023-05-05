@@ -1232,6 +1232,22 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                           for dtype in ['int8', 'float16', 'float32']])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
+
+    if torch.version.hip is not None:
+        # set capability to large number to jump over check below
+        # check are not relevant to amd gpu, left them for smaller diff between test_core.py and test_core_amd.py tests
+        capability = (100, 100)
+
+    if capability[0] < 7:
+        pytest.skip("Only test tl.dot() on devices with sm >= 70")
+    if capability[0] < 8:
+        if dtype == 'int8':
+            pytest.skip("Only test int8 on devices with sm >= 80")
+        elif dtype == 'float32' and allow_tf32:
+            pytest.skip("Only test tf32 on devices with sm >= 80")
+    if capability[0] == 7:
+        if (M, N, K, num_warps) == (128, 256, 32, 8):
+            pytest.skip("shared memory out of resource")
     if torch.version.hip is not None:
         if (M, N, K) == (64, 128, 128):
             pytest.skip("Not supported: memory out of resource.")

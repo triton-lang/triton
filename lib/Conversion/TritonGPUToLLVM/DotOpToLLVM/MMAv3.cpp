@@ -24,10 +24,6 @@ enum class MatrixCoreType : uint8_t {
   NOT_APPLICABLE,
 };
 
-struct GridDescription {
-  Value thread, lane, wave, waveSize;
-};
-
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
 struct DotOpMFMAConversionHelper {
@@ -49,15 +45,6 @@ struct DotOpMFMAConversionHelper {
     auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
         loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x);
     return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
-  }
-
-  GridDescription generateGridDescription() const {
-    GridDescription gd;
-    gd.thread = getThreadId();
-    gd.waveSize = i32_val(64);
-    gd.lane = urem(gd.thread, gd.waveSize);
-    gd.wave = udiv(gd.thread, gd.waveSize);
-    return gd;
   }
 
   Value generateMFMAOp(MatrixCoreType mfmaTy, Value valA, Value valB,
@@ -109,9 +96,6 @@ struct DotOpMFMAConversionHelper {
 
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
-
-    GridDescription gd = generateGridDescription();
-
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
     auto mfmaTy = getMatrixCoreTypeFromDot(op);
 

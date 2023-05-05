@@ -134,7 +134,11 @@ private:
     }
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       SmallVector<Value> mmaColIdx(4);
+#ifdef USE_ROCM
       SmallVector<Value> mmaRowIdx(16);
+#else
+      SmallVector<Value> mmaRowIdx(2);
+#endif
       Value threadId = getThreadId(rewriter, loc);
 #ifdef USE_ROCM
       Value warpSize = i32_val(64);

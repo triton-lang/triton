@@ -442,7 +442,6 @@ MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
 #endif
 
   SmallVector<unsigned> elemsPerThread(rank);
-  int res = 0;
   if (isVolta()) {
     auto [isARow, isBRow, isAVec4, isBVec4, id] = decodeVoltaLayoutStates();
     static constexpr std::array<unsigned, 2> fpw{{2, 2}};
@@ -463,14 +462,12 @@ MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
     unsigned elemsCol = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
     elemsPerThread[0] = elemsRow;
     elemsPerThread[1] = elemsCol;
-    unsigned elemsCol = ceil<unsigned>(shape[0], 16 * getWarpsPerCTA()[0]) * 2;
-    unsigned elemsRow = ceil<unsigned>(shape[1], 8 * getWarpsPerCTA()[1]) * 2;
-    res = elemsCol * elemsRow;
 #ifdef USE_ROCM
   } else if (isMI200()) {
     unsigned elemsCol = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]);
-    unsigned elemsRow = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]);
-    res = elemsCol * elemsRow * 16;
+    unsigned elemsRow = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1])*16;
+    elemsPerThread[0] = elemsRow;
+    elemsPerThread[1] = elemsCol;
 #endif
   } else {
     llvm_unreachable("Unexpected mma version");
