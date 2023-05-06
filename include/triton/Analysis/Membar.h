@@ -72,7 +72,7 @@ public:
   /// in the following circumstances:
   /// - RAW: If a shared memory write is followed by a shared memory read, and
   /// their addresses are intersected, a barrier is inserted.
-  /// - WAR: If a shared memory read is followed by a shared memory read, and
+  /// - WAR: If a shared memory read is followed by a shared memory write, and
   /// their addresses are intersected, a barrier is inserted.
   /// The following circumstances do not require a barrier:
   /// - WAW: not possible because overlapped memory allocation is not allowed.

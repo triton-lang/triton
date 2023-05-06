@@ -81,9 +81,8 @@ void MembarAnalysis::visitTerminator(Operation *op,
                                      SmallVector<Block *> &successors) {
   if (auto branchInterface = dyn_cast<BranchOpInterface>(op)) {
     Block *parentBlock = branchInterface->getBlock();
-    for (Block *successor : parentBlock->getSuccessors()) {
-      successors.push_back(successor);
-    }
+    successors.append(std::begin(parentBlock->getSuccessors()),
+                      std::end(parentBlock->getSuccessors()));
     return;
   }
   // Otherwise, it could be a return op
