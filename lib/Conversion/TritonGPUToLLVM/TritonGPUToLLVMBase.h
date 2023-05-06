@@ -457,7 +457,7 @@ public:
     } else {
       // If the tensor is not ranked, then it is a scalar and only thread 0 can
       // write
-      mask = and_(mask, icmp_slt(tid, i32_val(1)));
+      mask = and_(mask, icmp_eq(tid, i32_val(0)));
     }
     return mask;
   }
