@@ -72,8 +72,24 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
                                                   op->getAttrs());
     } else {
       // A device function
-      auto newOp =
-          rewriter.create<LLVM::ReturnOp>(op.getLoc(), adaptor.getOperands());
+      LLVM::ReturnOp newOp;
+      if (adaptor.getOperands().size() < 2) {
+        // Single or no return value.
+        newOp =
+            rewriter.create<LLVM::ReturnOp>(op.getLoc(), adaptor.getOperands());
+      } else {
+        // Pack the results into a struct.
+        auto packedResultsTy = this->getTypeConverter()->packFunctionResults(
+            funcOp.getResultTypes());
+        Value packedResults =
+            rewriter.create<LLVM::UndefOp>(op.getLoc(), packedResultsTy);
+        auto loc = op.getLoc();
+        for (auto it : llvm::enumerate(adaptor.getOperands())) {
+          packedResults = insert_val(packedResultsTy, packedResults, it.value(),
+                                     it.index());
+        }
+        newOp = rewriter.create<LLVM::ReturnOp>(op.getLoc(), packedResults);
+      }
       newOp->setAttrs(op->getAttrs());
       rewriter.replaceOp(op, newOp->getResults());
     }
