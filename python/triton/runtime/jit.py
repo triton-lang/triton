@@ -472,7 +472,6 @@ def jit(
                 debug=debug,
                 noinline=noinline,
             )
-
     if fn is not None:
         return decorator(fn)
 
