@@ -2550,24 +2550,30 @@ def test_if_else():
     assert to_numpy(out)[0] == false_val[0]
 
 
-def test_if_return():
+@pytest.mark.parametrize("mode", ["dynamic", "static"])
+def test_if_return(mode):
 
     @triton.jit
-    def kernel(ExitEarly, Out):
-        if tl.load(ExitEarly):
-            tl.store(Out, 0)
-            return
+    def kernel(ExitEarly, Out, cond: tl.constexpr, mode: tl.constexpr):
+        if mode == "dynamic":
+            if tl.load(ExitEarly):
+                tl.store(Out, 0)
+                return
+        else:
+            if cond:
+                tl.store(Out, 0)
+                return
         tl.store(Out, 1)
 
     out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
     exit_early = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
     # exit early path taken
     exit_early[0] = 1
-    kernel[(1,)](exit_early, out)
+    kernel[(1,)](exit_early, out, True, mode)
     assert to_numpy(out)[0] == 0
     # exit early path not taken
     exit_early[0] = 0
-    kernel[(1,)](exit_early, out)
+    kernel[(1,)](exit_early, out, False, mode)
     assert to_numpy(out)[0] == 1
 
 
@@ -2576,7 +2582,20 @@ def add_fn(x):
     return x + 1
 
 
-@pytest.mark.parametrize("call_type", ["attribute", "jit_function"])
+@triton.jit
+def add_fn_return(x, pid):
+    if pid == 0:
+        return x + 1
+    else:
+        return x + 2
+
+
+@triton.jit
+def add_fn_expr(Out, x):
+    tl.store(Out, x)
+
+
+@pytest.mark.parametrize("call_type", ["attribute", "jit_function", "jit_function_return", "jit_function_ifexp", "jit_function_expr"])
 def test_if_call(call_type):
     @triton.jit
     def kernel(Out, call_type: tl.constexpr):
@@ -2584,13 +2603,30 @@ def test_if_call(call_type):
         o = tl.load(Out)
         if pid == 0:
             if call_type == "attribute":
+                # call attribute
                 a = o + 1
                 a = a.to(tl.int32)
                 o = a
             else:
                 a = o
-                a = add_fn(a)
+                if call_type == "jit_function":
+                    # regular function call
+                    a = add_fn(a)
+                elif call_type == "jit_function_return":
+                    # function without end_if block
+                    a = add_fn_return(a, pid)
+                elif call_type == "jit_function_ifexp":
+                    # ifexp expression
+                    a = add_fn(a) if pid == 0 else add_fn_return(a, pid)
+                elif call_type == "jit_function_expr":
+                    if pid == 1:
+                        return
+                    a = add_fn(a)
+                    if pid == 0:
+                        # call without return
+                        add_fn_expr(Out, a)
                 o = a
+
         tl.store(Out, o)
 
     out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
