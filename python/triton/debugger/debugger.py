@@ -110,7 +110,8 @@ class GridSelector:
     """
 
     def __init__(self, func):
-        assert torch.__version__[0] == 2, "Triton Debugger only supports torch >= 2.0"
+        version = torch.__version__
+        assert version[0] == "2", f"Triton Debugger only supports torch >= 2.0, using {version}"
         self.func = func
 
     def __getitem__(self, grid):
