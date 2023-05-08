@@ -2619,7 +2619,7 @@ def test_if_call(call_type):
             if call_type == "attribute":
                 # call attribute
                 a = o + 1
-                a = a.to(tl.int32)
+                a = a.to(tl.int32).to(tl.int32)
                 o = a
             else:
                 a = o

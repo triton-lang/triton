@@ -168,12 +168,21 @@ class CodeGenerator(ast.NodeVisitor):
             pred = lambda s: self.contains_return_op(s)
             return any(pred(s) for s in node.body)
         elif isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Attribute):
+            def check_undefined_name(cur_node):
                 # Check if name is an undefined local variable,
                 # which can only be a tensor or a constexpr
-                name = node.func.value.id
-                if name not in self.lscope and name not in self.gscope:
-                    return False
+                if isinstance(cur_node.func, ast.Attribute):
+                    if isinstance(cur_node.func.value, ast.Name):
+                        name = cur_node.func.value.id
+                        if name not in self.lscope and name not in self.gscope:
+                            return True
+                        return False
+                    # chain of calls
+                    # e.g., tl.load(a).to(tl.float32)
+                    return check_undefined_name(cur_node.func.value)
+                return False
+            if check_undefined_name(node):
+                return False
             fn = self.visit(node.func)
             if isinstance(fn, JITFunction) and fn.noinline is False:
                 old_gscope = self.gscope
