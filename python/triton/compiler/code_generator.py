@@ -287,8 +287,7 @@ class CodeGenerator(ast.NodeVisitor):
                 fn.reset_type(self.prototype.to_ir(self.builder))
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
-        # We could finalize here after last_ret_type is set
-        # because triton requires each return op to be the same type
+        # Remove dead code
         fn.finalize()
 
     def visit_arguments(self, node):
