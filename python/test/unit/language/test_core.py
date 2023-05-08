@@ -2582,6 +2582,11 @@ def add_fn(x):
     return x + 1
 
 
+@triton.jit(noinline=True)
+def add_fn_noinline(x):
+    return x + 1
+
+
 @triton.jit
 def add_fn_return(x, pid):
     if pid == 0:
@@ -2595,7 +2600,16 @@ def add_fn_expr(Out, x):
     tl.store(Out, x)
 
 
-@pytest.mark.parametrize("call_type", ["attribute", "jit_function", "jit_function_return", "jit_function_ifexp", "jit_function_expr"])
+@triton.jit
+def add_fn_static_cond(x, cond: tl.constexpr):
+    if cond == "":
+        return x
+    else:
+        return x + 1
+
+
+@pytest.mark.parametrize("call_type", ["attribute", "jit_function", "jit_function_return",
+                                       "ifexp", "expr", "jit_function_static_cond", "jit_function_noinline"])
 def test_if_call(call_type):
     @triton.jit
     def kernel(Out, call_type: tl.constexpr):
@@ -2615,16 +2629,20 @@ def test_if_call(call_type):
                 elif call_type == "jit_function_return":
                     # function without end_if block
                     a = add_fn_return(a, pid)
-                elif call_type == "jit_function_ifexp":
+                elif call_type == "ifexp":
                     # ifexp expression
                     a = add_fn(a) if pid == 0 else add_fn_return(a, pid)
-                elif call_type == "jit_function_expr":
+                elif call_type == "expr":
                     if pid == 1:
                         return
                     a = add_fn(a)
                     if pid == 0:
                         # call without return
                         add_fn_expr(Out, a)
+                elif call_type == "jit_function_static_cond":
+                    a = add_fn_static_cond(a, call_type)
+                elif call_type == "jit_function_noinline":
+                    a = add_fn_noinline(a)
                 o = a
 
         tl.store(Out, o)

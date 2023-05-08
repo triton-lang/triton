@@ -175,7 +175,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if name not in self.lscope and name not in self.gscope:
                     return False
             fn = self.visit(node.func)
-            if isinstance(fn, JITFunction):
+            if isinstance(fn, JITFunction) and fn.noinline is False:
                 old_gscope = self.gscope
                 self.gscope = sys.modules[fn.fn.__module__].__dict__
                 ret = self.contains_return_op(fn.parse())
@@ -195,8 +195,8 @@ class CodeGenerator(ast.NodeVisitor):
             for _, value in ast.iter_fields(node):
                 if isinstance(value, list):
                     for item in value:
-                       if isinstance(item, ast.AST):
-                           ret = ret or self.contains_return_op(item)
+                        if isinstance(item, ast.AST):
+                            ret = ret or self.contains_return_op(item)
                 elif isinstance(value, ast.AST):
                     ret = ret or self.contains_return_op(value)
             return ret
