@@ -101,29 +101,19 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.autotune">
 <span class="sig-prename descclassname"><span class="pre">triton.</span></span><span class="sig-name descname"><span class="pre">autotune</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">configs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prune_configs_by</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reset_to_zero</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.autotune" title="Permalink to this definition">¶</a></dt>
-<dd><p>Decorator for auto-tuning a <code class="code docutils literal notranslate"><span class="pre">triton.jit</span></code>’d function.
-.. highlight:: python
-.. code-block:: python</p>
-<blockquote>
-<div><dl>
-<dt>&#64;triton.autotune(configs=[</dt><dd><blockquote>
-<div><p>triton.Config(meta={‘BLOCK_SIZE’: 128}, num_warps=4),
-triton.Config(meta={‘BLOCK_SIZE’: 1024}, num_warps=8),</p>
-</div></blockquote>
-<p>],
-key=[‘x_size’] # the two above configs will be evaluated anytime</p>
-<blockquote>
-<div><p># the value of x_size changes</p>
-</div></blockquote>
-</dd>
-</dl>
-<p>)
-&#64;triton.jit
-def kernel(x_ptr, x_size, <a href="#id1"><span class="problematic" id="id2">**</span></a>META):</p>
-<blockquote>
-<div><p>BLOCK_SIZE = META[‘BLOCK_SIZE’]</p>
-</div></blockquote>
-</div></blockquote>
+<dd><p>Decorator for auto-tuning a <code class="code docutils literal notranslate"><span class="pre">triton.jit</span></code>’d function.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span><span class="n">configs</span><span class="o">=</span><span class="p">[</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span><span class="n">meta</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">},</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span><span class="n">meta</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">:</span> <span class="mi">1024</span><span class="p">},</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+  <span class="p">],</span>
+  <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;x_size&#39;</span><span class="p">]</span> <span class="c1"># the two above configs will be evaluated anytime</span>
+                 <span class="c1"># the value of x_size changes</span>
+<span class="p">)</span>
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span> <span class="nf">kernel</span><span class="p">(</span><span class="n">x_ptr</span><span class="p">,</span> <span class="n">x_size</span><span class="p">,</span> <span class="o">**</span><span class="n">META</span><span class="p">):</span>
+    <span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">]</span>
+</pre></div>
+</div>
 <dl class="field-list simple">
 <dt class="field-odd">Note<span class="colon">:</span></dt>
 <dd class="field-odd"><p>When all the configurations are evaluated, the kernel will run multiple times.

@@ -104,17 +104,14 @@
 <dl class="py class">
 <dt class="sig sig-object py" id="triton.Config">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">triton.</span></span><span class="sig-name descname"><span class="pre">Config</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kwargs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_warps</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">4</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_stages</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pre_hook</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.Config" title="Permalink to this definition">¶</a></dt>
-<dd><p>An object that represents a possible kernel configuration for the auto-tuner to try.
-:ivar meta: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
-:type meta: dict[Str, Any]
-:ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if</p>
-<blockquote>
-<div><p><cite>num_warps=8</cite>, then each kernel instance will be automatically parallelized to
-cooperatively execute using <cite>8 * 32 = 256</cite> threads.</p>
-</div></blockquote>
+<dd><p>An object that represents a possible kernel configuration for the auto-tuner to try.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Variables<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
+<li><p><strong>meta</strong> – a dictionary of meta-parameters to pass to the kernel as keyword arguments.</p></li>
+<li><p><strong>num_warps</strong> – the number of warps to use for the kernel when compiled for GPUs. For example, if
+<cite>num_warps=8</cite>, then each kernel instance will be automatically parallelized to
+cooperatively execute using <cite>8 * 32 = 256</cite> threads.</p></li>
 <li><p><strong>num_stages</strong> – the number of stages that the compiler should use when software-pipelining loops.
 Mostly useful for matrix multiplication workloads on SM80+ GPUs.</p></li>
 <li><p><strong>pre_hook</strong> – a function that will be called before the kernel is called. Parameters of this
