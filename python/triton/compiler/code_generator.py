@@ -455,16 +455,16 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
-            if not then_block.has_terminator() and not then_block.has_return():
-                self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
-            # else terminator
-            self.builder.set_insertion_point_to_end(else_block)
-            if not else_block.has_terminator() and not else_block.has_return():
-                self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
             if then_block.has_return() and else_block.has_return():
                 has_endif_block = False
                 endif_block.erase()
-            else:
+            if not then_block.has_terminator() and has_endif_block:
+                self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
+            # else terminator
+            self.builder.set_insertion_point_to_end(else_block)
+            if not else_block.has_terminator() and has_endif_block:
+                self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+            if has_endif_block:
                 for ty in ir_ret_types:
                     endif_block.add_argument(ty)
         if has_endif_block:
