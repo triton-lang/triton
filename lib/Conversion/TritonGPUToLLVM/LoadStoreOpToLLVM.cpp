@@ -298,14 +298,7 @@ struct StoreOpConversion
       vec = std::min(vec, maskAlign);
     }
 
-    // numElements = 1 for scalar
-    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
-    auto numElems = tensorTy ? tensorTy.getNumElements() : 1;
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
-    mask = and_(mask,
-                icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
-
+    Value mask = getMask(valueTy, rewriter, loc);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -406,13 +399,13 @@ struct AtomicCASOpConversion
     auto valElements = getTypeConverter()->unpackLLElements(
         loc, llVal, rewriter, op.getVal().getType());
 
-    auto TensorTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    auto valueTy = op.getResult().getType();
+    auto TensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
         TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
-                 : op.getResult().getType();
+                 : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
-    auto tid = tid_val();
-    Value pred = icmp_eq(tid, i32_val(0));
+    Value mask = getMask(valueTy, rewriter, loc);
     PTXBuilder ptxBuilderMemfence;
     auto memfence = ptxBuilderMemfence.create<PTXInstr>("membar")->o("gl");
     memfence();
@@ -432,7 +425,7 @@ struct AtomicCASOpConversion
     auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, "r");
     auto &atom = *ptxBuilderAtomicCAS.create<PTXInstr>("atom");
     atom.global().o("cas").o("b32");
-    atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(pred);
+    atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
     auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
     barrier();
 
@@ -441,7 +434,7 @@ struct AtomicCASOpConversion
     auto *valOprStore = ptxBuilderStore.newOperand(old, "r");
     auto &st = *ptxBuilderStore.create<PTXInstr>("st");
     st.shared().o("b32");
-    st(dstOprStore, valOprStore).predicate(pred);
+    st(dstOprStore, valOprStore).predicate(mask);
     ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
     ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
     barrier();
@@ -490,10 +483,11 @@ struct AtomicRMWOpConversion
       maskElements = getTypeConverter()->unpackLLElements(
           loc, llMask, rewriter, op.getMask().getType());
 
-    auto tensorTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    auto valueTy = op.getResult().getType();
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
-                 : op.getResult().getType();
+                 : valueTy;
     const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
@@ -506,10 +500,7 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
-    mask = and_(mask,
-                icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
+    Value mask = getMask(valueTy, rewriter, loc);
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
@@ -589,7 +580,6 @@ struct AtomicRMWOpConversion
         memfenc();
         auto ASMReturnTy = void_ty(ctx);
         ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
-        rmwMask = and_(rmwMask, icmp_eq(tid, i32_val(0)));
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
