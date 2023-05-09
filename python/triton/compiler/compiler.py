@@ -322,14 +322,6 @@ def _is_cuda(arch):
     return isinstance(arch, int)
 
 
-def _is_hip():
-    try:
-        import torch
-    except ImportError:
-        raise ImportError("Triton requires PyTorch to be installed")
-    return torch.version.hip is not None
-
-
 def get_architecture_descriptor(capability):
     try:
         import torch
@@ -478,7 +470,7 @@ def compile(fn, **kwargs):
             metadata["shared"] = kwargs["shared"]
 
     # Add device type to meta information
-    metadata["device_type"] = "cuda" if is_cuda else "hip" if is_hip else device_type
+    metadata["device_type"] = device_type
 
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
