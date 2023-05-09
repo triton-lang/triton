@@ -18,6 +18,7 @@ from ..runtime import driver
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..tools.disasm import extract
+from ..common.backend import get_backend
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
 
@@ -321,6 +322,14 @@ def _is_cuda(arch):
     return isinstance(arch, int)
 
 
+def _is_hip():
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("Triton requires PyTorch to be installed")
+    return torch.version.hip is not None
+
+
 def get_architecture_descriptor(capability):
     try:
         import torch
@@ -362,8 +371,19 @@ def add_cuda_stages(arch, extern_libs, stages):
 
 
 def compile(fn, **kwargs):
-    arch = get_architecture_descriptor(kwargs.get("cc", None))
-    is_cuda = _is_cuda(arch)
+    # Get device type to decide which backend should be used
+    device_type = kwargs.get("device_type", "cuda")
+    _device_backend = get_backend(device_type)
+
+    if device_type in ["cuda", "hip"]:
+        arch = get_architecture_descriptor(kwargs.get("cc", None))
+    else:
+        _device_backend = get_backend(device_type)
+        assert _device_backend
+        arch = _device_backend.get_architecture_descriptor(**kwargs)
+
+    is_cuda = device_type == "cuda"
+    is_hip = device_type == "hip"
     context = _triton.ir.context()
     asm = dict()
     constants = kwargs.get("constants", dict())
@@ -373,6 +393,7 @@ def compile(fn, **kwargs):
     if extern_libs is None:
         extern_libs = dict()
     debug = kwargs.get("debug", False)
+
     # build compilation stages
     stages = dict()
     stages["ast"] = (lambda path: fn, None)
@@ -384,8 +405,10 @@ def compile(fn, **kwargs):
                       lambda src: ttgir_to_llir(src, extern_libs, arch))
     if is_cuda:
         add_cuda_stages(arch, extern_libs, stages)
-    else:
+    elif is_hip:
         add_rocm_stages(arch, extern_libs, stages)
+    else:
+        _device_backend.add_stages(arch, extern_libs, stages)
 
     # find out the signature of the function
     if isinstance(fn, triton.runtime.JITFunction):
@@ -418,7 +441,11 @@ def compile(fn, **kwargs):
         first_stage = list(stages.keys()).index(ir)
 
     # cache manager
-    so_path = make_stub(name, signature, constants)
+    if is_cuda or is_hip:
+        so_path = make_stub(name, signature, constants)
+    else:
+        so_path = _device_backend.make_launcher_stub(name, signature, constants)
+
     # create cache manager
     fn_cache_manager = get_cache_manager(make_hash(fn, arch, **kwargs))
     # determine name and extension type of provided function
@@ -449,6 +476,9 @@ def compile(fn, **kwargs):
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
+
+    # Add device type to meta information
+    metadata["device_type"] = "cuda" if is_cuda else "hip" if is_hip else device_type
 
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
@@ -492,6 +522,8 @@ def compile(fn, **kwargs):
         if ir == "amdgcn":
             metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
             asm["hsaco_path"] = next_module[1]
+        if not is_cuda and not is_hip:
+            _device_backend.add_meta_info(ir, next_module, metadata, asm)
         module = next_module
     # write-back metadata, if it didn't come from the cache
     if metadata_path is None:
@@ -517,10 +549,12 @@ class CompiledKernel:
         spec.loader.exec_module(mod)
         self.c_wrapper = getattr(mod, "launch")
         # initialize metadata
-        self.shared = metadata["shared"]
+        self.shared = metadata["shared"] if "shared" in metadata else 0
         self.num_warps = metadata["num_warps"]
         self.num_stages = metadata["num_stages"]
         self.constants = metadata["constants"]
+        self.device_type = metadata["device_type"]
+        self.device_backend = get_backend(self.device_type) if self.device_type not in ["cuda", "hip"] else None
         # initialize asm dict
         self.asm = asm
         # binaries are lazily initialized
@@ -533,15 +567,25 @@ class CompiledKernel:
     def _init_handles(self):
         if self.cu_module is not None:
             return
-        device = triton.runtime.jit.get_current_device()
-        bin_path = {
-            driver.HIP: "hsaco_path",
-            driver.CUDA: "cubin"
-        }[driver.backend]
-        max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
+
+        if self.device_type in ["cuda", "hip"]:
+            device = triton.runtime.jit.get_current_device()
+            bin_path = {
+                driver.HIP: "hsaco_path",
+                driver.CUDA: "cubin"
+            }[driver.backend]
+            max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
+            fn_load_binary = driver.utils.load_binary
+        else:
+            device = self.device_backend.get_current_device()
+            bin_path = self.device_backend.get_kernel_path()
+            max_shared = self.device_backend.get_device_properties()["max_shared_mem"]
+            fn_load_binary = self.device_backend.device_driver().utils.load_binary
+
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
-        mod, func, n_regs, n_spills = driver.utils.load_binary(self.metadata["name"], self.asm[bin_path], self.shared, device)
+
+        mod, func, n_regs, n_spills = fn_load_binary(self.metadata["name"], self.asm[bin_path], self.shared, device)
 
         self.n_spills = n_spills
         self.n_regs = n_regs
@@ -558,7 +602,10 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             if stream is None:
-                stream = triton.runtime.jit.get_cuda_stream()
+                if self.device_type in ["cuda", "rocm"]:
+                    stream = triton.runtime.jit.get_cuda_stream()
+                else:
+                    stream = get_backend(self.device_type).get_stream(None)
             self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner

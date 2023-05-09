@@ -11,6 +11,7 @@ from collections import defaultdict, namedtuple
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
 
 import triton
+from triton.common.backend import get_backend
 
 
 def get_cuda_stream(idx=None):
@@ -159,6 +160,13 @@ class JITFunction(KernelInterface[T]):
             raise TypeError(f'Unsupported type {type(arg)} for {arg}')
 
     @staticmethod
+    def _device_of(arg):
+        if hasattr(arg, "device"):
+            return arg.device.type
+        else:
+            return ''
+
+    @staticmethod
     def _spec_of(arg):
         if hasattr(arg, "data_ptr"):
             return (arg.data_ptr() % JITFunction.divisibility == 0)
@@ -267,6 +275,7 @@ class JITFunction(KernelInterface[T]):
         args = ', '.join(regular_args)
         # cache key for regular argument type
         sig_keys = ', '.join([self._get_arg_sig_key(arg) for arg in regular_args])
+        device_types = '[' + ', '.join([f'_device_of({arg})' for arg in regular_args]) + ']'
         # cache key for constexpr argument values
         constexpr_keys = ', '.join(constexpr_args)
         # cache key for argument specialization
@@ -294,11 +303,25 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
+    device_types = {device_types}
+    device_types.remove('')
+    device_type = device_types[0] if len(device_types) > 0 else 'cuda'
     if device is None:
-        device = get_current_device()
-        set_current_device(device)
+        if device_type in ['cuda', 'hip']:
+            device = get_current_device()
+            set_current_device(device)
+        else:
+            device_backend = get_backend(device_type)
+            assert device_backend
+            device = device_backend.get_current_device()
+            device_backend.set_current_device(device)
     if stream is None and not warmup:
-      stream = get_cuda_stream(device)
+        if device_type in ['cuda', 'hip']:
+            stream = get_cuda_stream(device)
+        else:
+            device_backend = get_backend(device_type)
+            assert device_backend
+            stream = device_backend.get_stream()
     try:
       bin = cache[device][key]
       if not warmup:
@@ -320,7 +343,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {{i}} is not supported")
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
-        bin = triton.compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs, debug=self.debug)
+        bin = triton.compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
         if not warmup:
             bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
         self.cache[device][key] = bin
@@ -329,7 +352,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
 """
         scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,
                  "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of,
-                 "cache": self.cache, "triton": triton,
+                 "_device_of": self._device_of, "cache": self.cache, "triton": triton,
+                 "get_backend": get_backend,
                  "get_current_device": get_current_device,
                  "set_current_device": set_current_device}
         exec(src, scope)
