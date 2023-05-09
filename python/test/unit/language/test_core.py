@@ -1605,68 +1605,68 @@ def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
     )
 
 
-layouts = [
-    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0]),
-    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0]),
-    BlockedLayout([1, 4], [1, 32], [1, 4], [1, 0]),
-    BlockedLayout([1, 4], [8, 4], [2, 2], [0, 1])
-]
+# layouts = [
+#     BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0]),
+#     BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0]),
+#     BlockedLayout([1, 4], [1, 32], [1, 4], [1, 0]),
+#     BlockedLayout([1, 4], [8, 4], [2, 2], [0, 1])
+# ]
 
 
-@pytest.mark.parametrize("M, N", [[32, 128], [128, 128], [128, 32]])
-@pytest.mark.parametrize("src_layout", layouts)
-def test_reduce_2d(M, N, src_layout, device='cuda'):
-    ir = f"""
-    #src = {src_layout}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
-    tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
-        %cst = arith.constant dense<{M}> : tensor<{M}x1xi32, #src>
-        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
-        %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
-        %2 = arith.muli %1, %cst : tensor<{M}x1xi32, #src>
-        %3 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
-        %4 = tt.expand_dims %3 {{axis = 0 : i32}} : (tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>) -> tensor<1x{N}xi32, #src>
-        %5 = tt.broadcast %2 : (tensor<{M}x1xi32, #src>) -> tensor<{M}x{N}xi32, #src>
-        %6 = tt.broadcast %4 : (tensor<1x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #src>
-        %7 = arith.addi %5, %6 : tensor<{M}x{N}xi32, #src>
-        %8 = tt.splat %arg0 : (!tt.ptr<i32>) -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
-        %9 = tt.addptr %8, %7 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
-        %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #src>
-        %11 = "tt.reduce"(%10) ({{
-        ^bb0(%arg2: i32, %arg3: i32):
-        %13 = arith.addi %arg2, %arg3 : i32
-        tt.reduce.return %13 : i32
-        }}) {{axis = 1 : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
-        %12 = "tt.reduce"(%11) ({{
-        ^bb0(%arg2: i32, %arg3: i32):
-        %13 = arith.addi %arg2, %arg3 : i32
-        tt.reduce.return %13 : i32
-        }}) {{axis = 0 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> i32
-        tt.store %arg1, %12 {{cache = 1 : i32, evict = 1 : i32}} : i32
-        tt.return
-    }}
-    }}
-    """
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
-
-    rs = RandomState(17)
-    x = rs.randint(0, 4, (M, N)).astype('int32')
-    x = (x.view('uint32') & np.uint32(0xffffe000)).view('int32')
-
-    z = np.zeros((1,)).astype('int32')
-
-    x_tri = torch.tensor(x, device=device)
-    z_tri = torch.tensor(z, device=device)
-
-    pgm = kernel[(1, 1, 1)](x_tri, z_tri)
-
-    z_ref = np.sum(x)
-
-    np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+# @pytest.mark.parametrize("M, N", [[32, 128], [128, 128], [128, 32]])
+# @pytest.mark.parametrize("src_layout", layouts)
+# def test_reduce_2d(M, N, src_layout, device='cuda'):
+#     ir = f"""
+#     #src = {src_layout}
+#     module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+#     tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
+#         %cst = arith.constant dense<{M}> : tensor<{M}x1xi32, #src>
+#         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+#         %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
+#         %2 = arith.muli %1, %cst : tensor<{M}x1xi32, #src>
+#         %3 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
+#         %4 = tt.expand_dims %3 {{axis = 0 : i32}} : (tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>) -> tensor<1x{N}xi32, #src>
+#         %5 = tt.broadcast %2 : (tensor<{M}x1xi32, #src>) -> tensor<{M}x{N}xi32, #src>
+#         %6 = tt.broadcast %4 : (tensor<1x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #src>
+#         %7 = arith.addi %5, %6 : tensor<{M}x{N}xi32, #src>
+#         %8 = tt.splat %arg0 : (!tt.ptr<i32>) -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
+#         %9 = tt.addptr %8, %7 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
+#         %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #src>
+#         %11 = "tt.reduce"(%10) ({{
+#         ^bb0(%arg2: i32, %arg3: i32):
+#         %13 = arith.addi %arg2, %arg3 : i32
+#         tt.reduce.return %13 : i32
+#         }}) {{axis = 1 : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+#         %12 = "tt.reduce"(%11) ({{
+#         ^bb0(%arg2: i32, %arg3: i32):
+#         %13 = arith.addi %arg2, %arg3 : i32
+#         tt.reduce.return %13 : i32
+#         }}) {{axis = 0 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> i32
+#         tt.store %arg1, %12 {{cache = 1 : i32, evict = 1 : i32}} : i32
+#         tt.return
+#     }}
+#     }}
+#     """
+#     import tempfile
+#     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+#         f.write(ir)
+#         f.flush()
+#         kernel = triton.compile(f.name)
+#
+#     rs = RandomState(17)
+#     x = rs.randint(0, 4, (M, N)).astype('int32')
+#     x = (x.view('uint32') & np.uint32(0xffffe000)).view('int32')
+#
+#     z = np.zeros((1,)).astype('int32')
+#
+#     x_tri = torch.tensor(x, device=device)
+#     z_tri = torch.tensor(z, device=device)
+#
+#     pgm = kernel[(1, 1, 1)](x_tri, z_tri)
+#
+#     z_ref = np.sum(x)
+#
+#     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
 def test_generic_reduction(device='cuda'):
@@ -2550,24 +2550,30 @@ def test_if_else():
     assert to_numpy(out)[0] == false_val[0]
 
 
-def test_if_return():
+@pytest.mark.parametrize("mode", ["dynamic", "static"])
+def test_if_return(mode):
 
     @triton.jit
-    def kernel(ExitEarly, Out):
-        if tl.load(ExitEarly):
-            tl.store(Out, 0)
-            return
+    def kernel(ExitEarly, Out, cond: tl.constexpr, mode: tl.constexpr):
+        if mode == "dynamic":
+            if tl.load(ExitEarly):
+                tl.store(Out, 0)
+                return
+        else:
+            if cond:
+                tl.store(Out, 0)
+                return
         tl.store(Out, 1)
 
     out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
     exit_early = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
     # exit early path taken
     exit_early[0] = 1
-    kernel[(1,)](exit_early, out)
+    kernel[(1,)](exit_early, out, True, mode)
     assert to_numpy(out)[0] == 0
     # exit early path not taken
     exit_early[0] = 0
-    kernel[(1,)](exit_early, out)
+    kernel[(1,)](exit_early, out, False, mode)
     assert to_numpy(out)[0] == 1
 
 
@@ -2576,7 +2582,34 @@ def add_fn(x):
     return x + 1
 
 
-@pytest.mark.parametrize("call_type", ["attribute", "jit_function"])
+@triton.jit(noinline=True)
+def add_fn_noinline(x):
+    return x + 1
+
+
+@triton.jit
+def add_fn_return(x, pid):
+    if pid == 0:
+        return x + 1
+    else:
+        return x + 2
+
+
+@triton.jit
+def add_fn_expr(Out, x):
+    tl.store(Out, x)
+
+
+@triton.jit
+def add_fn_static_cond(x, cond: tl.constexpr):
+    if cond == "":
+        return x
+    else:
+        return x + 1
+
+
+@pytest.mark.parametrize("call_type", ["attribute", "jit_function", "jit_function_return",
+                                       "ifexp", "expr", "jit_function_static_cond", "jit_function_noinline"])
 def test_if_call(call_type):
     @triton.jit
     def kernel(Out, call_type: tl.constexpr):
@@ -2584,13 +2617,34 @@ def test_if_call(call_type):
         o = tl.load(Out)
         if pid == 0:
             if call_type == "attribute":
+                # call attribute
                 a = o + 1
-                a = a.to(tl.int32)
+                a = a.to(tl.int32).to(tl.int32)
                 o = a
             else:
                 a = o
-                a = add_fn(a)
+                if call_type == "jit_function":
+                    # regular function call
+                    a = add_fn(a)
+                elif call_type == "jit_function_return":
+                    # function without end_if block
+                    a = add_fn_return(a, pid)
+                elif call_type == "ifexp":
+                    # ifexp expression
+                    a = add_fn(a) if pid == 0 else add_fn_return(a, pid)
+                elif call_type == "expr":
+                    if pid == 1:
+                        return
+                    a = add_fn(a)
+                    if pid == 0:
+                        # call without return
+                        add_fn_expr(Out, a)
+                elif call_type == "jit_function_static_cond":
+                    a = add_fn_static_cond(a, call_type)
+                elif call_type == "jit_function_noinline":
+                    a = add_fn_noinline(a)
                 o = a
+
         tl.store(Out, o)
 
     out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')

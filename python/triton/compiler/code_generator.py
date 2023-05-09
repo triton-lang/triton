@@ -104,6 +104,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.debug = debug
         self.noinline = noinline
         self.scf_stack = []
+        self.last_ret_type = None
         # SSA-construction
         # name => language.tensor
         self.local_defs: Dict[str, tensor] = {}
@@ -138,7 +139,7 @@ class CodeGenerator(ast.NodeVisitor):
     def set_value(self, name: str,
                   value: Union[tensor, constexpr]) -> None:
         ''' This function:
-          called by visit_Assign() & visit_FuncDef() to store left value (lvalue)
+            called by visit_Assign() & visit_FunctionDef() to store left value (lvalue)
         1. record local defined name (FIXME: should consider control flow)
         2. store tensor in self.lvalue
         '''
@@ -150,10 +151,9 @@ class CodeGenerator(ast.NodeVisitor):
     #
     def visit_compound_statement(self, stmts):
         for stmt in stmts:
-            self.last_ret_type = self.visit(stmt)
-            if isinstance(stmt, ast.Return):
-                break
-        return stmts and isinstance(stmt, ast.Return)
+            ret_type = self.visit(stmt)
+            if ret_type is not None and isinstance(stmt, ast.Return):
+                self.last_ret_type = ret_type
 
     # TODO: should be its own AST visitor
     def contains_return_op(self, node):
@@ -168,10 +168,23 @@ class CodeGenerator(ast.NodeVisitor):
             pred = lambda s: self.contains_return_op(s)
             return any(pred(s) for s in node.body)
         elif isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Attribute):
+            def check_undefined_name(cur_node):
+                # Check if name is an undefined local variable,
+                # which can only be a tensor or a constexpr
+                if isinstance(cur_node.func, ast.Attribute):
+                    if isinstance(cur_node.func.value, ast.Name):
+                        name = cur_node.func.value.id
+                        if name not in self.lscope and name not in self.gscope:
+                            return True
+                        return False
+                    # chain of calls
+                    # e.g., tl.load(a).to(tl.float32)
+                    return check_undefined_name(cur_node.func.value)
+                return False
+            if check_undefined_name(node):
                 return False
             fn = self.visit(node.func)
-            if isinstance(fn, JITFunction):
+            if isinstance(fn, JITFunction) and fn.noinline is False:
                 old_gscope = self.gscope
                 self.gscope = sys.modules[fn.fn.__module__].__dict__
                 ret = self.contains_return_op(fn.parse())
@@ -183,6 +196,18 @@ class CodeGenerator(ast.NodeVisitor):
             ret = any(pred(s) for s in node.body)
             if node.orelse:
                 ret = ret or any(pred(s) for s in node.orelse)
+            return ret
+        elif isinstance(node, ast.IfExp):
+            return self.contains_return_op(node.body) or self.contains_return_op(node.orelse)
+        elif isinstance(node, ast.Expr):
+            ret = False
+            for _, value in ast.iter_fields(node):
+                if isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, ast.AST):
+                            ret = ret or self.contains_return_op(item)
+                elif isinstance(value, ast.AST):
+                    ret = ret or self.contains_return_op(value)
             return ret
         else:
             return False
@@ -257,9 +282,9 @@ class CodeGenerator(ast.NodeVisitor):
             self.set_value(arg_name, arg_value)
         self.builder.set_insertion_point_to_start(entry)
         # visit function body
-        has_ret = self.visit_compound_statement(node.body)
+        self.visit_compound_statement(node.body)
         # finalize function
-        if not has_ret:
+        if self.last_ret_type is None:
             self.builder.ret([])
         else:
             # update return type
@@ -271,6 +296,8 @@ class CodeGenerator(ast.NodeVisitor):
                 fn.reset_type(self.prototype.to_ir(self.builder))
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
+        # Remove dead code
+        fn.finalize()
 
     def visit_arguments(self, node):
         arg_names = []
@@ -421,6 +448,7 @@ class CodeGenerator(ast.NodeVisitor):
         return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
 
     def visit_if_top_level(self, cond, node):
+        has_endif_block = True
         with enter_sub_region(self) as sr:
             liveins, ip_block = sr
             then_block = self.builder.create_block()
@@ -435,20 +463,25 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
-            if not then_block.has_terminator():
+            if then_block.has_return() and else_block.has_return():
+                has_endif_block = False
+                endif_block.erase()
+            if not then_block.has_terminator() and has_endif_block:
                 self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
             # else terminator
             self.builder.set_insertion_point_to_end(else_block)
-            if not else_block.has_terminator():
+            if not else_block.has_terminator() and has_endif_block:
                 self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
-            for ty in ir_ret_types:
-                endif_block.add_argument(ty)
-        # change block
-        self.builder.set_insertion_point_to_start(endif_block)
-        # update value
-        for i, name in enumerate(names):
-            new_tensor = language.core.tensor(endif_block.arg(i), ret_types[i])
-            self.set_value(name, new_tensor)
+            if has_endif_block:
+                for ty in ir_ret_types:
+                    endif_block.add_argument(ty)
+        if has_endif_block:
+            # change block
+            self.builder.set_insertion_point_to_start(endif_block)
+            # update value
+            for i, name in enumerate(names):
+                new_tensor = language.core.tensor(endif_block.arg(i), ret_types[i])
+                self.set_value(name, new_tensor)
 
     # TODO: refactor
     def visit_if_scf(self, cond, node):
