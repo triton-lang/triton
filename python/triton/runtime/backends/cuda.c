@@ -21,6 +21,20 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {
       return NULL;                                                             \
   }
 
+static PyObject *enablePeerAccess(PyObject *self, PyObject *args) {
+  uint64_t ptr;
+  if (!PyArg_ParseTuple(args, "K", &ptr))
+    return NULL;
+  CUcontext ctx;
+  CUDA_CHECK(cuPointerGetAttribute(&ctx, CU_POINTER_ATTRIBUTE_CONTEXT, ptr));
+  int code = cuCtxEnablePeerAccess(ctx, 0);
+  if (code != CUDA_SUCCESS && code != CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED) {
+    CUDA_CHECK(code);
+  }
+  Py_INCREF(Py_None);
+  return Py_None;
+}
+
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int device_id;
   if (!PyArg_ParseTuple(args, "i", &device_id))
@@ -102,6 +116,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 }
 
 static PyMethodDef ModuleMethods[] = {
+    {"enable_peer_access", enablePeerAccess, METH_VARARGS,
+     "Enable peer access for the context attached to the given pointer"},
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided cubin into CUDA driver"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,

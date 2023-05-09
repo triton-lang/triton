@@ -52,6 +52,7 @@ class CudaUtils(object):
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
+        self.enable_peer_access = mod.enable_peer_access
 
 
 class CudaDriver(DriverBase):
