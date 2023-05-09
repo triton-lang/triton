@@ -262,6 +262,11 @@ void init_triton_ir(py::module &&m) {
              return !self.empty() &&
                     self.back().hasTrait<mlir::OpTrait::IsTerminator>();
            })
+      .def("has_return",
+           [](mlir::Block &self) {
+             return !self.empty() &&
+                    self.back().hasTrait<mlir::OpTrait::ReturnLike>();
+           })
       .def("erase", [](mlir::Block &self) { self.erase(); });
 
   // using eattr = ir::attribute_kind_t;
@@ -428,6 +433,25 @@ void init_triton_ir(py::module &&m) {
             self.setArgAttr(arg_no, name, mlir::IntegerAttr::get(attrTy, val));
           },
           ret::reference)
+      .def("finalize",
+           [](mlir::triton::FuncOp &self) -> void {
+             // Remove dead code
+             // 1. Unreachable code after return
+             self.walk([&](mlir::Block *block) {
+               mlir::Operation *retOp = nullptr;
+               block->walk([&](mlir::Operation *op) {
+                 if (mlir::isa<mlir::triton::ReturnOp>(op))
+                   if (retOp == nullptr)
+                     retOp = op;
+               });
+               if (retOp && retOp != &block->back()) {
+                 auto pos = retOp->getIterator();
+                 pos++;
+                 auto *newBlock = block->splitBlock(pos);
+                 newBlock->erase();
+               }
+             });
+           })
       .def_property_readonly("type", &mlir::triton::FuncOp::getFunctionType)
       .def("reset_type", &mlir::triton::FuncOp::setType);
 
