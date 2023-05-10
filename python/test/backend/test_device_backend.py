@@ -137,7 +137,7 @@ class ExtensionBackend(BaseBackend):
     def add_meta_info(self, ir, module, metadata, asm):
         metadata["name"] = "extension_backend_name"
 
-    def device_driver(self):
+    def get_driver(self):
         return self.driver
 
     def get_stream(self):
@@ -153,7 +153,10 @@ class ExtensionBackend(BaseBackend):
     def set_current_device(self, device):
         pass
 
-    def get_kernel_path(self):
+    def get_load_binary_fn(self):
+        return self.driver.utils.load_binary
+
+    def get_kernel_bin(self):
         return "ttgir"
 
     def get_architecture_descriptor(self, **kwargs):

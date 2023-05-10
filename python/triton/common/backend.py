@@ -1,39 +1,71 @@
 
 from typing import Dict
 
+from triton.runtime.driver import DriverBase
+
 
 class BaseBackend:
     def __init__(self, device_type: str) -> None:
         self.device_type = device_type
 
     def add_stages(self, arch, extern_libs, stages):
+        """
+        Custom the arch, extern_libs and stages per backend specific requirement
+        """
         raise NotImplementedError
 
     def add_meta_info(self, ir, module, metadata, asm):
+        """
+        Custom the ir, module, metadata and asm per backend specific requirement
+        """
         raise NotImplementedError
 
-    def device_driver(self):
+    def get_load_binary_fn(self):
+        """
+        Return a callable to load binary
+        """
+        raise NotImplementedError
+
+    def get_driver(self) -> DriverBase:
+        """
+        Get the backend driver. Please refer to "DriverBase" for more details
+        """
         raise NotImplementedError
 
     def get_stream(self):
+        """
+        Get stream for current device
+        """
         raise NotImplementedError
 
     def get_device_properties(self):
         raise NotImplementedError
 
     def get_current_device(self):
+        """
+        Get current device
+        """
         raise NotImplementedError
 
     def set_current_device(self, device):
+        """
+        Set current device as the given device
+        """
         raise NotImplementedError
 
-    def get_kernel_path(self):
+    def get_kernel_bin(self):
         raise NotImplementedError
 
     def make_launcher_stub(self, name, signature, constants):
+        """
+        Generate the launcher stub to launch the kernel
+        """
         raise NotImplementedError
 
     def get_architecture_descriptor(self, **kwargs):
+        """
+        Get the architecture descriptor the backend
+        """
         raise NotImplementedError
 
     @classmethod
