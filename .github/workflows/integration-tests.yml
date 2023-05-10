@@ -101,6 +101,18 @@ jobs:
           cd python/test/unit
           python3 -m pytest
 
+      - name: Create artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100')}}
+        run: |
+          tar -czvf artifacts.tar.gz ~/.triton/cache
+
+      - name: Upload artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100')}}
+        uses: actions/upload-artifact@v2
+        with:
+          name: artifacts
+          path: artifacts.tar.gz
+
       - name: Run CXX unittests
         if: ${{ env.BACKEND != 'ROCM'}}
         run: |
