@@ -231,6 +231,39 @@ def test_compile_in_subproc() -> None:
     assert proc.exitcode == 0
 
 
+def compile_fn_dot(config, cc):
+    @triton.jit
+    def kernel_dot(Z):
+        offs = tl.arange(0, 16)[:, None] * 16 + tl.arange(0, 16)[None, :]
+        z = tl.load(Z + offs)
+        z = tl.dot(z, z)
+        tl.store(Z + offs, z)
+
+    triton.compile(
+        fn=kernel_dot,
+        signature={0: "*fp32"},
+        device=0,
+        configs=[config],
+        warm_cache_only=True,
+        cc=cc,
+    )
+
+
+def test_compile_in_forked_subproc() -> None:
+    reset_tmp_dir()
+    major, minor = torch.cuda.get_device_capability(0)
+    cc = major * 10 + minor
+    config = instance_descriptor(tuple(range(1)), ())
+
+    multiprocessing.set_start_method('fork')
+    proc = multiprocessing.Process(
+        target=compile_fn_dot,
+        args=(config, cc))
+    proc.start()
+    proc.join()
+    assert proc.exitcode == 0
+
+
 def test_memory_leak() -> None:
     @triton.jit
     def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):

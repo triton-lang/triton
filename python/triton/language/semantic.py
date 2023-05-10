@@ -1185,14 +1185,6 @@ def dot(lhs: tl.tensor,
         import torch
     except ImportError:
         raise ImportError("Triton requires PyTorch to be installed")
-    if torch.version.hip is None:
-        device = triton.runtime.jit.get_current_device()
-        capability = triton.runtime.jit.get_device_capability(device)
-        capability = capability[0] * 10 + capability[1]
-        if capability < 70:
-            assert (
-                not rhs.dtype.is_fp16() and not rhs.dtype.is_fp8()
-            ), "Float8 and Float16 types are not supported for compute capability < 70 (use Float32 or above)"
     assert lhs.type.is_block() and rhs.type.is_block()
     assert lhs.dtype == rhs.dtype, "lhs and rhs must have the same dtype!"
     assert len(lhs.shape) == 2 and len(rhs.shape) == 2
