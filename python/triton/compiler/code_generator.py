@@ -184,7 +184,7 @@ class CodeGenerator(ast.NodeVisitor):
             if check_undefined_name(node):
                 return False
             fn = self.visit(node.func)
-            if isinstance(fn, JITFunction) and fn.noinline is False:
+            if isinstance(fn, JITFunction) and fn.noinline is not True:
                 old_gscope = self.gscope
                 self.gscope = sys.modules[fn.fn.__module__].__dict__
                 ret = self.contains_return_op(fn.parse())
