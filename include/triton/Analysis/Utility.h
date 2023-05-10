@@ -39,6 +39,10 @@ public:
 
   unsigned getIntraWarpSize();
 
+  unsigned getInterWarpSizeWithUniqueData();
+
+  unsigned getIntraWarpSizeWithUniqueData();
+
   unsigned getThreadsReductionAxis();
 
   SmallVector<unsigned> getScratchConfigBasic();

@@ -336,8 +336,8 @@ private:
                   elemPtrTys[i]);
     }
 
-    unsigned sizeIntraWarps = helper.getIntraWarpSize();
-    unsigned sizeInterWarps = helper.getInterWarpSize();
+    unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
+    unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
 
     unsigned srcElems = getTotalElemsPerThread(srcTys[0]);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);

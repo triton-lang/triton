@@ -17,11 +17,24 @@ unsigned ReduceOpHelper::getInterWarpSize() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSize();
   return std::min(srcReduceDimSize / sizeIntraWarps,
+                  triton::gpu::getWarpsPerCTA(getSrcLayout())[axis]);
+}
+
+unsigned ReduceOpHelper::getIntraWarpSize() {
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
+  return std::min(srcReduceDimSize,
+                  triton::gpu::getThreadsPerWarp(getSrcLayout())[axis]);
+}
+
+unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
+  unsigned sizeIntraWarps = getIntraWarpSizeWithUniqueData();
+  return std::min(srcReduceDimSize / sizeIntraWarps,
                   triton::gpu::getWarpsPerCTAWithUniqueData(
                       getSrcLayout(), getSrcShape())[axis]);
 }
 
-unsigned ReduceOpHelper::getIntraWarpSize() {
+unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   return std::min(srcReduceDimSize,
                   triton::gpu::getThreadsPerWarpWithUniqueData(
