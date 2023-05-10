@@ -222,7 +222,7 @@ def test_compile_in_subproc() -> None:
     cc = major * 10 + minor
     config = instance_descriptor(tuple(range(4)), ())
 
-    multiprocessing.set_start_method('spawn')
+    multiprocessing.set_start_method('fork')
     proc = multiprocessing.Process(
         target=compile_fn,
         args=(config, cc))
@@ -255,7 +255,7 @@ def test_compile_in_forked_subproc() -> None:
     cc = major * 10 + minor
     config = instance_descriptor(tuple(range(1)), ())
 
-    multiprocessing.set_start_method('fork')
+    assert multiprocessing.get_start_method() == 'fork'
     proc = multiprocessing.Process(
         target=compile_fn_dot,
         args=(config, cc))
