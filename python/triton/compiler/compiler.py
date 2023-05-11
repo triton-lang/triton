@@ -322,8 +322,10 @@ instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equ
 
 # TODO: architecture descriptor class
 def _is_cuda(arch):
-    # return isinstance(arch, int)
-    return False  # NOTE: assume ROCM device
+    return isinstance(arch, int)
+
+def is_hip():
+    return torch.version.hip is not None
 
 
 def get_architecture_descriptor(capability):
@@ -334,8 +336,7 @@ def get_architecture_descriptor(capability):
             capability = capability[0] * 10 + capability[1]
         else:
             capability = get_amdgpu_arch_fulldetails()
-    # return capability
-    return get_amdgpu_arch_fulldetails()  # NOTE: assume ROCM device
+    return capability
 
 
 def add_rocm_stages(arch, extern_libs, stages):
@@ -364,7 +365,11 @@ def add_cuda_stages(arch, extern_libs, stages):
 
 
 def compile(fn, **kwargs):
-    arch = get_architecture_descriptor(kwargs.get("cc", None))
+    if is_hip():
+        capability = None
+    else:
+        capability = kwargs.get("cc", None)
+    arch = get_architecture_descriptor(capability)
     is_cuda = _is_cuda(arch)
     context = _triton.ir.context()
     asm = dict()
