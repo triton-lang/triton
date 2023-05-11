@@ -134,3 +134,47 @@ jobs:
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
           python3 -m pytest -vs .
           sudo nvidia-smi -i 0 -rgc
+
+  Compare-artifacts:
+    needs: Integration-Tests
+
+    steps:
+      - name: Install gh CLI
+        run: |
+          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key C99B11DEB97541F0
+          sudo apt-add-repository https://cli.github.com/packages
+          sudo apt update
+          sudo apt install gh
+
+      - name: Get last merged PR workflow run ID
+        env:
+          ARTIFACT_JOB_NAME: Integration-Tests
+        run: |
+          PR_NUMBER=$(gh api repos/:owner/:repo/pulls \
+            --jq ".[] | select(.merged_at != null) | .number" | head -1)
+          echo "Last merged PR number: $PR_NUMBER"
+
+          WORKFLOW_RUN_ID=$(gh api repos/:owner/:repo/pulls/$PR_NUMBER/check-runs \
+            --jq ".check_runs[] | select(.name == \"$ARTIFACT_JOB_NAME\") | .check_suite_id" \
+            --header "Accept: application/vnd.github+json")
+          echo "Workflow run ID: $WORKFLOW_RUN_ID"
+          echo "WORKFLOW_RUN_ID=$WORKFLOW_RUN_ID" >> $GITHUB_ENV
+
+      - name: Download artifact
+        env:
+          ARTIFACT_NAME: artifacts
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_JOB_NAME: Integration-Tests
+        run: |
+          ARTIFACT_URL=$(gh api repos/:owner/:repo/actions/runs/$WORKFLOW_RUN_ID/artifacts \
+            --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\") | .archive_download_url")
+
+          if [ -n "$ARTIFACT_URL" ]; then
+            echo "Downloading artifact: $ARTIFACT_URL"
+            curl --location --remote-header-name --remote-name -H "Authorization: token $GITHUB_TOKEN" "$ARTIFACT_URL"
+            # Print the size of the downloaded artifact
+            echo "Artifact size (stat): $(stat --printf="%s bytes" your_artifact_name.zip)"
+            echo "Artifact size (du): $(du -sh your_artifact_name.zip)"
+          else
+            echo "No artifact found with the name: $ARTIFACT_NAME"
+          fi
