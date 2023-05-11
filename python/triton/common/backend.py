@@ -72,6 +72,7 @@ class BaseBackend:
     def create_backend(cls, device_type: str):
         return cls(device_type)
 
+
 _backends: Dict[str, BaseBackend] = {}
 
 
@@ -82,4 +83,3 @@ def register_backend(device_type: str, backend_cls: type):
 
 def get_backend(device_type: str):
     return _backends[device_type] if device_type in _backends else None
-

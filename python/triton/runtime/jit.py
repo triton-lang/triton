@@ -303,8 +303,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
-    device_types = {device_types}
-    device_types.remove('')
+    device_types = [device_type for device_type in {device_types} if device_type != '']
     device_type = device_types[0] if len(device_types) > 0 else 'cuda'
     if device is None:
         if device_type in ['cuda', 'hip']:

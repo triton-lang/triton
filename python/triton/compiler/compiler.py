@@ -13,12 +13,12 @@ from typing import Any, Tuple
 
 import triton
 import triton._C.libtriton.triton as _triton
+from ..common.backend import get_backend
 from ..runtime import driver
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..tools.disasm import extract
-from ..common.backend import get_backend
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
 
@@ -374,8 +374,8 @@ def compile(fn, **kwargs):
         assert _device_backend
         arch = _device_backend.get_architecture_descriptor(**kwargs)
 
-    is_cuda = device_type == "cuda"
-    is_hip = device_type == "hip"
+    is_cuda = device_type == "cuda" and _is_cuda(arch)
+    is_hip = device_type in ["cuda", "hip"] and not is_cuda
     context = _triton.ir.context()
     asm = dict()
     constants = kwargs.get("constants", dict())

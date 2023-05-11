@@ -2,15 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-
-
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   // create a struct to hold device properties
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
-                       1024, "multiprocessor_count",
-                       16, "sm_clock_rate",
-                       2100, "mem_clock_rate", 2300,
-                       "mem_bus_width", 2400);
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem", 1024,
+                       "multiprocessor_count", 16, "sm_clock_rate", 2100,
+                       "mem_clock_rate", 2300, "mem_bus_width", 2400);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {

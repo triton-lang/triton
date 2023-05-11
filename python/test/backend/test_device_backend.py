@@ -2,20 +2,20 @@ import functools
 import gc
 import hashlib
 import os
-from pathlib import Path
 import shutil
 import subprocess
-import sys
 import sysconfig
 import tempfile
 import tracemalloc
-import setuptools
+from pathlib import Path
 
+import setuptools
 import torch
+
 import triton
 import triton.language as tl
-from triton.common.build import quiet
 from triton.common.backend import BaseBackend, register_backend
+from triton.common.build import quiet
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
 from triton.runtime.driver import DriverBase
@@ -182,101 +182,52 @@ class ExtensionBackend(BaseBackend):
             return cache_path
 
     def _generate_launcher(self, constants, signature):
-        def ty_to_cpp(ty):
-            if ty[0] == '*':
-                return "void *"
-
-            return {
-                "i1": "int32_t",
-                "i8": "int8_t",
-                "i16": "int16_t",
-                "i32": "int32_t",
-                "i64": "int64_t",
-                "u32": "uint32_t",
-                "u64": "uint64_t",
-                "fp16": "float",
-                "bf16": "float",
-                "fp32": "float",
-                "f32": "float",
-                "fp64": "double",
-            }[ty]
-
-        arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
-
-        def _extracted_type(ty):
-            if ty[0] == '*':
-                return "PyObject*"
-            return {
-                'i1': 'int32_t',
-                'i32': 'int32_t',
-                'i64': 'int64_t',
-                'u32': 'uint32_t',
-                'u64': 'uint64_t',
-                'fp16': 'float',
-                'bf16': 'float',
-                'fp32': 'float',
-                'f32': 'float',
-                'fp64': 'double',
-            }[ty]
-
-        def format_of(ty):
-            return {
-                "PyObject*": "O",
-                "float": "f",
-                "double": "d",
-                "long": "l",
-                "uint32_t": "I",
-                "int32_t": "i",
-                "uint64_t": "K",
-                "int64_t": "L",
-            }[ty]
-
-        format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
-
         # generate glue code
-        src = f"""
+        src = """
         #define __EXTENSION_BACKEND__
         #include <Python.h>
         #include <stdio.h>
 
-        static PyObject* launch(PyObject* self, PyObject* args) {{
+        static PyObject* launch(PyObject* self, PyObject* args) {
         printf("Launch empty kernel for extension backend\\n");
 
-        if (PyErr_Occurred()) {{
+        if (PyErr_Occurred()) {
             return NULL;
-        }}
+        }
 
         // return None
         Py_INCREF(Py_None);
         return Py_None;
-        }}
+        }
 
-        static PyMethodDef ModuleMethods[] = {{
-        {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-        {{NULL, NULL, 0, NULL}} // sentinel
-        }};
+        static PyMethodDef ModuleMethods[] = {
+        {"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"},
+        {NULL, NULL, 0, NULL} // sentinel
+        };
 
-        static struct PyModuleDef ModuleDef = {{
+        static struct PyModuleDef ModuleDef = {
         PyModuleDef_HEAD_INIT,
         \"__triton_launcher\",
         NULL, //documentation
         -1, //size
         ModuleMethods
-        }};
+        };
 
-        PyMODINIT_FUNC PyInit___triton_launcher(void) {{
+        PyMODINIT_FUNC PyInit___triton_launcher(void) {
         PyObject *m = PyModule_Create(&ModuleDef);
-        if(m == NULL) {{
+        if(m == NULL) {
             return NULL;
-        }}
+        }
         PyModule_AddFunctions(m, ModuleMethods);
         return m;
-        }}
+        }
         """
 
         return src
 
+
 register_backend("cpu", ExtensionBackend)
+
 
 @triton.jit
 def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
@@ -287,6 +238,7 @@ def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
     x0 = xindex
     tmp0 = tl.load(in_ptr0 + (x0), xmask)
     tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
+
 
 tracemalloc.start()
 try:
