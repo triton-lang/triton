@@ -119,7 +119,7 @@ class _matmul(torch.autograd.Function):
     _locks = {}
 
     @staticmethod
-    def _call(a, b, dot_out_dtype):
+    def _call(a, b, dot_out_dtype, gemm_out_dtype):
         device = a.device
         # handle non-contiguous inputs if necessary
         if a.stride(0) > 1 and a.stride(1) > 1:
@@ -131,7 +131,9 @@ class _matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
         # allocates output
-        c = torch.empty((M, N), device=device, dtype=a.dtype)
+        if gemm_out_dtype is None:
+            gemm_out_dtype = a.dtype
+        c = torch.empty((M, N), device=device, dtype=gemm_out_dtype)
         if dot_out_dtype is None:
             if a.dtype in [torch.float16, torch.float32, torch.bfloat16]:
                 dot_out_dtype = tl.float32
@@ -156,8 +158,8 @@ class _matmul(torch.autograd.Function):
         return c
 
     @staticmethod
-    def forward(ctx, a, b, dot_out_dtype=None):
-        return _matmul._call(a, b, dot_out_dtype=dot_out_dtype)
+    def forward(ctx, a, b, dot_out_dtype=None, gemm_out_dtype=None):
+        return _matmul._call(a, b, dot_out_dtype=dot_out_dtype, gemm_out_dtype=gemm_out_dtype)
 
 
 matmul = _matmul.apply

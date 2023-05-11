@@ -49,7 +49,7 @@ import triton.ops
                 (128, 128, 32, 1, 4, 2, 384, 128, 640, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 311, AT, BT, DTYPE),
-            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
+            ] for DTYPE in ["int8","float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
         ],
         # n-stage
         *[
@@ -62,7 +62,7 @@ import triton.ops
                 # split-k
                 (64, 64, 16, 8, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
                 (64, 64, 16, 8, 4, STAGES, 1024, 1024, 32, AT, BT, DTYPE),
-            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [2, 3, 4]
+            ] for DTYPE in ["int8","float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [2, 3, 4]
         ]
     ),
 )
@@ -88,15 +88,21 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     N = BLOCK_N if N is None else N
     K = BLOCK_K * SPLIT_K if K is None else K
     # allocate/transpose inputs
-    DTYPE = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[DTYPE]
-    a = .1 * torch.randn((K, M) if AT else (M, K), device="cuda", dtype=DTYPE)
-    b = .1 * torch.randn((N, K) if BT else (K, N), device="cuda", dtype=DTYPE)
+    DTYPE = {"int8": torch.int8, "float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[DTYPE]
+    if DTYPE == torch.int8:
+        a = (torch.rand((K, M) if AT else (M, K), device="cuda") * 255 - 128).to(torch.int8)
+        b = (torch.rand((N, K) if BT else (K, N), device="cuda") * 255 - 128).to(torch.int8)
+        out_dtype = torch.int32
+    else:
+        a = .1 * torch.randn((K, M) if AT else (M, K), device="cuda", dtype=DTYPE)
+        b = .1 * torch.randn((N, K) if BT else (K, N), device="cuda", dtype=DTYPE)
+        out_dtype = DTYPE
     a = a.t() if AT else a
     b = b.t() if BT else b
     # run test
-    th_c = torch.matmul(a, b)
+    th_c = torch.matmul(a.to(torch.float32), b.to(torch.float32)).to(out_dtype)
     try:
-        tt_c = triton.ops.matmul(a, b)
+        tt_c = triton.ops.matmul(a, b, gemm_out_dtype = out_dtype)
         torch.testing.assert_allclose(th_c, tt_c, atol=1e-2, rtol=0)
     except triton.OutOfResources as e:
         pytest.skip(str(e))
