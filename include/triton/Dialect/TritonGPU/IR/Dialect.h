@@ -74,6 +74,9 @@ bool isaDistributedLayout(Attribute layout);
 
 } // namespace gpu
 } // namespace triton
+
+bool isSharedEncoding(Value value);
+
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
