@@ -138,6 +138,8 @@ jobs:
   Compare-artifacts:
     needs: Integration-Tests
 
+    runs-on: ubuntu-latest
+
     steps:
       - name: Install gh CLI
         run: |
