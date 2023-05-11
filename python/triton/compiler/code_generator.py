@@ -60,8 +60,19 @@ def _is_constexpr(o: Any) -> bool:
     return isinstance(o, constexpr)
 
 
+def _is_triton_scalar(o: Any) -> bool:
+    return _is_triton_tensor(o) and (not o.type.is_block() or o.type.numel == 1)
+
+
 def _unwrap_if_constexpr(o: Any):
     return o.value if isinstance(o, constexpr) else o
+
+
+def _check_fn_args(node, fn, args):
+    if fn.noinline:
+        for idx, arg in enumerate(args):
+            if not _is_constexpr(arg) and not _is_triton_scalar(arg):
+                raise UnsupportedLanguageConstruct(fn.src, node, f'Function {fn.__name__} is marked noinline, but was called with non-constexpr argument {fn.arg_names[idx]}:{arg}')
 
 
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
@@ -844,6 +855,7 @@ class CodeGenerator(ast.NodeVisitor):
             if not self.debug:
                 return
         if isinstance(fn, JITFunction):
+            _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_tensor(fn.__self__)) or language.core.is_builtin(fn):
             extra_kwargs = dict(_builder=self.builder)
