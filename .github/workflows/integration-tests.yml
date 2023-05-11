@@ -143,7 +143,7 @@ jobs:
     steps:
       - name: Install gh CLI
         run: |
-          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key C99B11DEB97541F0
+          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key 23F3D4EA75716059
           echo "deb [arch=$(dpkg --print-architecture)] https://cli.github.com/packages focal main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
           sudo apt update
           sudo apt install gh
@@ -151,12 +151,14 @@ jobs:
       - name: Get last merged PR workflow run ID
         env:
           ARTIFACT_JOB_NAME: Integration-Tests
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER=$(gh api repos/:owner/:repo/pulls \
+          OWNER_REPO="${{ github.repository }}"
+          PR_NUMBER=$(gh api repos/$OWNER_REPO/pulls \
             --jq ".[] | select(.merged_at != null) | .number" | head -1)
           echo "Last merged PR number: $PR_NUMBER"
 
-          WORKFLOW_RUN_ID=$(gh api repos/:owner/:repo/pulls/$PR_NUMBER/check-runs \
+          WORKFLOW_RUN_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER/check-runs \
             --jq ".check_runs[] | select(.name == \"$ARTIFACT_JOB_NAME\") | .check_suite_id" \
             --header "Accept: application/vnd.github+json")
           echo "Workflow run ID: $WORKFLOW_RUN_ID"
@@ -168,7 +170,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ARTIFACT_JOB_NAME: Integration-Tests
         run: |
-          ARTIFACT_URL=$(gh api repos/:owner/:repo/actions/runs/$WORKFLOW_RUN_ID/artifacts \
+          OWNER_REPO="${{ github.repository }}"
+          ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts \
             --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\") | .archive_download_url")
 
           if [ -n "$ARTIFACT_URL" ]; then
