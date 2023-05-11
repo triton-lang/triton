@@ -1981,6 +1981,59 @@ def test_full(dtype_str):
 # test arange
 # ---------------
 
+def test_temp():
+    @triton.jit
+    def batched_vecmat(
+        # inputs
+        A,  # shape: [dim_m, dim_k]
+        B,  # shape: [dim_m, dim_n, dim_k]
+        # dimensions
+        dim_m, dim_n, dim_k,
+        # outputs
+        output,
+        # block information
+        block_m: tl.constexpr, block_n: tl.constexpr, block_k: tl.constexpr
+    ):
+        m_index = tl.program_id(0)
+        n_index = tl.program_id(1)
+
+        # Load A tile
+        a_tile = (m_index * block_m + tl.arange(0, block_m))[:, None] * dim_k \
+            + tl.arange(0, block_k)[None, :]
+        a = tl.load(A + a_tile)
+
+        # Load B tile, transposed to [n, m, k] in order to broadcast A on a
+        # leading dimension.
+        b_tile = (m_index * block_m + tl.arange(0, block_m))[None, :, None] * dim_n * dim_k \
+            + (n_index * block_n + tl.arange(0, block_n))[:, None, None] * dim_k \
+            + tl.arange(0, block_k)[None, None, :]
+        b = tl.load(B + b_tile)
+
+        # Output tile
+        output_tile = (m_index * block_m + tl.arange(0, block_m))[:, None] * dim_n \
+            + (n_index * block_n + tl.arange(0, block_n))[None, :]
+
+        vecmat = tl.zeros([block_m, block_n], dtype=A.dtype.element_ty)
+
+        expanded_a, _ = tl.broadcast(a, b)
+        vecmat += tl.trans(tl.sum(expanded_a * b, axis=2))
+
+        tl.store(output + output_tile, vecmat)
+
+    M, N, K = 16, 32, 64
+
+    A = torch.ones((M, K), dtype=torch.float32, device='cuda')
+    B = torch.ones((M, N, K), dtype=torch.float32, device='cuda')
+    output = torch.zeros((M, N), dtype=torch.float32, device='cuda')
+
+    block_m, block_n, block_k = 16, 32, 64
+
+    grid = (M // block_m, N // block_n)
+
+    batched_vecmat[grid](A, B, M, N, K, output,
+                         block_m=block_m, block_n=block_n, block_k=block_k,
+                         num_warps=4, num_stages=1)
+
 
 @pytest.mark.parametrize("start", [0, 1, 7, 16])
 def test_arange(start, device='cuda'):
