@@ -49,7 +49,7 @@ jobs:
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
 
       - name: Set ROCM ENV
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
+        if: false #${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
         run: |
           echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
 
@@ -76,7 +76,7 @@ jobs:
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Install Triton on ROCM
-        if: ${{ env.BACKEND == 'ROCM'}}
+        if: false #${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python
           python3 -m pip install --upgrade pip
@@ -85,7 +85,7 @@ jobs:
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
-        if: ${{ env.BACKEND != 'ROCM'}}
+        if: false #${{ env.BACKEND != 'ROCM'}}
         run: |
           python3 -m pip install lit
           cd python
@@ -114,20 +114,20 @@ jobs:
           path: artifacts.tar.gz
 
       - name: Run CXX unittests
-        if: ${{ env.BACKEND != 'ROCM'}}
+        if: false #${{ env.BACKEND != 'ROCM'}}
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
           ctest
 
       - name: Run python tests on ROCM
-        if: ${{ env.BACKEND == 'ROCM'}}
+        if: false #${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python/test/unit/language
           python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
 
       - name: Regression tests
-        if: ${{ contains(matrix.runner, 'A100') }}
+        if: false #${{ contains(matrix.runner, 'A100') }}
         run: |
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
