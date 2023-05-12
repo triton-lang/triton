@@ -25,7 +25,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "gfx908"]]'
+            echo '::set-output name=matrix::[["self-hosted", "A100"]]'
           else
             echo '::set-output name=matrix::["ubuntu-latest"]'
           fi
@@ -152,10 +152,12 @@ jobs:
         env:
           ARTIFACT_JOB_NAME: Integration-Tests
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OWNER_REPO="${{ github.repository }}"
-          PR_NUMBER=$(gh api repos/$OWNER_REPO/pulls \
-            --jq ".[] | select(.merged_at != null) | .number" | head -1)
+          PULLS=$(gh api repos/$OWNER_REPO/pulls)
+          MERGED_PULLS=$(echo "$PULLS" | jq ".[] | select(.merged_at != null) | .number")
+          PR_NUMBER=$(echo "$PULLS" | jq ".[] | select(.merged_at != null) | .number" | head -1)
           echo "Last merged PR number: $PR_NUMBER"
 
           WORKFLOW_RUN_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER/check-runs \
