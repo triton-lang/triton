@@ -49,7 +49,7 @@ import triton.ops
                 (128, 128, 32, 1, 4, 2, 384, 128, 640, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 311, AT, BT, DTYPE),
-            ] for DTYPE in ["int8","float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
+            ] for DTYPE in ["int8", "float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
         ],
         # n-stage
         *[
@@ -62,7 +62,7 @@ import triton.ops
                 # split-k
                 (64, 64, 16, 8, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
                 (64, 64, 16, 8, 4, STAGES, 1024, 1024, 32, AT, BT, DTYPE),
-            ] for DTYPE in ["int8","float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [2, 3, 4]
+            ] for DTYPE in ["int8", "float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [2, 3, 4]
         ]
     ),
 )
@@ -70,8 +70,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
-    if capability[0] < 8 and DTYPE == "bfloat16":
-        pytest.skip("Only test bfloat16 on devices with sm >= 80")
+    if capability[0] < 8 and DTYPE in ["bfloat16", "int8"]:
+        pytest.skip("Only test bfloat16 and int8 on devices with sm >= 80")
     if DTYPE == "bfloat16" and SPLIT_K != 1:
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
     torch.manual_seed(0)
@@ -102,7 +102,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     # run test
     th_c = torch.matmul(a.to(torch.float32), b.to(torch.float32)).to(out_dtype)
     try:
-        tt_c = triton.ops.matmul(a, b, gemm_out_dtype = out_dtype)
+        tt_c = triton.ops.matmul(a, b, gemm_out_dtype=out_dtype)
         torch.testing.assert_allclose(th_c, tt_c, atol=1e-2, rtol=0)
     except triton.OutOfResources as e:
         pytest.skip(str(e))
