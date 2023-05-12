@@ -155,7 +155,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OWNER_REPO="${{ github.repository }}"
-          PULLS=$(gh api repos/$OWNER_REPO/pulls)
+          PULLS=$(gh api repos/$OWNER_REPO/pulls --per-page 100 --state closed)
           PULLS_COUNT=$(echo "$PULLS" | jq length)
           echo "PULLS_COUNT: $PULLS_COUNT"
           MERGED_PULLS=$(echo "$PULLS" | jq ".[] | select(.merged_at != null) | .number")
