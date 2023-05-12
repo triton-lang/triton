@@ -98,7 +98,7 @@ jobs:
       - name: Run python tests on CUDA
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
-          cd python/test/unit
+          cd python/test/unit/language
           python3 -m pytest
 
       - name: Create artifacts archive
@@ -156,7 +156,11 @@ jobs:
         run: |
           OWNER_REPO="${{ github.repository }}"
           PULLS=$(gh api repos/$OWNER_REPO/pulls)
+          PULLS_COUNT=$(echo "$PULLS" | jq length)
+          echo "PULLS_COUNT: $PULLS_COUNT"
           MERGED_PULLS=$(echo "$PULLS" | jq ".[] | select(.merged_at != null) | .number")
+          MERGED_PULLS_COUNT=$(echo "$MERGED_PULLS" | jq length)
+          echo "MERGED_PULLS_COUNT: $MERGED_PULLS_COUNT"
           PR_NUMBER=$(echo "$PULLS" | jq ".[] | select(.merged_at != null) | .number" | head -1)
           echo "Last merged PR number: $PR_NUMBER"
 
