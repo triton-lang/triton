@@ -11,4 +11,7 @@ add_mlir_library(TritonAnalysis
 
   LINK_LIBS PUBLIC
   MLIRAnalysis
+  MLIRLLVMDialect
+  TritonIR
+  TritonGPUIR
 )

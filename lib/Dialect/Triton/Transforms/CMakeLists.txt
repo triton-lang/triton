@@ -9,4 +9,9 @@ add_mlir_dialect_library(TritonTransforms
   DEPENDS
   TritonTransformsIncGen
   TritonCombineIncGen
+
+  LINK_LIBS PUBLIC
+  MLIRPass
+  MLIRTransformUtils
+  TritonIR
 )
