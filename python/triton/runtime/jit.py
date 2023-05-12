@@ -8,7 +8,8 @@ import os
 import subprocess
 import textwrap
 from collections import defaultdict, namedtuple
-from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, cast, overload
+from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast,
+                    overload)
 
 import triton
 from triton.common.backend import get_backend
@@ -162,9 +163,18 @@ class JITFunction(KernelInterface[T]):
     @staticmethod
     def _device_of(arg):
         if hasattr(arg, "device"):
-            return arg.device.type
-        else:
-            return ''
+            if hasattr(arg.device, 'type'):
+                return arg.device.type
+
+        return ''
+
+    @staticmethod
+    def _pinned_memory_of(arg):
+        if hasattr(arg, "is_pinned"):
+            if isinstance(arg.is_pinned, Callable):
+                return arg.is_pinned()
+
+        return False
 
     @staticmethod
     def _spec_of(arg):
@@ -269,6 +279,20 @@ class JITFunction(KernelInterface[T]):
         else:
             return f'_key_of({arg})'
 
+    def _conclude_device_type(self, device_types: List[str], pinned_memory_flags: List[bool]) -> str:
+        device_types = [device_type for device_type in device_types if device_type != '']
+        # Return cuda if one of the input tensors is cuda
+        if 'cuda' in device_types:
+            return 'cuda'
+
+        is_cpu = all(device_type == 'cpu' for device_type in device_types)
+        is_pinned_memory = any(pinned_memory_flag for pinned_memory_flag in pinned_memory_flags)
+        # Return cuda if all the input tensors are cpu while the memory is pinned
+        if is_cpu and is_pinned_memory:
+            return 'cuda'
+
+        return device_types[0] if len(device_types) > 0 else 'cuda'
+
     def _make_launcher(self):
         regular_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
         constexpr_args = [f'{arg}' for i, arg in enumerate(self.arg_names) if i in self.constexprs]
@@ -276,6 +300,7 @@ class JITFunction(KernelInterface[T]):
         # cache key for regular argument type
         sig_keys = ', '.join([self._get_arg_sig_key(arg) for arg in regular_args])
         device_types = '[' + ', '.join([f'_device_of({arg})' for arg in regular_args]) + ']'
+        pinned_memory_flags = '[' + ', '.join([f'_pinned_memory_of({arg})' for arg in regular_args]) + ']'
         # cache key for constexpr argument values
         constexpr_keys = ', '.join(constexpr_args)
         # cache key for argument specialization
@@ -303,23 +328,26 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_0 = grid[0]
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
+
     device_types = [device_type for device_type in {device_types} if device_type != '']
-    device_type = device_types[0] if len(device_types) > 0 else 'cuda'
+    device_type = self._conclude_device_type(device_types, {pinned_memory_flags})
+    device_backend = None
+    if device_type not in ['cuda', 'hip']:
+        device_backend = get_backend(device_type)
+        if device_backend is None:
+            raise ValueError('Cannot find backend for ' + device_type)
+
     if device is None:
         if device_type in ['cuda', 'hip']:
             device = get_current_device()
             set_current_device(device)
         else:
-            device_backend = get_backend(device_type)
-            assert device_backend
             device = device_backend.get_current_device()
             device_backend.set_current_device(device)
     if stream is None and not warmup:
         if device_type in ['cuda', 'hip']:
             stream = get_cuda_stream(device)
         else:
-            device_backend = get_backend(device_type)
-            assert device_backend
             stream = device_backend.get_stream()
     try:
       bin = cache[device][key]
@@ -349,9 +377,15 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         return bin
       return None
 """
-        scope = {"version_key": version_key(), "get_cuda_stream": get_cuda_stream,
-                 "self": self, "_spec_of": self._spec_of, "_key_of": self._key_of,
-                 "_device_of": self._device_of, "cache": self.cache, "triton": triton,
+        scope = {"version_key": version_key(),
+                 "get_cuda_stream": get_cuda_stream,
+                 "self": self,
+                 "_spec_of": self._spec_of,
+                 "_key_of": self._key_of,
+                 "_device_of": self._device_of,
+                 "_pinned_memory_of": self._pinned_memory_of,
+                 "cache": self.cache,
+                 "triton": triton,
                  "get_backend": get_backend,
                  "get_current_device": get_current_device,
                  "set_current_device": set_current_device}

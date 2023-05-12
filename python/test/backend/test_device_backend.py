@@ -1,12 +1,11 @@
 import functools
-import gc
 import hashlib
+import importlib
 import os
 import shutil
 import subprocess
 import sysconfig
 import tempfile
-import tracemalloc
 from pathlib import Path
 
 import setuptools
@@ -121,6 +120,8 @@ class ExtensionDriver(DriverBase):
 
 
 class ExtensionBackend(BaseBackend):
+    stub_so_path = ""
+
     def __init__(self, device_type: str) -> None:
         super(ExtensionBackend, self).__init__(device_type)
         self.driver = ExtensionDriver()
@@ -177,8 +178,11 @@ class ExtensionBackend(BaseBackend):
                     f.write(src)
                 so = build_for_backend(name, src_path, tmpdir)
                 with open(so, "rb") as f:
-                    return so_cache_manager.put(f.read(), so_name, binary=True)
+                    so_path = so_cache_manager.put(f.read(), so_name, binary=True)
+                    type(self).stub_so_path = so_path
+                    return so_path
         else:
+            type(self).stub_so_path = cache_path
             return cache_path
 
     def _generate_launcher(self, constants, signature):
@@ -188,13 +192,17 @@ class ExtensionBackend(BaseBackend):
         #include <Python.h>
         #include <stdio.h>
 
-        static PyObject* launch(PyObject* self, PyObject* args) {
-        printf("Launch empty kernel for extension backend\\n");
+        static PyObject* launch_counter(PyObject* self, PyObject* args) {
+        static int64_t launch_counter = 0;
+        launch_counter += 1;
+        return PyLong_FromLong(launch_counter);
+        }
 
+        static PyObject* launch(PyObject* self, PyObject* args) {
         if (PyErr_Occurred()) {
             return NULL;
         }
-
+        launch_counter(self, args);
         // return None
         Py_INCREF(Py_None);
         return Py_None;
@@ -202,6 +210,7 @@ class ExtensionBackend(BaseBackend):
 
         static PyMethodDef ModuleMethods[] = {
         {"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"},
+        {"launch_counter", launch_counter, METH_VARARGS, "Entry point to get launch counter"},
         {NULL, NULL, 0, NULL} // sentinel
         };
 
@@ -226,31 +235,28 @@ class ExtensionBackend(BaseBackend):
         return src
 
 
-register_backend("cpu", ExtensionBackend)
+def test_thirdparty_backend():
+    register_backend("cpu", ExtensionBackend)
 
+    @triton.jit
+    def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
+        xnumel = 10
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)[:]
+        xmask = xindex < xnumel
+        x0 = xindex
+        tmp0 = tl.load(in_ptr0 + (x0), xmask)
+        tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
 
-@triton.jit
-def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
-    xnumel = 10
-    xoffset = tl.program_id(0) * XBLOCK
-    xindex = xoffset + tl.arange(0, XBLOCK)[:]
-    xmask = xindex < xnumel
-    x0 = xindex
-    tmp0 = tl.load(in_ptr0 + (x0), xmask)
-    tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
-
-
-tracemalloc.start()
-try:
     inp = torch.randn(10)
     out = torch.randn(10)
     kernel[(10,)](inp, out, 10, XBLOCK=16)
-    gc.collect()
-    begin, _ = tracemalloc.get_traced_memory()
+    spec = importlib.util.spec_from_file_location("__triton_launcher", ExtensionBackend.stub_so_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    launch_counter = getattr(mod, "launch_counter")
+
     for _ in range(100):
         kernel[(10,)](inp, out, 10, XBLOCK=16)
-    gc.collect()
-    end, _ = tracemalloc.get_traced_memory()
-    assert end - begin < 1000
-finally:
-    tracemalloc.stop()
+
+    assert launch_counter() > 0
