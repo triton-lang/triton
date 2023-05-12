@@ -14,6 +14,7 @@ add_mlir_conversion_library(TritonToTritonGPU
     LINK_LIBS PUBLIC
     MLIRIR
     MLIRPass
+    MLIRTransforms
     TritonIR
     TritonGPUIR
     TritonGPUTransforms
