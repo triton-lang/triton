@@ -111,15 +111,6 @@ bool ReduceOpHelper::isSupportedLayout() {
   return false;
 }
 
-bool isSharedEncoding(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
-    auto encoding = tensorType.getEncoding();
-    return encoding && encoding.isa<triton::gpu::SharedEncodingAttr>();
-  }
-  return false;
-}
-
 bool maybeSharedAllocationOp(Operation *op) {
   // TODO(Keren): This function can be replaced by adding
   // MemoryEffectOpInterface. We can then use the MemoryEffectOpInterface to

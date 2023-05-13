@@ -27,7 +27,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/IRMapping.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
