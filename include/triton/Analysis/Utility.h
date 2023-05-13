@@ -61,8 +61,6 @@ private:
   int axis;
 };
 
-bool isSharedEncoding(Value value);
-
 bool maybeSharedAllocationOp(Operation *op);
 
 bool maybeAliasOp(Operation *op);
