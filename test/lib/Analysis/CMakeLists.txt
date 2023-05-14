@@ -5,6 +5,7 @@ add_mlir_library(TritonTestAnalysis
   TestMembar.cpp
 
   LINK_LIBS PUBLIC
+  MLIRPass
   TritonAnalysis
   ${dialect_libs}
 )

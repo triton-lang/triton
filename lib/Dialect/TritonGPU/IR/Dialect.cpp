@@ -356,6 +356,16 @@ bool isaDistributedLayout(Attribute layout) {
 
 } // namespace gpu
 } // namespace triton
+
+bool isSharedEncoding(Value value) {
+  auto type = value.getType();
+  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
+    auto encoding = tensorType.getEncoding();
+    return encoding && encoding.isa<triton::gpu::SharedEncodingAttr>();
+  }
+  return false;
+}
+
 } // namespace mlir
 
 static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
