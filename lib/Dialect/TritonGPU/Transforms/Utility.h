@@ -28,6 +28,10 @@ void rematerializeConversionChain(
     const llvm::MapVector<Value, Attribute> &toConvert,
     mlir::PatternRewriter &rewriter, SetVector<Operation *> &processed,
     IRMapping &mapping);
+
+LogicalResult canMoveOutOfLoop(BlockArgument arg,
+                               SmallVector<Operation *> &cvts);
+
 } // namespace mlir
 
 #endif // TRITON_LIB_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

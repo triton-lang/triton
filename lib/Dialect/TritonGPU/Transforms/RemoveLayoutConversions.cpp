@@ -123,11 +123,6 @@ public:
     auto newEncoding =
         newOperands[0].getType().cast<RankedTensorType>().getEncoding();
 
-    // this may generate unsupported conversions in the LLVM codegen
-    if (newEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
-      return failure();
-    }
-
     for (unsigned i = 1; i < newOperands.size(); ++i) {
       auto oldTy = newOperands[i].getType().cast<RankedTensorType>();
       RankedTensorType newTy =
@@ -348,11 +343,13 @@ public:
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     SetVector<Operation *> cvtSlices;
+    auto isStopOp = [&](Operation *op) {
+      return isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp, scf::YieldOp>(
+          op);
+    };
     auto filter = [&](Operation *op) {
-      return op->getBlock() == cvt->getBlock() &&
-             !(isa<triton::ReduceOp>(op) &&
-               !op->getResult(0).getType().isa<RankedTensorType>()) &&
-             !isa<triton::gpu::ConvertLayoutOp>(op) && !isa<scf::YieldOp>(op);
+      return !(op->getBlock() != cvt->getBlock() || isStopOp(op) ||
+               !op->getResult(0).getType().isa<RankedTensorType>());
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty()) {
@@ -361,33 +358,49 @@ public:
 
     llvm::MapVector<Value, Attribute> toConvert;
     for (Operation *op : cvtSlices) {
+      if (isStopOp(op))
+        continue;
       // don't rematerialize anything expensive
       if (expensiveToRemat(op, dstEncoding)) {
         return failure();
       }
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp>(op) && !isa<triton::ReduceOp>(op)) {
+          !op->hasTrait<mlir::OpTrait::Elementwise>()) {
         return failure();
       }
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
       for (Value arg : op->getOperands()) {
         Operation *argOp = arg.getDefiningOp();
-        SetVector<Operation *> processed;
-        SetVector<Attribute> layout;
-        llvm::MapVector<Value, Attribute> toConvert;
-        int numAddedConvs = simulateBackwardRematerialization(
-            argOp, processed, layout, toConvert, srcEncoding);
-        if (argOp && !isa<triton::gpu::ConvertLayoutOp>(argOp) &&
-            cvtSlices.count(argOp) == 0 && numAddedConvs > 0) {
-          return failure();
+        // scf.for blockArgument can be conditionally optimized only if
+        // there's a single conversion use.
+        if (!argOp) {
+          SmallVector<Operation *> cvts;
+          if (canMoveOutOfLoop(arg.cast<BlockArgument>(), cvts).failed())
+            return failure();
+        } else {
+          SetVector<Operation *> processed;
+          SetVector<Attribute> layout;
+          llvm::MapVector<Value, Attribute> toConvert;
+          if (cvtSlices.count(argOp) == 0 &&
+              simulateBackwardRematerialization(argOp, processed, layout,
+                                                toConvert, srcEncoding) > 0)
+            return failure();
         }
       }
     }
+    // Step 3: Take out the operations at which we stop slicing.
+    // These must be the last operations on the slice path.
+    SetVector<Operation *> candidates;
+    for (Operation *op : cvtSlices) {
+      if (!isStopOp(op))
+        candidates.insert(op);
+    }
+    if (candidates.empty())
+      return failure();
 
-    pushConversionForward(cvt, cvtSlices, rewriter);
+    pushConversionForward(cvt, candidates, rewriter);
     return success();
   }
 };
@@ -508,8 +521,6 @@ public:
     auto forOp = cast<scf::ForOp>(op);
     auto iterArgs = forOp.getRegionIterArgs();
     for (const auto &iterArg : llvm::enumerate(iterArgs)) {
-      // if (iterArg.index() != 1)
-      //   continue;
       // skip non-tensor types
       if (!iterArg.value().getType().isa<RankedTensorType>())
         continue;
@@ -517,40 +528,13 @@ public:
       //   - there is only a single conversion use
       //   - moving this conversion out of the loop will not generate
       //     any extra non-removable conversion
-      auto users = iterArg.value().getUsers();
       // check first condition
-      SetVector<Type> cvtTargetTypes;
-      for (auto user : users) {
-        if (isa<triton::gpu::ConvertLayoutOp>(user)) {
-          auto newType =
-              user->getResults()[0].getType().cast<RankedTensorType>();
-          auto oldType = user->getOperand(0).getType().cast<RankedTensorType>();
-          if (oldType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-              newType.getEncoding()
-                  .isa<triton::gpu::DotOperandEncodingAttr>()) {
-            continue;
-          }
-          if (newType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
-            if (newType.getEncoding()
-                    .cast<triton::gpu::SharedEncodingAttr>()
-                    .getVec() == 1)
-              continue;
-          }
-          cvtTargetTypes.insert(newType);
-        }
-      }
-      if (cvtTargetTypes.size() != 1)
+      SmallVector<Operation *> cvts;
+      if (canMoveOutOfLoop(iterArg.value(), cvts).failed())
         continue;
-      // TODO: check second condition
-      for (auto user : users) {
-        if (isa<triton::gpu::ConvertLayoutOp>(user))
-          continue;
-      }
       // check
-      for (auto op : iterArg.value().getUsers()) {
+      for (auto *op : cvts) {
         auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
-        if (!cvt)
-          continue;
         auto targetType = op->getResultTypes()[0].cast<RankedTensorType>();
         auto newFor = rematerializeForLoop(rewriter, forOp, iterArg.index(),
                                            targetType, cvt);

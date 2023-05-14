@@ -167,10 +167,18 @@ int simulateBackwardRematerialization(
       // 2. Skip if there's no defining op
       // 3. Skip if the defining op has already been processed
       // 4. Skip or the defining op is in a different block
-      if (!argI.getType().isa<RankedTensorType>() || !opArgI ||
-          processed.contains(opArgI) ||
-          opArgI->getBlock() != currOp->getBlock())
-        continue;
+      if (!opArgI) {
+        SmallVector<Operation *> cvts;
+        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), cvts).failed())
+          return INT_MAX;
+        else
+          continue;
+      } else {
+        if (!argI.getType().isa<RankedTensorType>() ||
+            processed.contains(opArgI) ||
+            opArgI->getBlock() != currOp->getBlock())
+          continue;
+      }
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
       if (canFoldConversion(opArgI))
@@ -264,6 +272,53 @@ void rematerializeConversionChain(
     }
     mapping.map(origOperand, newOperand);
   }
+}
+
+LogicalResult canMoveOutOfLoop(BlockArgument arg,
+                               SmallVector<Operation *> &cvts) {
+  auto parentOp = arg.getOwner()->getParentOp();
+  // Don't move if arg is defined in a while loop
+  if (isa<scf::WhileOp>(parentOp))
+    return failure();
+  // Skip if arg is not defined in scf.for
+  if (!isa<scf::ForOp>(parentOp))
+    return success();
+  auto forOp = cast<scf::ForOp>(parentOp);
+  // We only move `iterArg` out of the loop if
+  // 1. There is no conversion
+  // 2. There is only a single conversion type
+  // 3. Moving this conversion out of the loop will not generate any extra
+  // non-removable conversion
+  DenseSet<Type> cvtTypes;
+  auto oldType = arg.getType().cast<RankedTensorType>();
+  for (auto user : arg.getUsers()) {
+    if (isa<triton::gpu::ConvertLayoutOp>(user)) {
+      // Only move if user resides in the same block as the forOp.
+      // Otherwise, we should lift the conversion from the inner block first
+      if (user->getBlock() != forOp.getBody())
+        return failure();
+      // Don't move if the conversion target is a dot operand or shared memory
+      auto newType = user->getResults()[0].getType().cast<RankedTensorType>();
+      if (newType.getEncoding()
+              .isa<triton::gpu::DotOperandEncodingAttr,
+                   triton::gpu::SharedEncodingAttr>()) {
+        return failure();
+      }
+      cvts.emplace_back(user);
+      cvtTypes.insert(newType);
+    } else {
+      cvtTypes.insert(oldType);
+    }
+  }
+  // First condition
+  if (cvts.empty())
+    return success();
+  // Second condition
+  if (cvtTypes.size() == 1)
+    return success();
+  else
+    return failure();
+  // Third condition?
 }
 
 } // namespace mlir
