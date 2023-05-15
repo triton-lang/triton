@@ -33,9 +33,9 @@ def test_assert(func: str):
     x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda')
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if func == "device_assert":
-        kernel_device_assert[(1,)](x, y, BLOCK=shape[0])
+        kernel_device_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "assert":
-        kernel_assert[(1,)](x, y, BLOCK=shape[0])
+        kernel_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "static_assert":
         kernel_static_assert[(1,)](x, y, BLOCK=shape[0])
     assert_close(y, x)
