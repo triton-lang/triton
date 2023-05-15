@@ -26,7 +26,6 @@ computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
                ArrayRef<int> spw, ArrayRef<int> rep,
                ConversionPatternRewriter &rewriter, Location loc,
                Type resultTy) {
-  auto *ctx = rewriter.getContext();
   auto wpt = resultTy.cast<RankedTensorType>()
                  .getEncoding()
                  .cast<DotOperandEncodingAttr>()
@@ -34,7 +33,6 @@ computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
                  .cast<MmaEncodingAttr>()
                  .getWarpsPerCTA();
 
-  Value _1 = i32_val(1);
   Value _3 = i32_val(3);
   Value _4 = i32_val(4);
   Value _16 = i32_val(16);
@@ -75,7 +73,6 @@ computeOffsets(Value threadId, bool isARow, bool isBRow, ArrayRef<int> fpw,
   Value offsetBN = add(warpNOff, laneNOff);
   Value offsetBK = and_(lane, _3);
   // i indices
-  Value offsetCM = add(and_(lane, _1), offsetAM);
   if (isARow) {
     offsetAM = add(offsetAM, urem(threadId, _4));
     offsetAK = i32_val(0);
@@ -100,7 +97,6 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
                  .cast<MmaEncodingAttr>()
                  .getWarpsPerCTA();
 
-  auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto shape = tensorTy.getShape();
@@ -192,10 +188,8 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
     }
   };
 
-  bool isARow_ = resultEncoding.getMMAv1IsRow();
-  bool isAVec4 = resultEncoding.getMMAv1IsVec4();
   unsigned numM = resultEncoding.getMMAv1NumOuter(shape);
-  for (unsigned k = 0; k < NK; k += 4)
+  for (int k = 0; k < NK; k += 4)
     for (unsigned m = 0; m < numM / 2; ++m)
       if (!has.count({m, k}))
         loadA(m, k);
@@ -225,7 +219,6 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   // smem
   auto strides = smemObj.strides;
 
-  auto *ctx = rewriter.getContext();
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
 
@@ -316,10 +309,10 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   };
 
   bool isBRow_ = resultEncoding.getMMAv1IsRow();
+  (void)isBRow_;
   assert(isBRow == isBRow_ && "B need smem isRow");
-  bool isBVec4 = resultEncoding.getMMAv1IsVec4();
   unsigned numN = resultEncoding.getMMAv1NumOuter(shape);
-  for (unsigned k = 0; k < NK; k += 4)
+  for (int k = 0; k < NK; k += 4)
     for (unsigned n = 0; n < numN / 2; ++n) {
       if (!hbs.count({n, k}))
         loadB(n, k);
@@ -400,15 +393,13 @@ SmallVector<CoordTy> getMNCoords(Value thread,
 
   // quad pair offset
   Value offLaneM = add(offPairM, offQuadM);
-  Value offLaneN = add(offPairN, offQuadN);
   // a, b offset
   Value offsetAM = add(offWarpM, offLaneM);
-  Value offsetBN = add(offWarpN, offLaneN);
   // m indices
   Value offsetCM = add(and_(lane, _1), offsetAM);
   SmallVector<Value> idxM;
   for (unsigned m = 0; m < shape[0]; m += shapePerCTA[0])
-    for (unsigned mm = 0; mm < rep[0]; ++mm)
+    for (int mm = 0; mm < rep[0]; ++mm)
       idxM.push_back(add(offsetCM, i32_val(m + mm * 2)));
 
   // n indices

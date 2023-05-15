@@ -30,17 +30,6 @@ int computeCapabilityToMMAVersion(int computeCapability) {
   }
 }
 
-SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
-  if (version == 1)
-    return {16, 16};
-  else if (version == 2)
-    return {16, 8};
-  else {
-    assert(false && "version not supported");
-    return {0, 0};
-  }
-}
-
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
                                         const ArrayRef<int64_t> shape,
                                         int numWarps) {
@@ -53,14 +42,12 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
 
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {16, 8};
-  bool changed = false;
   // TODO (@daadaada): double-check.
   // original logic in
   // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
   // seems buggy for shape = [32, 16] ?
   do {
-    changed = false;
-    if (ret[0] * ret[1] >= numWarps)
+    if (static_cast<int>(ret[0] * ret[1]) >= numWarps)
       break;
     if (shape[0] / shapePerWarp[0] / ret[0] >=
         shape[1] / (shapePerWarp[1] * 2) / ret[1]) {
@@ -159,17 +146,6 @@ public:
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
-    auto oldAOrder = oldAType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-    auto oldBOrder = oldBType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-
     auto newAEncoding = triton::gpu::DotOperandEncodingAttr::get(
         oldAType.getContext(), 0, newRetType.getEncoding(),
         oldAType.getElementType());

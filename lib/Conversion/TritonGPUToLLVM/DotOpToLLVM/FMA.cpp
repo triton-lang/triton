@@ -16,9 +16,9 @@ static ValueTableFMA getValueTableFromStructFMA(
   ValueTableFMA res;
   auto elems = typeConverter->unpackLLElements(loc, val, rewriter, type);
   int index = 0;
-  for (unsigned k = 0; k < K; ++k) {
-    for (unsigned m = 0; m < n0; m += shapePerCTA)
-      for (unsigned mm = 0; mm < sizePerThread; ++mm) {
+  for (int k = 0; k < K; ++k) {
+    for (int m = 0; m < n0; m += shapePerCTA)
+      for (int mm = 0; mm < sizePerThread; ++mm) {
         res[{m + mm, k}] = elems[index++];
       }
   }
@@ -28,12 +28,10 @@ static ValueTableFMA getValueTableFromStructFMA(
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
-  auto *ctx = rewriter.getContext();
   auto loc = op.getLoc();
 
   auto A = op.getA();
   auto B = op.getB();
-  auto C = op.getC();
   auto D = op.getResult();
 
   auto aTensorTy = A.getType().cast<RankedTensorType>();
@@ -78,11 +76,11 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   SmallVector<Value> ret = cc;
   bool isCRow = order[0] == 1;
 
-  for (unsigned k = 0; k < K; k++) {
-    for (unsigned m = 0; m < M; m += mShapePerCTA)
-      for (unsigned n = 0; n < N; n += nShapePerCTA)
-        for (unsigned mm = 0; mm < mSizePerThread; ++mm)
-          for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
+  for (int k = 0; k < K; k++) {
+    for (int m = 0; m < M; m += mShapePerCTA)
+      for (int n = 0; n < N; n += nShapePerCTA)
+        for (int mm = 0; mm < mSizePerThread; ++mm)
+          for (int nn = 0; nn < nSizePerThread; ++nn) {
             int mIdx = m / mShapePerCTA * mSizePerThread + mm;
             int nIdx = n / nShapePerCTA * nSizePerThread + nn;
 

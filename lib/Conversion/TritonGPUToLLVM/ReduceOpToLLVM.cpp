@@ -89,6 +89,7 @@ private:
                           std::map<int, Value> &ints, unsigned axis) const {
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
       auto dim = sliceLayout.getDim();
+      (void)dim;
       assert(dim != axis && "Reduction axis cannot be sliced");
       auto parentLayout = sliceLayout.getParent();
       getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
@@ -144,7 +145,6 @@ private:
     // The order of the axes for the the threads within the warp
     auto srcOrd = triton::gpu::getOrder(srcLayout);
     auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
-    auto srcShape = helper.getSrcShape();
 
     SmallVector<Type> elemPtrTys(srcTys.size());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -152,9 +152,6 @@ private:
       auto llvmElemTy = getTypeConverter()->convertType(ty);
       elemPtrTys[i] = LLVM::LLVMPointerType::get(llvmElemTy, 3);
     }
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-    auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
-
     auto smemShape = helper.getScratchConfigBasic();
     unsigned elems = product<unsigned>(smemShape);
 
@@ -293,7 +290,6 @@ private:
       }
     }
 
-    auto parentBlock = op.getOperation()->getBlock();
     rewriter.replaceOp(op, results);
     return success();
   }
@@ -312,7 +308,6 @@ private:
       assert(false && "Unexpected srcLayout in ReduceOpConversion");
     }
     auto srcOrd = triton::gpu::getOrder(srcLayout);
-    auto srcShape = helper.getSrcShape();
 
     SmallVector<Type> elemPtrTys(srcTys.size());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -320,8 +315,6 @@ private:
       auto llvmElemTy = getTypeConverter()->convertType(ty);
       elemPtrTys[i] = LLVM::LLVMPointerType::get(llvmElemTy, 3);
     }
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-    auto indexPtrTy = LLVM::LLVMPointerType::get(llvmIndexTy, 3);
 
     auto smemShapes = helper.getScratchConfigsFast();
     unsigned elems = product<unsigned>(smemShapes[0]);

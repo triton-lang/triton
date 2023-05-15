@@ -21,6 +21,7 @@ Value loadC(Value tensor, Value llTensor,
   // Load a normal C tensor with mma layout, that should be a
   // LLVM::struct with fcSize elements.
   auto structTy = llTensor.getType().cast<LLVM::LLVMStructType>();
+  (void)structTy;
   assert(structTy.getBody().size() == fcSize &&
          "DotOp's $c operand should pass the same number of values as $d in "
          "mma layout.");
@@ -34,7 +35,7 @@ Value loadC(Value tensor, Value llTensor,
     auto cElemTy = tensorTy.getElementType();
     int numCPackedElem = 4 / numMmaRets;
     Type cPackTy = vec_ty(cElemTy, numCPackedElem);
-    for (int i = 0; i < fcSize; i += numCPackedElem) {
+    for (size_t i = 0; i < fcSize; i += numCPackedElem) {
       Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
       for (int j = 0; j < numCPackedElem; ++j) {
         pack = insert_element(
@@ -172,7 +173,6 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 
   SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
                               aTensorTy.getShape().end());
-  auto dShape = dTensorTy.getShape();
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto repA =
       aTensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
@@ -214,7 +214,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
     auto bArgs =
         builder.newListOperand({{hb[{n, k}], "r"}, {hb[{n, k + 1}], "r"}});
     auto cArgs = builder.newListOperand();
-    for (int i = 0; i < numMmaRets; ++i) {
+    for (unsigned i = 0; i < numMmaRets; ++i) {
       cArgs->listAppend(builder.newOperand(
           fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
           std::to_string(i)));
@@ -226,7 +226,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
         builder.launch(rewriter, loc, getMmaRetType(mmaType, op.getContext()));
 
     Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
-    for (int i = 0; i < numMmaRets; ++i) {
+    for (unsigned i = 0; i < numMmaRets; ++i) {
       fc[(m * colsPerThread + 4 * n) / numCPackedElem + i] =
           extract_val(elemTy, mmaOut, i);
     }
@@ -243,7 +243,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(fc.size() * numCPackedElem, resElemTy));
   SmallVector<Value> results(fc.size() * numCPackedElem);
-  for (int i = 0; i < fc.size(); ++i) {
+  for (size_t i = 0; i < fc.size(); ++i) {
     for (int j = 0; j < numCPackedElem; ++j) {
       results[i * numCPackedElem + j] =
           numCPackedElem > 1
@@ -262,13 +262,6 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               TritonGPUToLLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter) {
-  auto loc = op.getLoc();
-  auto mmaLayout = op.getResult()
-                       .getType()
-                       .cast<RankedTensorType>()
-                       .getEncoding()
-                       .cast<MmaEncodingAttr>();
-
   Value A = op.getA();
   Value B = op.getB();
   Value C = op.getC();
@@ -276,6 +269,8 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
 
+  (void)ATensorTy;
+  (void)BTensorTy;
   assert(ATensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
          BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
          "Both $a and %b should be DotOperand layout.");

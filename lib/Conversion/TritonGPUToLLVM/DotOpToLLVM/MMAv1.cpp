@@ -24,7 +24,7 @@ extractLoadedOperand(Value llStruct, int NK,
   SmallVector<Value> elems = typeConverter->unpackLLElements(
       llStruct.getLoc(), llStruct, rewriter, type);
 
-  int offset = 0;
+  size_t offset = 0;
   for (int i = 0; offset < elems.size(); ++i) {
     for (int k = 0; k < NK; k += 4) {
       rcds[{i, k}] = std::make_pair(elems[offset], elems[offset + 1]);
@@ -38,7 +38,6 @@ extractLoadedOperand(Value llStruct, int NK,
 LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
-  auto *ctx = op.getContext();
   auto loc = op.getLoc();
 
   Value A = op.getA();
@@ -67,6 +66,10 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   bool isBRow = BLayout.getMMAv1IsRow();
   auto [isARow_, isBRow_, isAVec4_, isBVec4_, _] =
       mmaLayout.decodeVoltaLayoutStates();
+  (void)isARow_;
+  (void)isBRow_;
+  (void)isAVec4_;
+  (void)isBVec4_;
   assert(isARow == isARow_);
   assert(isBRow == isBRow_);
 

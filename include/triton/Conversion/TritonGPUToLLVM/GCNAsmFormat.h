@@ -15,9 +15,9 @@ class Location;
 namespace triton {
 using llvm::StringRef;
 
-class GCNInstr;
-class GCNInstrCommon;
-class GCNInstrExecution;
+struct GCNInstr;
+struct GCNInstrCommon;
+struct GCNInstrExecution;
 
 // GCNBuilder helps to manage a GCN asm program consists of one or multiple
 // instructions.
@@ -94,7 +94,7 @@ struct GCNBuilder {
     Operand() = default;
     Operand(const Operation &) = delete;
     Operand(Value value, StringRef constraint)
-        : value(value), constraint(constraint) {}
+        : constraint(constraint), value(value) {}
 
     bool isList() const { return !value && constraint.empty(); }
 
@@ -164,7 +164,7 @@ struct GCNBuilder {
   Operand *newListOperand(unsigned count, mlir::Value val,
                           const std::string &constraint) {
     auto *list = newOperand();
-    for (int i = 0; i < count; ++i) {
+    for (unsigned i = 0; i < count; ++i) {
       list->listAppend(newOperand(val, constraint));
     }
     return list;
@@ -172,7 +172,7 @@ struct GCNBuilder {
 
   Operand *newListOperand(unsigned count, const std::string &constraint) {
     auto *list = newOperand();
-    for (int i = 0; i < count; ++i) {
+    for (unsigned i = 0; i < count; ++i) {
       list->listAppend(newOperand(constraint));
     }
     return list;
@@ -223,8 +223,8 @@ private:
     return modArchive.back().get();
   }
 
-  friend class GCNInstr;
-  friend class GCNInstrCommon;
+  friend struct GCNInstr;
+  friend struct GCNInstrCommon;
 
 protected:
   llvm::SmallVector<std::unique_ptr<Operand>, 6> argArchive;
@@ -264,7 +264,7 @@ protected:
   GCNBuilder *builder{};
   llvm::SmallVector<std::string, 4> instrParts;
 
-  friend class GCNInstrExecution;
+  friend struct GCNInstrExecution;
 };
 
 template <class ConcreteT> struct GCNInstrBase : public GCNInstrCommon {
@@ -320,8 +320,8 @@ struct GCNInstrExecution {
   explicit GCNInstrExecution(GCNInstrCommon *instr,
                              llvm::ArrayRef<Operand *> oprs,
                              llvm::ArrayRef<Modifier *> modifiers)
-      : instr(instr), argsInOrder(oprs.begin(), oprs.end()),
-        mods(modifiers.begin(), modifiers.end()) {}
+      : argsInOrder(oprs.begin(), oprs.end()),
+        mods(modifiers.begin(), modifiers.end()), instr(instr) {}
 
   std::string dump() const;
 

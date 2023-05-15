@@ -100,7 +100,6 @@ bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
       op->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
           "triton_gpu.num-warps");
   if (numWarps) {
-    int sizePerThread = triton::gpu::getTotalElemsPerThread(ptrType);
     if (ptrType.getNumElements() < numWarps.getInt() * 32)
       return false;
   }

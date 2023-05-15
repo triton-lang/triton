@@ -572,7 +572,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     // is modified
     auto it = std::find(loads.begin(), loads.end(), op.getOperand(0));
     if (it == loads.end()) {
-      Operation *newOp = cloneWithInferType(builder, &op, mapping);
+      cloneWithInferType(builder, &op, mapping);
       continue;
     }
 

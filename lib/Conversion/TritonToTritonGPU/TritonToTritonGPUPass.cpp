@@ -554,7 +554,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::CallOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto converter = getTypeConverter();
     auto newOp = rewriter.replaceOpWithNewOp<triton::CallOp>(
         op, op.getCallee(), op.getResultTypes(), adaptor.getOperands());
     addNamedAttrs(newOp, adaptor.getAttributes());
@@ -569,9 +568,7 @@ public:
   LogicalResult
   matchAndRewrite(ReturnOp op, ReturnOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto converter = getTypeConverter();
-    auto newOp =
-        rewriter.replaceOpWithNewOp<ReturnOp>(op, adaptor.getOperands());
+    rewriter.replaceOpWithNewOp<ReturnOp>(op, adaptor.getOperands());
     return success();
   }
 };

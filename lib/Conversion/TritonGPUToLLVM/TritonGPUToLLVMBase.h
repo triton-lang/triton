@@ -158,7 +158,6 @@ struct CacheKeyDenseMapInfo {
         tombstone);
   }
   static unsigned getHashValue(IndexCacheKeyT key) {
-    auto shape = key.second.getShape();
     return llvm::hash_combine(mlir::hash_value(key.first),
                               mlir::hash_value(key.second));
   }
@@ -218,7 +217,6 @@ public:
   }
 
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
-    auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
         loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x);
     return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
@@ -286,7 +284,6 @@ public:
     Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
 
     auto srcEncoding = srcTy.getEncoding();
-    auto srcShape = srcTy.getShape();
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     // swizzling params as described in TritonGPUAttrDefs.td
     unsigned outVec = resSharedLayout.getVec();
@@ -367,6 +364,7 @@ public:
                                 ConversionPatternRewriter &rewriter) const {
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
+    (void)srcShape;
     assert(srcShape.size() == 2 &&
            "Unexpected rank of storeDistributedToShared");
     auto dstTy = dst.getType().cast<RankedTensorType>();
@@ -386,16 +384,11 @@ public:
             : 1;
     unsigned outVec = dstSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
-    unsigned perPhase = dstSharedLayout.getPerPhase();
-    unsigned maxPhase = dstSharedLayout.getMaxPhase();
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
     auto inVals =
         getTypeConverter()->unpackLLElements(loc, llSrc, rewriter, srcTy);
     auto wordTy = vec_ty(elemTy, minVec);
-    auto elemPtrTy = ptr_ty(elemTy);
-    Value outVecVal = i32_val(outVec);
-    Value minVecVal = i32_val(minVec);
     Value word;
 
     SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
@@ -761,12 +754,8 @@ private:
   emitBaseIndexForMmaLayoutV1(Location loc, ConversionPatternRewriter &rewriter,
                               const MmaEncodingAttr &mmaLayout,
                               RankedTensorType type) const {
-    auto shape = type.getShape();
-
     auto wpt = mmaLayout.getWarpsPerCTA();
     static constexpr std::array<int, 3> fpw{{2, 2, 1}};
-    auto [isARow, isBRow, isAVec4, isBVec4, _] =
-        mmaLayout.decodeVoltaLayoutStates();
 
     Value thread = getThreadId(rewriter, loc);
     auto *ctx = thread.getContext();
@@ -818,10 +807,8 @@ private:
     offQuadN = mul(offQuadN, i32_val(rep[1] / 2));
     // quad pair offset
     Value offLaneM = add(offPairM, offQuadM);
-    Value offLaneN = add(offPairN, offQuadN);
-    // a, b offset
+    // a offset
     Value offsetAM = add(offWarpM, offLaneM);
-    Value offsetBN = add(offWarpN, offLaneN);
     // m indices
     Value offsetCM = add(and_(lane, _1), offsetAM);
     // n indices
@@ -833,9 +820,6 @@ private:
   emitOffsetForMmaLayoutV1(const MmaEncodingAttr &mmaLayout,
                            RankedTensorType type) const {
     auto shape = type.getShape();
-
-    auto [isARow, isBRow, isAVec4, isBVec4, _] =
-        mmaLayout.decodeVoltaLayoutStates();
 
     // TODO: seems like the apttern below to get `rep`/`spw` appears quite often
     // A info
@@ -857,7 +841,7 @@ private:
 
     SmallVector<unsigned> idxM;
     for (unsigned m = 0; m < shape[0]; m += shapePerCTA[0])
-      for (unsigned mm = 0; mm < rep[0]; ++mm)
+      for (int mm = 0; mm < rep[0]; ++mm)
         idxM.push_back(m + mm * 2);
 
     SmallVector<unsigned> idxN;
@@ -1008,9 +992,8 @@ public:
 
 protected:
   TritonGPUToLLVMTypeConverter *getTypeConverter() const {
-    LLVMTypeConverter *ret =
-        ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
-    return (TritonGPUToLLVMTypeConverter *)ret;
+    return static_cast<const ConvertTritonGPUOpToLLVMPatternBase *>(this)
+        ->getTypeConverter();
   }
 };
 

@@ -241,7 +241,7 @@ struct SharedMemoryObject {
   }
 
   Value getCSwizzleOffset(int order) const {
-    assert(order >= 0 && order < strides.size());
+    assert(order >= 0 && order < static_cast<int>(strides.size()));
     return offsets[order];
   }
 

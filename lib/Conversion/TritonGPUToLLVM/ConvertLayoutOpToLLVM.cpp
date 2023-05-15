@@ -285,7 +285,6 @@ private:
                               SmallVector<Value> &vals, Value smemBase,
                               ArrayRef<int64_t> shape,
                               bool isDestMma = false) const {
-    unsigned accumNumCTAsEachRep = 1;
     auto layout = type.getEncoding();
     MmaEncodingAttr mma = layout.dyn_cast<MmaEncodingAttr>();
     auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>();
@@ -323,7 +322,7 @@ private:
       // when store to smem.
       std::vector<std::pair<SmallVector<Value>, Value>> coord2val(
           accumSizePerThread);
-      for (unsigned elemId = 0; elemId < accumSizePerThread; ++elemId) {
+      for (int elemId = 0; elemId < accumSizePerThread; ++elemId) {
         // TODO[Superjomn]: Move the coordinate computation out of loop, it is
         // duplicate in Volta.
         SmallVector<Value> multiDimOffset =
@@ -351,7 +350,7 @@ private:
 
     // Now the coord2valT has the transposed and contiguous elements(with
     // vec=2), the original vals is not needed.
-    for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
+    for (int elemId = 0; elemId < accumSizePerThread; elemId += vec) {
       auto coord = coord2valT[elemId].first;
       Value offset = linearize(rewriter, loc, coord, paddedRepShape, outOrd);
       auto elemPtrTy = ptr_ty(elemTy, 3);
@@ -483,8 +482,6 @@ private:
     }
 
     SmallVector<Type> types(outElems, llvmElemTy);
-    auto *ctx = llvmElemTy.getContext();
-    Type structTy = struct_ty(types);
     Value result =
         getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
@@ -503,10 +500,11 @@ private:
     Value dst = op.getResult();
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
-    auto dstTy = dst.getType().cast<RankedTensorType>();
-    auto dstShape = dstTy.getShape();
+    (void)srcShape;
     assert(srcShape.size() == 2 &&
            "Unexpected rank of ConvertLayout(blocked->shared)");
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto dstShape = dstTy.getShape();
     auto srcLayout = srcTy.getEncoding();
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = getOrder(srcLayout);
@@ -593,7 +591,7 @@ private:
       // instructions to pack & unpack sub-word integers. A workaround is to
       // store the results of ldmatrix in i32
       auto elemSize = elemTy.getIntOrFloatBitWidth();
-      if (auto intTy = elemTy.dyn_cast<IntegerType>() && elemSize <= 16) {
+      if (elemTy.isa<IntegerType>() && elemSize <= 16) {
         auto fold = 32 / elemSize;
         for (unsigned i = 0; i < elems; i += fold) {
           Value val = i32_val(0);

@@ -186,7 +186,7 @@ private:
       unsigned outVec = 0;
       auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
+                                       std::multiplies<unsigned>{});
       auto bytes =
           srcTy.getElementType().isa<triton::PointerType>()
               ? elems * kPtrBitWidth / 8
@@ -201,7 +201,7 @@ private:
       } else {
         auto smemShape = getScratchConfigForAtomicRMW(atomicRMWOp);
         unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                         std::multiplies{});
+                                         std::multiplies<unsigned>{});
         auto elemTy =
             value.getType().cast<triton::PointerType>().getPointeeType();
         auto bytes =
@@ -214,7 +214,7 @@ private:
       auto value = op->getOperand(0);
       auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
+                                       std::multiplies<unsigned>{});
       auto elemTy =
           value.getType().cast<triton::PointerType>().getPointeeType();
       auto bytes = elemTy.isa<triton::PointerType>()
@@ -296,7 +296,7 @@ private:
           minId = std::min(minId, bufferRange[buffer].start());
           maxId = std::max(maxId, bufferRange[buffer].end());
         }
-        bufferRange[buffer] = Interval(minId, maxId);
+        bufferRange[buffer] = Interval<size_t>(minId, maxId);
       }
     }
   }
@@ -313,8 +313,9 @@ private:
         // range.
         auto *op = opScratchIter.first;
         auto *buffer = opScratchIter.second;
-        bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                             operationId.lookup(op) + 1)});
+        bufferRange.insert(
+            {buffer, Interval<size_t>(operationId.lookup(op),
+                                      operationId.lookup(op) + 1)});
       }
     };
     processScratchMemory(allocation->opScratch);
@@ -358,7 +359,7 @@ private:
                         maxId = operationId[liveOp] + 1;
                       }
                     });
-      return Interval(minId, maxId);
+      return Interval<size_t>(minId, maxId);
     };
 
     resolveExplicitBufferLiveness(getValueLivenessRange);
@@ -427,16 +428,19 @@ private:
         auto xRange = bufferRange.lookup(buffer);
         bufferStart[buffer] = size;
         tripleMap.insert(
-            {size + xSize, Interval{std::max(range.start(), xRange.start()),
-                                    std::min(range.end(), xRange.end())}});
+            {size + xSize,
+             Interval<size_t>{std::max(range.start(), xRange.start()),
+                              std::min(range.end(), xRange.end())}});
         // We could either insert (range.start, xRange.start) or (range.start,
         // xRange.end), both are correct and determine the potential buffer
         // offset, and the graph coloring algorithm will solve the interference,
         // if any
         if (range.start() < xRange.start())
-          tripleMap.insert({size, Interval{range.start(), xRange.end()}});
+          tripleMap.insert(
+              {size, Interval<size_t>{range.start(), xRange.end()}});
         if (xRange.end() < range.end())
-          tripleMap.insert({size, Interval{xRange.start(), range.end()}});
+          tripleMap.insert(
+              {size, Interval<size_t>{xRange.start(), range.end()}});
         xBuffers.erase(bufferIt);
       }
     }
@@ -455,8 +459,8 @@ private:
         auto yStart = bufferStart.lookup(y);
         auto xSize = x->size;
         auto ySize = y->size;
-        Interval xSizeRange = {xStart, xStart + xSize};
-        Interval ySizeRange = {yStart, yStart + ySize};
+        Interval<size_t> xSizeRange = {xStart, xStart + xSize};
+        Interval<size_t> ySizeRange = {yStart, yStart + ySize};
         auto xOpRange = bufferRange.lookup(x);
         auto yOpRange = bufferRange.lookup(y);
         if (xOpRange.intersects(yOpRange) &&

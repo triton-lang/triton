@@ -240,7 +240,7 @@ SmallVector<unsigned> getUniqueContigPerThread(Type type) {
   SmallVector<unsigned> ret(rank);
   auto contigPerThread = getContigPerThread(tensorType.getEncoding());
   assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
-  for (int d = 0; d < rank; ++d) {
+  for (unsigned d = 0; d < rank; ++d) {
     ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
   }
   return ret;
@@ -543,9 +543,10 @@ SmallVector<int64_t>
 DotOperandEncodingAttr::getMMAv2Rep(ArrayRef<int64_t> shape,
                                     int bitwidth) const {
   auto mmaParent = getParent().cast<MmaEncodingAttr>();
+  (void)mmaParent;
+  assert(mmaParent.isAmpere());
   SmallVector<int> shapePerWarp = {16, 8, 4 * 64 / bitwidth};
   auto warpsPerCTA = getParent().cast<MmaEncodingAttr>().getWarpsPerCTA();
-  assert(mmaParent.isAmpere());
   if (getOpIdx() == 0)
     return {std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0])),
             std::max<int64_t>(1, shape[1] / shapePerWarp[2])};
@@ -567,8 +568,6 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
-    int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
-    int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
     // A100
     if (mmaParent.isAmpere()) {
       auto rep = getMMAv2Rep(shape, eltTy.getIntOrFloatBitWidth());
@@ -584,7 +583,6 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
       if (getOpIdx() == 0) {
         int packSizeM = (isRow || isVec4) ? 1 : 2;
         int repM = 2 * packSizeM;
-        int spwM = 2 * 4 * repM;
         int numM = getMMAv1NumOuter(shape);
         int NK = shape[1];
         int vec = 2 * repM;
@@ -600,8 +598,8 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
               visited.insert({m + 1, k});
           }
         };
-        for (unsigned k = 0; k < NK; k += 4)
-          for (unsigned m = 0; m < numM / 2; ++m)
+        for (int k = 0; k < NK; k += 4)
+          for (int m = 0; m < numM / 2; ++m)
             if (!visited.count({m, k}))
               ld(m, k);
         return visited.size() * 2;
@@ -609,7 +607,6 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
       if (getOpIdx() == 1) {
         int packSizeN = (isRow && !isVec4) ? 2 : 1;
         int repN = 2 * packSizeN;
-        int spwN = 2 * 4 * repN;
         int numN = getMMAv1NumOuter(shape);
         int vec = 2 * repN;
 
@@ -617,7 +614,6 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
         // Here we mimic the logic in loadA, the result cannot be calculated
         // directly.
         llvm::DenseSet<std::pair<int, int>> visited;
-        int elemsPerLd = vec > 4 ? 4 : 2;
         auto ld = [&](int n, int k) {
           visited.insert({n, k});
           if (vec > 4) {
@@ -628,8 +624,8 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
           }
         };
 
-        for (unsigned k = 0; k < NK; k += 4)
-          for (unsigned n = 0; n < numN / 2; ++n) {
+        for (int k = 0; k < NK; k += 4)
+          for (int n = 0; n < numN / 2; ++n) {
             if (!visited.count({n, k}))
               ld(n, k);
           }
@@ -1251,7 +1247,6 @@ void ExtractSliceOp::build(OpBuilder &b, OperationState &result,
   dispatchIndexOpFoldResults(offsets, dynamicOffsets, staticOffsets);
   dispatchIndexOpFoldResults(sizes, dynamicSizes, staticSizes);
   dispatchIndexOpFoldResults(strides, dynamicStrides, staticStrides);
-  auto sourceRankedTensorType = source.getType().cast<RankedTensorType>();
   build(b, result, resultType, source, dynamicOffsets, dynamicSizes,
         dynamicStrides, b.getDenseI64ArrayAttr(staticOffsets),
         b.getDenseI64ArrayAttr(staticSizes),

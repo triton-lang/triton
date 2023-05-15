@@ -124,6 +124,8 @@ struct LoadOpConversion
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNBits;
       const size_t movWidth = width < 16 ? 16 : width;
+      (void)wordNElems;
+      (void)numVecs;
       assert(wordNElems * nWords * numVecs == numElems);
 
       // TODO(Superjomn) Add cache policy fields to StoreOp.
@@ -313,6 +315,7 @@ struct StoreOpConversion
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNBits;
+      (void)numVecs;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
 
       // TODO(Superjomn) Add cache policy fields to StoreOp.
@@ -404,7 +407,6 @@ struct AtomicCASOpConversion
     Type valueElemTy =
         TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
                  : valueTy;
-    auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     Value mask = getMask(valueTy, rewriter, loc);
     PTXBuilder ptxBuilderMemfence;
     auto memfence = ptxBuilderMemfence.create<PTXInstr>("membar")->o("gl");
@@ -492,21 +494,19 @@ struct AtomicRMWOpConversion
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
     auto vec = getVectorSize(ptr);
-    int numElems = 1;
     // tensor
     if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
-      // mask
-      numElems = tensorTy.getNumElements();
     }
+    // mask
     Value mask = getMask(valueTy, rewriter, loc);
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value rmwVal = undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
+      for (unsigned ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
         rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], iiVal);
@@ -570,7 +570,7 @@ struct AtomicRMWOpConversion
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
         auto retType = vec == 1 ? valueElemTy : vecTy;
         auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
-        for (int ii = 0; ii < vec; ++ii) {
+        for (unsigned ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
               vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
@@ -623,17 +623,19 @@ struct InsertSliceOpConversion
     Value res = op.getResult();
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
     auto *funcAllocation = allocation->getFuncData(funcOp);
+    (void)res;
+    (void)funcAllocation;
     assert(funcAllocation->getBufferId(res) == Allocation::InvalidBufferId &&
            "Only support in-place insert_slice for now");
 
     auto srcTy = src.getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
-    auto srcShape = srcTy.getShape();
     assert(srcLayout && "Unexpected srcLayout in InsertSliceOpConversion");
 
     auto dstTy = dst.getType().dyn_cast<RankedTensorType>();
     auto dstLayout = dstTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     auto llDst = adaptor.getDest();
+    (void)dstLayout;
     assert(dstLayout && "Unexpected dstLayout in InsertSliceOpConversion");
     assert(op.hasUnitStride() &&
            "Only unit stride supported by InsertSliceOpConversion");
@@ -644,7 +646,7 @@ struct InsertSliceOpConversion
     SmallVector<Value, 4> offsets;
     SmallVector<Value, 4> srcStrides;
     auto mixedOffsets = op.getMixedOffsets();
-    for (auto i = 0; i < mixedOffsets.size(); ++i) {
+    for (size_t i = 0; i < mixedOffsets.size(); ++i) {
       if (op.isDynamicOffset(i)) {
         offsets.emplace_back(adaptor.getOffsets()[i]);
       } else {
@@ -702,6 +704,8 @@ struct InsertSliceAsyncOpConversion
     Value other = op.getOther();
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
     auto *funcAllocation = allocation->getFuncData(funcOp);
+    (void)res;
+    (void)funcAllocation;
     assert(funcAllocation->getBufferId(res) == Allocation::InvalidBufferId &&
            "Only support in-place insert_slice_async for now");
 
@@ -711,6 +715,7 @@ struct InsertSliceAsyncOpConversion
     auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
     auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
+    (void)srcShape;
     assert(srcShape.size() == 2 &&
            "insert_slice_async: Unexpected rank of %src");
 
@@ -731,7 +736,7 @@ struct InsertSliceAsyncOpConversion
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
     SmallVector<Value, 4> offsetVals;
     SmallVector<Value, 4> srcStrides;
-    for (auto i = 0; i < dstShape.size(); ++i) {
+    for (long i = 0; i < static_cast<long>(dstShape.size()); ++i) {
       if (i == axis) {
         offsetVals.emplace_back(llIndex);
       } else {
@@ -739,11 +744,6 @@ struct InsertSliceAsyncOpConversion
         srcStrides.emplace_back(smemObj.strides[i]);
       }
     }
-    // Compute the offset based on the original dimensions of the shared
-    // memory object
-    auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
-    auto dstPtrTy = ptr_ty(resElemTy, 3);
-    Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
 
     // %mask
     SmallVector<Value> maskElems;
@@ -772,24 +772,10 @@ struct InsertSliceAsyncOpConversion
     unsigned outVec = resSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = getTotalElemsPerThread(srcTy);
-    unsigned perPhase = resSharedLayout.getPerPhase();
-    unsigned maxPhase = resSharedLayout.getMaxPhase();
-    auto sizePerThread = srcBlockedLayout.getSizePerThread();
     auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
-    auto inOrder = srcBlockedLayout.getOrder();
     DenseMap<unsigned, Value> sharedPtrs =
         getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
-
-    // If perPhase * maxPhase > threadsPerCTA, we will have elements
-    // that share the same tile indices. The index calculation will
-    // be cached.
-    auto numSwizzleRows = std::max<unsigned>(
-        (perPhase * maxPhase) / threadsPerCTA[inOrder[1]], 1);
-    // A sharedLayout encoding has a "vec" parameter.
-    // On the column dimension, if inVec > outVec, it means we have to divide
-    // single vector read into multiple ones
-    auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
 
     auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcTy);
 

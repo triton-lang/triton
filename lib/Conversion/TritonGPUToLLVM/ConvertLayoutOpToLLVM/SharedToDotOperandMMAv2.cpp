@@ -187,12 +187,10 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   SmallVector<Value> offs(numPtrs);
 
   int vecWidth = kWidth;
-  int threadsPerQuad[2] = {8, 4};
   int laneWidth = 4;
   int laneHeight = 8;
   int quadWidth = laneWidth * vecWidth;
   int quadHeight = laneHeight;
-  int numQuadI = 2;
 
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));

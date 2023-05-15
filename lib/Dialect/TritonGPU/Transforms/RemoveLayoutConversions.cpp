@@ -208,7 +208,7 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
   }
   rewriter.setInsertionPoint(op);
   if (op->getNumResults() == 0) {
-    Operation *newOp = rewriter.clone(*op, mapping);
+    rewriter.clone(*op, mapping);
     rewriter.eraseOp(op);
     return;
   }
@@ -251,7 +251,7 @@ public:
     }
 
     IRMapping mapping;
-    for (size_t i = 0; i < numOps; i++) {
+    for (int i = 0; i < numOps; i++) {
       auto thenCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
           thenYield.getOperand(i).getDefiningOp());
       if (hasElse) {
@@ -312,7 +312,7 @@ public:
 
     rewriter.setInsertionPointAfter(newIfOp);
     SmallVector<Value> newRetValues = newIfOp.getResults();
-    for (size_t i = 0; i < numOps; i++) {
+    for (int i = 0; i < numOps; i++) {
       if (newIfOp.getResult(i).getType() != ifOp.getResult(i).getType()) {
         newRetValues[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
             newIfOp.getLoc(), ifOp.getResult(i).getType(),

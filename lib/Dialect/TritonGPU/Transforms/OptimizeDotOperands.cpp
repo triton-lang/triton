@@ -159,7 +159,8 @@ public:
 
     mlir::PassManager pm(m.getContext());
     pm.addPass(mlir::createCanonicalizerPass());
-    auto ret = pm.run(m);
+    if (pm.run(m).failed())
+      signalPassFailure();
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<ConvertTransConvert>(context);

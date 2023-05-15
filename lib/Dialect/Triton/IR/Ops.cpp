@@ -480,7 +480,6 @@ mlir::LogicalResult mlir::triton::ReduceOp::verifyRegions() {
                                << " arguments, but given block with "
                                << block.getNumArguments() << " arguments";
   }
-  unsigned i = 0;
   const auto &blockArgTypes = block.getArgumentTypes();
   for (unsigned i = 0; i < numArgs; ++i) {
     const auto &blockArgTy = blockArgTypes[i];

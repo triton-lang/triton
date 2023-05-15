@@ -59,9 +59,8 @@ struct BroadcastOpConversion
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
     auto srcShape = srcTy.getShape();
-    auto resultShape = resultTy.getShape();
     unsigned rank = srcTy.getRank();
-
+    (void)rank;
     assert(rank == resultTy.getRank());
     auto order = triton::gpu::getOrder(srcLayout);
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
@@ -193,8 +192,6 @@ struct PrintOpConversion
     Type int8Ptr = ptr_ty(i8_ty);
 
     auto *ctx = rewriter.getContext();
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     auto funcOp = getVprintfDeclaration(rewriter);
     auto loc = UnknownLoc::get(ctx);
 
@@ -247,7 +244,6 @@ struct AssertOpConversion
   matchAndRewrite(triton::AssertOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto ctx = rewriter.getContext();
     auto elems = getTypeConverter()->unpackLLElements(
         loc, adaptor.getCondition(), rewriter, op.getCondition().getType());
     auto elemTy = elems[0].getType();
@@ -275,7 +271,6 @@ struct AssertOpConversion
                        StringRef file, StringRef func, int line,
                        ConversionPatternRewriter &rewriter) {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
 
     // #block1
@@ -289,8 +284,6 @@ struct AssertOpConversion
     rewriter.setInsertionPointToStart(ifBlock);
 
     auto funcOp = getAssertfailDeclaration(rewriter);
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Value messageString =
         LLVM::addStringToModule(loc, rewriter, "assertMessage_", message);
     Value fileString =
@@ -302,7 +295,7 @@ struct AssertOpConversion
 
     SmallVector<Value> operands = {messageString, fileString, lineNumber,
                                    funcString, charSize};
-    auto ret = call(funcOp, operands);
+    call(funcOp, operands);
 
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
@@ -352,7 +345,6 @@ struct MakeRangeOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto rankedTy = op.getResult().getType().cast<RankedTensorType>();
-    auto shape = rankedTy.getShape();
     auto layout = rankedTy.getEncoding();
 
     auto elemTy = rankedTy.getElementType();
@@ -503,6 +495,7 @@ struct ExtractSliceOpConversion
     Location loc = op->getLoc();
     auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    (void)srcLayout;
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
     assert(op.hasUnitStride() &&
            "Only unit stride supported by ExtractSliceOpConversion");
@@ -514,7 +507,7 @@ struct ExtractSliceOpConversion
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
-    for (auto i = 0; i < mixedOffsets.size(); ++i) {
+    for (size_t i = 0; i < mixedOffsets.size(); ++i) {
       if (op.isDynamicOffset(i))
         opOffsetVals.emplace_back(adaptor.getOffsets()[i]);
       else
@@ -527,7 +520,7 @@ struct ExtractSliceOpConversion
     // newShape = rank_reduce(shape)
     // Triton only supports static tensor sizes
     SmallVector<Value, 4> strideVals;
-    for (auto i = 0; i < op.static_sizes().size(); ++i) {
+    for (size_t i = 0; i < op.static_sizes().size(); ++i) {
       if (op.getStaticSize(i) == 1) {
         offsetVals.erase(offsetVals.begin() + i);
       } else {
@@ -599,7 +592,7 @@ void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
                    std::string elem_repr, ConversionPatternRewriter &builder) {
   std::string fmt = info + " t-%d ";
   std::vector<Value> new_arr({thread});
-  for (int i = 0; i < arr.size(); ++i) {
+  for (size_t i = 0; i < arr.size(); ++i) {
     fmt += elem_repr + ((i == arr.size() - 1) ? "" : ", ");
     new_arr.push_back(arr[i]);
   }

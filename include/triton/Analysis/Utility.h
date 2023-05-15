@@ -58,7 +58,7 @@ private:
   ArrayRef<int64_t> srcShape;
   Attribute srcEncoding;
   SmallVector<Type> srcElementTypes;
-  int axis;
+  unsigned axis;
 };
 
 bool maybeSharedAllocationOp(Operation *op);
@@ -82,7 +82,7 @@ inline SmallVector<T_OUT> convertType(ArrayRef<T_IN> in) {
 }
 
 template <typename Int> Int product(llvm::ArrayRef<Int> arr) {
-  return std::accumulate(arr.begin(), arr.end(), 1, std::multiplies{});
+  return std::accumulate(arr.begin(), arr.end(), 1, std::multiplies<Int>{});
 }
 
 template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }

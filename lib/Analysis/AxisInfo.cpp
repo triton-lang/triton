@@ -247,6 +247,9 @@ private:
       //  %ptr = add %0, %rhs
       elemSize = std::max<unsigned int>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
+    } else {
+      // Side step unused variable errors when constexpr expression is false.
+      (void)op;
     }
     return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim) * elemSize);
   }
@@ -661,7 +664,7 @@ public:
         constantValue = lhsInfo.getConstantValue();
       }
     } else {
-      for (auto d = 0; d < rank; ++d) {
+      for (size_t d = 0; d < rank; ++d) {
         constancy.push_back(
             std::min(gcd(lhsInfo.getConstancy(d), condConstancy[d]),
                      gcd(rhsInfo.getConstancy(d), condConstancy[d])));
@@ -876,11 +879,6 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
 void AxisInfoAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
-  // TODO: For sure not the right way to do this
-  // but why is scf.if not initialized otherwise?
-  for (auto op : operands)
-    if (op->getValue().getRank() == 0)
-      setToEntryState((dataflow::Lattice<AxisInfo> *)op);
   AxisInfo curr = visitors.apply(op, operands);
   if (curr.getRank() == 0)
     return setAllToEntryStates(results);
@@ -912,7 +910,6 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   if (!tensorTy)
     return 1;
   auto layout = tensorTy.getEncoding();
-  auto shape = tensorTy.getShape();
 
   // Here order should be ordered by contiguous first, so the first element
   // should have the largest contiguous.

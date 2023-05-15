@@ -106,6 +106,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     return elemTy;
   if (mmaParent.isAmpere()) {
     int bitwidth = elemTy.getIntOrFloatBitWidth();
+    (void)bitwidth;
     assert(bitwidth <= 32);
     return IntegerType::get(ctx, 32);
   } else {

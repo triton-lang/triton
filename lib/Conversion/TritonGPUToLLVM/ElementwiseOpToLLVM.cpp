@@ -14,12 +14,12 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
       dyn_cast<triton::gpu::DotOperandEncodingAttr>(inTensorTy.getEncoding());
   auto ouEncoding =
       dyn_cast<triton::gpu::DotOperandEncodingAttr>(ouTensorTy.getEncoding());
+  (void)ouEncoding;
   assert(inEncoding == ouEncoding);
   if (!inEncoding)
     return values;
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
   size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
-  auto ouEltTy = ouTensorTy.getElementType();
   if (inBitWidth == ouBitWidth)
     return values;
   if (inBitWidth == 16 && ouBitWidth == 32) {
@@ -98,7 +98,7 @@ inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
     auto eltType = typeConverter->convertType(tensorTy.getElementType());
     auto vecType = vec_ty(eltType, 32 / eltType.getIntOrFloatBitWidth());
     auto vec = bitcast(v, vecType);
-    for (int i = 0; i < 32 / eltType.getIntOrFloatBitWidth(); i++) {
+    for (unsigned i = 0; i < 32 / eltType.getIntOrFloatBitWidth(); i++) {
       outValues.push_back(extract_element(vec, i32_val(i)));
     }
   }
@@ -119,7 +119,7 @@ inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
   auto eltType = typeConverter->convertType(tensorTy.getElementType());
   int vecWidth = 32 / eltType.getIntOrFloatBitWidth();
   auto vecType = vec_ty(eltType, vecWidth);
-  for (int i = 0; i < inValues.size(); i += vecWidth) {
+  for (size_t i = 0; i < inValues.size(); i += vecWidth) {
     Value vec = undef(vecType);
     for (int j = 0; j < vecWidth; j++) {
       vec = insert_element(vec, inValues[i + j], i32_val(j));
@@ -625,7 +625,6 @@ struct FpToFpOpConversion
     auto F16TyID = TypeID::get<mlir::Float16Type>();
     auto BF16TyID = TypeID::get<mlir::BFloat16Type>();
     auto F32TyID = TypeID::get<mlir::Float32Type>();
-    auto F64TyID = TypeID::get<mlir::Float64Type>();
     static DenseMap<std::pair<TypeID, TypeID>, ConvertorT> convertorMap = {
         // F8 -> F16
         {{F8E4M3TyID, F16TyID}, convertFp8E4M3x4ToFp16x4},
@@ -727,9 +726,9 @@ public:
     if (allOperands.size() == 0)
       allOperands.push_back({});
     for (const SmallVector<Value> &operands : allOperands) {
+      auto thisPtr = static_cast<const ConcreteT *>(this);
       Value curr =
-          ((ConcreteT *)(this))
-              ->createDestOp(op, adaptor, rewriter, elemTy, operands, loc);
+          thisPtr->createDestOp(op, adaptor, rewriter, elemTy, operands, loc);
       if (!bool(curr))
         return failure();
       resultVals.push_back(curr);
@@ -1083,6 +1082,7 @@ struct ExtFOpConversion
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
       auto outElemTy = getElementType(op.getOut());
+      (void)outElemTy;
       assert(outElemTy.isF32() && "unsupported conversion");
       return FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0]);
     } else {
@@ -1104,6 +1104,7 @@ struct TruncFOpConversion
     auto outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
+      (void)inElemTy;
       assert(inElemTy.isF32() && "unsupported conversion");
       return FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, operands[0]);
     } else {

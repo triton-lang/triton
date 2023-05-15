@@ -103,8 +103,8 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 struct FuncOpConversion : public FuncOpConversionBase {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
                    ModuleAllocation &allocation, PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), allocation(allocation),
-        numWarps(numWarps) {}
+      : FuncOpConversionBase(converter, benefit), numWarps(numWarps),
+        allocation(allocation) {}
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
@@ -185,7 +185,7 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
   CallOpConversion(LLVMTypeConverter &converter, int numWarps,
                    ModuleAllocation &allocation, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit),
-        allocation(allocation), numWarps(numWarps) {}
+        numWarps(numWarps), allocation(allocation) {}
 
   LogicalResult
   matchAndRewrite(triton::CallOp callOp,
@@ -250,6 +250,7 @@ private:
   SmallVector<Value>
   getCallOpResults(triton::CallOp callOp, LLVM::CallOp newCallOp,
                    ConversionPatternRewriter &rewriter) const {
+    (void)numWarps;
     auto numResults = callOp.getNumResults();
     SmallVector<Value> results;
     if (numResults < 2) {
@@ -556,7 +557,7 @@ private:
       auto sizes = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(1));
       auto strides = SmallVector<OpFoldResult>(dstTy.getRank(), intAttr(1));
       offsets[axis] = insertSliceAsyncOp.getIndex();
-      for (size_t i = 0; i < dstTy.getRank(); i++) {
+      for (int64_t i = 0; i < dstTy.getRank(); i++) {
         if (i != axis)
           sizes[i] = intAttr(dstTy.getShape()[i]);
       }

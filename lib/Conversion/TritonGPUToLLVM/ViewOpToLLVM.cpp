@@ -29,8 +29,9 @@ struct SplatOpConversion
     return typeConverter->packLLElements(loc, elems, rewriter, resType);
   }
 
-  LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const {
+  LogicalResult
+  matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto src = adaptor.getSrc();
     auto llStruct = convertSplatLikeOp(src.getType(), op.getType(), src,

@@ -306,6 +306,7 @@ public:
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
     for (auto root : getRoots()) {
+      (void)root;
       walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
           // Pre-order edge walk callback
           [](CallOpInterface callOp, FunctionOpInterface funcOp) {},

@@ -19,7 +19,7 @@ getThreadIds(Value threadId, ArrayRef<unsigned int> shapePerCTA,
              ConversionPatternRewriter &rewriter, Location loc) {
   int dim = order.size();
   SmallVector<Value> threadIds(dim);
-  for (unsigned k = 0; k < dim - 1; k++) {
+  for (int k = 0; k < dim - 1; k++) {
     Value dimK = i32_val(shapePerCTA[order[k]] / sizePerThread[order[k]]);
     Value rem = urem(threadId, dimK);
     threadId = udiv(threadId, dimK);
@@ -77,9 +77,9 @@ ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
   ValueTable res;
   auto elems = typeConverter->unpackLLElements(loc, val, rewriter, type);
   int index = 0;
-  for (unsigned k = 0; k < K; ++k) {
-    for (unsigned m = 0; m < n0; m += shapePerCTA)
-      for (unsigned mm = 0; mm < sizePerThread; ++mm) {
+  for (int k = 0; k < K; ++k) {
+    for (int m = 0; m < n0; m += shapePerCTA)
+      for (int mm = 0; mm < sizePerThread; ++mm) {
         res[{m + mm, k}] = elems[index++];
       }
   }
@@ -137,9 +137,9 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
   int mShapePerCTA = getShapePerCTAForMN(dLayout, true /*isM*/);
   int mSizePerThread = getSizePerThreadForMN(dLayout, true /*isM*/);
 
-  for (unsigned k = 0; k < K; ++k)
-    for (unsigned m = 0; m < M; m += mShapePerCTA)
-      for (unsigned mm = 0; mm < mSizePerThread; ++mm) {
+  for (int k = 0; k < K; ++k)
+    for (int m = 0; m < M; m += mShapePerCTA)
+      for (int mm = 0; mm < mSizePerThread; ++mm) {
         Value offset =
             add(mul(i32_val(m + mm), strideAM), mul(i32_val(k), strideAK));
         Value pa = gep(ptrTy, aPtrs[0], offset);
@@ -201,9 +201,9 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
   int nShapePerCTA = getShapePerCTAForMN(dLayout, false /*isM*/);
   int nSizePerThread = getSizePerThreadForMN(dLayout, false /*isM*/);
 
-  for (unsigned k = 0; k < K; ++k)
-    for (unsigned n = 0; n < N; n += nShapePerCTA)
-      for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
+  for (int k = 0; k < K; ++k)
+    for (int n = 0; n < N; n += nShapePerCTA)
+      for (int nn = 0; nn < nSizePerThread; ++nn) {
         Value offset =
             add(mul(i32_val(n + nn), strideBN), mul(i32_val(k), strideBK));
         Value pb = gep(ptrTy, bPtrs[0], offset);
