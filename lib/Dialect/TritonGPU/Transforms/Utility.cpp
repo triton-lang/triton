@@ -131,7 +131,7 @@ bool canFoldConversion(Operation *op) {
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
-    Attribute targetEncoding) {
+    Attribute targetEncoding, bool skipHead) {
   // DFS
   std::vector<std::pair<Operation *, Attribute>> queue;
   queue.emplace_back(initOp, targetEncoding);
@@ -145,8 +145,9 @@ int simulateBackwardRematerialization(
     queue.pop_back();
     // If the current operation is expensive to rematerialize,
     // we stop everything
-    if (expensiveToRemat(currOp, currLayout))
+    if (!skipHead && expensiveToRemat(currOp, currLayout))
       break;
+    skipHead = false;
     // A conversion will be removed here (i.e. transferred to operands)
     numCvts -= 1;
     // Done processing
@@ -169,16 +170,14 @@ int simulateBackwardRematerialization(
       // 4. Skip or the defining op is in a different block
       if (!opArgI) {
         SmallVector<Operation *> cvts;
-        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), cvts).failed())
+        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), cvts).failed()) {
           return INT_MAX;
-        else
+        } else
           continue;
-      } else {
-        if (!argI.getType().isa<RankedTensorType>() ||
-            processed.contains(opArgI) ||
-            opArgI->getBlock() != currOp->getBlock())
-          continue;
-      }
+      } else if (!argI.getType().isa<RankedTensorType>() ||
+                 processed.contains(opArgI) ||
+                 opArgI->getBlock() != currOp->getBlock())
+        continue;
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
       if (canFoldConversion(opArgI))
@@ -286,17 +285,14 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
   auto forOp = cast<scf::ForOp>(parentOp);
   // We only move `iterArg` out of the loop if
   // 1. There is no conversion
-  // 2. There is only a single conversion type
+  // 2. There is only a single conversion
   // 3. Moving this conversion out of the loop will not generate any extra
   // non-removable conversion
   DenseSet<Type> cvtTypes;
+  SetVector<Operation *> others;
   auto oldType = arg.getType().cast<RankedTensorType>();
   for (auto user : arg.getUsers()) {
     if (isa<triton::gpu::ConvertLayoutOp>(user)) {
-      // Only move if user resides in the same block as the forOp.
-      // Otherwise, we should lift the conversion from the inner block first
-      if (user->getBlock() != forOp.getBody())
-        return failure();
       // Don't move if the conversion target is a dot operand or shared memory
       auto newType = user->getResults()[0].getType().cast<RankedTensorType>();
       if (newType.getEncoding()
@@ -307,18 +303,26 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
       cvts.emplace_back(user);
       cvtTypes.insert(newType);
     } else {
-      cvtTypes.insert(oldType);
+      others.insert(user);
     }
   }
   // First condition
   if (cvts.empty())
     return success();
-  // Second condition
-  if (cvtTypes.size() == 1)
+  if (cvtTypes.size() == 1) {
+    // Second condition
+    if (others.empty())
+      return success();
+    // Third condition: not completely correct
+    // If the other use is in the different block, we cannot push the conversion
+    // forward
+    for (auto *other : others) {
+      if (other->getBlock() != forOp.getBody())
+        return failure();
+    }
     return success();
-  else
-    return failure();
-  // Third condition?
+  }
+  return failure();
 }
 
 } // namespace mlir

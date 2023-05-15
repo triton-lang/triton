@@ -342,12 +342,10 @@ public:
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     SetVector<Operation *> cvtSlices;
-    auto isStopOp = [&](Operation *op) {
-      return isa<triton::ReduceOp, triton::gpu::ConvertLayoutOp, scf::YieldOp>(
-          op);
-    };
     auto filter = [&](Operation *op) {
-      return !(op->getBlock() != cvt->getBlock() || isStopOp(op) ||
+      return op->getBlock() == cvt->getBlock() &&
+             !isa<triton::gpu::ConvertLayoutOp, scf::YieldOp>(op) &&
+             !(isa<triton::ReduceOp>(op) &&
                !op->getResult(0).getType().isa<RankedTensorType>());
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
@@ -355,9 +353,8 @@ public:
       return failure();
     }
 
-    llvm::MapVector<Value, Attribute> toConvert;
     for (Operation *op : cvtSlices) {
-      if (isStopOp(op))
+      if (!filter(op))
         continue;
       // don't rematerialize anything expensive
       if (expensiveToRemat(op, dstEncoding)) {
@@ -370,30 +367,20 @@ public:
       }
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
-      for (Value arg : op->getOperands()) {
-        Operation *argOp = arg.getDefiningOp();
-        // scf.for blockArgument can be conditionally optimized only if
-        // there's a single conversion use.
-        if (!argOp) {
-          SmallVector<Operation *> cvts;
-          if (canMoveOutOfLoop(arg.cast<BlockArgument>(), cvts).failed())
-            return failure();
-        } else {
-          SetVector<Operation *> processed;
-          SetVector<Attribute> layout;
-          llvm::MapVector<Value, Attribute> toConvert;
-          if (cvtSlices.count(argOp) == 0 &&
-              simulateBackwardRematerialization(argOp, processed, layout,
-                                                toConvert, srcEncoding) > 0)
-            return failure();
-        }
+      SetVector<Operation *> processed = cvtSlices;
+      SetVector<Attribute> layout;
+      llvm::MapVector<Value, Attribute> toConvert;
+      if (simulateBackwardRematerialization(op, processed, layout, toConvert,
+                                            srcEncoding,
+                                            /*skipHead=*/true) > 0) {
+        return failure();
       }
     }
     // Step 3: Take out the operations at which we stop slicing.
     // These must be the last operations on the slice path.
     SetVector<Operation *> candidates;
     for (Operation *op : cvtSlices) {
-      if (!isStopOp(op))
+      if (filter(op))
         candidates.insert(op);
     }
     if (candidates.empty())
@@ -438,7 +425,6 @@ public:
     SetVector<Operation *> processed;
     SetVector<Attribute> layout;
     llvm::MapVector<Value, Attribute> toConvert;
-    std::vector<std::pair<Operation *, Attribute>> queue;
     if (simulateBackwardRematerialization(cvt, processed, layout, toConvert,
                                           targetType.getEncoding()) > 0)
       return mlir::failure();
