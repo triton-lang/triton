@@ -67,19 +67,21 @@ public:
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = getTypeConverter()->convertType(op.getType());
+    auto retShapedType = retType.cast<ShapedType>();
     auto value = adaptor.getValue().dyn_cast<DenseElementsAttr>();
-    if (dyn_cast<RankedTensorType>(retType)) {
+    if (dyn_cast<RankedTensorType>(retShapedType)) {
       assert(value);
       if (value.getElementType().isInteger(1) && value.isSplat())
         // Workaround until https://reviews.llvm.org/D133743 is included.
-        value = DenseElementsAttr::get(retType, value.getSplatValue<bool>());
+        value =
+            DenseElementsAttr::get(retShapedType, value.getSplatValue<bool>());
       else
         // This is a hack. We just want to add encoding
-        value = value.reshape(retType);
+        value = value.reshape(retShapedType);
     }
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, retType, value),
-        adaptor.getAttributes());
+    addNamedAttrs(rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+                      op, retShapedType, value),
+                  adaptor.getAttributes());
     return success();
   }
 };
