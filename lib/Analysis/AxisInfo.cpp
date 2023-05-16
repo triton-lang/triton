@@ -912,7 +912,6 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   if (!tensorTy)
     return 1;
   auto layout = tensorTy.getEncoding();
-  auto shape = tensorTy.getShape();
 
   // Here order should be ordered by contiguous first, so the first element
   // should have the largest contiguous.
