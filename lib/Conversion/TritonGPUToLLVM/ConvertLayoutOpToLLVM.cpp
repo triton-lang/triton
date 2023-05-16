@@ -508,22 +508,17 @@ private:
     auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
     auto dstLayout = dstTy.getEncoding();
     auto inOrd = getOrder(srcSharedLayout);
-    auto outOrd = getOrder(dstLayout);
 
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), rewriter);
-    Value smemBase = smemObj.getBaseBeforeSwizzle(inOrd[0], loc, rewriter);
     auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
-    smemBase = bitcast(smemBase, elemPtrTy);
 
     auto srcStrides =
         getStridesFromShapeAndOrder(srcShape, inOrd, loc, rewriter);
     auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy);
-    unsigned outElems = getTotalElemsPerThread(dstTy);
-    SmallVector<Value> outVals(outElems);
-    loadSharedToDistributed(dst, adaptor.getSrc(), srcStrides, dstIndices, src,
-                            smemBase, elemTy, outVals, loc, rewriter);
+
+    SmallVector<Value> outVals = loadSharedToDistributed(
+        dst, dstIndices, src, smemObj, elemTy, loc, rewriter);
 
     Value result =
         getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);

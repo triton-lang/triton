@@ -359,12 +359,11 @@ public:
     return ret;
   }
 
-  void loadSharedToDistributed(Value dst, Value lldst,
-                               ArrayRef<Value> srcStrides,
-                               ArrayRef<SmallVector<Value>> dstIndices,
-                               Value src, Value smemBase, Type elemTy,
-                               SmallVector<Value> &vals, Location loc,
-                               ConversionPatternRewriter &rewriter) const {
+  SmallVector<Value>
+  loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
+                          Value src, SharedMemoryObject smemObj, Type elemTy,
+                          Location loc,
+                          ConversionPatternRewriter &rewriter) const {
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShape = dstTy.getShape();
     assert(dstShape.size() == 2 &&
@@ -387,30 +386,26 @@ public:
             : 1;
     unsigned inVec = srcSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
-    unsigned numElems = triton::gpu::getTotalElemsPerThread(dstTy);
-    assert(numElems == dstIndices.size());
+    unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
+    assert(outElems == dstIndices.size());
 
+    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
+        loc, outVec, dstTy, srcSharedLayout, srcElemTy, smemObj, rewriter,
+        smemObj.offsets, smemObj.strides);
+    assert(outElems % minVec == 0 && "Unexpected number of elements");
+    unsigned numVecs = outElems / minVec;
     auto wordTy = vec_ty(elemTy, minVec);
-
-    SmallVector<Value> strides = {srcStrides[0], srcStrides[1]};
-    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
-    SharedMemoryObject smemObj(smemBase, strides, offsetVals);
-
-    DenseMap<unsigned, Value> sharedPtrs =
-        getSwizzledSharedPtrs(loc, outVec, dstTy, srcSharedLayout, srcElemTy,
-                              smemObj, rewriter, offsetVals, strides);
-
-    assert(numElems % minVec == 0 && "Unexpected number of elements");
-    unsigned numVecs = numElems / minVec;
+    SmallVector<Value> outVals(outElems);
     for (unsigned i = 0; i < numVecs; ++i) {
       Value smemAddr = sharedPtrs[i / minVec * minVec];
       smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
       Value valVec = load(smemAddr);
       for (unsigned v = 0; v < minVec; ++v) {
         Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
-        vals[i * minVec + v] = currVal;
+        outVals[i * minVec + v] = currVal;
       }
     }
+    return outVals;
   }
 
   void storeDistributedToShared(Value src, Value llSrc,
