@@ -44,11 +44,13 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
                                         const ArrayRef<int64_t> shape,
                                         int numWarps) {
-  auto slices = mlir::getSlice(dotOp);
-  if (llvm::find_if(slices, [](Operation *op) {
-        return isa<triton::DotOp>(op);
-      }) != slices.end())
-    return {(unsigned)numWarps, 1};
+  auto filter = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  auto slices = mlir::getSlice(dotOp, filter);
+  for (Operation *op : slices)
+    if (isa<triton::DotOp>(op) && (op != dotOp))
+      return {(unsigned)numWarps, 1};
 
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {16, 8};
