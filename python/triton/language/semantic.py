@@ -656,7 +656,7 @@ def bitcast(input: tl.tensor,
     src_bits = src_sca_ty.primitive_bitwidth
     dst_bits = dst_sca_ty.primitive_bitwidth
     if src_bits != dst_bits:
-        raise ValueError("Cannot bitcast data-type of size " + str(src_bits) + "to "
+        raise ValueError("Cannot bitcast data-type of size " + str(src_bits) + " to "
                          "data-type of size " + str(dst_bits))
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)),
                      dst_ty)
