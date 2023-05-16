@@ -150,35 +150,18 @@ jobs:
 
       - name: Get last merged PR workflow run ID
         env:
+          ARTIFACT_NAME: artifacts
           ARTIFACT_JOB_NAME: Integration-Tests
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OWNER_REPO="${{ github.repository }}"
-          PULLS=$(gh api repos/$OWNER_REPO/pulls --per-page 100 --state closed)
-          PULLS_COUNT=$(echo "$PULLS" | jq length)
-          echo "PULLS_COUNT: $PULLS_COUNT"
-          MERGED_PULLS=$(echo "$PULLS" | jq ".[] | select(.merged_at != null) | .number")
-          MERGED_PULLS_COUNT=$(echo "$MERGED_PULLS" | jq length)
-          echo "MERGED_PULLS_COUNT: $MERGED_PULLS_COUNT"
-          PR_NUMBER=$(echo "$PULLS" | jq ".[] | select(.merged_at != null) | .number" | head -1)
+          PR_NUMBER=$(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq ".[] | select(.merged_at != null) | .number" | head -1)
           echo "Last merged PR number: $PR_NUMBER"
 
-          WORKFLOW_RUN_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER/check-runs \
-            --jq ".check_runs[] | select(.name == \"$ARTIFACT_JOB_NAME\") | .check_suite_id" \
-            --header "Accept: application/vnd.github+json")
-          echo "Workflow run ID: $WORKFLOW_RUN_ID"
-          echo "WORKFLOW_RUN_ID=$WORKFLOW_RUN_ID" >> $GITHUB_ENV
-
-      - name: Download artifact
-        env:
-          ARTIFACT_NAME: artifacts
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ARTIFACT_JOB_NAME: Integration-Tests
-        run: |
-          OWNER_REPO="${{ github.repository }}"
-          ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts \
-            --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\") | .archive_download_url")
+          GIT_HASH=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER/commits | jq '.[0].sha' --raw-output)
+          WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs -f commit=$GIT_HASH | jq '.workflow_runs[0].id' --raw-output)
+          ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq '.artifacts[].archive_download_url' --raw-output)
 
           if [ -n "$ARTIFACT_URL" ]; then
             echo "Downloading artifact: $ARTIFACT_URL"
