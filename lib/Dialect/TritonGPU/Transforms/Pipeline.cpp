@@ -364,14 +364,14 @@ void LoopPipeliner::emitPrologue() {
     for (Operation &op : forOp.getLoopBody().front()) {
       if (depOps.contains(&op))
         orderedDeps.push_back(&op);
-      else if (loads.contains(op.getResult(0)))
+      else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
         orderedDeps.push_back(&op);
     }
     assert(depOps.size() + loads.size() == orderedDeps.size() &&
            "depOps contains invalid values");
     for (Operation *op : orderedDeps) {
       Operation *newOp = nullptr;
-      if (loads.contains(op->getResult(0))) {
+      if (op->getNumResults() > 0 && loads.contains(op->getResult(0))) {
         // Allocate empty buffer
         if (stage == 0) {
           loadsBuffer[op->getResult(0)] = allocateEmptyBuffer(op, builder);
@@ -578,7 +578,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   for (Operation &op : forOp.getLoopBody().front()) {
     if (depOps.contains(&op))
       orderedDeps.push_back(&op);
-    else if (loads.contains(op.getResult(0)))
+    else if (op.getNumResults() && loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
@@ -652,7 +652,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
     // Update loading mask
-    if (loads.contains(op->getResult(0))) {
+    if (op->getNumResults() > 0 && loads.contains(op->getResult(0))) {
       auto loadOp = llvm::cast<triton::LoadOp>(op);
       auto mask = loadOp.getMask();
       auto newMask =
