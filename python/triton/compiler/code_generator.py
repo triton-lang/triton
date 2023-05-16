@@ -700,6 +700,8 @@ class CodeGenerator(ast.NodeVisitor):
         ub = language.core._to_tensor(ub, self.builder)
         step = language.core._to_tensor(step, self.builder)
         # induction variable type
+        if not lb.dtype.is_int() or not ub.dtype.is_int() or not step.dtype.is_int():
+            raise TypeError(f"For loop bounds and step must all be ints, are ({lb.dtype}, {ub.dtype}, {step.dtype})")
         iv_type = language.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = language.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
