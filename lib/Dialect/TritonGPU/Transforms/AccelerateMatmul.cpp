@@ -44,8 +44,7 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
                                         const ArrayRef<int64_t> shape,
                                         int numWarps) {
-  SetVector<Operation *> slices;
-  mlir::getForwardSlice(dotOp.getResult(), &slices);
+  auto slices = mlir::getSlice(dotOp);
   if (llvm::find_if(slices, [](Operation *op) {
         return isa<triton::DotOp>(op);
       }) != slices.end())
