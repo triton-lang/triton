@@ -359,6 +359,63 @@ public:
     return ret;
   }
 
+  void loadSharedToDistributed(Value dst, Value lldst,
+                               ArrayRef<Value> srcStrides,
+                               ArrayRef<SmallVector<Value>> dstIndices,
+                               Value src, Value smemBase, Type elemTy,
+                               SmallVector<Value> &vals, Location loc,
+                               ConversionPatternRewriter &rewriter) const {
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto dstShape = dstTy.getShape();
+    assert(dstShape.size() == 2 &&
+           "Unexpected rank of loadSharedToDistributed");
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto dstDistributedLayout = dstTy.getEncoding();
+    if (auto mmaLayout = dstDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert((!mmaLayout.isVolta()) &&
+             "ConvertLayout Shared->MMAv1 is not supported yet");
+    }
+    auto srcSharedLayout =
+        srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto srcElemTy = srcTy.getElementType();
+    auto dstElemTy = dstTy.getElementType();
+    auto inOrd = triton::gpu::getOrder(srcSharedLayout);
+    auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
+    unsigned outVec =
+        inOrd == outOrd
+            ? triton::gpu::getContigPerThread(dstDistributedLayout)[outOrd[0]]
+            : 1;
+    unsigned inVec = srcSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned numElems = triton::gpu::getTotalElemsPerThread(dstTy);
+    assert(numElems == dstIndices.size());
+
+    auto wordTy = vec_ty(elemTy, minVec);
+    Value word;
+
+    SmallVector<Value> strides = {srcStrides[0], srcStrides[1]};
+    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SharedMemoryObject smemObj(smemBase, strides, offsetVals);
+
+    DenseMap<unsigned, Value> sharedPtrs =
+        getSwizzledSharedPtrs(loc, outVec, dstTy, srcSharedLayout, srcElemTy,
+                              smemObj, rewriter, offsetVals, strides);
+
+    unsigned elemId = 0;
+    for (unsigned i = 0; i < numElems; ++i) {
+      if (i % minVec == minVec - 1) {
+        Value smemAddr = sharedPtrs[i / minVec * minVec];
+        smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
+        Value valVec = load(smemAddr);
+        for (unsigned v = 0; v < minVec; ++v) {
+          Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
+          vals[elemId] = currVal;
+          elemId++;
+        }
+      }
+    }
+  }
+
   void storeDistributedToShared(Value src, Value llSrc,
                                 ArrayRef<Value> dstStrides,
                                 ArrayRef<SmallVector<Value>> srcIndices,
@@ -386,16 +443,11 @@ public:
             : 1;
     unsigned outVec = dstSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
-    unsigned perPhase = dstSharedLayout.getPerPhase();
-    unsigned maxPhase = dstSharedLayout.getMaxPhase();
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     assert(numElems == srcIndices.size());
     auto inVals =
         getTypeConverter()->unpackLLElements(loc, llSrc, rewriter, srcTy);
     auto wordTy = vec_ty(elemTy, minVec);
-    auto elemPtrTy = ptr_ty(elemTy);
-    Value outVecVal = i32_val(outVec);
-    Value minVecVal = i32_val(minVec);
     Value word;
 
     SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};

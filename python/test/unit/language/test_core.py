@@ -2022,17 +2022,34 @@ def test_temp():
 
     M, N, K = 16, 32, 64
 
-    A = torch.ones((M, K), dtype=torch.float32, device='cuda')
-    B = torch.ones((M, N, K), dtype=torch.float32, device='cuda')
-    output = torch.zeros((M, N), dtype=torch.float32, device='cuda')
+    rs = RandomState(17)
+    A_vec = rs.randint(0, 4, (M, K)).astype('float32')
+    B_vec = rs.randint(0, 4, (M, N, K)).astype('float32')
+    A = A_vec
+    B = B_vec
+
+    # A_vec = np.arange(M*K, dtype=np.float32)
+    # B_vec = np.arange(M*N*K, dtype=np.float32)
+    # A = A_vec.reshape((M, K))
+    # B = B_vec.reshape((M, N, K))
+
+    A_tri = torch.tensor(A, device='cuda')
+    B_tri = torch.tensor(B, device='cuda')
+    C_tri = torch.zeros((M, N), dtype=torch.float32, device='cuda')
 
     block_m, block_n, block_k = 16, 32, 64
 
     grid = (M // block_m, N // block_n)
 
-    batched_vecmat[grid](A, B, M, N, K, output,
+    batched_vecmat[grid](A_tri, B_tri, M, N, K, C_tri,
                          block_m=block_m, block_n=block_n, block_k=block_k,
                          num_warps=4, num_stages=1)
+    torch.cuda.synchronize()
+    A_expanded = A[:, np.newaxis, :]
+    A_broadcasted = np.broadcast_to(A_expanded, (M, N, K))
+    AB = A_broadcasted * B
+    C_ref = np.sum(AB, axis=2)
+    np.testing.assert_allclose(C_ref, C_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
 @pytest.mark.parametrize("start", [0, 1, 7, 16])
