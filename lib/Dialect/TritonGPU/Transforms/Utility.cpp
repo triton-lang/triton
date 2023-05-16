@@ -215,8 +215,10 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
         newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
         newOp->getAttrDictionary(), newOp->getPropertiesStorage(),
         newOp->getRegions(), newTypes);
-    if (succeeded(success))
-      newOp->getResult(0).setType(newTypes.front());
+    if (succeeded(success)) {
+      for (size_t i = 0; i < newTypes.size(); i++)
+        newOp->getResult(i).setType(newTypes[i]);
+    }
   }
   return newOp;
 }
