@@ -1,3 +1,0 @@
-[submodule "deps/dlfcn-win32"]
-	path = deps/dlfcn-win32
-	url = https://github.com/dlfcn-win32/dlfcn-win32.git
