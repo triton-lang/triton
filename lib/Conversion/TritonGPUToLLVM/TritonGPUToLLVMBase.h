@@ -391,7 +391,6 @@ public:
     assert(numElems == dstIndices.size());
 
     auto wordTy = vec_ty(elemTy, minVec);
-    Value word;
 
     SmallVector<Value> strides = {srcStrides[0], srcStrides[1]};
     SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
@@ -401,17 +400,15 @@ public:
         getSwizzledSharedPtrs(loc, outVec, dstTy, srcSharedLayout, srcElemTy,
                               smemObj, rewriter, offsetVals, strides);
 
-    unsigned elemId = 0;
-    for (unsigned i = 0; i < numElems; ++i) {
-      if (i % minVec == minVec - 1) {
-        Value smemAddr = sharedPtrs[i / minVec * minVec];
-        smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
-        Value valVec = load(smemAddr);
-        for (unsigned v = 0; v < minVec; ++v) {
-          Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
-          vals[elemId] = currVal;
-          elemId++;
-        }
+    assert(numElems % minVec == 0 && "Unexpected number of elements");
+    unsigned numVecs = numElems / minVec;
+    for (unsigned i = 0; i < numVecs; ++i) {
+      Value smemAddr = sharedPtrs[i / minVec * minVec];
+      smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
+      Value valVec = load(smemAddr);
+      for (unsigned v = 0; v < minVec; ++v) {
+        Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
+        vals[i * minVec + v] = currVal;
       }
     }
   }
