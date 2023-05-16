@@ -50,6 +50,8 @@ private:
   T End = std::numeric_limits<T>::max();
 };
 
+template <class T> Interval(T, T) -> Interval<T>;
+
 class Allocation {
 public:
   /// A unique identifier for shared memory buffers
