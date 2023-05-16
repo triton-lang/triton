@@ -159,12 +159,12 @@ jobs:
           PR_NUMBER=$(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq ".[] | select(.merged_at != null) | .number" | head -1)
           echo "Last merged PR number: $PR_NUMBER"
 
-          GIT_HASH=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER/commits | jq '.[0].sha' --raw-output)
-          echo "Git hash: $GIT_HASH"
-          WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs -f commit=$GIT_HASH | jq '.workflow_runs[0].id' --raw-output)
-          echo "Workflow run ID: $WORKFLOW_RUN_ID"
+          BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
+          echo "BRANCH_NAME: $BRANCH_NAME"
+          WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs | jq '.workflow_runs[] | select(.head_branch == \"$BRANCH_NAME\")' | jq '.id')
+          echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
           ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq '.artifacts[].archive_download_url' --raw-output)
-          echo "Artifact URL: $ARTIFACT_URL"
+          echo "ARTIFACT_URL: $ARTIFACT_URL"
 
           if [ -n "$ARTIFACT_URL" ]; then
             echo "Downloading artifact: $ARTIFACT_URL"
