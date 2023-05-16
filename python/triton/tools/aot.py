@@ -83,24 +83,31 @@ if __name__ == '__main__':
         print(module)
         sys.exit(0)
 
-    if not args.sm:
-        raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
+    # set arch depending on platform
+    if args.gfx:
+        arch = args.gfx
+    elif args.sm:
+        arch = args.sm
+    else:
+        raise argparse.ArgumentError(None, "Must specify --sm or --gfx for ttgir compilation")
 
     # triton-ir -> triton-gpu-ir
     module = tc.ttir_to_ttgir(module, num_warps=args.num_warps)
-    module = tc.optimize_ttgir(module, num_stages=3, arch=args.sm)
+    module = tc.optimize_ttgir(module, num_stages=3, arch=arch)
     if args.target == 'triton-gpu-ir':
         print(module.str())
         sys.exit(0)
 
     # triton-gpu-ir -> llvm-ir
-    module = tc.ttgir_to_llir(module, extern_libs=None, arch=args.sm)
+    module = tc.ttgir_to_llir(module, extern_libs=None, arch=arch)
     if args.target == 'llvm-ir':
         print(module)
         sys.exit(0)
 
     # llvm-ir -> ptx
     if args.target == 'ptx':
+        if not args.sm:
+            raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
         if not args.ptx_version:
             raise argparse.ArgumentError(None, "Must specify --ptx-version for PTX compilation")
         module = tc.llir_to_ptx(module, arch=args.sm, ptx_version=args.ptx_version)

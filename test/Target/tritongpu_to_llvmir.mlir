@@ -1,4 +1,4 @@
-// RUN: %PYTHON -m triton.tools.aot %s --target=llvm-ir --sm=80 | FileCheck %s
+// RUN: %PYTHON -m triton.tools.aot %s --target=llvm-ir --gfx=90a | FileCheck %s
 
 // == LLVM IR check begin ==
 // CHECK-LABEL: ; ModuleID = 'LLVMDialectModule'

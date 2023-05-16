@@ -70,7 +70,7 @@ def optimize_ttgir(mod, num_stages, arch):
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
-    if isinstance(arch, int):
+    if _is_cuda(arch):
         pm.add_tritongpu_accelerate_matmul_pass(arch)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
@@ -325,6 +325,9 @@ instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equ
 def _is_cuda(arch):
     return isinstance(arch, int)
 
+def is_hip():
+    return torch.version.hip is not None
+
 
 def get_architecture_descriptor(capability):
     if capability is None:
@@ -363,7 +366,11 @@ def add_cuda_stages(arch, extern_libs, stages):
 
 
 def compile(fn, **kwargs):
-    arch = get_architecture_descriptor(kwargs.get("cc", None))
+    if is_hip():
+        capability = None
+    else:
+        capability = kwargs.get("cc", None)
+    arch = get_architecture_descriptor(capability)
     is_cuda = _is_cuda(arch)
     context = _triton.ir.context()
     asm = dict()

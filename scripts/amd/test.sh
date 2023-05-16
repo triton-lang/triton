@@ -14,9 +14,10 @@ chmod -R 777 $LOG_DIR
 sh scripts/amd/clean.sh
 
 UNIT_TEST="python/test/unit/language/test_core_amd.py"
+# UNIT_TEST="python/test/unit/language/test_core.py::test_empty_kernel[float32]"
+# UNIT_TEST="python/test/unit/runtime/test_cache.py::test_compile_in_subproc"
 # UNIT_TEST="python/test/unit/language/test_core_amd.py::test_shift_op[int8-int8-<<]"
 # UNIT_TEST="python/test/unit/language/test_core_amd.py::test_shift_op[int32-int32->>]"
-# UNIT_TEST="python/test/unit/language/test_core.py::test_empty_kernel[float32]"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[float32-float32-+]"
 # UNIT_TEST="python/test/unit/language/test_core.py::test_bin_op[int8-float16-%]"
