@@ -344,9 +344,7 @@ public:
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
-             !isa<triton::gpu::ConvertLayoutOp, scf::YieldOp>(op) &&
-             !(isa<triton::ReduceOp>(op) &&
-               !op->getResult(0).getType().isa<RankedTensorType>());
+             !isa<triton::gpu::ConvertLayoutOp, scf::YieldOp, triton::ReduceOp>(op);
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty()) {
@@ -357,14 +355,12 @@ public:
       if (!filter(op))
         continue;
       // don't rematerialize anything expensive
-      if (expensiveToRemat(op, dstEncoding)) {
+      if (expensiveToRemat(op, dstEncoding))
         return failure();
-      }
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>()) {
+          !op->hasTrait<mlir::OpTrait::Elementwise>()) 
         return failure();
-      }
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
       SetVector<Operation *> processed = cvtSlices;
@@ -372,9 +368,8 @@ public:
       llvm::MapVector<Value, Attribute> toConvert;
       if (simulateBackwardRematerialization(op, processed, layout, toConvert,
                                             srcEncoding,
-                                            /*skipHead=*/true) > 0) {
+                                            /*skipHead=*/true) > 0)
         return failure();
-      }
     }
     // Step 3: Take out the operations at which we stop slicing.
     // These must be the last operations on the slice path.
@@ -509,11 +504,6 @@ public:
       // skip non-tensor types
       if (!iterArg.value().getType().isa<RankedTensorType>())
         continue;
-      // we only move `iterArg` out of the loop if
-      //   - there is only a single conversion use
-      //   - moving this conversion out of the loop will not generate
-      //     any extra non-removable conversion
-      // check first condition
       SmallVector<Operation *> cvts;
       if (canMoveOutOfLoop(iterArg.value(), cvts).failed())
         continue;

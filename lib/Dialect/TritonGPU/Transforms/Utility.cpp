@@ -168,15 +168,9 @@ int simulateBackwardRematerialization(
       // 2. Skip if there's no defining op
       // 3. Skip if the defining op has already been processed
       // 4. Skip or the defining op is in a different block
-      if (!opArgI) {
-        SmallVector<Operation *> cvts;
-        if (canMoveOutOfLoop(argI.cast<BlockArgument>(), cvts).failed()) {
-          return INT_MAX;
-        } else
-          continue;
-      } else if (!argI.getType().isa<RankedTensorType>() ||
-                 processed.contains(opArgI) ||
-                 opArgI->getBlock() != currOp->getBlock())
+      if (!argI.getType().isa<RankedTensorType>() || !opArgI ||
+          processed.contains(opArgI) ||
+          opArgI->getBlock() != currOp->getBlock())
         continue;
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
@@ -302,9 +296,8 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
       }
       cvts.emplace_back(user);
       cvtTypes.insert(newType);
-    } else {
+    } else
       others.insert(user);
-    }
   }
   // First condition
   if (cvts.empty())
