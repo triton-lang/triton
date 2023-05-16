@@ -213,7 +213,8 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
     SmallVector<Type, 1> newTypes;
     auto success = typeInfer.inferReturnTypes(
         newOp->getContext(), newOp->getLoc(), newOp->getOperands(),
-        newOp->getAttrDictionary(), newOp->getRegions(), newTypes);
+        newOp->getAttrDictionary(), newOp->getPropertiesStorage(),
+        newOp->getRegions(), newTypes);
     if (succeeded(success)) {
       for (size_t i = 0; i < newTypes.size(); i++)
         newOp->getResult(i).setType(newTypes[i]);
