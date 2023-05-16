@@ -46,12 +46,6 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 # Third-party
 include_directories(${PYBIND11_INCLUDE_DIR})
 
-if(WIN32)
-  SET(BUILD_SHARED_LIBS OFF)
-  find_package(dlfcn-win32 REQUIRED)
-  set(CMAKE_DL_LIBS dlfcn-win32::dl)
-endif()
-
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
 
 if(APPLE)
