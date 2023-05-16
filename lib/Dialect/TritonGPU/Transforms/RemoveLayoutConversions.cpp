@@ -344,7 +344,8 @@ public:
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
-             !isa<triton::gpu::ConvertLayoutOp, scf::YieldOp, triton::ReduceOp>(op);
+             !isa<triton::gpu::ConvertLayoutOp, scf::YieldOp, triton::ReduceOp>(
+                 op);
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty()) {
@@ -359,7 +360,7 @@ public:
         return failure();
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>()) 
+          !op->hasTrait<mlir::OpTrait::Elementwise>())
         return failure();
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
