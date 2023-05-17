@@ -1604,59 +1604,6 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device='cuda'):
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
-layouts = [
-    [BlockedLayout([1, 1], [16, 2], [1, 4], [0, 1]), SharedLayout(1, 1, 1, [1, 0])],
-    [BlockedLayout([1, 1], [16, 2], [1, 4], [0, 1]), SharedLayout(4, 2, 4, [1, 0])],
-    [BlockedLayout([1, 1], [16, 2], [1, 4], [0, 1]), SharedLayout(2, 2, 4, [1, 0])],
-    [BlockedLayout([1, 1], [8, 4], [2, 2], [0, 1]), SharedLayout(4, 2, 4, [1, 0])],
-]
-
-
-@pytest.mark.parametrize("M, N", [[64, 64], [64, 128], [128, 64], [128, 128]])
-@pytest.mark.parametrize("src, dst", layouts)
-def test_convert_shared(M, N, src, dst, device='cuda'):
-    ir = f"""
-    #src = {src}
-    #dst = {dst}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
-        tt.func public @kernel(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg2: i32 {{tt.divisibility = 16 : i32}}) {{
-            %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
-            %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
-            %2 = tt.splat %arg2 : (i32) -> tensor<{M}x1xi32, #src>
-            %3 = arith.muli %1, %2 : tensor<{M}x1xi32, #src>
-            %4 = tt.broadcast %3 : (tensor<{M}x1xi32, #src>) -> tensor<{M}x{N}xi32, #src>
-            %5 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
-            %6 = tt.expand_dims %5 {{axis = 0 : i32}} : (tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>) -> tensor<1x{N}xi32, #src>
-            %7 = tt.broadcast %6 : (tensor<1x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #src>
-            %8 = arith.addi %4, %7 : tensor<{M}x{N}xi32, #src>
-            %9 = tt.splat %arg0 : (!tt.ptr<i32>) -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
-            %10 = tt.addptr %9, %8 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
-            %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #src>
-            %12 = triton_gpu.convert_layout %11 : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #dst>
-            %13 = triton_gpu.convert_layout %12 : (tensor<{M}x{N}xi32, #dst>) -> tensor<{M}x{N}xi32, #src>
-            %15 = tt.splat %arg1 : (!tt.ptr<i32>) -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
-            %16 = tt.addptr %15, %8 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
-            tt.store %16, %13 {{cache = 1 : i32, evict = 1 : i32}} : tensor<{M}x{N}xi32, #src>
-            tt.return
-        }}
-    }}
-    """
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
-
-    rs = RandomState(17)
-    x = rs.randint(0, 4, (M, N)).astype('int32')
-    y = np.zeros((M, N), dtype='int32')
-    x_tri = torch.tensor(x, device=device)
-    y_tri = torch.tensor(y, device=device)
-    kernel[(1, 1, 1)](x_tri, y_tri, x_tri.stride(0))
-    y_ref = x
-    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
-
-
 @triton.jit
 def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
     delta = mean_2 - mean_1
@@ -2868,22 +2815,49 @@ layouts = [
     BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0])
 ]
 
+intermediate_layouts = [
+    None,
+    SharedLayout(1, 1, 1, [1, 0]),
+    SharedLayout(4, 2, 4, [1, 0]),
+    SharedLayout(2, 2, 4, [1, 0]),
+]
+
 
 @pytest.mark.parametrize("shape", [(128, 128)])
 @pytest.mark.parametrize("dtype", ['float16'])
 @pytest.mark.parametrize("src_layout", layouts)
+@pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
-def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
+def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device='cuda'):
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
         pytest.skip()
 
-    ir = f"""
-#src = {src_layout}
-#dst = {dst_layout}
-""" + """
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
+    layouts = f"""
+    #src = {src_layout}
+    #dst = {dst_layout}
+    """ if interm_layout is None else f"""
+    #src = {src_layout}
+    #interm = {interm_layout}
+    #dst = {dst_layout}
+    """
+
+    conversion = f"""
+    %12 = triton_gpu.convert_layout %9 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #dst>
+    %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
+    """ if interm_layout is None else f"""
+    %15 = triton_gpu.convert_layout %9 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #interm>
+    %16 = triton_gpu.convert_layout %15 : (tensor<128x128xi32, #interm>) -> tensor<128x128xi32, #src>
+    %17 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #interm>
+    %18 = triton_gpu.convert_layout %17 : (tensor<128x128xf16, #interm>) -> tensor<128x128xf16, #src>
+
+    %12 = triton_gpu.convert_layout %16 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #dst>
+    %13 = triton_gpu.convert_layout %18 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
+    """
+
+    ir = layouts + """
+    module attributes {"triton_gpu.num-warps" = 4 : i32} {
   tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<128> : tensor<128x1xi32, #src>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>
@@ -2898,8 +2872,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %10 = tt.addptr %2, %9 : tensor<128x128x!tt.ptr<f16>, #src>, tensor<128x128xi32, #src>
     %11 = tt.load %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x128xf16, #src>
     %3 = tt.splat %arg1 : (!tt.ptr<f16>) -> tensor<128x128x!tt.ptr<f16>, #dst>
-    %12 = triton_gpu.convert_layout %9 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #dst>
-    %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
+    """ + conversion + """
     %14 = tt.addptr %3, %12 : tensor<128x128x!tt.ptr<f16>, #dst>, tensor<128x128xi32, #dst>
     tt.store %14, %13 : tensor<128x128xf16, #dst>
     tt.return

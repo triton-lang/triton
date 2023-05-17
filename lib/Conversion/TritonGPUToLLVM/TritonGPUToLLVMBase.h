@@ -397,7 +397,7 @@ public:
     auto wordTy = vec_ty(elemTy, minVec);
     SmallVector<Value> outVals(outElems);
     for (unsigned i = 0; i < numVecs; ++i) {
-      Value smemAddr = sharedPtrs[i / minVec * minVec];
+      Value smemAddr = sharedPtrs[i * minVec];
       smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
       Value valVec = load(smemAddr);
       for (unsigned v = 0; v < minVec; ++v) {
