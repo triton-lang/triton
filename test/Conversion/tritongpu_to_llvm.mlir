@@ -1366,21 +1366,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   tt.func @matmul_tf32dot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:tensor<32x16xf32, #shared>, %b:tensor<16x32xf32, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
-<<<<<<< HEAD
     // PTX: llvm.inline_asm
     // PTX-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // PTX-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
+    // PTX-SAME: (i32, i32, i32, i32)
     // PTX: llvm.inline_asm
     // PTX-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // PTX-SAME: (vector<1xf32>, vector<1xf32>, vector<1xf32>, vector<1xf32>)
-=======
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // CHECK-SAME: (i32, i32, i32, i32)
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
-    // CHECK-SAME: (i32, i32, i32, i32)
->>>>>>> openai/main
+    // PTX-SAME: (i32, i32, i32, i32)
     %a_mat = triton_gpu.convert_layout %a : (tensor<32x16xf32, #shared>) -> tensor<32x16xf32, #dot_operand_a>
     %b_mat = triton_gpu.convert_layout %b : (tensor<16x32xf32, #shared>) -> tensor<16x32xf32, #dot_operand_b>
 
@@ -1408,20 +1399,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32
   tt.func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
-<<<<<<< HEAD
     // GCN-NOT: llvm.inline_asm
     // GCN: llvm.atomicrmw fadd {{.*}}  monotonic  : !llvm.ptr<f32, 1>, f32
-    // PTX: llvm.icmp "slt"
-    // PTX: llvm.inline_asm
+    // PTC: llvm.inline_asm
     // PTX-SAME: @$3 atom.global.gpu.add.f32
     // PTX: llvm.inline_asm
     // PTX-SAME: @$3 atom.global.gpu.add.f32
-=======
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$3 atom.global.gpu.add.f32
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$3 atom.global.gpu.add.f32
->>>>>>> openai/main
     %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.return
   }
@@ -1432,18 +1415,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32_scalar
   tt.func @atomic_add_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
-<<<<<<< HEAD
     // GCN-NOT: llvm.inline_asm
     // GCN: llvm.atomicrmw fadd {{.*}}  monotonic  : !llvm.ptr<f32, 1>, f32
     // PTX: llvm.icmp "eq"
     // PTX: llvm.inline_asm
+    // PTX: llvm.inline_asm
     // PTX-SAME: @$3 atom.global.gpu.add.f32
-=======
-    // CHECK: llvm.icmp "eq"
-    // CHECK: llvm.inline_asm
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$3 atom.global.gpu.add.f32
->>>>>>> openai/main
     %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (!tt.ptr<f32>, f32, i1) -> f32
     tt.return
   }
@@ -1455,21 +1432,13 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: store_f32
   tt.func @store_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xf32, #blocked0>) {
-<<<<<<< HEAD
     // GCN-NOT: llvm.inline_asm
     // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
     // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // PTX: llvm.icmp "slt"
     // PTX: llvm.inline_asm
     // PTX-SAME: @$2 st.global.b32
     // PTX: llvm.inline_asm
     // PTX-SAME: @$2 st.global.b32
-=======
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$2 st.global.b32
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$2 st.global.b32
->>>>>>> openai/main
     tt.store %arg0, %arg1 : tensor<256xf32, #blocked0>
     tt.return
   }
@@ -1480,17 +1449,11 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: store_f32_scalar
   tt.func @store_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : f32) {
-<<<<<<< HEAD
     // GCN-NOT: llvm.inline_asm
     // GCN: llvm.store {{.*}} : !llvm.ptr<f32, 1>
-    // PTX: llvm.icmp "slt"
+    // PTX: llvm.icmp "eq"
     // PTX: llvm.inline_asm
     // PTX-SAME: @$2 st.global.b32
-=======
-    // CHECK: llvm.icmp "eq"
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$2 st.global.b32
->>>>>>> openai/main
     tt.store %arg0, %arg1 : f32
     tt.return
   }

@@ -152,16 +152,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     auto ctx = funcOp->getContext();
 
-<<<<<<< HEAD
-    // Set an attribute to indicate this function is a kernel entry.
-    newFuncOp->setAttr("nvvm.kernel",
-                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-#ifndef USE_ROCM
-    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-    // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
-#endif
-=======
     if (allocation.isRoot(funcOp)) {
       // Set an attribute to indicate this function is a kernel entry.
       newFuncOp->setAttr("nvvm.kernel",
@@ -174,12 +164,13 @@ struct FuncOpConversion : public FuncOpConversionBase {
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
     }
+#ifndef USE_ROCM
     // Set an attribute for maxntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
+#endif
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
->>>>>>> openai/main
 
     rewriter.eraseOp(funcOp);
     return success();
