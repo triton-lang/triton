@@ -192,15 +192,16 @@ class CMakeBuild(build_ext):
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         # python directories
-        python_include_dir = sysconfig.get_path("platinclude")
+        prefix = sysconfig.get_config_var("prefix")
+        python_version = sysconfig.get_python_version()
         cmake_args = [
             "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON",
-            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
+            "-DPython3_ROOT_DIR=" + prefix,
+            "-DPYTHON_VERSION=" + python_version,
             "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
-            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)

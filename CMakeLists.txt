@@ -144,34 +144,6 @@ if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
 
-# Python module
-if(TRITON_BUILD_PYTHON_MODULE)
-  message(STATUS "Adding Python module")
-  set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-  set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc)
-  include_directories("." ${PYTHON_SRC_PATH})
-
-  if(PYTHON_INCLUDE_DIRS)
-    include_directories(${PYTHON_INCLUDE_DIRS})
-  else()
-    find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
-    include_directories(${Python3_INCLUDE_DIRS})
-    link_directories(${Python3_LIBRARY_DIRS})
-    link_libraries(${Python3_LIBRARIES})
-    add_link_options(${Python3_LINK_OPTIONS})
-  endif()
-endif()
-
-# # Triton
-# file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
-# if (WIN32 AND TRITON_BUILD_PYTHON_MODULE)
-# Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-# set_target_properties(triton PROPERTIES SUFFIX ".pyd")
-# set_target_properties(triton PROPERTIES PREFIX "lib")
-# else()
-# add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
-# endif()
-
 # MLIR
 find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
 
@@ -245,7 +217,34 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+
+  message(STATUS "Adding Python module")
+  set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
+  set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc)
+  include_directories("." ${PYTHON_SRC_PATH})
+
+  if(PYTHON_VERSION)
+    find_package(Python3
+      ${PYTHON_VERSION} EXACT
+      REQUIRED COMPONENTS Development Interpreter)
+  else()
+    find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+  endif()
+
+  target_link_libraries(triton ${Python3_LIBRARIES})
+  target_link_options(triton PRIVATE ${Python3_LINK_OPTIONS})
+  target_include_directories(triton PRIVATE ${Python3_INCLUDE_DIRS})
 endif()
+
+# # Triton
+# file(GLOB_RECURSE LIBTRITON_SRC lib/*.cc)
+# if (WIN32 AND TRITON_BUILD_PYTHON_MODULE)
+# Python3_add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
+# set_target_properties(triton PROPERTIES SUFFIX ".pyd")
+# set_target_properties(triton PROPERTIES PREFIX "lib")
+# else()
+# add_library(triton SHARED ${LIBTRITON_SRC} ${PYTHON_SRC})
+# endif()
 
 if(UNIX AND NOT APPLE)
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
