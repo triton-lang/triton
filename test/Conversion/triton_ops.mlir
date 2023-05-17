@@ -154,3 +154,12 @@ tt.func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
   tt.store %ptr1x1, %r4 : tensor<1x1xf32>
   tt.return
 }
+
+// CHECK-LABEL: @print_no_arg
+tt.func @print_no_arg(%arg0: !tt.ptr<f32>) {
+// CHECK: tt.print "test"
+  tt.print "test"
+  %0 = tt.load %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : f32
+  tt.store %arg0, %0 {cache = 1 : i32, evict = 1 : i32} : f32
+  tt.return
+}
