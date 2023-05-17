@@ -10,6 +10,6 @@ void populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit);
+    PatternBenefit benefit, int computeCapability);
 
 #endif

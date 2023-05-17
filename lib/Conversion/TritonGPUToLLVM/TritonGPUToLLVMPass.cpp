@@ -369,7 +369,7 @@ public:
     populateElementwiseOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
                                       allocation, indexCacheInfo,
-                                      /*benefit=*/1);
+                                      /*benefit=*/1, computeCapability);
     populateReduceOpToLLVMPatterns(typeConverter, patterns, allocation,
                                    indexCacheInfo, /*benefit=*/1);
     populateViewOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);

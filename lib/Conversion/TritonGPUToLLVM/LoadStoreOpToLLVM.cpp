@@ -1,5 +1,6 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 #include "ConvertLayoutOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
@@ -454,10 +455,12 @@ struct AtomicRMWOpConversion
   AtomicRMWOpConversion(TritonGPUToLLVMTypeConverter &converter,
                         ModuleAllocation &allocation,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
-                        PatternBenefit benefit)
+                        PatternBenefit benefit,
+                        int computeCapability)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(
             converter, allocation, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(axisAnalysisPass),
+        computeCapability(computeCapability) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
@@ -496,7 +499,7 @@ struct AtomicRMWOpConversion
     // tensor
     if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
+      vec = std::min<unsigned>(vec, (valTy.getElementType().isF16() || valTy.getElementType().isBF16()) ? 2 : 1);
       // mask
       numElems = tensorTy.getNumElements();
     }
@@ -514,88 +517,173 @@ struct AtomicRMWOpConversion
 
       Value rmwPtr = ptrElements[i];
       Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
-      std::string sTy;
-      PTXBuilder ptxBuilderAtomicRMW;
-      std::string tyId = valueElemNBits * vec == 64
-                             ? "l"
-                             : (valueElemNBits * vec == 32 ? "r" : "h");
-      auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
-      auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
-      auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
 
-      auto &atom = ptxBuilderAtomicRMW.create<>("atom")->global().o("gpu");
-      auto rmwOp = stringifyRMWOp(atomicRmwAttr).str();
-      auto sBits = std::to_string(valueElemNBits);
-      switch (atomicRmwAttr) {
-      case RMWOp::AND:
-        sTy = "b" + sBits;
-        break;
-      case RMWOp::OR:
-        sTy = "b" + sBits;
-        break;
-      case RMWOp::XOR:
-        sTy = "b" + sBits;
-        break;
-      case RMWOp::ADD:
-        sTy = "s" + sBits;
-        break;
-      case RMWOp::FADD:
-        rmwOp = "add";
-        rmwOp += (valueElemNBits == 16 ? ".noftz" : "");
-        sTy = "f" + sBits;
-        sTy += (vec == 2 && valueElemNBits == 16) ? "x2" : "";
-        break;
-      case RMWOp::MAX:
-        sTy = "s" + sBits;
-        break;
-      case RMWOp::MIN:
-        sTy = "s" + sBits;
-        break;
-      case RMWOp::UMAX:
-        rmwOp = "max";
-        sTy = "u" + sBits;
-        break;
-      case RMWOp::UMIN:
-        rmwOp = "min";
-        sTy = "u" + sBits;
-        break;
-      case RMWOp::XCHG:
-        sTy = "b" + sBits;
-        break;
-      default:
-        return failure();
-      }
-      atom.o(rmwOp).o(sTy);
-      if (tensorTy) {
-        atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
+      if ((computeCapability >= 80 && computeCapability < 90) &&
+          atomicRmwAttr == RMWOp::FADD && tensorTy.getElementType().isBF16()) {
+
+        assert(vec == 2);
         auto retType = vec == 1 ? valueElemTy : vecTy;
-        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        Type proxyType = rewriter.getI32Type();
+        rmwVal = rewriter.create<LLVM::BitcastOp>(loc, proxyType, rmwVal);
+        // atomic_add for bf16 (and other types)
+        // ignore masks (for now)
+        PTXBuilder ldBuilder;
+        auto &ld = ldBuilder.create<>("ld")
+                    ->global()
+                    .b(vec * 16);
+        auto *loadedOpr = ldBuilder.newOperand("=r");
+        auto *ldPtrOpr = ldBuilder.newAddrOperand(rmwPtr, "l");
+        ld(loadedOpr, ldPtrOpr);
+        Value loaded = ldBuilder.launch(rewriter, loc, proxyType);
+
+        // xx => 16 or 32 depending on vec
+        // ^bb0
+        //   %init = ld.global.bxx 
+        //   br ^bb1(%init)
+        // ^bb1(%assume)
+        //   %sum = add %val, %assume
+        //   %old = atom.global.cas.bxx [%ptr], %assume, %sum
+        //   setp.ne.sxx %cond, %assume, %old
+        //   cond_br %cond, ^bb1(%old), ^bb2(%old)
+        // ^bb2(%atom_val)
+        //   use(%atom_val)
+        Region *region = op->getParentRegion();
+        Block *currentBlock = op->getBlock();
+
+        Block *loop = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+        Block *continuation = rewriter.splitBlock(loop, loop->begin());
+        loop->addArgument(proxyType, loc);
+        continuation->addArgument(proxyType, loc);
+        Value assume = loop->getArgument(0);
+        rewriter.setInsertionPointToEnd(loop);
+        // a + b
+        const char *bf162AddAsm =
+          "{.reg .b32 c; \n"
+          " mov.b32 c, 0x3f803f80U; \n"
+          " fma.rn.bf16x2 $0, $1, c, $2; }\n";
+        PTXBuilder ptxBuilderBf16Add;
+        auto &bf16add = *ptxBuilderBf16Add.create<PTXInstr>(bf162AddAsm);
+        auto o = ptxBuilderBf16Add.newOperand("=r");
+        auto i0 = ptxBuilderBf16Add.newOperand(rmwVal, "r");
+        auto i1 = ptxBuilderBf16Add.newOperand(assume, "r");
+        bf16add({o, i0, i1}, /*onlyAttachMLIRArgs=*/true);
+        Value sum = ptxBuilderBf16Add.launch(rewriter, loc, proxyType, /*hasSideEffect*/false);
+        
+        PTXBuilder ptxBuilderAtomicCAS;
+        auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=r");
+        auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(rmwPtr, "l");
+        auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(assume, "r");
+        auto *valOpr = ptxBuilderAtomicCAS.newOperand(sum, "r");
+        auto &atom = *ptxBuilderAtomicCAS.create<PTXInstr>("atom");
+        atom.global().o("cas").o("b32");
+        atom(dstOpr, ptrOpr, cmpOpr, valOpr);
+        Value old = ptxBuilderAtomicCAS.launch(rewriter, loc, proxyType);
+
+        // compare as integers
+        Value assumeI32 = rewriter.create<LLVM::BitcastOp>(loc, rewriter.getI32Type(), assume);
+        Value oldI32 = rewriter.create<LLVM::BitcastOp>(loc, rewriter.getI32Type(), old);
+        Value cond = rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne, assumeI32, oldI32);
+
+        // Block *continuation = rewriter.createBlock(region, region->end(), {retType}, loc);
+        rewriter.setInsertionPointToEnd(currentBlock);
+        // It's fine to use cf::BranchOp here. We have cf => llvm conversion
+        // after this.
+        rewriter.create<cf::BranchOp>(loc, ValueRange{loaded}, loop);
+        rewriter.setInsertionPointToEnd(loop);
+        rewriter.create<cf::CondBranchOp>(loc, cond, loop, ValueRange{old}, continuation, ValueRange{old});
+        rewriter.setInsertionPointToStart(continuation);
+
+        // extract results
+        Value ret = continuation->getArgument(0);
+        ret = rewriter.create<LLVM::BitcastOp>(loc, vecTy, ret);
         for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+            resultVals[i + ii] =
+                vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
       } else {
-        PTXBuilder ptxBuilderMemfence;
-        auto memfenc = ptxBuilderMemfence.create<PTXInstr>("membar")->o("gl");
-        memfenc();
-        auto ASMReturnTy = void_ty(ctx);
-        ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
-        atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
-        auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
-        // Only threads with rmwMask = True store the result
-        PTXBuilder ptxBuilderStore;
-        auto &storeShared =
-            ptxBuilderStore.create<>("st")->shared().o("b" + sBits);
-        auto *ptrOpr = ptxBuilderStore.newAddrOperand(atomPtr, "r");
-        auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
-        storeShared(ptrOpr, valOpr).predicate(rmwMask);
-        ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
-        barrier();
-        Value ret = load(atomPtr);
-        barrier();
-        rewriter.replaceOp(op, {ret});
+        std::string sTy;
+        PTXBuilder ptxBuilderAtomicRMW;
+        std::string tyId = valueElemNBits * vec == 64
+                              ? "l"
+                              : (valueElemNBits * vec == 32 ? "r" : "h");
+        auto *dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
+        auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
+        auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
+
+        auto &atom = ptxBuilderAtomicRMW.create<>("atom")->global().o("gpu");
+        auto rmwOp = stringifyRMWOp(atomicRmwAttr).str();
+        auto sBits = std::to_string(valueElemNBits);
+        switch (atomicRmwAttr) {
+        case RMWOp::AND:
+          sTy = "b" + sBits;
+          break;
+        case RMWOp::OR:
+          sTy = "b" + sBits;
+          break;
+        case RMWOp::XOR:
+          sTy = "b" + sBits;
+          break;
+        case RMWOp::ADD:
+          sTy = "s" + sBits;
+          break;
+        case RMWOp::FADD:
+          rmwOp = "add";
+          rmwOp += (valueElemNBits == 16 ? ".noftz" : "");
+          sTy = "f" + sBits;
+          sTy += (vec == 2 && valueElemNBits == 16) ? "x2" : "";
+          break;
+        case RMWOp::MAX:
+          sTy = "s" + sBits;
+          break;
+        case RMWOp::MIN:
+          sTy = "s" + sBits;
+          break;
+        case RMWOp::UMAX:
+          rmwOp = "max";
+          sTy = "u" + sBits;
+          break;
+        case RMWOp::UMIN:
+          rmwOp = "min";
+          sTy = "u" + sBits;
+          break;
+        case RMWOp::XCHG:
+          sTy = "b" + sBits;
+          break;
+        default:
+          return failure();
+        }
+        atom.o(rmwOp).o(sTy);
+        if (tensorTy) {
+          atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
+          auto retType = vec == 1 ? valueElemTy : vecTy;
+          auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+          for (int ii = 0; ii < vec; ++ii) {
+            resultVals[i + ii] =
+                vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+          }
+        } else {
+          PTXBuilder ptxBuilderMemfence;
+          auto memfenc = ptxBuilderMemfence.create<PTXInstr>("membar")->o("gl");
+          memfenc();
+          auto ASMReturnTy = void_ty(ctx);
+          ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
+          atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
+          auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
+          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
+          // Only threads with rmwMask = True store the result
+          PTXBuilder ptxBuilderStore;
+          auto &storeShared =
+              ptxBuilderStore.create<>("st")->shared().o("b" + sBits);
+          auto *ptrOpr = ptxBuilderStore.newAddrOperand(atomPtr, "r");
+          auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
+          storeShared(ptrOpr, valOpr).predicate(rmwMask);
+          ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
+          barrier();
+          Value ret = load(atomPtr);
+          barrier();
+          rewriter.replaceOp(op, {ret});
+        }
       }
     }
     if (tensorTy) {
@@ -606,6 +694,9 @@ struct AtomicRMWOpConversion
     }
     return success();
   }
+
+private:
+  int computeCapability{};
 };
 
 struct InsertSliceOpConversion
@@ -844,13 +935,14 @@ void populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit) {
+    PatternBenefit benefit, int computeCapability) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, allocation,
                                       axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, allocation,
-                                      axisInfoAnalysis, benefit);
+                                      axisInfoAnalysis, benefit,
+                                      computeCapability);
   patterns.add<InsertSliceOpConversion>(typeConverter, allocation,
                                         indexCacheInfo, benefit);
   patterns.add<InsertSliceAsyncOpConversion>(
