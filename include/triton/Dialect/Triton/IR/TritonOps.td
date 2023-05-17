@@ -479,7 +479,7 @@ def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
     format are generated automatically from the arguments.
   }];
   let assemblyFormat = [{
-    $prefix attr-dict `:` ($args^ `:` type($args))?
+    $prefix attr-dict (`:` $args^ `:` type($args))?
   }];
 }
 
