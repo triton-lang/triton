@@ -161,7 +161,7 @@ jobs:
 
           BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
           echo "BRANCH_NAME: $BRANCH_NAME"
-          WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs | jq '.workflow_runs[] | select(.head_branch == \"${BRANCH_NAME}\")' | jq '.id')
+          WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs | jq --arg branch_name "$BRANCH_NAME" '.workflow_runs[] | select(.head_branch == $branch_name)' | jq '.id')
           echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
           ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq '.artifacts[].archive_download_url' --raw-output)
           echo "ARTIFACT_URL: $ARTIFACT_URL"
