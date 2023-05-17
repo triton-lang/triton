@@ -309,9 +309,13 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
     // Second condition
     if (others.empty())
       return success();
-    // Third condition: not completely correct
-    // If the other use is in the different block, we cannot push the conversion
-    // forward
+    // Third condition: not complete
+    // If the other or the cvt is in the different block, we cannot push the
+    // conversion forward or backward
+    for (auto *cvt : cvts) {
+      if (cvt->getBlock() != forOp.getBody())
+        return failure();
+    }
     for (auto *other : others) {
       if (other->getBlock() != forOp.getBody())
         return failure();
