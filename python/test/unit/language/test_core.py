@@ -130,6 +130,17 @@ class BlockedLayout:
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
 
+class SharedLayout:
+    def __init__(self, vec, per_phase, max_phase, order):
+        self.vec = str(vec)
+        self.per_phase = str(per_phase)
+        self.max_phase = str(max_phase)
+        self.order = str(order)
+
+    def __str__(self):
+        return f"#triton_gpu.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}}}>"
+
+
 @pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
 def test_empty_kernel(dtype_x, device='cuda'):
     SIZE = 128
@@ -1593,6 +1604,59 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device='cuda'):
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+layouts = [
+    [BlockedLayout([1, 1], [16, 2], [1, 4], [0, 1]), SharedLayout(1, 1, 1, [1, 0])],
+    [BlockedLayout([1, 1], [16, 2], [1, 4], [0, 1]), SharedLayout(4, 2, 4, [1, 0])],
+    [BlockedLayout([1, 1], [16, 2], [1, 4], [0, 1]), SharedLayout(2, 2, 4, [1, 0])],
+    [BlockedLayout([1, 1], [8, 4], [2, 2], [0, 1]), SharedLayout(4, 2, 4, [1, 0])],
+]
+
+
+@pytest.mark.parametrize("M, N", [[64, 64], [64, 128], [128, 64], [128, 128]])
+@pytest.mark.parametrize("src, dst", layouts)
+def test_convert_shared(M, N, src, dst, device='cuda'):
+    ir = f"""
+    #src = {src}
+    #dst = {dst}
+    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+        tt.func public @kernel(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg2: i32 {{tt.divisibility = 16 : i32}}) {{
+            %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
+            %2 = tt.splat %arg2 : (i32) -> tensor<{M}x1xi32, #src>
+            %3 = arith.muli %1, %2 : tensor<{M}x1xi32, #src>
+            %4 = tt.broadcast %3 : (tensor<{M}x1xi32, #src>) -> tensor<{M}x{N}xi32, #src>
+            %5 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
+            %6 = tt.expand_dims %5 {{axis = 0 : i32}} : (tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>) -> tensor<1x{N}xi32, #src>
+            %7 = tt.broadcast %6 : (tensor<1x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #src>
+            %8 = arith.addi %4, %7 : tensor<{M}x{N}xi32, #src>
+            %9 = tt.splat %arg0 : (!tt.ptr<i32>) -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
+            %10 = tt.addptr %9, %8 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
+            %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #src>
+            %12 = triton_gpu.convert_layout %11 : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #dst>
+            %13 = triton_gpu.convert_layout %12 : (tensor<{M}x{N}xi32, #dst>) -> tensor<{M}x{N}xi32, #src>
+            %15 = tt.splat %arg1 : (!tt.ptr<i32>) -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
+            %16 = tt.addptr %15, %8 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
+            tt.store %16, %13 {{cache = 1 : i32, evict = 1 : i32}} : tensor<{M}x{N}xi32, #src>
+            tt.return
+        }}
+    }}
+    """
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+
+    rs = RandomState(17)
+    x = rs.randint(0, 4, (M, N)).astype('int32')
+    y = np.zeros((M, N), dtype='int32')
+    x_tri = torch.tensor(x, device=device)
+    y_tri = torch.tensor(y, device=device)
+    kernel[(1, 1, 1)](x_tri, y_tri, x_tri.stride(0))
+    y_ref = x
+    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+
+
 @triton.jit
 def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
     delta = mean_2 - mean_1
@@ -1980,70 +2044,6 @@ def test_full(dtype_str):
 # ---------------
 # test arange
 # ---------------
-
-def test_vecmat():
-    @triton.jit
-    def batched_vecmat(
-        # inputs
-        A,  # shape: [dim_m, dim_k]
-        B,  # shape: [dim_m, dim_n, dim_k]
-        # dimensions
-        dim_m, dim_n, dim_k,
-        # outputs
-        output,
-        # block information
-        block_m: tl.constexpr, block_n: tl.constexpr, block_k: tl.constexpr
-    ):
-        m_index = tl.program_id(0)
-        n_index = tl.program_id(1)
-        # Output tile
-        output_tile = (m_index * block_m + tl.arange(0, block_m))[:, None] * dim_n \
-            + (n_index * block_n + tl.arange(0, block_n))[None, :]
-
-        vecmat = tl.zeros([block_m, block_n], dtype=A.dtype.element_ty)
-        for k_index in range(2):
-            # Load A tile
-            a_tile = (m_index * block_m + tl.arange(0, block_m))[:, None] * dim_k \
-                + (k_index * block_k + tl.arange(0, block_k))[None, :]
-            a = tl.load(A + a_tile)
-
-            # Load B tile, transposed to [n, m, k] in order to broadcast A on a
-            # leading dimension.
-            b_tile = (m_index * block_m + tl.arange(0, block_m))[None, :, None] * dim_n * dim_k \
-                + (n_index * block_n + tl.arange(0, block_n))[:, None, None] * dim_k \
-                + (k_index * block_k + tl.arange(0, block_k))[None, None, :]
-            b = tl.load(B + b_tile)
-
-            expanded_a, _ = tl.broadcast(a, b)
-            vecmat += tl.trans(tl.sum(expanded_a * b, axis=2))
-
-        tl.store(output + output_tile, vecmat)
-
-    M, N, K = 128, 128, 128
-    block_m, block_n, block_k = 16, 32, 64
-
-    rs = RandomState(17)
-    A_vec = rs.randint(0, 4, (M, K)).astype('float32')
-    B_vec = rs.randint(0, 4, (M, N, K)).astype('float32')
-    A = A_vec
-    B = B_vec
-
-    A_tri = torch.tensor(A, device='cuda')
-    B_tri = torch.tensor(B, device='cuda')
-    C_tri = torch.zeros((M, N), dtype=torch.float32, device='cuda')
-
-    grid = (M // block_m, N // block_n)
-
-    batched_vecmat[grid](A_tri, B_tri, M, N, K, C_tri,
-                         block_m=block_m, block_n=block_n, block_k=block_k,
-                         num_warps=4, num_stages=1)
-
-    A_expanded = A[:, np.newaxis, :]
-    A_broadcasted = np.broadcast_to(A_expanded, (M, N, K))
-    AB = A_broadcasted * B
-    C_ref = np.sum(AB, axis=2)
-
-    np.testing.assert_allclose(C_ref, C_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
 @pytest.mark.parametrize("start", [0, 1, 7, 16])
