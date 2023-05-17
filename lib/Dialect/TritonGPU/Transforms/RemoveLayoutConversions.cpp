@@ -122,6 +122,11 @@ public:
     auto newEncoding =
         newOperands[0].getType().cast<RankedTensorType>().getEncoding();
 
+    // this may generate unsupported conversions in the LLVM codegen
+    if (newEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
+      return failure();
+    }
+
     for (unsigned i = 1; i < newOperands.size(); ++i) {
       auto oldTy = newOperands[i].getType().cast<RankedTensorType>();
       RankedTensorType newTy =
@@ -344,8 +349,9 @@ public:
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
-             !isa<triton::gpu::ConvertLayoutOp, scf::YieldOp, triton::ReduceOp>(
-                 op);
+             !isa<triton::gpu::ConvertLayoutOp, scf::YieldOp>(op) &&
+             !(isa<triton::ReduceOp>(op) &&
+               !op->getResult(0).getType().isa<RankedTensorType>());
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
     if (cvtSlices.empty()) {
