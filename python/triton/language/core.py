@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from enum import Enum
 from functools import wraps
-from typing import Callable, List, TypeVar
+from typing import Callable, List, Sequence, TypeVar
 
 import triton
 from . import semantic
@@ -903,6 +903,41 @@ def reshape(input, shape, _builder=None):
     shape = _shape_check_impl(shape)
     return semantic.reshape(input, shape, _builder)
 
+
+def _wrap_axis(axis, ndim):
+    if not (-ndim <= axis < ndim):
+        raise ValueError(f"invalid axis {axis}. Expected {-ndim} <= axis < {ndim}")
+
+    return axis if axis >= 0 else axis + ndim
+
+
+@builtin
+def expand_dims(input, axis, _builder=None):
+    """
+    Expand the shape of a tensor, by inserting new length-1 dimensions.
+
+    Axis indices are with respect to the resulting tensor, so
+    ``result.shape[axis]`` will be 1 for each axis.
+
+    :param input: The input tensor.
+    :type input: tl.tensor
+    :param axis: The indices to add new axes
+    :type axis: int | Sequence[int]
+
+    """
+    axis = _constexpr_to_value(axis)
+    axes = list(axis) if isinstance(axis, Sequence) else [axis]
+    new_ndim = len(input.shape) + len(axes)
+    axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
+
+    if len(set(axes)) != len(axes):
+        raise ValueError(f"expand_dims recieved duplicate axes, normalized axes = {axes}")
+
+    ret = input
+    for a in sorted(axes):
+        ret = semantic.expand_dims(ret, a, _builder)
+    return ret
+
 # -----------------------
 # Linear Algebra
 # -----------------------
@@ -1301,9 +1336,9 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
 
     if len(input.shape) > 1:
         # Broadcast index across the non-reduced axes
-        expand_dims_index = [constexpr(None)] * len(input.shape)
-        expand_dims_index[axis] = slice(None)
-        index = index.__getitem__(expand_dims_index, _builder=_builder)
+        axes_to_expand = [constexpr(d) for d in range(len(input.shape))]
+        del axes_to_expand[axis]
+        index = expand_dims(index, axes_to_expand, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
 
     rvalue, rindices = reduce((input, index), axis, combine_fn,

@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_ALLOCATION_H
 #define TRITON_ANALYSIS_ALLOCATION_H
 
+#include "triton/Analysis/Utility.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
@@ -49,18 +50,25 @@ private:
   T End = std::numeric_limits<T>::max();
 };
 
+template <class T> Interval(T, T) -> Interval<T>;
+
 class Allocation {
 public:
   /// A unique identifier for shared memory buffers
   using BufferId = size_t;
   using BufferIdSetT = DenseSet<BufferId>;
+  using FuncAllocMapT = CallGraph<Allocation>::FuncDataMapT;
 
   static constexpr BufferId InvalidBufferId =
       std::numeric_limits<BufferId>::max();
 
+  Allocation() = default;
   /// Creates a new Allocation analysis that computes the shared memory
   /// information for all associated shared memory values.
-  Allocation(Operation *operation) : operation(operation) { run(); }
+  explicit Allocation(Operation *operation) : operation(operation) {}
+
+  /// Runs allocation analysis on the given top-level operation.
+  void run(FuncAllocMapT &funcAllocMap);
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
@@ -73,6 +81,12 @@ public:
   /// Returns the size of the given buffer in the shared memory.
   size_t getAllocatedSize(BufferId bufferId) const {
     return bufferSet.at(bufferId).size;
+  }
+
+  /// Returns the allocated interval of the given buffer.
+  Interval<size_t> getAllocatedInterval(BufferId bufferId) const {
+    auto &buffer = bufferSet.at(bufferId);
+    return Interval<size_t>(buffer.offset, buffer.offset + buffer.size);
   }
 
   /// Returns the buffer id of the given value.
@@ -104,26 +118,28 @@ public:
   BufferId getBufferId(Operation *operation) const {
     if (opScratch.count(operation)) {
       return opScratch.lookup(operation)->id;
+    } else if (opVirtual.count(operation)) {
+      return opVirtual.lookup(operation)->id;
     } else {
       return InvalidBufferId;
     }
   }
 
+  /// Returns the size of the given buffer is a virtual buffer.
+  bool isVirtualBuffer(BufferId bufferId) const {
+    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
+  }
+
   /// Returns the size of total shared memory allocated
   size_t getSharedMemorySize() const { return sharedMemorySize; }
-
-  bool isIntersected(BufferId lhsId, BufferId rhsId) const {
-    if (lhsId == InvalidBufferId || rhsId == InvalidBufferId)
-      return false;
-    auto lhsBuffer = bufferSet.at(lhsId);
-    auto rhsBuffer = bufferSet.at(rhsId);
-    return lhsBuffer.intersects(rhsBuffer);
-  }
 
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
-    enum class BufferKind { Explicit, Scratch };
+    /// Explicit: triton_gpu.alloc_tensor
+    /// Scratch: triton_gpu.convert_layout
+    /// Virtual: triton.call
+    enum class BufferKind { Explicit, Scratch, Virtual };
 
     /// MT: thread-safe
     inline static std::atomic<BufferId> nextId = 0;
@@ -142,12 +158,6 @@ private:
     BufferT(BufferKind kind, size_t size) : BufferT(kind, size, 0) {}
     BufferT(BufferKind kind, size_t size, size_t offset)
         : kind(kind), id(nextId++), size(size), offset(offset) {}
-
-    bool intersects(const BufferT &other) const {
-      return Interval<size_t>(offset, offset + size)
-          .intersects(
-              Interval<size_t>(other.offset, other.offset + other.size));
-    }
   };
 
   /// Op -> Scratch Buffer
@@ -158,8 +168,6 @@ private:
   using AliasBufferMapT = llvm::MapVector<Value, llvm::SetVector<BufferT *>>;
   /// BufferId -> Buffer
   using BufferSetT = std::map<BufferId, BufferT>;
-  /// Runs allocation analysis on the given top-level operation.
-  void run();
 
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
@@ -168,6 +176,8 @@ private:
     bufferSet[buffer.id] = std::move(buffer);
     if constexpr (Kind == BufferT::BufferKind::Explicit) {
       valueBuffer[key] = &bufferSet[buffer.id];
+    } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
+      opVirtual[key] = &bufferSet[buffer.id];
     } else {
       opScratch[key] = &bufferSet[buffer.id];
     }
@@ -178,8 +188,9 @@ private:
   }
 
 private:
-  Operation *operation;
+  Operation *operation = nullptr;
   OpScratchMapT opScratch;
+  OpScratchMapT opVirtual;
   ValueBufferMapT valueBuffer;
   AliasBufferMapT aliasBuffer;
   BufferSetT bufferSet;
@@ -188,7 +199,53 @@ private:
   friend class triton::AllocationAnalysis;
 };
 
-template <typename T> Interval(T, T) -> Interval<T>;
+/// Static analysis that computes the allocation of shared memory buffers
+/// of the entire call graph.
+/// The allocation is performed in a post-order walk of the call graph.
+/// Each call op is treated like convert_layout that allocates a scratch buffer.
+/// At each call, we compute the start offset of the scratch buffer and pass it
+/// as an argument to the callee.
+class ModuleAllocation : public CallGraph<Allocation> {
+public:
+  using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
+
+  explicit ModuleAllocation(ModuleOp moduleOp)
+      : CallGraph<Allocation>(moduleOp) {
+    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        // Pre-order edge walk callback
+        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
+        // Post-order node walk callback
+        [&](FunctionOpInterface funcOp) {
+          auto [iter, inserted] = funcMap.try_emplace(funcOp, funcOp);
+          if (inserted)
+            iter->second.run(funcMap);
+        });
+  }
+
+  size_t getSharedMemorySize() {
+    size_t size = 0;
+    for (auto funcOp : getRoots()) {
+      auto *alloc = getFuncData(funcOp);
+      size = std::max(size, alloc->getSharedMemorySize());
+    }
+    return size;
+  }
+
+  size_t getSharedMemorySize(FunctionOpInterface funcOp) {
+    return getFuncData(funcOp)->getSharedMemorySize();
+  }
+
+  void setFunctionSharedMemoryValue(FunctionOpInterface funcOp, Value value) {
+    sharedMemoryValue[funcOp] = value;
+  }
+
+  Value getFunctionSharedMemoryBase(FunctionOpInterface funcOp) {
+    return sharedMemoryValue[funcOp];
+  }
+
+private:
+  FuncOffsetMapT sharedMemoryValue;
+};
 
 } // namespace mlir
 

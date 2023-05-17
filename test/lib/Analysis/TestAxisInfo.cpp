@@ -7,7 +7,7 @@ using namespace mlir;
 namespace {
 
 struct TestAxisInfoPass
-    : public PassWrapper<TestAxisInfoPass, OperationPass<triton::FuncOp>> {
+    : public PassWrapper<TestAxisInfoPass, OperationPass<ModuleOp>> {
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAxisInfoPass);
 
@@ -18,23 +18,24 @@ struct TestAxisInfoPass
 
   void runOnOperation() override {
     Operation *operation = getOperation();
-    auto &os = llvm::errs();
-    auto opName = SymbolTable::getSymbolName(operation).getValue().str();
-    os << "@" << opName << "\n";
-
-    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
-    if (failed(solver->initializeAndRun(operation)))
-      return signalPassFailure();
-    operation->walk([&](Operation *op) {
-      if (op->getNumResults() < 1)
-        return;
-      for (Value result : op->getResults()) {
-        result.print(os);
-        os << " => ";
-        analysis->getLatticeElement(result)->getValue().print(os);
-        os << "\n";
-      }
+    ModuleOp moduleOp = cast<ModuleOp>(operation);
+    ModuleAxisInfoAnalysis moduleAxisInfoAnalysis(moduleOp);
+    moduleOp.walk([&](triton::FuncOp funcOp) {
+      auto &os = llvm::errs();
+      auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
+      os << "@" << opName << "\n";
+      funcOp.walk([&](Operation *op) {
+        if (op->getNumResults() < 1)
+          return;
+        for (Value result : op->getResults()) {
+          result.print(os);
+          os << " => ";
+          auto *axisInfo = moduleAxisInfoAnalysis.getAxisInfo(result);
+          if (axisInfo)
+            axisInfo->print(os);
+          os << "\n";
+        }
+      });
     });
   }
 };

@@ -15,6 +15,14 @@ def kernel_device_assert(X, Y, BLOCK: tl.constexpr):
 
 
 @triton.jit
+def kernel_device_assert_scalar(X, Y, BLOCK: tl.constexpr):
+    x = tl.load(X + tl.arange(0, BLOCK))
+    # Trivial assert
+    tl.device_assert(0 == 0, "x != 0")
+    tl.store(Y + tl.arange(0, BLOCK), x)
+
+
+@triton.jit
 def kernel_assert(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
     assert x == 0, "x != 0"
@@ -33,7 +41,12 @@ def test_assert(func: str):
     x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda')
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if func == "device_assert":
+<<<<<<< HEAD
         kernel_device_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
+=======
+        kernel_device_assert[(1,)](x, y, BLOCK=shape[0])
+        kernel_device_assert_scalar[(1,)](x, y, BLOCK=shape[0])
+>>>>>>> openai/main
     elif func == "assert":
         kernel_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "static_assert":

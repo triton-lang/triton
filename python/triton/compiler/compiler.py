@@ -11,8 +11,6 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Tuple
 
-import torch
-
 import triton
 import triton._C.libtriton.triton as _triton
 from ..runtime import driver
@@ -254,7 +252,7 @@ def convert_type_repr(x):
     return x
 
 
-def make_hash(fn, **kwargs):
+def make_hash(fn, arch, **kwargs):
     if isinstance(fn, triton.runtime.JITFunction):
         configs = kwargs["configs"]
         signature = kwargs["signature"]
@@ -265,7 +263,7 @@ def make_hash(fn, **kwargs):
         # Get unique key for the compiled code
         get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
         configs_key = [get_conf_key(conf) for conf in configs]
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{debug}"
+        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{debug}-{arch}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     return hashlib.md5((Path(fn).read_text() + triton.runtime.jit.version_key()).encode("utf-8")).hexdigest()
@@ -330,6 +328,10 @@ def is_hip():
 
 
 def get_architecture_descriptor(capability):
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("Triton requires PyTorch to be installed")
     if capability is None:
         if torch.version.hip is None:
             device = triton.runtime.jit.get_current_device()
@@ -428,7 +430,7 @@ def compile(fn, **kwargs):
     # cache manager
     so_path = make_stub(name, signature, constants)
     # create cache manager
-    fn_cache_manager = get_cache_manager(make_hash(fn, **kwargs))
+    fn_cache_manager = get_cache_manager(make_hash(fn, arch, **kwargs))
     # determine name and extension type of provided function
     if isinstance(fn, triton.runtime.JITFunction):
         name, ext = fn.__name__, "ast"

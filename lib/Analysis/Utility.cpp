@@ -26,10 +26,27 @@ unsigned ReduceOpHelper::getIntraWarpSize() {
                   triton::gpu::getThreadsPerWarp(getSrcLayout())[axis]);
 }
 
+unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
+  unsigned sizeIntraWarps = getIntraWarpSizeWithUniqueData();
+  return std::min(srcReduceDimSize / sizeIntraWarps,
+                  triton::gpu::getWarpsPerCTAWithUniqueData(
+                      getSrcLayout(), getSrcShape())[axis]);
+}
+
+unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
+  return std::min(srcReduceDimSize,
+                  triton::gpu::getThreadsPerWarpWithUniqueData(
+                      getSrcLayout(), getSrcShape())[axis]);
+}
+
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
   auto srcLayout = getSrcLayout();
-  return triton::gpu::getThreadsPerWarp(srcLayout)[axis] *
-         triton::gpu::getWarpsPerCTA(srcLayout)[axis];
+  auto srcShape = getSrcShape();
+  return triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout,
+                                                      srcShape)[axis] *
+         triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
@@ -91,14 +108,8 @@ bool ReduceOpHelper::isSupportedLayout() {
       return true;
     }
   }
-  return false;
-}
-
-bool isSharedEncoding(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
-    auto encoding = tensorType.getEncoding();
-    return encoding && encoding.isa<triton::gpu::SharedEncodingAttr>();
+  if (auto sliceLayout = srcLayout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+    return true;
   }
   return false;
 }

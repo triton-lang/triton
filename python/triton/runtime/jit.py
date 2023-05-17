@@ -83,7 +83,8 @@ class DependenciesFinder(ast.NodeVisitor):
             finder = DependenciesFinder(func.__globals__, func.src)
             finder.visit(tree)
             func.hash = finder.ret
-        self.ret = (self.ret + func.hash).encode("utf-8")
+        noinline = str(getattr(func, 'noinline', False))
+        self.ret = (self.ret + func.hash + noinline).encode("utf-8")
         self.ret = hashlib.md5(self.ret).hexdigest()
 
 # -----------------------------------------------------------------------------
@@ -175,7 +176,7 @@ class JITFunction(KernelInterface[T]):
                 return True
             return False
         divisible_by_16 = {i for i, arg in enumerate(args) if is_divisible_by_16(arg) and i not in self.do_not_specialize}
-        equal_to_1 = {i for i, arg in enumerate(args) if isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize}
+        equal_to_1 = {i for i, arg in enumerate(args) if not isinstance(arg, bool) and isinstance(arg, int) and arg == 1 and i not in self.do_not_specialize}
         return namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])(tuple(divisible_by_16), tuple(equal_to_1))
         # return _triton.code_gen.instance_descriptor(divisible_by_16, equal_to_1)
 
@@ -298,13 +299,13 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         set_current_device(device)
     if stream is None and not warmup:
       stream = get_cuda_stream(device)
-    try:
-      bin = cache[device][key]
+    bin = cache[device].get(key, None)
+    if bin is not None:
       if not warmup:
           bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, {args})
       return bin
     # kernel not cached -- compile
-    except KeyError:
+    else:
       # build dict of constant values
       args = [{args}]
       all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
@@ -334,7 +335,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         exec(src, scope)
         return scope[self.fn.__name__]
 
-    def __init__(self, fn, version=None, do_not_specialize=None, debug=None):
+    def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
         self.fn = fn
         self.module = fn.__module__
         self.version = version
@@ -356,6 +357,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.kernel_decorators = []
         self.kernel = None
         self.debug = os.environ.get("TRITON_DEBUG", "0") == "1" if debug is None else debug
+        self.noinline = noinline
         # annotations
         normalize_ty = lambda ty: ty.__name__ if isinstance(ty, type) else ty
         self.__annotations__ = {name: normalize_ty(ty) for name, ty in fn.__annotations__.items()}
@@ -425,6 +427,7 @@ def jit(
     version=None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
+    noinline: Optional[bool] = None,
 ) -> Callable[[T], JITFunction[T]]:
     ...
 
@@ -435,6 +438,8 @@ def jit(
     version=None,
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
+    noinline: Optional[bool] = None,
+    interpret: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -456,13 +461,17 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        return JITFunction(
-            fn,
-            version=version,
-            do_not_specialize=do_not_specialize,
-            debug=debug,
-        )
-
+        if interpret:
+            from ..debugger.debugger import GridSelector
+            return GridSelector(fn)
+        else:
+            return JITFunction(
+                fn,
+                version=version,
+                do_not_specialize=do_not_specialize,
+                debug=debug,
+                noinline=noinline,
+            )
     if fn is not None:
         return decorator(fn)
 

@@ -31,7 +31,36 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
 SmallVector<unsigned> getSizePerThread(Attribute layout);
 
+// Returns the number of contiguous elements that each thread
+// has access to, on each dimension of the tensor. E.g.
+// for a blocked layout with sizePerThread = [1, 4], returns [1, 4],
+// regardless of the shape of the tensor.
 SmallVector<unsigned> getContigPerThread(Attribute layout);
+
+// Returns the number of non-replicated contiguous elements that each thread
+// has access to, on each dimension of the tensor. For a blocked layout
+// with sizePerThread = [1, 4] and tensor shape = [128, 1], the elements
+// for thread 0 would be [A_{0, 0}, A_{0, 0}, A_{0, 0}, A_{0, 0}], returns [1,
+// 1]. Whereas for a tensor shape [128, 128], the elements for thread 0 would be
+// [A_{0, 0}, A_{0, 1}, A_{0, 2}, A_{0, 3}], returns [1, 4].
+SmallVector<unsigned> getUniqueContigPerThread(Type type);
+
+// Returns the number of threads per warp that have access to non-replicated
+// elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
+// 1], threadsPerWarp = [2, 16] and tensor shape = [2, 2], threads 0, 1, 16, 17
+// have access to the full tensor, whereas the other threads have access to
+// replicated elements, so this function returns [2, 2].
+SmallVector<unsigned>
+getThreadsPerWarpWithUniqueData(Attribute layout,
+                                ArrayRef<int64_t> tensorShape);
+
+// Returns the number of warps per CTA that have access to non-replicated
+// elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
+// 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4] and tensor shape = [2, 2],
+// returns [1, 1], since the first warp has access to the full tensor, whereas
+// the other warps have access to replicated elements.
+SmallVector<unsigned>
+getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 
 SmallVector<unsigned> getThreadsPerCTA(Attribute layout);
 
@@ -45,6 +74,9 @@ bool isaDistributedLayout(Attribute layout);
 
 } // namespace gpu
 } // namespace triton
+
+bool isSharedEncoding(Value value);
+
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

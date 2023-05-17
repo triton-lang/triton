@@ -4,7 +4,6 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "triton/Analysis/Alias.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -117,8 +116,11 @@ SmallVector<unsigned> getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
 
 class AllocationAnalysis {
 public:
-  AllocationAnalysis(Operation *operation, Allocation *allocation)
-      : operation(operation), allocation(allocation) {
+  AllocationAnalysis(Operation *operation,
+                     Allocation::FuncAllocMapT *funcAllocMap,
+                     Allocation *allocation)
+      : operation(operation), funcAllocMap(funcAllocMap),
+        allocation(allocation) {
     run();
   }
 
@@ -219,6 +221,12 @@ private:
                        ? elems * kPtrBitWidth / 8
                        : elems * elemTy.getIntOrFloatBitWidth() / 8;
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+    } else if (auto callOp = dyn_cast<CallOpInterface>(op)) {
+      auto callable = callOp.resolveCallable();
+      auto funcOp = dyn_cast<FunctionOpInterface>(callable);
+      auto *funcAlloc = &(*funcAllocMap)[funcOp];
+      auto bytes = funcAlloc->getSharedMemorySize();
+      allocation->addBuffer<BufferT::BufferKind::Virtual>(op, bytes);
     }
   }
 
@@ -298,15 +306,19 @@ private:
   /// allocated, but is used to store intermediate results.
   void resolveScratchBufferLiveness(
       const DenseMap<Operation *, size_t> &operationId) {
-    // Analyze liveness of scratch buffers
-    for (auto opScratchIter : allocation->opScratch) {
-      // Any scratch memory's live range is the current operation's live
-      // range.
-      auto *op = opScratchIter.first;
-      auto *buffer = opScratchIter.second;
-      bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                           operationId.lookup(op) + 1)});
-    }
+    // Analyze liveness of scratch buffers and vritual buffers.
+    auto processScratchMemory = [&](const auto &container) {
+      for (auto opScratchIter : container) {
+        // Any scratch memory's live range is the current operation's live
+        // range.
+        auto *op = opScratchIter.first;
+        auto *buffer = opScratchIter.second;
+        bufferRange.insert({buffer, Interval(operationId.lookup(op),
+                                             operationId.lookup(op) + 1)});
+      }
+    };
+    processScratchMemory(allocation->opScratch);
+    processScratchMemory(allocation->opVirtual);
   }
 
   /// Resolves liveness of all values involved under the root operation.
@@ -499,11 +511,15 @@ private:
 
 private:
   Operation *operation;
+  Allocation::FuncAllocMapT *funcAllocMap;
   Allocation *allocation;
   BufferRangeMapT bufferRange;
 };
+
 } // namespace triton
 
-void Allocation::run() { triton::AllocationAnalysis(getOperation(), this); }
+void Allocation::run(FuncAllocMapT &funcAllocMap) {
+  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+}
 
 } // namespace mlir
