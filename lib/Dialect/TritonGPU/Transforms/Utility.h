@@ -12,14 +12,12 @@ LogicalResult fixupLoops(ModuleOp mod);
 LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
                              Attribute &ret);
 
-bool canFoldConversion(Operation *op);
-
 bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding);
 
 bool expensiveToRemat(Operation *op, Attribute &targetEncoding);
 
-/// skipInit is True when we only consider the operands of the initOp but
-/// not the initOp itself.
+// skipInit is True when we only consider the operands of the initOp but
+// not the initOp itself.
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
