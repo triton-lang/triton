@@ -69,6 +69,12 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
     let hasCustomAssemblyFormat = 1;
 
     let skipDefaultBuilders = 1;
+
+    let extraClassDeclaration = [{
+        constexpr static size_t getBitWidth() {
+            return 64 * 8;
+        }
+    }];
 }
 
 // Scalar Pointer Type: `ptr<>`

@@ -23,24 +23,68 @@ tt.func @test_combine_dot_add_pattern() -> (tensor<128x128xf32>, tensor<128x128x
 }
 
 
-// COM: CHECK-LABEL: @test_combine_addptr_pattern
+// CHECK-LABEL: @test_combine_addptr_pattern
 tt.func @test_combine_addptr_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
     %off0 = arith.constant 10 : i32
     %off1 = arith.constant 15 : i32
 
     // 10 + 15 = 25
-    // COM: CHECK-NEXT: %[[cst:.*]] = arith.constant dense<25> : tensor<8xi32>
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant dense<25> : tensor<8xi64>
 
     %base_ = tt.broadcast %base : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
 
-    // COM: CHECK-NEXT: %[[tmp0:.*]] = tt.broadcast %{{.*}} : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+    // CHECK-NEXT: %[[tmp0:.*]] = tt.broadcast %{{.*}} : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
 
     %idx0 = tt.broadcast %off0 : (i32) -> tensor<8xi32>
     %idx1 = tt.broadcast %off1 : (i32) -> tensor<8xi32>
 
-    // COM: CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
     %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
     %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+
+    tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
+}
+
+// CHECK-LABEL: @test_combine_addptr_extinteger_pattern
+tt.func @test_combine_addptr_extinteger_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
+    %off0 = arith.constant 10 : i64
+    %off1 = arith.constant 15 : i32
+
+    // 10 + 15 = 25
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant dense<25> : tensor<8xi64>
+
+    %base_ = tt.broadcast %base : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+
+    // CHECK-NEXT: %[[tmp0:.*]] = tt.broadcast %{{.*}} : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+
+    %idx0 = tt.broadcast %off0 : (i64) -> tensor<8xi64>
+    %idx1 = tt.broadcast %off1 : (i32) -> tensor<8xi32>
+
+    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
+    %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
+    %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+
+    tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
+}
+
+// CHECK-LABEL: @test_combine_addptr_extinteger_boundary_pattern
+tt.func @test_combine_addptr_extinteger_boundary_pattern(%base: !tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>> {
+    %off0 = arith.constant 1 : i64
+    %off1 = arith.constant 65535 : i16
+
+    // 1 + 65535 = 65536
+    // CHECK-NEXT: %[[cst:.*]] = arith.constant dense<65536> : tensor<8xi64>
+
+    %base_ = tt.broadcast %base : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+
+    // CHECK-NEXT: %[[tmp0:.*]] = tt.broadcast %{{.*}} : (!tt.ptr<f32>) -> tensor<8x!tt.ptr<f32>>
+
+    %idx0 = tt.broadcast %off0 : (i64) -> tensor<8xi64>
+    %idx1 = tt.broadcast %off1 : (i16) -> tensor<8xi16>
+
+    // CHECK-NEXT: %1 = tt.addptr %[[tmp0]], %[[cst]] : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
+    %ptr0 = tt.addptr %base_, %idx0 : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
+    %ptr1 = tt.addptr %ptr0, %idx1 : tensor<8x!tt.ptr<f32>>, tensor<8xi16>
 
     tt.return %ptr1 : tensor<8x!tt.ptr<f32>>
 }

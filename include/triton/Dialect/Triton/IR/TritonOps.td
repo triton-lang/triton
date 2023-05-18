@@ -108,6 +108,8 @@ def TT_AddPtrOp : TT_Op<"addptr",
     let results = (outs TT_PtrLike:$result);
 
     let assemblyFormat = "$ptr `,` $offset attr-dict `:` type($result) `,` type($offset)";
+
+    let hasCanonicalizeMethod = 1;
 }
 
 def TT_AdvanceOp : TT_Op<"advance",

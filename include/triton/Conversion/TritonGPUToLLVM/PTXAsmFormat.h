@@ -211,16 +211,11 @@ struct PTXInstrCommon {
 
   using Operand = PTXBuilder::Operand;
 
-  // clang-format off
-  PTXInstrExecution& operator()() { return call({}); }
-  PTXInstrExecution& operator()(Operand* a) { return call({a}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b) { return call({a, b}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c) { return call({a, b, c}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d) { return call({a, b, c, d}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e) { return call({a, b, c, d, e}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e, Operand* f) { return call({a, b, c, d, e, f}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e, Operand* f, Operand* g) { return call({a, b, c, d, e, f, g}); }
-  // clang-format on
+  template <typename... Args,
+            typename = typename std::enable_if<sizeof...(Args) <= 7>::type>
+  PTXInstrExecution &operator()(Args &&...args) {
+    return call({std::forward<Args>(args)...});
+  }
 
   // Set operands of this instruction.
   PTXInstrExecution &operator()(llvm::ArrayRef<Operand *> oprs,

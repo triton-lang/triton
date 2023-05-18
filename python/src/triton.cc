@@ -1476,6 +1476,20 @@ void init_triton_ir(py::module &&m) {
                  /*printAfterOnlyOnChange=*/true,
                  /*printAfterOnlyOnFailure*/ false, llvm::dbgs(),
                  printingFlags);
+             struct ErrorReproducerStream
+                 : public mlir::PassManager::ReproducerStream {
+               llvm::StringRef description() final {
+                 return "triton crash reproducer.";
+               }
+
+               llvm::raw_ostream &os() final { return llvm::errs(); }
+             };
+             self.enableCrashReproducerGeneration([](std::string &error) {
+               auto os = std::make_unique<ErrorReproducerStream>();
+               os->os() << error;
+               os->os().flush();
+               return std::move(os);
+             });
            })
       .def("run",
            [](mlir::PassManager &self, mlir::ModuleOp &mod) {

@@ -145,6 +145,47 @@ void StoreOp::print(OpAsmPrinter &printer) {
 namespace mlir {
 namespace triton {
 
+//-- AddPtrOp --
+// addptr(addptr(%ptr, %idx0), %idx1) => addptr(%ptr, AddI(%idx0, %idx1))
+LogicalResult AddPtrOp::canonicalize(AddPtrOp op, PatternRewriter &rewriter) {
+  auto addPtrOp = op.getPtr().getDefiningOp<AddPtrOp>();
+  if (!addPtrOp) {
+    return failure();
+  }
+
+  if (!addPtrOp.getOffset().getType().isa<ShapedType>()) {
+    return failure();
+  }
+
+  size_t targetPtrBitWidth = PointerType::getBitWidth();
+  auto createExplicitConvert = [&](Value integerOperand) -> Value {
+    auto integerShapeType = integerOperand.getType().cast<ShapedType>();
+    auto resultType =
+        RankedTensorType::get(integerShapeType.getShape(),
+                              rewriter.getIntegerType(targetPtrBitWidth / 8));
+    if (integerShapeType.getElementType().getIntOrFloatBitWidth() <
+        targetPtrBitWidth) {
+      return rewriter.create<arith::ExtUIOp>(op.getLoc(), resultType,
+                                             integerOperand);
+    } else if (integerShapeType.getElementType().getIntOrFloatBitWidth() >
+               targetPtrBitWidth) {
+      return rewriter.create<arith::TruncIOp>(op.getLoc(), resultType,
+                                              integerOperand);
+    }
+    return integerOperand;
+  };
+
+  auto lhsIntegerValue = createExplicitConvert(addPtrOp.getOffset());
+  auto rhsIntegerValue = createExplicitConvert(op.getOffset());
+
+  auto sumIntegerValue = rewriter.create<arith::AddIOp>(
+      op.getLoc(), lhsIntegerValue, rhsIntegerValue);
+  rewriter.updateRootInPlace(op, [=]() mutable {
+    op.getOperation()->setOperands({addPtrOp.getPtr(), sumIntegerValue});
+  });
+  return success();
+}
+
 //-- LoadOp --
 static Type getLoadOpResultType(::mlir::OpBuilder &builder, Type ptrType) {
   auto ptrTensorType = ptrType.dyn_cast<RankedTensorType>();
@@ -667,6 +708,9 @@ OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
   auto value = adaptor.getSrc();
   if (!value)
     return {};
+
+  if (getOperand().getType().isIntOrIndexOrFloat())
+    return SplatElementsAttr::get(getType().cast<ShapedType>(), value);
 
   if (auto denseElemsAttr = value.dyn_cast<SplatElementsAttr>()) {
     auto shapedType = getType().cast<ShapedType>();
