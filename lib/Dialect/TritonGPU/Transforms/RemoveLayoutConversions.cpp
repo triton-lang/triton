@@ -375,10 +375,10 @@ public:
       llvm::MapVector<Value, Attribute> toConvert;
       if (simulateBackwardRematerialization(op, processed, layout, toConvert,
                                             srcEncoding,
-                                            /*skipHead=*/true) > 0)
+                                            /*skipFirst=*/true) > 0)
         return failure();
     }
-    // Step 3: Take out the operations at which we stop slicing.
+    // Take out the operations at which we stop slicing.
     // These must be the last operations on the slice path.
     SetVector<Operation *> candidates;
     for (Operation *op : cvtSlices) {

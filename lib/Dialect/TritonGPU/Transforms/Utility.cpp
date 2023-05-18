@@ -131,7 +131,7 @@ bool canFoldConversion(Operation *op) {
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
-    Attribute targetEncoding, bool skipHead) {
+    Attribute targetEncoding, bool skipFirst) {
   // DFS
   std::vector<std::pair<Operation *, Attribute>> queue;
   queue.emplace_back(initOp, targetEncoding);
@@ -145,9 +145,9 @@ int simulateBackwardRematerialization(
     queue.pop_back();
     // If the current operation is expensive to rematerialize,
     // we stop everything
-    if (!skipHead && expensiveToRemat(currOp, currLayout))
+    if (!skipFirst && expensiveToRemat(currOp, currLayout))
       break;
-    skipHead = false;
+    skipFirst = false;
     // A conversion will be removed here (i.e. transferred to operands)
     numCvts -= 1;
     // Done processing
