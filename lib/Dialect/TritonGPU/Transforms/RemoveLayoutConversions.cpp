@@ -375,7 +375,7 @@ public:
       llvm::MapVector<Value, Attribute> toConvert;
       if (simulateBackwardRematerialization(op, processed, layout, toConvert,
                                             srcEncoding,
-                                            /*skipFirst=*/true) > 0)
+                                            /*skipInit=*/true) > 0)
         return failure();
     }
     // Take out the operations at which we stop slicing.
