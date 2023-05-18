@@ -435,7 +435,11 @@ public:
       auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
       auto order = triton::gpu::getOrder(layout);
       auto shapePerCTA = triton::gpu::getShapePerCTA(layout, shape);
+#ifdef USE_ROCM
+      Value warpSize = i32_val(64);
+#else
       Value warpSize = i32_val(32);
+#endif
       Value laneId = urem(tid, warpSize);
       Value warpId = udiv(tid, warpSize);
       SmallVector<Value> multiDimWarpId =
