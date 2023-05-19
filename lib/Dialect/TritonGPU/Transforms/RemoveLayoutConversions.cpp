@@ -354,41 +354,34 @@ public:
                !op->getResult(0).getType().isa<RankedTensorType>());
     };
     mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
-    if (cvtSlices.empty()) {
+    if (cvtSlices.empty())
       return failure();
-    }
 
     for (Operation *op : cvtSlices) {
-      if (!filter(op))
-        continue;
       // don't rematerialize anything expensive
       if (expensiveToRemat(op, dstEncoding))
         return failure();
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>())
+          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
+          !isa<triton::StoreOp, triton::ReduceOp>(op))
         return failure();
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
-      SetVector<Operation *> processed = cvtSlices;
-      SetVector<Attribute> layout;
-      llvm::MapVector<Value, Attribute> toConvert;
-      if (simulateBackwardRematerialization(op, processed, layout, toConvert,
-                                            srcEncoding,
-                                            /*skipInit=*/true) > 0)
-        return failure();
+      for (Value arg : op->getOperands()) {
+        Operation *argOp = arg.getDefiningOp();
+        SetVector<Operation *> processed;
+        SetVector<Attribute> layout;
+        llvm::MapVector<Value, Attribute> toConvert;
+        int numAddedConvs = simulateBackwardRematerialization(
+            argOp, processed, layout, toConvert, srcEncoding);
+        if (argOp && !isa<triton::gpu::ConvertLayoutOp>(argOp) &&
+            cvtSlices.count(argOp) == 0 && numAddedConvs > 0)
+          return failure();
+      }
     }
-    // Take out the operations at which we stop slicing.
-    // These must be the last operations on the slice path.
-    SetVector<Operation *> candidates;
-    for (Operation *op : cvtSlices) {
-      if (filter(op))
-        candidates.insert(op);
-    }
-    if (candidates.empty())
-      return failure();
 
-    pushConversionForward(cvt, candidates, rewriter);
+    pushConversionForward(cvt, cvtSlices, rewriter);
     return success();
   }
 };

@@ -131,7 +131,7 @@ bool canFoldConversion(Operation *op) {
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
-    Attribute targetEncoding, bool skipInit) {
+    Attribute targetEncoding) {
   // DFS
   std::vector<std::pair<Operation *, Attribute>> queue;
   queue.emplace_back(initOp, targetEncoding);
@@ -145,9 +145,8 @@ int simulateBackwardRematerialization(
     queue.pop_back();
     // If the current operation is expensive to rematerialize,
     // we stop everything
-    if (!skipInit && expensiveToRemat(currOp, currLayout))
+    if (expensiveToRemat(currOp, currLayout))
       break;
-    skipInit = false;
     // A conversion will be removed here (i.e. transferred to operands)
     numCvts -= 1;
     // Done processing
@@ -292,10 +291,15 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
     if (isa<triton::gpu::ConvertLayoutOp>(user)) {
       // Don't move if the conversion target is a dot operand or shared memory
       auto newType = user->getResults()[0].getType().cast<RankedTensorType>();
-      if (newType.getEncoding()
-              .isa<triton::gpu::DotOperandEncodingAttr,
-                   triton::gpu::SharedEncodingAttr>()) {
-        return failure();
+      if (oldType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
+          newType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
+        continue;
+      }
+      if (newType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
+        if (newType.getEncoding()
+                .cast<triton::gpu::SharedEncodingAttr>()
+                .getVec() == 1)
+          continue;
       }
       cvts.emplace_back(user);
       cvtTypes.insert(newType);

@@ -21,7 +21,7 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding);
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
-    Attribute targetEncoding, bool skipInit = false);
+    Attribute targetEncoding);
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
