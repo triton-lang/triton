@@ -303,6 +303,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else {
+    if (needTrans && elemBytes == 2 && kWidth == 4)
+      llvm_unreachable("unimplemented code path");
     // base pointers
     std::array<std::array<Value, 4>, 2> ptrs;
     int vecWidth = 4 / elemBytes;
@@ -340,16 +342,17 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     std::array<Value, 4> retElems;
     retElems.fill(undef(vec_ty(canonInt, 32 / canonBits)));
     for (int r = 0; r < 2; ++r) {
-      for (int em = 0; em < 2 * vecWidth; em += inc) {
-        int e = em % vecWidth;
-        int m = em / vecWidth;
+      for (int em = 0; em < 2 * kWidth; em += inc) {
+        int e = em % kWidth;
+        int m = em / kWidth;
         int idx = m * 2 + r;
         Value ptr = bitcast(vptrs[idx][e], ptr_ty(packedTy, 3));
         Value val = load(ptr);
         Value canonval = bitcast(val, vec_ty(canonInt, canonWidth));
         for (int w = 0; w < canonWidth; ++w) {
-          retElems[idx + w * kWidth / vecWidth] =
-              insert_element(retElems[idx + w * kWidth / vecWidth],
+          int vidx = idx + w * kWidth / vecWidth;
+          retElems[vidx] =
+              insert_element(retElems[vidx],
                              extract_element(canonval, i32_val(w)), i32_val(e));
         }
       }
@@ -388,7 +391,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
         tileShape[order[0]] / (needTrans ? wpt : 1) / instrShape[order[0]];
   } else {
     numPtrs = tileShape[order[0]] / (needTrans ? wpt : 1) / matShape[order[0]];
-    numPtrs *= 4 / elemBytes;
+    numPtrs *= kWidth;
   }
   numPtrs = std::max<int>(numPtrs, 2);
 
@@ -516,13 +519,13 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
 
   SmallVector<int64_t> shape(tensorTy.getShape().begin(),
                              tensorTy.getShape().end());
+  int kWidth = encoding.getMMAv2kWidth();
 
   ValueTable vals;
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
-  int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
+  int matShapeM = 8, matShapeN = 8, matShapeK = 4 * kWidth;
 
   auto numRep = encoding.getMMAv2Rep(tensorTy.getShape(), bitwidth);
-  int kWidth = encoding.getMMAv2kWidth();
 
   int wpt0 = mmaLayout.getWarpsPerCTA()[0];
   int wpt1 = mmaLayout.getWarpsPerCTA()[1];

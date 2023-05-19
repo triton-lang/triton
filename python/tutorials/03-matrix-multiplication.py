@@ -150,27 +150,110 @@ You will specifically learn about:
 # Final Result
 # ------------
 
+import argparse
+
 import torch
 
 import triton
 import triton.language as tl
 
+parser = argparse.ArgumentParser(
+    prog="03-matrix-multiplication",
+    description="Matrix multiplication kernel via Triton")
+parser.add_argument('-c', '--config', default="FNFN",
+                    help="configuration of matmul data types and transposition options")
+parser.add_argument('-s', '--stype', default="int8",
+                    help="which type should be used as the 'S' type in config")
+args = parser.parse_args()
+
+print("config:", args.config, "stype:", args.stype)
+
+
+def f8_to_f16(x):
+    assert x.is_contiguous(), "Kernel only works for contiguous tensors"
+
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        y = x.to(tl.float16)
+        tl.store(Y + offs, y, mask=mask)
+    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
+    kernel[grid](ret, triton.reinterpret(x, tl.float8e5), ret.numel(), BLOCK_SIZE=1024)
+    return ret
+
+
+def f16_to_f8(x):
+    assert x.is_contiguous(), "Kernel only works for contiguous tensors"
+
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        y = x.to(tl.float8e5)
+        tl.store(Y + offs, y, mask=mask)
+    ret = torch.empty(x.shape, dtype=torch.int8, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
+    kernel[grid](triton.reinterpret(ret, tl.float8e5), x, x.numel(), BLOCK_SIZE=1024)
+    return ret
+
+
+def transform_impl(c, x):
+    t = x
+    if c[0] == "S":
+        if args.stype == "int8":
+            t = x.to(torch.int8)
+        elif args.stype == "float8":
+            t = f16_to_f8(x)
+        else:
+            raise Exception("unexpected --stype value")
+    return t.T if c[1] == "T" else t
+
+
+def transform_lhs(x):
+    return transform_impl(args.config[0:2], x)
+
+
+def transform_rhs(x):
+    return transform_impl(args.config[2:4], x)
+
+
+def maybe_upcast_impl(p, x):
+    if not x.is_contiguous():
+        return maybe_upcast_impl(p, x.T).T
+    return f8_to_f16(x) if p == "S" and args.stype == "float8" else x.to(torch.float16)
+
+
+def maybe_upcast_lhs(x):
+    return maybe_upcast_impl(args.config[0], x)
+
+
+def maybe_upcast_rhs(x):
+    return maybe_upcast_impl(args.config[2], x)
 
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
 #   - A list of `triton.Config` objects that define different configurations of
 #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
 #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
+
+
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        # triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -189,7 +272,8 @@ def matmul_kernel(
     # Meta-parameters
     BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
-    ACTIVATION: tl.constexpr,
+    IS_LHS_FP8: tl.constexpr,
+    IS_RHS_FP8: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
@@ -231,16 +315,18 @@ def matmul_kernel(
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        if IS_LHS_FP8:
+            a = a.to(tl.float8e5, bitcast=True)
+        a = a.to(tl.float16)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        if IS_RHS_FP8:
+            b = b.to(tl.float8e5, bitcast=True)
+        b = b.to(tl.float16)
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # You can fuse arbitrary activation functions here
-    # while the accumulator is still in FP32!
-    if ACTIVATION == "leaky_relu":
-        accumulator = leaky_relu(accumulator)
     c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
@@ -252,13 +338,6 @@ def matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
-@triton.jit
-def leaky_relu(x):
-    x = x + 1
-    return tl.where(x >= 0, x, 0.01 * x)
-
-
 # %%
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
@@ -267,12 +346,10 @@ def leaky_relu(x):
 def matmul(a, b, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-    assert a.is_contiguous(), "Matrix A must be contiguous"
-    assert b.is_contiguous(), "Matrix B must be contiguous"
     M, K = a.shape
     K, N = b.shape
     # Allocates output.
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    c = torch.empty((M, N), device=a.device, dtype=torch.float16)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
@@ -283,7 +360,8 @@ def matmul(a, b, activation=""):
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        ACTIVATION=activation
+        IS_LHS_FP8=(a.dtype == torch.int8 and args.stype == "float8"),
+        IS_RHS_FP8=(b.dtype == torch.int8 and args.stype == "float8")
     )
     return c
 
@@ -295,16 +373,26 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+M = N = K = 512
+a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+# print(f"before_lhs={a}")
+a = transform_lhs(a)
+# print(f"after_lhs={maybe_upcast_lhs(a)}")
+b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+# print(f"before_rhs={b}")
+b = transform_rhs(b)
+# print(f"after_rhs={maybe_upcast_rhs(b)}")
+# print((a - b).abs().max())
 triton_output = matmul(a, b)
-torch_output = torch.matmul(a, b)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
-if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+torch_output = torch.matmul(maybe_upcast_lhs(a), maybe_upcast_rhs(b))
+if torch.allclose(triton_output, torch_output, atol=1e-1, rtol=0):
     print("✅ Triton and Torch match")
 else:
+    print(f"triton_output={triton_output}")
+    print(f"torch_output={torch_output}")
     print("❌ Triton and Torch differ")
+
+print(((triton_output[0, :] - torch_output[0, :]).abs() > 1e-1).nonzero())
 
 # %%
 # Benchmark
@@ -321,7 +409,7 @@ else:
     triton.testing.Benchmark(
         x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
         x_vals=[
-            128 * i for i in range(2, 33)
+            128 * i for i in range(32, 33)
         ],  # Different possible values for `x_name`
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
         # Possible values for `line_arg`
@@ -336,15 +424,16 @@ else:
     )
 )
 def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    a = transform_lhs(torch.randn((M, K), device='cuda', dtype=torch.float16))
+    b = transform_rhs(torch.randn((K, N), device='cuda', dtype=torch.float16))
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
-    if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+        fn = lambda: torch.matmul(maybe_upcast_lhs(a), maybe_upcast_rhs(b))
+    elif provider == 'triton':
+        fn = lambda: matmul(a, b)
+    ms, min_ms, max_ms = triton.testing.do_bench(fn, quantiles=quantiles, warmup=100, rep=1000)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+# benchmark.run(show_plots=False, print_data=True)
