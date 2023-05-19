@@ -172,16 +172,34 @@ jobs:
             echo "Artifact size (stat): $(stat --printf="%s bytes" reference.zip)"
             echo "Artifact size (du): $(du -sh reference.zip)"
             unzip reference.zip
-            tar -xzf artifacts.tar.gz
-            mv home/phil/.triton/cache reference
-            echo "-------------------1---------------------------"
-            pwd
-            echo "-------------------2---------------------------"
-            ls reference
-            echo "-------------------3---------------------------"
-            ls /home/phil/.triton/cache
-            echo "-------------------4---------------------------"
-            python test/tools/compare_files.py --path1 /home/phil/.triton/cache --path2 reference --hash /home/phil/code/triton/python/test/kernel_comparison/kernels.yml
+            mkdir temp
+            tar -xzf artifacts.tar.gz -C temp
+            rm reference.zip
+            rm artifacts.tar.gz
+            mv temp/home/phil/.triton/cache reference
+            rm -rf temp
           else
             echo "No artifact found with the name: $ARTIFACT_NAME"
           fi
+      - name: Download current job artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: artifacts
+      - name: Unzip current job artifacts
+        run: |
+          # Print the size of the downloaded artifact
+          echo "Artifact size (stat): $(stat --printf="%s bytes" artifacts/artifacts.tar.gz)"
+          echo "Artifact size (du): $(du -sh artifacts/artifacts.tar.gz)"
+          mkdir temp1
+          tar -xzf artifacts/artifacts.tar.gz -C temp1
+          rm -rf artifacts
+          mv temp1/home/phil/.triton/cache current
+          rm -rf temp1
+      - name: Compare artifacts
+        run: |
+          pwd
+          ls reference
+          echo "-----------------------------------------------"
+          ls current
+          echo "-----------------------------------------------"
+          python3 -m python/test/tools/compare_files.py --path1 reference --path2 current --hash python/test/kernel_comparison/kernels.yml
