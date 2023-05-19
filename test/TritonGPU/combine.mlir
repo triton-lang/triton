@@ -1106,7 +1106,9 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 // Check if the SimplifyReduceCvt handles convert_layout lifted from the for loop.
 // CHECK-LABEL: reduce_cvt2
 // Match the reduction
-// CHECK: }) {axis = 1 : i32} : (tensor<1x256xf32, #blocked>) -> tensor<1xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+// CHECK: tt.reduce
+// CHECK-SAME: axis = 1
+// CHECK: (tensor<1x256xf32, #blocked>) -> tensor<1xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
 // CHECK-NEXT: triton_gpu.convert_layout
 // CHECK-NOT: triton_gpu.convert_layout
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
