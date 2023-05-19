@@ -99,7 +99,7 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python/test/unit
-          python3 -m pytest
+          python3 -m pytest -n 8
 
       - name: Create artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100')}}
@@ -124,7 +124,7 @@ jobs:
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python/test/unit/language
-          python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
+          python3 -m pytest -n 8 --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
 
       - name: Regression tests
         if: ${{ contains(matrix.runner, 'A100') }}
@@ -132,5 +132,5 @@ jobs:
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          python3 -m pytest -vs .
+          python3 -m pytest -n 8 -vs .
           sudo nvidia-smi -i 0 -rgc
