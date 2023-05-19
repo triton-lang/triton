@@ -153,7 +153,6 @@ jobs:
           ARTIFACT_NAME: artifacts
           ARTIFACT_JOB_NAME: Integration-Tests
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OWNER_REPO="${{ github.repository }}"
           PR_NUMBER=$(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq ".[] | select(.merged_at != null) | .number" | head -1)
@@ -168,10 +167,11 @@ jobs:
 
           if [ -n "$ARTIFACT_URL" ]; then
             echo "Downloading artifact: $ARTIFACT_URL"
-            curl --location --remote-header-name --remote-name -H "Authorization: token $GITHUB_TOKEN" "$ARTIFACT_URL"
+            curl --location --remote-header-name -H "Authorization: token $GH_TOKEN" -o reference.zip "$ARTIFACT_URL"
             # Print the size of the downloaded artifact
-            echo "Artifact size (stat): $(stat --printf="%s bytes" artifacts.zip)"
-            echo "Artifact size (du): $(du -sh artifacts.zip)"
+            echo "Artifact size (stat): $(stat --printf="%s bytes" reference.zip)"
+            echo "Artifact size (du): $(du -sh reference.zip)"
+            unzip reference.zip
           else
             echo "No artifact found with the name: $ARTIFACT_NAME"
           fi
