@@ -174,7 +174,14 @@ jobs:
             unzip reference.zip
             tar -xzf artifacts.tar.gz
             mv home/phil/.triton/cache reference
+            echo "-----------------------------------------------"
+            pwd
+            echo "-----------------------------------------------"
             ls reference
+            echo "-----------------------------------------------"
+            ls ~/.triton/cache
+            echo "-----------------------------------------------"
+            python test/tools/compare_files.py --path1 /home/phil/.triton/cache --path2 reference --hash /home/phil/code/triton/python/test/kernel_comparison/kernels.yml
           else
             echo "No artifact found with the name: $ARTIFACT_NAME"
           fi
