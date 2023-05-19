@@ -112,6 +112,7 @@ class ContainsReturnChecker(ast.NodeVisitor):
         if isinstance(fn, JITFunction) and not fn.noinline:
             fn_node = fn.parse()
             return ContainsReturnChecker(self.gscope).visit(fn_node)
+        return False
 
     def generic_visit(self, node) -> bool:
         ret = False
@@ -129,8 +130,8 @@ class ContainsReturnChecker(ast.NodeVisitor):
             if node.value.id in self.gscope:
                 value = self.gscope[node.value.id]
                 fn = getattr(value, node.attr)
-                if self._visit_function(fn):
-                    return True
+                return self._visit_function(fn)
+            return False
         # If the left part is not a name, it must return a tensor or a constexpr
         # whose methods do not contain return statements
         # e.g., (tl.load(x)).to(y)
@@ -142,8 +143,7 @@ class ContainsReturnChecker(ast.NodeVisitor):
             return False
         if node.id in self.gscope:
             fn = self.gscope[node.id]
-            if self._visit_function(fn):
-                return True
+            return self._visit_function(fn)
         return False
 
     def visit_Return(self, node: ast.Return) -> bool:
