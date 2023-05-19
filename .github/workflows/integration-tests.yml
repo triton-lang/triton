@@ -172,6 +172,9 @@ jobs:
             echo "Artifact size (stat): $(stat --printf="%s bytes" reference.zip)"
             echo "Artifact size (du): $(du -sh reference.zip)"
             unzip reference.zip
+            tar -xzf artifacts.tar.gz
+            mv home/phil/.triton/cache reference
+            ls reference
           else
             echo "No artifact found with the name: $ARTIFACT_NAME"
           fi
