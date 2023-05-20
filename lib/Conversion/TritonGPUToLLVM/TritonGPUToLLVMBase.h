@@ -118,9 +118,8 @@ protected:
     // Create an LLVM function, use external linkage by default until MLIR
     // functions have linkage.
     LLVM::Linkage linkage = LLVM::Linkage::External;
-    if (funcOp->hasAttr("llvm.linkage")) {
-      auto attr =
-          funcOp->getAttr("llvm.linkage").dyn_cast<mlir::LLVM::LinkageAttr>();
+    if (auto linkageAttr = funcOp->getDiscardableAttr("llvm.linkage")) {
+      auto attr = linkageAttr.dyn_cast<mlir::LLVM::LinkageAttr>();
       if (!attr) {
         funcOp->emitError()
             << "Contains llvm.linkage attribute not of type LLVM::LinkageAttr";

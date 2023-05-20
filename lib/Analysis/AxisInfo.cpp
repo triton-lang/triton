@@ -111,15 +111,15 @@ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
       }
     }
   } else if (Operation *op = value.getDefiningOp()) {
-    if (Attribute attr = op->getAttr("tt.divisibility")) {
+    if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownDivisibility = DimVectorT(vals.begin(), vals.end());
     }
-    if (Attribute attr = op->getAttr("tt.contiguity")) {
+    if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownContiguity = DimVectorT(vals.begin(), vals.end());
     }
-    if (Attribute attr = op->getAttr("tt.constancy")) {
+    if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
       auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
       knownConstancy = DimVectorT(vals.begin(), vals.end());
     }
@@ -888,15 +888,15 @@ void AxisInfoAnalysis::visitOperation(
   auto newContiguity = curr.getContiguity();
   auto newDivisibility = curr.getDivisibility();
   auto newConstancy = curr.getConstancy();
-  if (Attribute attr = op->getAttr("tt.contiguity")) {
+  if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
     auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
     newContiguity = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
-  if (Attribute attr = op->getAttr("tt.divisibility")) {
+  if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
     auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
     newDivisibility = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
-  if (Attribute attr = op->getAttr("tt.constancy")) {
+  if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
     auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
