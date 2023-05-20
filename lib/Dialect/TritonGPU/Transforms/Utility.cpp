@@ -269,4 +269,64 @@ void rematerializeConversionChain(
   }
 }
 
+LogicalResult canMoveOutOfLoop(BlockArgument arg,
+                               SmallVector<Operation *> &cvts) {
+  auto parentOp = arg.getOwner()->getParentOp();
+  // Don't move if arg is defined in a while loop
+  if (isa<scf::WhileOp>(parentOp))
+    return failure();
+  // Skip if arg is not defined in scf.for
+  if (!isa<scf::ForOp>(parentOp))
+    return success();
+  auto forOp = cast<scf::ForOp>(parentOp);
+  // We only move `iterArg` out of the loop if
+  // 1. There is no conversion
+  // 2. There is only a single conversion
+  // 3. Moving this conversion out of the loop will not generate any extra
+  // non-removable conversion
+  DenseSet<Type> cvtTypes;
+  SetVector<Operation *> others;
+  auto oldType = arg.getType().cast<RankedTensorType>();
+  for (auto user : arg.getUsers()) {
+    if (isa<triton::gpu::ConvertLayoutOp>(user)) {
+      // Don't move if the conversion target is a dot operand or shared memory
+      auto newType = user->getResults()[0].getType().cast<RankedTensorType>();
+      if (oldType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
+          newType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
+        continue;
+      }
+      if (newType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
+        if (newType.getEncoding()
+                .cast<triton::gpu::SharedEncodingAttr>()
+                .getVec() == 1)
+          continue;
+      }
+      cvts.emplace_back(user);
+      cvtTypes.insert(newType);
+    } else
+      others.insert(user);
+  }
+  // First condition
+  if (cvts.empty())
+    return success();
+  if (cvtTypes.size() == 1) {
+    // Second condition
+    if (others.empty())
+      return success();
+    // Third condition: not complete
+    // If the other or the cvt is in the different block, we cannot push the
+    // conversion forward or backward
+    for (auto *cvt : cvts) {
+      if (cvt->getBlock() != forOp.getBody())
+        return failure();
+    }
+    for (auto *other : others) {
+      if (other->getBlock() != forOp.getBody())
+        return failure();
+    }
+    return success();
+  }
+  return failure();
+}
+
 } // namespace mlir
