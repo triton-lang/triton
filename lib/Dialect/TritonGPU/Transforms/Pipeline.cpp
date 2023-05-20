@@ -25,9 +25,19 @@ namespace ttg = triton::gpu;
 
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
-  for (const NamedAttribute attr : dictAttrs.getValue())
-    if (!op->hasAttr(attr.getName()))
-      op->setAttr(attr.getName(), attr.getValue());
+  NamedAttrList attrs = op->getDiscardableAttrs();
+  // Collect the attributes to propagate: the ones in dictAttrs and not yet on
+  // the operation.
+  SmallVector<NamedAttribute> toPropagate;
+  for (const NamedAttribute attr : dictAttrs.getValue()) {
+    if (!attrs.get(attr.getName()))
+      toPropagate.push_back(attr);
+  }
+  // If we found any, let's set them here as a single step.
+  if (toPropagate.size()) {
+    attrs.append(toPropagate);
+    op->setDiscardableAttrs(attrs);
+  }
 }
 
 #define int_attr(num) builder.getI64IntegerAttr(num)
@@ -428,7 +438,7 @@ void LoopPipeliner::emitPrologue() {
               lookupOrDefault(loadOp.getOther(), stage),
               loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
               loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-          addNamedAttrs(newOp, op->getAttrDictionary());
+          addNamedAttrs(newOp, op->getDiscardableAttrDictionary());
         } else {
           newOp = builder.clone(*op);
         }
@@ -652,7 +662,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
             nextMapping.lookupOrDefault(loadOp.getOther()),
             loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
             loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-        addNamedAttrs(nextOp, op->getAttrDictionary());
+        addNamedAttrs(nextOp, op->getDiscardableAttrDictionary());
         nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
       } else {
         nextOp = builder.clone(*op, nextMapping);
