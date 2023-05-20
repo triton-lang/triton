@@ -55,7 +55,14 @@ def _to_tensor(x, builder):
         else:
             raise RuntimeError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
-        return tensor(builder.get_fp32(x), float32)
+        min_float32 = 2 ** -126
+        max_float32 = (2 - 2**-23) * 2**127
+        abs_x = __builtins__['abs'](x)
+        if abs_x == float("inf") or min_float32 <= abs_x <= max_float32:
+            return tensor(builder.get_fp32(x), float32)
+        else:
+            return tensor(builder.get_fp64(x), float64)
+
     elif isinstance(x, constexpr):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
