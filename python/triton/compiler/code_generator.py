@@ -97,6 +97,7 @@ class enter_sub_region:
         self.generator.local_defs = self.prev_defs
 
 
+# Check if the given syntax node has an "early" return
 class ContainsReturnChecker(ast.NodeVisitor):
     def __init__(self, gscope):
         self.gscope = gscope
@@ -126,16 +127,18 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return ret
 
     def visit_Attribute(self, node: ast.Attribute) -> bool:
+        # If the left part is a name, it's possible that
+        # we call triton native function or a jit function from another module.
+        # If the left part is not a name, it must return a tensor or a constexpr
+        # whose methods do not contain return statements
+        # e.g., (tl.load(x)).to(y)
+        # So we only check if the expressions within value have return or not
         if isinstance(node.value, ast.Name):
             if node.value.id in self.gscope:
                 value = self.gscope[node.value.id]
                 fn = getattr(value, node.attr)
                 return self._visit_function(fn)
             return False
-        # If the left part is not a name, it must return a tensor or a constexpr
-        # whose methods do not contain return statements
-        # e.g., (tl.load(x)).to(y)
-        # So we only check if the expressions within value have return or not
         return self.visit(node.value)
 
     def visit_Name(self, node: ast.Name) -> bool:
@@ -150,7 +153,14 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return True
 
     def visit_Assign(self, node: ast.Assign) -> bool:
-        return self.visit(node.value)
+        # There couldn't be an early return
+        # x = ...
+        return False
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> bool:
+        # There couldn't be an early return
+        # x += ...
+        return False
 
     def visit_Module(self, node: ast.Module) -> bool:
         return self._visit_stmts(node.body)
