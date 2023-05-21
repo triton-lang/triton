@@ -1567,8 +1567,10 @@ class static_range:
     .. highlight:: python
     .. code-block:: python
 
-        for i in tl.static_range(10):
-            ...
+        @triton.jit
+        def kernel(...):
+            for i in tl.static_range(10):
+                ...
     :note: This is a special iterator used to implement similar semantics to Python's :code:`range` in the context of
         :code:`triton.jit` functions. In addition, it also guides the compiler to unroll the loop aggressively.
     :param arg1: the start value.
