@@ -1969,6 +1969,23 @@ def test_full(dtype_str):
     assert torch.all(out_dynamic == 2)
 
 
+@pytest.mark.parametrize("literal, dtype_str",
+                         [(1e+50, "f64"), (1e+10, "f32"), (1.0, "f32"),
+                          ('float("inf")', "f32"), ('float("-inf")', "f32"),
+                          ('float("nan")', "f32"), ('float("-nan")', "f32"),
+                          (0., "f32"),
+                          (5, "i32"), (2**40, "i64"),])
+def test_constexpr(literal, dtype_str):
+    @triton.jit
+    def kernel(out_ptr):
+        val = GENERATE_TEST_HERE
+        tl.store(out_ptr.to(tl.pointer_type(val.dtype)), val)
+
+    kernel_patched = patch_kernel(kernel, {'GENERATE_TEST_HERE': f"{literal}"})
+    out = torch.zeros((1,), dtype=torch.float32, device="cuda")
+    h = kernel_patched[(1,)](out)
+    assert re.search(r"arith.constant .* : " + dtype_str, h.asm["ttir"]) is not None
+
 # TODO: uncomment once DotOperandEncoding::getElemsPerThread is implemented
 # @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 # def test_dot_without_load(dtype_str):
@@ -2639,41 +2656,64 @@ def add_fn_static_cond(x, cond: tl.constexpr):
         return x + 1
 
 
-@pytest.mark.parametrize("call_type", ["attribute", "jit_function", "jit_function_return",
-                                       "ifexp", "expr", "jit_function_static_cond", "jit_function_noinline"])
+@pytest.mark.parametrize("call_type", ["attribute", "attribute_jit",
+                                       "jit", "jit_if", "jit_ifexp", "jit_expr",
+                                       "jit_static_cond", "jit_noinline", "jit_extern"])
 def test_if_call(call_type):
     @triton.jit
     def kernel(Out, call_type: tl.constexpr):
         pid = tl.program_id(0)
         o = tl.load(Out)
-        if pid == 0:
-            if call_type == "attribute":
-                # call attribute
-                a = o + 1
-                a = a.to(tl.int32).to(tl.int32)
-                o = a
-            else:
+        if call_type == "attribute":
+            # call attribute
+            if pid == 0:
                 a = o
-                if call_type == "jit_function":
-                    # regular function call
-                    a = add_fn(a)
-                elif call_type == "jit_function_return":
-                    # function without end_if block
-                    a = add_fn_return(a, pid)
-                elif call_type == "ifexp":
-                    # ifexp expression
-                    a = add_fn(a) if pid == 0 else add_fn_return(a, pid)
-                elif call_type == "expr":
-                    if pid == 1:
-                        return
-                    a = add_fn(a)
-                    if pid == 0:
-                        # call without return
-                        add_fn_expr(Out, a)
-                elif call_type == "jit_function_static_cond":
-                    a = add_fn_static_cond(a, call_type)
-                elif call_type == "jit_function_noinline":
-                    a = add_fn_noinline(a)
+                a = a.to(tl.int32).to(tl.int32) + 1
+                o = a
+        elif call_type == "attribute_jit":
+            # call attribute and jit function
+            if pid == 0:
+                a = o
+                a = tl.load(Out + add_fn(a) - 1).to(tl.int32) + 1
+                o = a
+        elif call_type == "jit":
+            if pid == 0:
+                # regular function call
+                a = o
+                a = add_fn(a)
+                o = a
+        elif call_type == "jit_if":
+            # function without end_if block
+            if pid == 0:
+                a = o
+                a = add_fn_return(a, pid)
+                o = a
+        elif call_type == "jit_ifexp":
+            # ifexp expression
+            if pid == 0:
+                a = o
+                a = add_fn(a) if pid == 0 else add_fn_return(a, pid)
+                o = a
+        elif call_type == "jit_expr":
+            # call without return
+            if pid == 0:
+                a = o + 1
+                add_fn_expr(Out, a)
+                o = a
+        elif call_type == "jit_static_cond":
+            if pid == 0:
+                a = o + 1
+                add_fn_static_cond(o, call_type)
+                o = a
+        elif call_type == "jit_noinline":
+            if pid == 0:
+                a = o + 1
+                add_fn_noinline(a)
+                o = a
+        elif call_type == "jit_extern":
+            if pid == 0:
+                a = o + 1
+                tl.cdiv(a, a)
                 o = a
 
         tl.store(Out, o)

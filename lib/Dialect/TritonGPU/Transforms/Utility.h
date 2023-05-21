@@ -16,6 +16,8 @@ bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding);
 
 bool expensiveToRemat(Operation *op, Attribute &targetEncoding);
 
+// skipInit is True when we only consider the operands of the initOp but
+// not the initOp itself.
 int simulateBackwardRematerialization(
     Operation *initOp, SetVector<Operation *> &processed,
     SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
@@ -28,6 +30,10 @@ void rematerializeConversionChain(
     const llvm::MapVector<Value, Attribute> &toConvert,
     mlir::PatternRewriter &rewriter, SetVector<Operation *> &processed,
     IRMapping &mapping);
+
+LogicalResult canMoveOutOfLoop(BlockArgument arg,
+                               SmallVector<Operation *> &cvts);
+
 } // namespace mlir
 
 #endif // TRITON_LIB_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
