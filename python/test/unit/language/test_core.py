@@ -1971,6 +1971,9 @@ def test_full(dtype_str):
 
 @pytest.mark.parametrize("literal, dtype_str",
                          [(1e+50, "f64"), (1e+10, "f32"), (1.0, "f32"),
+                          ('float("inf")', "f32"), ('float("-inf")', "f32"),
+                          ('float("nan")', "f32"), ('float("-nan")', "f32"),
+                          (0., "f32"),
                           (5, "i32"), (2**40, "i64"),])
 def test_constexpr(literal, dtype_str):
     @triton.jit
