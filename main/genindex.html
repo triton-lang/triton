@@ -92,6 +92,7 @@
  | <a href="#C"><strong>C</strong></a>
  | <a href="#D"><strong>D</strong></a>
  | <a href="#E"><strong>E</strong></a>
+ | <a href="#F"><strong>F</strong></a>
  | <a href="#H"><strong>H</strong></a>
  | <a href="#J"><strong>J</strong></a>
  | <a href="#L"><strong>L</strong></a>
@@ -100,6 +101,9 @@
  | <a href="#P"><strong>P</strong></a>
  | <a href="#R"><strong>R</strong></a>
  | <a href="#S"><strong>S</strong></a>
+ | <a href="#T"><strong>T</strong></a>
+ | <a href="#U"><strong>U</strong></a>
+ | <a href="#V"><strong>V</strong></a>
  | <a href="#W"><strong>W</strong></a>
  | <a href="#X"><strong>X</strong></a>
  | <a href="#Z"><strong>Z</strong></a>
@@ -111,6 +115,8 @@
       <li><a href="python-api/generated/triton.Config.html#triton.Config.__init__">__init__() (triton.Config method)</a>
 
       <ul>
+        <li><a href="python-api/generated/triton.language.static_range.html#triton.language.static_range.__init__">(triton.language.static_range method)</a>
+</li>
         <li><a href="python-api/generated/triton.testing.Benchmark.html#triton.testing.Benchmark.__init__">(triton.testing.Benchmark method)</a>
 </li>
       </ul></li>
@@ -152,6 +158,8 @@
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="python-api/generated/triton.language.broadcast.html#triton.language.broadcast">broadcast() (in module triton.language)</a>
+</li>
       <li><a href="python-api/generated/triton.language.broadcast_to.html#triton.language.broadcast_to">broadcast_to() (in module triton.language)</a>
 </li>
   </ul></td>
@@ -160,10 +168,12 @@
 <h2 id="C">C</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.Config.html#triton.Config">Config (class in triton)</a>
+      <li><a href="python-api/generated/triton.language.cat.html#triton.language.cat">cat() (in module triton.language)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="python-api/generated/triton.Config.html#triton.Config">Config (class in triton)</a>
+</li>
       <li><a href="python-api/generated/triton.language.cos.html#triton.language.cos">cos() (in module triton.language)</a>
 </li>
   </ul></td>
@@ -172,10 +182,16 @@
 <h2 id="D">D</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.testing.do_bench.html#triton.testing.do_bench">do_bench() (in module triton.testing)</a>
+      <li><a href="python-api/generated/triton.language.debug_barrier.html#triton.language.debug_barrier">debug_barrier() (in module triton.language)</a>
+</li>
+      <li><a href="python-api/generated/triton.language.device_assert.html#triton.language.device_assert">device_assert() (in module triton.language)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="python-api/generated/triton.language.device_print.html#triton.language.device_print">device_print() (in module triton.language)</a>
+</li>
+      <li><a href="python-api/generated/triton.testing.do_bench.html#triton.testing.do_bench">do_bench() (in module triton.testing)</a>
+</li>
       <li><a href="python-api/generated/triton.language.dot.html#triton.language.dot">dot() (in module triton.language)</a>
 </li>
   </ul></td>
@@ -189,6 +205,18 @@
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.language.expand_dims.html#triton.language.expand_dims">expand_dims() (in module triton.language)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="F">F</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="python-api/generated/triton.language.fdiv.html#triton.language.fdiv">fdiv() (in module triton.language)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="python-api/generated/triton.language.full.html#triton.language.full">full() (in module triton.language)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -225,6 +253,8 @@
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="python-api/generated/triton.language.max.html#triton.language.max">max() (in module triton.language)</a>
+</li>
+      <li><a href="python-api/generated/triton.language.max_contiguous.html#triton.language.max_contiguous">max_contiguous() (in module triton.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.maximum.html#triton.language.maximum">maximum() (in module triton.language)</a>
 </li>
@@ -290,13 +320,43 @@
 </li>
       <li><a href="python-api/generated/triton.language.softmax.html#triton.language.softmax">softmax() (in module triton.language)</a>
 </li>
+      <li><a href="python-api/generated/triton.language.sqrt.html#triton.language.sqrt">sqrt() (in module triton.language)</a>
+</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="python-api/generated/triton.language.sqrt.html#triton.language.sqrt">sqrt() (in module triton.language)</a>
+      <li><a href="python-api/generated/triton.language.static_assert.html#triton.language.static_assert">static_assert() (in module triton.language)</a>
+</li>
+      <li><a href="python-api/generated/triton.language.static_print.html#triton.language.static_print">static_print() (in module triton.language)</a>
+</li>
+      <li><a href="python-api/generated/triton.language.static_range.html#triton.language.static_range">static_range (class in triton.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.store.html#triton.language.store">store() (in module triton.language)</a>
 </li>
       <li><a href="python-api/generated/triton.language.sum.html#triton.language.sum">sum() (in module triton.language)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="T">T</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="python-api/generated/triton.language.trans.html#triton.language.trans">trans() (in module triton.language)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="U">U</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="python-api/generated/triton.language.umulhi.html#triton.language.umulhi">umulhi() (in module triton.language)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="V">V</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="python-api/generated/triton.language.view.html#triton.language.view">view() (in module triton.language)</a>
 </li>
   </ul></td>
 </tr></table>
