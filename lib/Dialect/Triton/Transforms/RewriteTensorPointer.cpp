@@ -167,10 +167,10 @@ public:
     auto otherTensorType = RankedTensorType::get(tensorShape, elementType);
 
     // Set zero padding value
-    Attribute attr =
+    TypedAttr attr =
         elementType.isIntOrIndex()
-            ? builder.getIntegerAttr(elementType, 0).cast<Attribute>()
-            : builder.getFloatAttr(elementType, 0).cast<Attribute>();
+            ? builder.getIntegerAttr(elementType, 0).cast<TypedAttr>()
+            : builder.getFloatAttr(elementType, 0).cast<TypedAttr>();
 
     // Float NaN padding case
     if (padding.value() == triton::PaddingOption::PAD_NAN) {

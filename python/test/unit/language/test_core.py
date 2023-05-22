@@ -457,6 +457,86 @@ def test_broadcast(dtype):
     assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
 
 
+# ----------------
+# test expand_dims
+# ----------------
+def test_expand_dims():
+    @triton.jit
+    def expand_dims_kernel(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, 0)
+        tl.static_assert(t.shape == [1, N])
+
+        t = tl.expand_dims(offset1, 1)
+        tl.static_assert(t.shape == [N, 1])
+
+        t = tl.expand_dims(offset1, -1)
+        tl.static_assert(t.shape == [N, 1])
+
+        t = tl.expand_dims(offset1, -2)
+        tl.static_assert(t.shape == [1, N])
+
+        t = tl.expand_dims(offset1, (0, -1))
+        tl.static_assert(t.shape == [1, N, 1])
+
+        t = tl.expand_dims(offset1, (0, 1, 3))
+        tl.static_assert(t.shape == [1, 1, N, 1])
+
+        t = tl.expand_dims(offset1, (-4, 2, -1))
+        tl.static_assert(t.shape == [1, N, 1, 1])
+
+        t = tl.expand_dims(offset1, (3, 1, 2))
+        tl.static_assert(t.shape == [N, 1, 1, 1])
+
+    N = 32
+    dummy_tensor = torch.empty((), device="cuda")
+    expand_dims_kernel[(1,)](dummy_tensor, N)
+
+
+def test_expand_dims_error_cases():
+    @triton.jit
+    def dim_out_of_range1(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, -2)
+        t = tl.expand_dims(offset1, -3)
+
+    @triton.jit
+    def dim_out_of_range2(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, 1)
+        t = tl.expand_dims(offset1, 2)
+
+    @triton.jit
+    def duplicate_dim1(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, (0, 0))
+
+    @triton.jit
+    def duplicate_dim2(dummy, N: tl.constexpr):
+        offset1 = tl.arange(0, N)
+
+        t = tl.expand_dims(offset1, (0, -3))
+
+    N = 32
+    dummy_tensor = torch.empty((), device="cuda")
+
+    with pytest.raises(triton.CompilationError, match="invalid axis -3"):
+        dim_out_of_range1[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match="invalid axis 2"):
+        dim_out_of_range2[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+        duplicate_dim1[(1,)](dummy_tensor, N)
+
+    with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
+        duplicate_dim2[(1,)](dummy_tensor, N)
+
+
 # ---------------
 # test where
 # ---------------
@@ -688,7 +768,7 @@ def test_index1d(expr, dtype_str, device='cuda'):
 
 
 @triton.jit
-def fn(a, b):
+def tuples_fn(a, b):
     return a + b, \
         a - b, \
         a * b
@@ -701,7 +781,7 @@ def test_tuples():
     def with_fn(X, Y, A, B, C):
         x = tl.load(X)
         y = tl.load(Y)
-        a, b, c = fn(x, y)
+        a, b, c = tuples_fn(x, y)
         tl.store(A, a)
         tl.store(B, b)
         tl.store(C, c)
@@ -726,6 +806,92 @@ def test_tuples():
         assert a_tri == a_ref
         assert b_tri == b_ref
         assert c_tri == c_ref
+
+
+@triton.jit(noinline=True)
+def noinline_simple_fn(x, y, Z):
+    z = x + y
+    tl.store(Z, z)
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn1(x):
+    return x + 1
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn2(y):
+    return y + 2
+
+
+@triton.jit(noinline=True)
+def noinline_call_graph_fn(x, y, Z):
+    t0 = noinline_call_graph_fn1(x)
+    t1 = noinline_call_graph_fn2(y)
+    z = t0 + t1
+    tl.store(Z, z)
+
+
+@triton.jit(noinline=True)
+def noinline_shared_fn(x, y, Z):
+    offs = tl.arange(0, 16)[:, None] * 16 + tl.arange(0, 16)[None, :]
+    z = tl.load(Z + offs)
+    z = tl.dot(z, z) + x + y
+    tl.store(Z + offs, z)
+
+
+@triton.jit(noinline=True)
+def noinline_dynamic_fn(x, y, Z):
+    if x >= 1:
+        x = noinline_call_graph_fn1(x)
+    else:
+        x = noinline_call_graph_fn2(x)
+    if y >= 2:
+        y = noinline_call_graph_fn2(y)
+    else:
+        y = noinline_call_graph_fn1(y)
+    z = x + y
+    tl.store(Z, z)
+
+
+@triton.jit(noinline=True)
+def noinline_call_multi_values_fn(x, y):
+    return x + 1, y + 2
+
+
+@triton.jit(noinline=True)
+def noinline_multi_values_fn(x, y, Z):
+    x, y = noinline_call_multi_values_fn(x, y)
+    z = x + y
+    tl.store(Z, z)
+
+
+@pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic", "multi_values"])
+def test_noinline(mode):
+    device = 'cuda'
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        x = tl.load(X)
+        y = tl.load(Y)
+        GENERATE_TEST_HERE(x, y, Z)
+
+    func_name = f'noinline_{mode}_fn'
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': func_name})
+    x = torch.tensor([1.0], device=device, dtype=torch.float32)
+    y = torch.tensor([2.0], device=device, dtype=torch.float32)
+    if mode == "shared":
+        z = torch.ones((16, 16), device=device, dtype=torch.float32)
+    else:
+        z = torch.tensor([0.0], device=device, dtype=torch.float32)
+    kernel[(1,)](x, y, z, num_warps=1)
+    if mode == "simple":
+        assert torch.equal(z, x + y)
+    elif mode == "call_graph" or mode == "dynamic" or mode == "multi_values":
+        assert torch.equal(z, x + 1 + y + 2)
+    elif mode == "shared":
+        ref = torch.full((16, 16), 16, device=device, dtype=torch.float32)
+        assert torch.equal(z, ref + x + y)
 
 
 # ---------------
@@ -1334,6 +1500,99 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+layouts = [
+    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0]),
+    MmaLayout(version=(2, 0), warps_per_cta=[4, 1])
+]
+
+
+@pytest.mark.parametrize("M", [32, 64, 128, 256])
+@pytest.mark.parametrize("src_layout", layouts)
+def test_store_op(M, src_layout, device='cuda'):
+    ir = f"""
+    #src = {src_layout}
+    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+        tt.func public @kernel(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) {{
+            %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %1 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<{M}x!tt.ptr<f32>, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %2 = tt.addptr %1, %0 : tensor<{M}x!tt.ptr<f32>, #triton_gpu.slice<{{dim = 1, parent = #src}}>>, tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %3 = tt.load %2 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}xf32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %4 = tt.expand_dims %3 {{axis = 1 : i32}} : (tensor<{M}xf32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xf32, #src>
+            %5 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+            %6 = tt.expand_dims %5 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
+            %7 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<{M}x1x!tt.ptr<f32>, #src>
+            %8 = tt.addptr %7, %6 : tensor<{M}x1x!tt.ptr<f32>, #src>, tensor<{M}x1xi32, #src>
+            tt.store %8, %4 : tensor<{M}x1xf32, #src>
+            tt.return
+        }}
+    }}
+    """
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        store_kernel = triton.compile(f.name)
+
+    rs = RandomState(17)
+    x = rs.randint(0, 4, (M, 1)).astype('float32')
+    y = np.zeros((M, 1), dtype='float32')
+    x_tri = torch.tensor(x, device=device)
+    y_tri = torch.tensor(y, device=device)
+
+    pgm = store_kernel[(1, 1, 1)](x_tri, y_tri)
+    y_ref = x
+    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+
+
+layouts = [
+    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0]),
+    MmaLayout(version=(2, 0), warps_per_cta=[4, 1])
+]
+
+
+@pytest.mark.parametrize("M", [64, 128, 256])
+@pytest.mark.parametrize("src_layout", layouts)
+@pytest.mark.parametrize("dst_layout", layouts)
+@pytest.mark.parametrize("src_dim", [0, 1])
+@pytest.mark.parametrize("dst_dim", [0, 1])
+def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device='cuda'):
+    ir = f"""
+    #dst = {dst_layout}
+    #src = {src_layout}
+    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+        tt.func public @kernel(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
+            %0 = tt.splat %arg0 : (!tt.ptr<i32>) -> tensor<{M}x!tt.ptr<i32>, #triton_gpu.slice<{{dim = {src_dim}, parent = #src}}>>
+            %1 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = {src_dim}, parent = #src}}>>
+            %2 = tt.addptr %0, %1 : tensor<{M}x!tt.ptr<i32>, #triton_gpu.slice<{{dim = {src_dim}, parent = #src}}>>, tensor<{M}xi32, #triton_gpu.slice<{{dim = {src_dim}, parent = #src}}>>
+            %3 = tt.load %2 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = {src_dim}, parent = #src}}>>
+            %4 = tt.splat %arg1 : (!tt.ptr<i32>) -> tensor<{M}x!tt.ptr<i32>, #triton_gpu.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            %5 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            %6 = tt.addptr %4, %5 : tensor<{M}x!tt.ptr<i32>, #triton_gpu.slice<{{dim = {dst_dim}, parent = #dst}}>>, tensor<{M}xi32, #triton_gpu.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            %7 = triton_gpu.convert_layout %3 : (tensor<{M}xi32, #triton_gpu.slice<{{dim = {src_dim}, parent = #src}}>>) -> tensor<{M}xi32, #triton_gpu.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            tt.store %6, %7 : tensor<{M}xi32, #triton_gpu.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            tt.return
+        }}
+    }}
+    """
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+
+    rs = RandomState(17)
+    x = rs.randint(0, 4, (M, )).astype('int32')
+    y = np.zeros((M, ), dtype='int32')
+    x_tri = torch.tensor(x, device=device)
+    y_tri = torch.tensor(y, device=device)
+    pgm = kernel[(1, 1, 1)](x_tri, y_tri)
+    y_ref = x
+    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+
+
 @triton.jit
 def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
     delta = mean_2 - mean_1
@@ -1344,6 +1603,68 @@ def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
         m2_1 + m2_2 + delta * delta * weight_1 * w2_over_w,
         new_weight,
     )
+
+
+layouts = [
+    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0]),
+    BlockedLayout([1, 4], [1, 32], [1, 4], [1, 0]),
+    BlockedLayout([1, 4], [8, 4], [2, 2], [0, 1])
+]
+
+
+@pytest.mark.parametrize("M, N", [[128, 128], [256, 128], [256, 256], [128, 256]])
+@pytest.mark.parametrize("src_layout", layouts)
+def test_chain_reduce(M, N, src_layout, device='cuda'):
+    ir = f"""
+    #src = {src_layout}
+    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+    tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
+        %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
+        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+        %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> tensor<{M}x1xi32, #src>
+        %2 = arith.muli %1, %cst : tensor<{M}x1xi32, #src>
+        %3 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
+        %4 = tt.expand_dims %3 {{axis = 0 : i32}} : (tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>) -> tensor<1x{N}xi32, #src>
+        %5 = tt.broadcast %2 : (tensor<{M}x1xi32, #src>) -> tensor<{M}x{N}xi32, #src>
+        %6 = tt.broadcast %4 : (tensor<1x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #src>
+        %7 = arith.addi %5, %6 : tensor<{M}x{N}xi32, #src>
+        %8 = tt.splat %arg0 : (!tt.ptr<i32>) -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
+        %9 = tt.addptr %8, %7 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
+        %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #src>
+        %11 = "tt.reduce"(%10) ({{
+        ^bb0(%arg2: i32, %arg3: i32):
+        %13 = arith.addi %arg2, %arg3 : i32
+        tt.reduce.return %13 : i32
+        }}) {{axis = 1 : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+        %12 = "tt.reduce"(%11) ({{
+        ^bb0(%arg2: i32, %arg3: i32):
+        %13 = arith.addi %arg2, %arg3 : i32
+        tt.reduce.return %13 : i32
+        }}) {{axis = 0 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> i32
+        tt.store %arg1, %12 {{cache = 1 : i32, evict = 1 : i32}} : i32
+        tt.return
+    }}
+    }}
+    """
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+
+    rs = RandomState(17)
+    x = rs.randint(0, 4, (M, N)).astype('int32')
+
+    z = np.zeros((1,)).astype('int32')
+
+    x_tri = torch.tensor(x, device=device)
+    z_tri = torch.tensor(z, device=device)
+
+    pgm = kernel[(1, 1, 1)](x_tri, z_tri)
+    z_ref = np.sum(x)
+
+    np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
 def test_generic_reduction(device='cuda'):
@@ -2013,57 +2334,79 @@ def val_multiplier(val, i):
     return val * i
 
 
+@triton.jit(noinline=True)
+def val_multiplier_noinline(val, i):
+    return val * i
+
+
 @triton.jit
-def vecmul_kernel(ptr, n_elements, rep):
+def vecmul_kernel(ptr, n_elements, rep, type: tl.constexpr):
     pid = tl.program_id(axis=0)
     offsets = pid * 128 + tl.arange(0, 128)
     mask = offsets < n_elements
     vec = tl.load(ptr + offsets, mask=mask)
     for i in range(1, rep):
-        vec = val_multiplier(vec, i)
+        if type == "inline":
+            vec = val_multiplier(vec, i)
+        else:
+            vec = val_multiplier_noinline(vec, i)
     tl.store(ptr + offsets, vec, mask=mask)
 
 
-def test_call():
+@pytest.mark.parametrize("type", ["inline", "noinline"])
+def test_call(type):
 
     @triton.jit
-    def kernel(ptr, n_elements, num1, num2):
-        vecmul_kernel(ptr, n_elements, num1)
-        vecmul_kernel(ptr, n_elements, num2)
+    def kernel(ptr, n_elements, num1, num2, type: tl.constexpr):
+        vecmul_kernel(ptr, n_elements, num1, type)
+        vecmul_kernel(ptr, n_elements, num2, type)
 
     size = 1024
     rand_val = numpy_random((size,), dtype_str="float32")
     rand_val_tri = to_triton(rand_val, device='cuda')
-    kernel[(size // 128,)](rand_val_tri, size, 3, 5)
+    err_msg = ""
+    try:
+        kernel[(size // 128,)](rand_val_tri, size, 3, 5, type)
+    except Exception as e:
+        err_msg = str(e)
 
-    ans = rand_val * 1 * 2 * 1 * 2 * 3 * 4
-    np.testing.assert_equal(to_numpy(rand_val_tri), ans)
+    if type == "noinline":
+        assert err_msg is not ""
+    else:
+        ans = rand_val * 1 * 2 * 1 * 2 * 3 * 4
+        np.testing.assert_equal(to_numpy(rand_val_tri), ans)
 
 # -------------
 # test if
 # -------------
 
 
-@pytest.mark.parametrize("if_type", ["if", "if_exp"])
+@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and"])
 def test_if(if_type):
 
     @triton.jit
-    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr):
+    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr):
         pid = tl.program_id(0)
         cond = tl.load(Cond)
         if IfType == "if":
-            if pid % 2:
+            if pid % 2 == 0:
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))
-        else:
+        elif IfType == "if_exp":
             tl.store(Ret, tl.load(XTrue)) if pid % 2 else tl.store(Ret, tl.load(XFalse))
+        elif IfType == "if_and":
+            if BoolVar and pid % 2 == 0:
+                tl.store(Ret, tl.load(XTrue))
+            else:
+                tl.store(Ret, tl.load(XFalse))
 
     cond = torch.ones(1, dtype=torch.int32, device='cuda')
     x_true = torch.tensor([3.14], dtype=torch.float32, device='cuda')
     x_false = torch.tensor([1.51], dtype=torch.float32, device='cuda')
     ret = torch.empty(1, dtype=torch.float32, device='cuda')
-    kernel[(1,)](cond, x_true, x_false, ret, if_type)
+    kernel[(1,)](cond, x_true, x_false, ret, if_type, True)
+    assert torch.equal(ret, x_true)
 
 
 def test_num_warps_pow2():
@@ -2227,24 +2570,105 @@ def test_if_else():
     assert to_numpy(out)[0] == false_val[0]
 
 
-def test_if_return():
+@pytest.mark.parametrize("mode", ["dynamic", "static"])
+def test_if_return(mode):
 
     @triton.jit
-    def kernel(ExitEarly, Out):
-        if tl.load(ExitEarly):
-            tl.store(Out, 0)
-            return
+    def kernel(ExitEarly, Out, cond: tl.constexpr, mode: tl.constexpr):
+        if mode == "dynamic":
+            if tl.load(ExitEarly):
+                tl.store(Out, 0)
+                return
+        else:
+            if cond:
+                tl.store(Out, 0)
+                return
         tl.store(Out, 1)
 
     out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
     exit_early = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
     # exit early path taken
     exit_early[0] = 1
-    kernel[(1,)](exit_early, out)
+    kernel[(1,)](exit_early, out, True, mode)
     assert to_numpy(out)[0] == 0
     # exit early path not taken
     exit_early[0] = 0
-    kernel[(1,)](exit_early, out)
+    kernel[(1,)](exit_early, out, False, mode)
+    assert to_numpy(out)[0] == 1
+
+
+@triton.jit
+def add_fn(x):
+    return x + 1
+
+
+@triton.jit(noinline=True)
+def add_fn_noinline(x):
+    return x + 1
+
+
+@triton.jit
+def add_fn_return(x, pid):
+    if pid == 0:
+        return x + 1
+    else:
+        return x + 2
+
+
+@triton.jit
+def add_fn_expr(Out, x):
+    tl.store(Out, x)
+
+
+@triton.jit
+def add_fn_static_cond(x, cond: tl.constexpr):
+    if cond == "":
+        return x
+    else:
+        return x + 1
+
+
+@pytest.mark.parametrize("call_type", ["attribute", "jit_function", "jit_function_return",
+                                       "ifexp", "expr", "jit_function_static_cond", "jit_function_noinline"])
+def test_if_call(call_type):
+    @triton.jit
+    def kernel(Out, call_type: tl.constexpr):
+        pid = tl.program_id(0)
+        o = tl.load(Out)
+        if pid == 0:
+            if call_type == "attribute":
+                # call attribute
+                a = o + 1
+                a = a.to(tl.int32).to(tl.int32)
+                o = a
+            else:
+                a = o
+                if call_type == "jit_function":
+                    # regular function call
+                    a = add_fn(a)
+                elif call_type == "jit_function_return":
+                    # function without end_if block
+                    a = add_fn_return(a, pid)
+                elif call_type == "ifexp":
+                    # ifexp expression
+                    a = add_fn(a) if pid == 0 else add_fn_return(a, pid)
+                elif call_type == "expr":
+                    if pid == 1:
+                        return
+                    a = add_fn(a)
+                    if pid == 0:
+                        # call without return
+                        add_fn_expr(Out, a)
+                elif call_type == "jit_function_static_cond":
+                    a = add_fn_static_cond(a, call_type)
+                elif call_type == "jit_function_noinline":
+                    a = add_fn_noinline(a)
+                o = a
+
+        tl.store(Out, o)
+
+    out = to_triton(np.zeros((1,), dtype=np.int32), device='cuda')
+    kernel[(1,)](out, call_type)
     assert to_numpy(out)[0] == 1
 
 

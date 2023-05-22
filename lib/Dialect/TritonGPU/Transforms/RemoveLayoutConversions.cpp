@@ -13,7 +13,6 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
@@ -341,7 +340,10 @@ public:
         cvt.getOperand().getType().cast<RankedTensorType>().getEncoding();
     auto dstEncoding =
         cvt.getResult().getType().cast<RankedTensorType>().getEncoding();
-    // XXX: why is this needed?
+    if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>() ||
+        dstEncoding.isa<triton::gpu::SharedEncodingAttr>())
+      return failure();
+    // heuristics for flash attention
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
     SetVector<Operation *> cvtSlices;
@@ -365,7 +367,7 @@ public:
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp>(op)) {
+          !isa<triton::StoreOp>(op) && !isa<triton::ReduceOp>(op)) {
         return failure();
       }
       // don't rematerialize if it adds an extra conversion that can't
@@ -375,9 +377,10 @@ public:
         SetVector<Operation *> processed;
         SetVector<Attribute> layout;
         llvm::MapVector<Value, Attribute> toConvert;
-        if (argOp && (argOp != cvt) && cvtSlices.count(argOp) == 0 &&
-            simulateBackwardRematerialization(argOp, processed, layout,
-                                              toConvert, srcEncoding) > 0) {
+        int numAddedConvs = simulateBackwardRematerialization(
+            argOp, processed, layout, toConvert, srcEncoding);
+        if (argOp && !isa<triton::gpu::ConvertLayoutOp>(argOp) &&
+            cvtSlices.count(argOp) == 0 && numAddedConvs > 0) {
           return failure();
         }
       }

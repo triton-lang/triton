@@ -5,8 +5,17 @@ add_mlir_translation_library(TritonLLVMIR
         Core
 
         LINK_LIBS PUBLIC
+        MLIRArithToLLVM
+        MLIRBuiltinToLLVMIRTranslation
+        MLIRExecutionEngineUtils
+        MLIRIndexToLLVM
         MLIRIR
         MLIRLLVMDialect
+        MLIRLLVMToLLVMIRTranslation
+        MLIRNVVMToLLVMIRTranslation
+        MLIRROCDLToLLVMIRTranslation
+        MLIRSCFToControlFlow
         MLIRSupport
         MLIRTargetLLVMIRExport
+        TritonGPUToLLVM
         )

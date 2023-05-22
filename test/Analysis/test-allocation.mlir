@@ -7,8 +7,8 @@
 #A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
-#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
-#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
+#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
@@ -28,10 +28,10 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
 
   scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     %a_ = tt.load %a_ptr, %a_mask, %a_other {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #AL>
-    // CHECK: offset = 0, size = 4608
+    // CHECK: scratch offset = 0, size = 4608
     %a = triton_gpu.convert_layout %a_ : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A_DOT>
     %b_ = tt.load %b_ptr, %b_mask, %b_other {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #BL>
-    // CHECK-NEXT: offset = 0, size = 4224
+    // CHECK-NEXT: scratch offset = 0, size = 4224
     %b = triton_gpu.convert_layout %b_ : (tensor<32x128xf16, #BL>) -> tensor<32x128xf16, #B_DOT>
 
     %c = tt.dot %a, %b, %prev_c {allowTF32 = true, transA = false, transB = false} : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
@@ -56,17 +56,17 @@ tt.func @reusable(%A : !tt.ptr<f16>) {
   %a_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<128x32x!tt.ptr<f16>, #AL>
   %b_ptr = tt.broadcast %A : (!tt.ptr<f16>) -> tensor<32x128x!tt.ptr<f16>, #AL>
   %a1_ = tt.load %a_ptr, %cst1, %cst2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #AL>
-  // CHECK-NEXT: offset = 0, size = 4608
+  // CHECK-NEXT: scratch offset = 0, size = 4608
   %a1 = triton_gpu.convert_layout %a1_ : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A_DOT>
   %a2_ = tt.load %b_ptr, %cst3, %cst4 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #AL>
-  // CHECK-NEXT: offset = 0, size = 1152
+  // CHECK-NEXT: scratch offset = 0, size = 1152
   %a2 = triton_gpu.convert_layout %a2_ : (tensor<32x128xf16, #AL>) -> tensor<32x128xf16, #B_DOT>
   %a3_ = tt.load %a_ptr, %cst1, %cst2 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x32xf16, #AL>
-  // CHECK-NEXT: offset = 0, size = 4608
+  // CHECK-NEXT: scratch offset = 0, size = 4608
   %a3 = triton_gpu.convert_layout %a3_ : (tensor<128x32xf16, #AL>) -> tensor<128x32xf16, #A_DOT>
   %c = tt.dot %a1, %a2, %c_init {allowTF32 = true, transA = false, transB = false} : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
   %a4_ = tt.load %b_ptr, %cst3, %cst4 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf16, #AL>
-  // CHECK-NEXT: offset = 0, size = 1152
+  // CHECK-NEXT: scratch offset = 0, size = 1152
   %a4 = triton_gpu.convert_layout %a4_ : (tensor<32x128xf16, #AL>) -> tensor<32x128xf16, #B_DOT>
   %c1 = tt.dot %a3, %a4, %c {allowTF32 = true, transA = false, transB = false} : tensor<128x32xf16, #A_DOT> * tensor<32x128xf16, #B_DOT> -> tensor<128x128xf32, #C>
   tt.return
@@ -393,6 +393,130 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   %cst2 = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
   tt.return
   // CHECK-NEXT: size = 40960
+}
+
+}
+
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: alloc1
+tt.func @alloc1(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 512
+  %cst0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
+  tt.return
+  // CHECK-NEXT: size = 512
+}
+
+// CHECK-LABEL: alloc2
+tt.func @alloc2(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 1024
+  %cst0 = triton_gpu.alloc_tensor : tensor<32x16xf16, #A_SHARED>
+  tt.return
+  // CHECK-NEXT: size = 1024
+}
+
+// CHECK-LABEL: alloc3
+tt.func @alloc3(%cond : i1) {
+  scf.if %cond {
+    // CHECK: offset = 0, size = 512
+    %cst0 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
+  } else {
+    // CHECK-NEXT: offset = 0, size = 1024
+    %cst0 = triton_gpu.alloc_tensor : tensor<16x32xf16, #A_SHARED>
+  }
+  tt.return
+  // CHECK-NEXT: size = 1024
+}
+
+// CHECK-LABEL: alloc4
+tt.func @alloc4(%A : !tt.ptr<f16>, %cond : i1) {
+  scf.if %cond {
+    // CHECK: virtual offset = 0, size = 1024
+    tt.call @alloc3(%cond) : (i1) -> ()
+  } else {
+    // CHECK-NEXT: virtual offset = 0, size = 512
+    tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+  // CHECK-NEXT: size = 1024
+}
+
+// CHECK-LABEL: single_call
+tt.func @single_call(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // CHECK-NEXT: virtual offset = 0, size = 512
+  tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  tt.return
+  // CHECK-NEXT: size = 512
+}
+
+// CHECK-LABEL: multiple_calls
+tt.func @multiple_calls(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // CHECK-NEXT: virtual offset = 0, size = 512
+  tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // CHECK-NEXT: virtual offset = 0, size = 1024
+  tt.call @alloc2(%A) : (!tt.ptr<f16>) -> ()
+  tt.return
+  // CHECK-NEXT: size = 1024
+}
+
+// CHECK-LABEL: if_else_calls
+tt.func @if_else_calls(%A : !tt.ptr<f16>, %cond : i1) {
+  scf.if %cond {
+    // CHECK: offset = 0, size = 512
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+    // CHECK-NEXT: offset = 0, size = 1024
+    %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #A_SHARED>
+    // CHECK-NEXT: virtual offset = 0, size = 512
+    tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  } else {
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+    // CHECK-NEXT: virtual offset = 0, size = 1024
+    tt.call @alloc2(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+  // CHECK-NEXT: size = 1024
+}
+
+// CHECK-LABEL: for_calls
+tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
+  // CHECK: offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  %lb = arith.constant 0 : index
+  %ub = arith.constant 10 : index
+  %step = arith.constant 1 : index
+  scf.for %iv = %lb to %ub step %step {
+    // CHECK-NEXT: virtual offset = 0, size = 512
+    tt.call @alloc1(%A) : (!tt.ptr<f16>) -> ()
+  }
+  tt.return
+  // CHECK-NEXT: size = 512
+}
+
+// CHECK-LABEL: call_graph_1
+tt.func @call_graph_1(%A : !tt.ptr<f16>, %cond : i1) {
+  // CHECK: offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // CHECK-NEXT: virtual offset = 0, size = 1024
+  tt.call @alloc3(%cond) : (i1) -> ()
+  tt.return
+  // CHECK-NEXT: size = 1024
+}
+
+// CHECK-LABEL: call_graph_2
+tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
+  // CHECK: offset = 0, size = 512
+  %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  // CHECK-NEXT: virtual offset = 0, size = 1024
+  tt.call @alloc4(%A, %cond) : (!tt.ptr<f16>, i1) -> ()
+  tt.return
+  // CHECK-NEXT: size = 1024
 }
 
 }

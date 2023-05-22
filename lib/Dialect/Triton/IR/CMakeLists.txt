@@ -1,5 +1,4 @@
 add_mlir_dialect_library(TritonIR
-  Interfaces.cpp
   Dialect.cpp
   Ops.cpp
   Types.cpp
@@ -11,5 +10,6 @@ add_mlir_dialect_library(TritonIR
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRArithDialect
+  MLIRMathDialect
   MLIRSCFDialect
 )

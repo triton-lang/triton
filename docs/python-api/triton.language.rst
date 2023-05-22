@@ -34,6 +34,7 @@ Shape Manipulation Ops
     :nosignatures:
 
     broadcast_to
+    expand_dims
     reshape
     ravel
 

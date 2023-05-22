@@ -1,5 +1,5 @@
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
-#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 mlir::LogicalResult
 mlir::OpTrait::impl::verifyResultsAreSharedEncoding(Operation *op) {

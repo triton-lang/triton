@@ -14,7 +14,9 @@ add_mlir_dialect_library(TritonGPUTransforms
   TritonGPUTransformsIncGen
 
   LINK_LIBS PUBLIC
+  MLIRTransforms
+  MLIRTransformUtils
+  TritonAnalysis
   TritonIR
   TritonGPUIR
-  MLIRTransformUtils
 )

@@ -3,9 +3,6 @@ from __future__ import annotations  # remove after python 3.11
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
-import torch
-
-import triton
 from . import core as tl
 from triton._C.libtriton.triton import ir
 
@@ -665,7 +662,7 @@ def bitcast(input: tl.tensor,
     src_bits = src_sca_ty.primitive_bitwidth
     dst_bits = dst_sca_ty.primitive_bitwidth
     if src_bits != dst_bits:
-        raise ValueError("Cannot bitcast data-type of size " + str(src_bits) + "to "
+        raise ValueError("Cannot bitcast data-type of size " + str(src_bits) + " to "
                          "data-type of size " + str(dst_bits))
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)),
                      dst_ty)
@@ -1184,20 +1181,18 @@ def atomic_xchg(ptr: tl.tensor,
 #                               Linear Algebra
 # ===----------------------------------------------------------------------===//
 
+def is_hip():
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("Triton requires PyTorch to be installed")
+    return torch.version.hip is not None
 
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         allow_tf32: bool,
         out_dtype: tl.dtype,
         builder: ir.builder) -> tl.tensor:
-    if torch.version.hip is None:
-        device = triton.runtime.jit.get_current_device()
-        capability = triton.runtime.jit.get_device_capability(device)
-        capability = capability[0] * 10 + capability[1]
-        if capability < 70:
-            assert (
-                not rhs.dtype.is_fp16() and not rhs.dtype.is_fp8()
-            ), "Float8 and Float16 types are not supported for compute capability < 70 (use Float32 or above)"
     assert lhs.type.is_block() and rhs.type.is_block()
     assert lhs.dtype == rhs.dtype, "lhs and rhs must have the same dtype!"
     assert len(lhs.shape) == 2 and len(rhs.shape) == 2
@@ -1224,7 +1219,7 @@ def dot(lhs: tl.tensor,
     # Cast operands of types f16 and i8 since only FMA implemented yet for ROCM.
     # So we always perform dot(f32,f32,f32)->f32 here with FMA.
     # TODO: remove the case for MMA/MFMA implemented cases
-    if torch.version.hip is not None:
+    if is_hip():
         ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
         lhs = cast(lhs, ret_cast_scalar_ty, builder)
         rhs = cast(rhs, ret_cast_scalar_ty, builder)
@@ -1398,6 +1393,10 @@ def device_print(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.
 
 
 def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: int, builder: ir.builder) -> tl.tensor:
+    cond_ty = cond.type
+    if not cond_ty.is_block():
+        cond_ty = tl.block_type(cond_ty.scalar, (1,))
+        cond = tl.tensor(builder.create_splat(cond.handle, (1,)), cond_ty)
     return tl.tensor(builder.create_assert(cond.handle, msg, file_name, func_name, lineno), tl.void)
 
 
