@@ -1181,6 +1181,12 @@ def atomic_xchg(ptr: tl.tensor,
 #                               Linear Algebra
 # ===----------------------------------------------------------------------===//
 
+def is_hip():
+    try:
+        import torch
+    except ImportError:
+        raise ImportError("Triton requires PyTorch to be installed")
+    return torch.version.hip is not None
 
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
@@ -1213,7 +1219,7 @@ def dot(lhs: tl.tensor,
     # Cast operands of types f16 and i8 since only FMA implemented yet for ROCM.
     # So we always perform dot(f32,f32,f32)->f32 here with FMA.
     # TODO: remove the case for MMA/MFMA implemented cases
-    if torch.version.hip is not None:
+    if is_hip():
         ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
         lhs = cast(lhs, ret_cast_scalar_ty, builder)
         rhs = cast(rhs, ret_cast_scalar_ty, builder)
