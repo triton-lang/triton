@@ -1,9 +1,9 @@
-// RUN: %PYTHON -m triton.tools.aot %s --target=llvm-ir --sm=80 | FileCheck %s
+// RUN: %PYTHON -m triton.tools.aot %s --target=llvm-ir --gfx=90a | FileCheck %s
 
 // == LLVM IR check begin ==
 // CHECK-LABEL: ; ModuleID = 'LLVMDialectModule'
 // CHECK: define void @test_func
-// CHECK: define void @test_kernel
+// CHECK: define amdgpu_kernel void @test_kernel
 // CHECK: tail call void @test_func
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
