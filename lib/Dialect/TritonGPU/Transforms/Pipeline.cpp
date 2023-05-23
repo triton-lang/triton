@@ -95,9 +95,13 @@ class LoopPipeliner {
   ///   %3 = load %2  <--- non-immediate dep, %arg1 must be an update-to-date
   ///   value
   /// }
-  SetVector<BlockArgument> immedidateDepArgs;
+  SetVector<BlockArgument> immediateDepArgs;
 
-  SetVector<BlockArgument> nonImmedidateDepArgs;
+  SetVector<BlockArgument> nonImmediateDepArgs;
+
+  SetVector<Operation *> immediateDepIVOps;
+
+  SetVector<Operation *> nonImmediateDepIVOps;
 
   /// Operations (inside the loop body) that loads depend on
   SetVector<Operation *> depOps;
@@ -326,27 +330,42 @@ LogicalResult LoopPipeliner::initialize() {
     // Update depArgs & depOps
     for (Value loadOp : loads) {
       auto &deps = loadDeps[loadOp];
+      auto immediate = deps.front().isa<BlockArgument>();
       for (auto &dep : deps) {
         if (auto arg = dep.dyn_cast<BlockArgument>()) {
           depArgs.insert(arg);
-          if (deps.front().isa<BlockArgument>()) {
-            immedidateDepArgs.insert(arg);
-          } else {
-            nonImmedidateDepArgs.insert(arg);
-          }
-        } else
+          if (immediate)
+            immediateDepArgs.insert(arg);
+          else
+            nonImmediateDepArgs.insert(arg);
+        } else {
           depOps.insert(dep.getDefiningOp());
+          auto *defOp = dep.getDefiningOp();
+          for (auto operand : defOp->getOperands())
+            if (auto arg = operand.dyn_cast<BlockArgument>())
+              if (arg.getArgNumber() == 0) {
+                if (immediate)
+                  immediateDepIVOps.insert(defOp);
+                else
+                  nonImmediateDepIVOps.insert(defOp);
+              }
+        }
       }
     }
     return success();
   }
 
-  // Check if immedidateDepArgs and nonImmedidateDepArgs are disjoint
+  // Check if immediateDepArgs and nonImmediateDepArgs are disjoint
   // If yes, we cannot pipeline the loop for now
-  for (BlockArgument arg : immedidateDepArgs)
-    if (nonImmedidateDepArgs.contains(arg)) {
+  for (BlockArgument arg : immediateDepArgs)
+    if (nonImmediateDepArgs.contains(arg))
       return failure();
-    }
+
+  // Check if immediateDepIVOps and nonImmediateDepIVOps are disjoint
+  // If yes, we cannot pipeline the loop for now
+  for (Operation *op : immediateDepIVOps)
+    if (nonImmediateDepIVOps.contains(op))
+      return failure();
 
   return failure();
 }
@@ -453,17 +472,12 @@ void LoopPipeliner::emitPrologue() {
         }
       }
 
-      // Update mapping of results
-      // if (stage == numStages - 2)
-      //   continue;
-
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
         Value originalResult = op->getResult(dstIdx);
         // copy_async will update the value of its only use
         // TODO: load should not be used in the preheader?
         if (loads.contains(originalResult)) {
           break;
-          // originalResult = loadsMapping[originalResult];
         }
         setValueMapping(originalResult, newOp->getResult(dstIdx), stage);
         // update mapping for loop-carried values (args)
@@ -549,9 +563,9 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   size_t depArgsBeginIdx = newLoopArgs.size();
   for (BlockArgument depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    if (immedidateDepArgs.contains(depArg)) {
+    if (immediateDepArgs.contains(depArg))
       newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
-    } else
+    else
       newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
   }
 
@@ -628,13 +642,12 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   }
 
   // Special handling for iv & loop condition
+  Value curIV = newForOp.getRegionIterArgs()[nextIVIdx];
   Value nextIV = builder.create<arith::AddIOp>(
-      newForOp.getInductionVar().getLoc(),
-      newForOp.getRegionIterArgs()[nextIVIdx], newForOp.getStep());
+      newForOp.getInductionVar().getLoc(), curIV, newForOp.getStep());
   Value nextLoopCond =
       builder.create<arith::CmpIOp>(nextIV.getLoc(), arith::CmpIPredicate::slt,
                                     nextIV, newForOp.getUpperBound());
-  nextMapping.map(forOp.getInductionVar(), nextIV);
 
   // Slice index
   SmallVector<Value> nextBuffers;
@@ -651,6 +664,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   for (Operation *op : orderedDeps)
     if (!loads.contains(op->getResult(0))) {
+      if (immediateDepIVOps.contains(op))
+        nextMapping.map(forOp.getInductionVar(), curIV);
+      else
+        nextMapping.map(forOp.getInductionVar(), nextIV);
       Operation *nextOp;
       if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
         auto newMask =
