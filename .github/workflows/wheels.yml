@@ -1,7 +1,9 @@
 name: Wheels
 on:
   workflow_dispatch:
-  #schedule:
+  pull_request:
+    branches: [main]
+    #schedule:
   #  - cron: "0 0 * * *"
 
 jobs:
