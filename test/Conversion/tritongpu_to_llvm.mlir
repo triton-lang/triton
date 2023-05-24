@@ -1556,3 +1556,25 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
       tt.return
   }
 }
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+module attributes {"triton_gpu.num-warps" = 2 : i32} {
+  // CHECK-LABEL: atomic_add_f16
+  tt.func @atomic_add_f16(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: f16 {tt.difisibility = 16 : i32}) {
+    %c1_i1 = arith.constant 1 : i1
+    %1 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+    %2 = tt.expand_dims %1 {axis = 0 : i32} : (tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>) -> tensor<1x32xi32, #blocked>
+    %3 = tt.broadcast %2 : (tensor<1x32xi32, #blocked>) -> tensor<32x32xi32, #blocked>
+    %4 = tt.splat %arg0 : (!tt.ptr<f16>) -> tensor<32x32x!tt.ptr<f16>, #blocked>
+    %5 = tt.addptr %4, %3 : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
+    %6 = tt.splat %arg1 : (f16) -> tensor<32x32xf16, #blocked>
+    %7 = tt.splat %c1_i1 : (i1) -> tensor<32x32xi1, #blocked>
+
+    // PTX: llvm.inline_asm
+    // PTX-SAME: @$3 atom.global.gpu.add.noftz.f16x2
+    // GCN-COUNT-8: llvm.atomicrmw fadd {{.*}}  monotonic  : !llvm.ptr<f16, 1>, f16
+    %8 = "tt.atomic_rmw"(%5, %6, %7) {atomic_rmw_op = 5 : i32} : (tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xf16, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf16, #blocked>
+    tt.return
+  }
+}
