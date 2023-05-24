@@ -92,17 +92,19 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     if DTYPE == torch.int8:
         a = (torch.rand((K, M) if AT else (M, K), device="cuda") * 255 - 128).to(torch.int8)
         b = (torch.rand((N, K) if BT else (K, N), device="cuda") * 255 - 128).to(torch.int8)
-        out_dtype = torch.int32
+        gemm_out_dtype = torch.int32
     else:
         a = .1 * torch.randn((K, M) if AT else (M, K), device="cuda", dtype=DTYPE)
         b = .1 * torch.randn((N, K) if BT else (K, N), device="cuda", dtype=DTYPE)
-        out_dtype = DTYPE
+        gemm_out_dtype = DTYPE
     a = a.t() if AT else a
     b = b.t() if BT else b
     # run test
-    th_c = torch.matmul(a.to(torch.float32), b.to(torch.float32)).to(out_dtype)
+    th_c = torch.matmul(a.to(torch.float32), b.to(torch.float32)).to(gemm_out_dtype)
+    # use None for auto inference of dot output dtype
+    dot_out_dtype = None
     try:
-        tt_c = triton.ops.matmul(a, b, gemm_out_dtype=out_dtype)
+        tt_c = triton.ops.matmul(a, b, dot_out_dtype, gemm_out_dtype)
         torch.testing.assert_allclose(th_c, tt_c, atol=1e-2, rtol=0)
     except triton.OutOfResources as e:
         pytest.skip(str(e))
