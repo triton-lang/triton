@@ -103,8 +103,8 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 struct FuncOpConversion : public FuncOpConversionBase {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
                    ModuleAllocation &allocation, PatternBenefit benefit)
-      : FuncOpConversionBase(converter, benefit), allocation(allocation),
-        numWarps(numWarps) {}
+      : FuncOpConversionBase(converter, benefit), numWarps(numWarps),
+        allocation(allocation) {}
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
@@ -185,7 +185,7 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
   CallOpConversion(LLVMTypeConverter &converter, int numWarps,
                    ModuleAllocation &allocation, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit),
-        allocation(allocation), numWarps(numWarps) {}
+        numWarps(numWarps), allocation(allocation) {}
 
   LogicalResult
   matchAndRewrite(triton::CallOp callOp,

@@ -23,6 +23,8 @@ Creation Ops
     :nosignatures:
 
     arange
+    cat
+    full
     zeros
 
 
@@ -33,11 +35,13 @@ Shape Manipulation Ops
     :toctree: generated
     :nosignatures:
 
+    broadcast
     broadcast_to
     expand_dims
-    reshape
     ravel
-
+    reshape
+    trans
+    view
 
 
 Linear Algebra Ops
@@ -83,11 +87,13 @@ Math Ops
     abs
     exp
     log
+    fdiv
     cos
     sin
     sqrt
     sigmoid
     softmax
+    umulhi
 
 
 Reduction Ops
@@ -151,4 +157,27 @@ Compiler Hint Ops
     :toctree: generated
     :nosignatures:
 
+    debug_barrier
+    max_contiguous
     multiple_of
+
+Debug Ops
+-----------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    static_print
+    static_assert
+    device_print
+    device_assert
+
+Iterators
+-----------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    static_range
