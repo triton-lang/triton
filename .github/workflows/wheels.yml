@@ -21,7 +21,8 @@ jobs:
         uses: azure/login@v1
         with:
           creds: '${{ secrets.AZURE_CREDENTIALS }}'
-
+          allow-no-subscriptions: true
+          
       - name: Patch setup.py
         run: |
           sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
