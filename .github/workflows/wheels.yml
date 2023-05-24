@@ -8,16 +8,21 @@ jobs:
 
   Build-Wheels:
 
-    runs-on: [self-hosted, V100]
+    runs-on: ubuntu-latest
 
     steps:
 
       - name: Checkout
         uses: actions/checkout@v2
 
+      - name: Log in with Azure
+        uses: azure/login@v1
+        with:
+          creds: '${{ secrets.AZURE_CREDENTIALS }}'
+
       - name: Patch setup.py
         run: |
-          #sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
+          sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
           export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d' --format="%cd")
           sed -i -r "s/version\=\"(.*)\"/version=\"\1-dev"$LATEST_DATE"\"/g" python/setup.py
           echo "" >> python/setup.cfg
@@ -34,6 +39,6 @@ jobs:
           python3 -m cibuildwheel python --output-dir wheelhouse
 
 
-      - name: Upload wheels to PyPI
-        run: |
-          python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
+      # - name: Upload wheels to PyPI
+      #   run: |
+      #     python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
