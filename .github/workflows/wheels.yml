@@ -18,11 +18,11 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Log in with Azure
-        uses: azure/login@v1
+        uses: azure/actions/login@v1
         with:
           creds: '${{ secrets.AZURE_CREDENTIALS }}'
           allow-no-subscriptions: true
-          
+
       - name: Patch setup.py
         run: |
           sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
