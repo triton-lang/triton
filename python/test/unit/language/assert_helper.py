@@ -21,8 +21,6 @@ def kernel_device_assert_scalar(X, Y, BLOCK: tl.constexpr):
     tl.device_assert(0 == 0, "x != 0")
     tl.store(Y + tl.arange(0, BLOCK), x)
 
-# TRITON_DEBUG=True can override the debug flag
-
 
 @triton.jit(debug=False)
 def kernel_device_assert_no_debug(X, Y, BLOCK: tl.constexpr):
@@ -53,6 +51,7 @@ def test_assert(func: str):
         kernel_device_assert[(1,)](x, y, BLOCK=shape[0])
         kernel_device_assert_scalar[(1,)](x, y, BLOCK=shape[0])
     elif func == "no_debug":
+        # TRITON_DEBUG=True can override the debug flag
         kernel_device_assert_no_debug[(1,)](x, y, BLOCK=shape[0])
     elif func == "assert":
         kernel_assert[(1,)](x, y, BLOCK=shape[0])
