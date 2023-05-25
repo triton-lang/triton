@@ -141,6 +141,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
       - name: Install gh CLI
         run: |
           sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key 23F3D4EA75716059
@@ -187,19 +190,18 @@ jobs:
           name: artifacts
       - name: Unzip current job artifacts
         run: |
+          ls
+          pwd
           # Print the size of the downloaded artifact
-          echo "Artifact size (stat): $(stat --printf="%s bytes" artifacts/artifacts.tar.gz)"
-          echo "Artifact size (du): $(du -sh artifacts/artifacts.tar.gz)"
+          echo "Artifact size (stat): $(stat --printf="%s bytes" artifacts.tar.gz)"
+          echo "Artifact size (du): $(du -sh artifacts.tar.gz)"
           mkdir temp1
-          tar -xzf artifacts/artifacts.tar.gz -C temp1
-          rm -rf artifacts
+          tar -xzf artifacts.tar.gz -C temp1
+          rm artifacts.tar.gz
           mv temp1/home/phil/.triton/cache current
           rm -rf temp1
       - name: Compare artifacts
         run: |
           pwd
-          ls reference
-          echo "-----------------------------------------------"
-          ls current
-          echo "-----------------------------------------------"
-          python3 -m python/test/tools/compare_files.py --path1 reference --path2 current --hash python/test/kernel_comparison/kernels.yml
+          ls
+          python3 python/test/tools/compare_files.py --path1 reference --path2 current --hash python/test/kernel_comparison/kernels.yml
