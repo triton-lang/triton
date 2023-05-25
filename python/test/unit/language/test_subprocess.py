@@ -9,7 +9,8 @@ print_path = os.path.join(dir_path, "print_helper.py")
 assert_path = os.path.join(dir_path, "assert_helper.py")
 
 # TODO: bfloat16 after LLVM-15
-func_types = ["device_assert", "assert", "static_assert"]
+func_types = ["device_assert", "assert", "static_assert", "no_debug"]
+nested_types = [(caller, callee) for caller in ["true", "false", "none"] for callee in ["true", "false", "none"]]
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
 
 
@@ -51,3 +52,29 @@ def test_assert(func_type: str):
         assert num_errs == 127
     else:
         assert num_errs == 0
+
+
+@pytest.mark.parametrize("caller_type, callee_type", nested_types)
+def test_assert_nested(caller_type, callee_type):
+    proc = subprocess.Popen([sys.executable, assert_path, caller_type, callee_type], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
+    _, errs = proc.communicate()
+    errs = errs.splitlines()
+    num_errs = 0
+    for err in errs:
+        if "x != 0" in err.decode("utf-8"):
+            num_errs += 1
+    if caller_type == "none":
+        if callee_type == "true":
+            assert num_errs == 127
+        else:
+            assert num_errs == 0
+    elif caller_type == "true":
+        if callee_type == "false":
+            assert num_errs == 0
+        else:
+            assert num_errs == 127
+    elif caller_type == "false":
+        if callee_type == "true":
+            assert num_errs == 127
+        else:
+            assert num_errs == 0
