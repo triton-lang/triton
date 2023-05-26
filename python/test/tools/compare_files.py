@@ -32,8 +32,7 @@ def get_json_file(path):
     # filter out json files with grp in their name
     json_files = [f for f in json_files if "grp" not in f]
     assert len(json_files) == 1, f"Found {len(json_files)} files in {path} with extension json!"
-    json_file = os.path.join(path, json_files[0])
-    return json_file
+    return json_files[0]
 
 
 def get_name_to_hashes_dict(path):
