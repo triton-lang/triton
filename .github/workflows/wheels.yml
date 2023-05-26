@@ -21,7 +21,6 @@ jobs:
         uses: azure/actions/login@v1
         with:
           creds: '${{ secrets.AZURE_CREDENTIALS }}'
-          allow-no-subscriptions: true
 
       - name: Patch setup.py
         run: |
