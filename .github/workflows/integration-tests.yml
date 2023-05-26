@@ -204,4 +204,4 @@ jobs:
         run: |
           pwd
           ls
-          python3 python/test/tools/compare_files.py --path1 reference --path2 current --hash python/test/kernel_comparison/kernels.yml
+          python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml
