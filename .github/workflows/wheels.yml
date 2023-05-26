@@ -31,6 +31,9 @@ jobs:
           echo "[build_ext]" >> python/setup.cfg
           echo "base-dir=/project" >> python/setup.cfg
 
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel twine
+
       - name: Build wheels
         run: |
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
