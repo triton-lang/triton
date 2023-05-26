@@ -342,7 +342,9 @@ class CodeGenerator(ast.NodeVisitor):
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
         # Remove dead code
+        print(fn)
         fn.finalize()
+        print(fn)
 
     def visit_arguments(self, node):
         arg_names = []
@@ -560,7 +562,11 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
         if _is_triton_tensor(cond):
             cond = cond.to(language.int1, _builder=self.builder)
-            if self.scf_stack or not ContainsReturnChecker(self.gscope).visit(node):
+            contains_return = ContainsReturnChecker(self.gscope).visit(node)
+            if self.scf_stack and contains_return:
+                raise UnsupportedLanguageConstruct(None, node,
+                                                   "Cannot have `return` statements inside `while` or `for` statements in triton")
+            elif self.scf_stack or not contains_return:
                 self.visit_if_scf(cond, node)
             else:
                 self.visit_if_top_level(cond, node)

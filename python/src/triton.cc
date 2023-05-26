@@ -439,11 +439,15 @@ void init_triton_ir(py::module &&m) {
              // 1. Unreachable code after return
              self.walk([&](mlir::Block *block) {
                mlir::Operation *retOp = nullptr;
-               block->walk([&](mlir::Operation *op) {
+               // It's better to not use walk here because we only want to
+               // check operations in the current block
+               for (auto &op : block->getOperations()) {
                  if (mlir::isa<mlir::triton::ReturnOp>(op))
-                   if (retOp == nullptr)
-                     retOp = op;
-               });
+                   if (retOp == nullptr) {
+                     retOp = &op;
+                     break;
+                   }
+               }
                if (retOp && retOp != &block->back()) {
                  auto pos = retOp->getIterator();
                  pos++;
