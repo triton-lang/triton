@@ -44,6 +44,6 @@ jobs:
           python3 -m cibuildwheel python --output-dir wheelhouse
 
 
-      # - name: Upload wheels to PyPI
-      #   run: |
-      #     python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
+      - name: Upload wheels to ADO
+        run: |
+          python3 -m twine upload -r Triton-Nightly-Test --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
