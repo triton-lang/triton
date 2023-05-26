@@ -342,9 +342,7 @@ class CodeGenerator(ast.NodeVisitor):
         if insert_pt:
             self.builder.set_insertion_point_to_end(insert_pt)
         # Remove dead code
-        print(fn)
         fn.finalize()
-        print(fn)
 
     def visit_arguments(self, node):
         arg_names = []
