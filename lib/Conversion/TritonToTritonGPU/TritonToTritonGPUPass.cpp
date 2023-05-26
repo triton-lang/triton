@@ -790,7 +790,6 @@ public:
     if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(),
                                            *converter)))
       return failure();
-    rewriter.eraseOp(op);
     return success();
   }
 };
