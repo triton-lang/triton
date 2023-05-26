@@ -11,6 +11,8 @@ from collections import defaultdict, namedtuple
 from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast,
                     overload)
 
+import torch
+
 import triton
 from triton.common.backend import get_backend
 
@@ -283,7 +285,7 @@ class JITFunction(KernelInterface[T]):
         device_types = [device_type for device_type in device_types if device_type != '']
         # Return cuda if one of the input tensors is cuda
         if 'cuda' in device_types:
-            return 'cuda'
+            return 'hip' if torch.version.hip else 'cuda'
 
         is_cpu = all(device_type == 'cpu' for device_type in device_types)
         is_pinned_memory = any(pinned_memory_flag for pinned_memory_flag in pinned_memory_flags)
