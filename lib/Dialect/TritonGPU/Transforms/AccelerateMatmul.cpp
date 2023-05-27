@@ -49,7 +49,7 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
   };
   auto slices = mlir::getSlice(dotOp, filter);
   for (Operation *op : slices)
-    if (isa<triton::DotOp>(op) && (op != dotOp))
+    if (isa<triton::ReduceOp>(op))
       return {(unsigned)numWarps, 1};
 
   SmallVector<unsigned, 2> ret = {1, 1};
