@@ -600,8 +600,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   newLoopArgs.push_back(loopIterIdx);
 
   for (size_t i = 0; i < newLoopArgs.size(); ++i)
-    assert(newLoopArgs[i] &&
-           "newLoopArgs has null args without a define op.");
+    assert(newLoopArgs[i] && "newLoopArgs has null args without a define op.");
 
   // 1. signature of the new ForOp
   auto newForOp = builder.create<scf::ForOp>(
@@ -655,12 +654,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
-  for (auto [depOp, stage] : depOps) {
-    llvm::errs() << "dep op " << *depOp << " stage " << stage << "\n";
-  }
-  llvm::errs() << "depOps.size(): " << depOps.size() << "\n";
-  llvm::errs() << "loads.size(): " << loads.size() << "\n";
-  llvm::errs() << "orderedDeps.size(): " << orderedDeps.size() << "\n";
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
          "depOps contains invalid values");
   IRMapping nextMapping;
