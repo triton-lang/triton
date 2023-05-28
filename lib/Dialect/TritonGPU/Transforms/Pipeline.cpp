@@ -580,6 +580,10 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     depArgsIdx[depArg] = newLoopArgs.size();
     for (int stage = numStages - 1; stage >= defStage; --stage) {
       Value defOp = valueMapping[depArg][stage];
+      assert(defOp &&
+             "newLoopArgs has null args without a define op. Consider either "
+             "rewrite the loop to reduce cross iteration dependencies or "
+             "increase the num_stages value.");
       if (!isa<BlockArgument>(defOp)) {
         auto *op = defOp.getDefiningOp();
         if (stage == numStages - 1 && depOps.contains(op) &&
@@ -598,9 +602,6 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   newLoopArgs.push_back(valueMapping[forOp.getInductionVar()][numStages - 2]);
   newLoopArgs.push_back(pipelineIterIdx);
   newLoopArgs.push_back(loopIterIdx);
-
-  for (size_t i = 0; i < newLoopArgs.size(); ++i)
-    assert(newLoopArgs[i] && "newLoopArgs has null args without a define op.");
 
   // 1. signature of the new ForOp
   auto newForOp = builder.create<scf::ForOp>(

@@ -222,9 +222,9 @@ def test_iv_dependent_matmul(type):
     def grid(META):
         return (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
 
+    num_stages = 4 if type == "post_load_three_iters" else 3
     kernel[grid](a, b, triton_output, M, N, K, a.stride(0), a.stride(1),
                  b.stride(0), b.stride(1), triton_output.stride(0), triton_output.stride(1),
                  BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
-                 type=type)
+                 type=type, num_stages=num_stages)
     torch.testing.assert_allclose(torch_output, triton_output, rtol=1e-2, atol=1e-2)
-                                                                                                                   
