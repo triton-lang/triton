@@ -581,7 +581,13 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     for (int stage = numStages - 1; stage >= defStage; --stage) {
       Value defOp = valueMapping[depArg][stage];
       if (!isa<BlockArgument>(defOp)) {
-        newLoopArgs.push_back(defOp);
+        auto *op = defOp.getDefiningOp();
+        if (stage == numStages - 1 && depOps.contains(op) &&
+            depOps[op] == numStages - 2) {
+          newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
+        } else {
+          newLoopArgs.push_back(valueMapping[depArg][stage]);
+        }
         break;
       } else
         depArg = defOp.cast<BlockArgument>();
@@ -649,6 +655,12 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
+  for (auto [depOp, stage] : depOps) {
+    llvm::errs() << "dep op " << *depOp << " stage " << stage << "\n";
+  }
+  llvm::errs() << "depOps.size(): " << depOps.size() << "\n";
+  llvm::errs() << "loads.size(): " << loads.size() << "\n";
+  llvm::errs() << "orderedDeps.size(): " << orderedDeps.size() << "\n";
   assert(depOps.size() + loads.size() == orderedDeps.size() &&
          "depOps contains invalid values");
   IRMapping nextMapping;

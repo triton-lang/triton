@@ -183,7 +183,7 @@ def test_iv_dependent_matmul(type):
             if type == "post_load":
                 a_ptrs = a_ptr + (k + 1) * BLOCK_SIZE_K * stride_ak
                 b_ptrs = b_ptr + (k + 1) * BLOCK_SIZE_K * stride_bk
-            elif type == "post_load_two_iters":
+            elif type == "post_pre_mixed":
                 b_ptrs = b_ptr + (k + 1) * BLOCK_SIZE_K * stride_bk
             elif type == "post_load_two_iters":
                 a_ptrs = a_ptrs_next
