@@ -1386,7 +1386,7 @@ def _argmax_combine(value1, index1, value2, index2):
 
 @triton.jit
 @_add_reduction_docstr("maximum index")
-def argmax(input, axis=None):
+def argmax(input, axis):
     input = _promote_reduction_input(input)
     return _argreduce(input, axis, _argmax_combine)
 
@@ -1416,7 +1416,7 @@ def _argmin_combine(value1, index1, value2, index2):
 
 @triton.jit
 @_add_reduction_docstr("minimum index")
-def argmin(input, axis=None):
+def argmin(input, axis):
     input = _promote_reduction_input(input)
     return _argreduce(input, axis, _argmin_combine)
 
