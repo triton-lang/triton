@@ -560,7 +560,11 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
         if _is_triton_tensor(cond):
             cond = cond.to(language.int1, _builder=self.builder)
-            if self.scf_stack or not ContainsReturnChecker(self.gscope).visit(node):
+            contains_return = ContainsReturnChecker(self.gscope).visit(node)
+            if self.scf_stack and contains_return:
+                raise UnsupportedLanguageConstruct(None, node,
+                                                   "Cannot have `return` statements inside `while` or `for` statements in triton")
+            elif self.scf_stack or not contains_return:
                 self.visit_if_scf(cond, node)
             else:
                 self.visit_if_top_level(cond, node)
@@ -859,7 +863,9 @@ class CodeGenerator(ast.NodeVisitor):
         if not self.module.has_function(fn_name):
             prototype = language.function_type([], arg_types)
             gscope = sys.modules[fn.fn.__module__].__dict__
-            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=fn.debug, noinline=fn.noinline)
+            # If the callee is not set, we use the same debug setting as the caller
+            debug = self.debug if fn.debug is None else fn.debug
+            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=debug, noinline=fn.noinline)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type
