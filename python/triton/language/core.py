@@ -1297,8 +1297,8 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
             else:
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
-
-    axis = _constexpr_to_value(axis)
+    if axis is not None:
+        axis = _constexpr_to_value(axis)
     return semantic.reduction(input, axis, make_combine_region, _builder)
 
 
@@ -1369,7 +1369,7 @@ def _max_combine(a, b):
 
 @triton.jit
 @_add_reduction_docstr("maximum")
-def max(input, axis):
+def max(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _max_combine)
 
@@ -1399,7 +1399,7 @@ def _min_combine(a, b):
 
 @triton.jit
 @_add_reduction_docstr("minimum")
-def min(input, axis):
+def min(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _min_combine)
 
@@ -1428,7 +1428,7 @@ def _sum_combine(a, b):
 
 @triton.jit
 @_add_reduction_docstr("sum")
-def sum(input, axis):
+def sum(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _sum_combine)
 
@@ -1440,7 +1440,7 @@ def _xor_combine(a, b):
 
 @builtin
 @_add_reduction_docstr("xor sum")
-def xor_sum(input, axis, _builder=None, _generator=None):
+def xor_sum(input, axis=None, _builder=None, _generator=None):
     scalar_ty = input.type.scalar
     if not scalar_ty.is_int():
         raise ValueError("xor_sum only supported for integers")
