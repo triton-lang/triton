@@ -137,7 +137,7 @@ def test_vecmat():
     np.testing.assert_allclose(C_ref, C_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
-@pytest.mark.parametrize("type", ["pre_load", "post_load", "post_load_two_iters"])
+@pytest.mark.parametrize("type", ["pre_load", "post_load", "post_pre_mixed", "post_load_two_iters", "post_load_three_iters"])
 def test_iv_dependent_matmul(type):
     @triton.jit
     def kernel(
@@ -164,23 +164,39 @@ def test_iv_dependent_matmul(type):
         if type == "post_load_two_iters":
             a_ptrs_next = a_ptr + BLOCK_SIZE_K * stride_ak
             b_ptrs_next = b_ptr + BLOCK_SIZE_K * stride_bk
+        elif type == "post_load_three_iters":
+            a_ptrs_next = a_ptr + BLOCK_SIZE_K * stride_ak
+            b_ptrs_next = b_ptr + BLOCK_SIZE_K * stride_bk
+            a_ptrs_next_next = a_ptr + 2 * BLOCK_SIZE_K * stride_ak
+            b_ptrs_next_next = b_ptr + 2 * BLOCK_SIZE_K * stride_bk
 
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
             if type == "pre_load":
                 a_ptrs = a_ptr + k * BLOCK_SIZE_K * stride_ak
                 b_ptrs = b_ptr + k * BLOCK_SIZE_K * stride_bk
+            elif type == "post_pre_mixed":
+                a_ptrs = a_ptr + k * BLOCK_SIZE_K * stride_ak
             a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
             b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
             accumulator += tl.dot(a, b)
             if type == "post_load":
                 a_ptrs = a_ptr + (k + 1) * BLOCK_SIZE_K * stride_ak
                 b_ptrs = b_ptr + (k + 1) * BLOCK_SIZE_K * stride_bk
-            if type == "post_load_two_iters":
+            elif type == "post_load_two_iters":
+                b_ptrs = b_ptr + (k + 1) * BLOCK_SIZE_K * stride_bk
+            elif type == "post_load_two_iters":
                 a_ptrs = a_ptrs_next
                 b_ptrs = b_ptrs_next
                 a_ptrs_next = a_ptr + (k + 2) * BLOCK_SIZE_K * stride_ak
                 b_ptrs_next = b_ptr + (k + 2) * BLOCK_SIZE_K * stride_bk
+            elif type == "post_load_three_iters":
+                a_ptrs = a_ptrs_next
+                b_ptrs = b_ptrs_next
+                a_ptrs_next = a_ptrs_next_next
+                b_ptrs_next = b_ptrs_next_next
+                a_ptrs_next_next = a_ptr + (k + 3) * BLOCK_SIZE_K * stride_ak
+                b_ptrs_next_next = b_ptr + (k + 3) * BLOCK_SIZE_K * stride_bk
         c = accumulator.to(tl.float16)
 
         offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
