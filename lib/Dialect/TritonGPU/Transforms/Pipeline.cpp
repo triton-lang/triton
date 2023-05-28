@@ -618,7 +618,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   size_t depArgsBeginIdx = newLoopArgs.size();
   for (auto [depArg, useStage] : depArgUseStage) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    auto defStage = getArgDefStage(depArg, numStages - 1);
+    auto defStage = getArgDefStage(depArg, useStage);
     assert(defStage >= 0 &&
            "newLoopArgs has null args without a define op. Consider either "
            "rewrite the loop to reduce cross iteration dependencies or "
