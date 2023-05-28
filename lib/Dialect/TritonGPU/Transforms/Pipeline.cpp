@@ -579,22 +579,22 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   for (auto [depArg, defStage] : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
     for (int stage = numStages - 1; stage >= defStage; --stage) {
-      Value defOp = valueMapping[depArg][stage];
-      assert(defOp &&
+      Value def = valueMapping[depArg][stage];
+      assert(def &&
              "newLoopArgs has null args without a define op. Consider either "
              "rewrite the loop to reduce cross iteration dependencies or "
              "increase the num_stages value.");
-      if (!isa<BlockArgument>(defOp)) {
-        auto *op = defOp.getDefiningOp();
-        if (stage == numStages - 1 && depOps.contains(op) &&
-            depOps[op] == numStages - 2) {
+      if (!isa<BlockArgument>(def)) {
+        auto *defOp = def.getDefiningOp();
+        if (stage == numStages - 1 && depOps.contains(defOp) &&
+            depOps[defOp] == numStages - 2) {
           newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
         } else {
           newLoopArgs.push_back(valueMapping[depArg][stage]);
         }
         break;
       } else
-        depArg = defOp.cast<BlockArgument>();
+        depArg = def.cast<BlockArgument>();
     }
   }
 
