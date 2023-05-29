@@ -271,7 +271,11 @@ LogicalResult LoopPipeliner::initialize() {
                     .cast<triton::PointerType>()
                     .getPointeeType();
       unsigned width = vec * ty.getIntOrFloatBitWidth();
-      // cp.async's cp-size can only be 4, 8 and 16.
+      // We do not pipeline all loads for the following reasons:
+      // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
+      // 2. It's likely that pipling small load won't offer much performance
+      //    improvement and may even hurt performance by increasing register
+      //    pressure.
       if (width >= 32)
         validLoads.push_back(loadOp);
     }
@@ -899,8 +903,10 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     getOperation()->walk([&](scf::ForOp forOp) -> void {
       LoopPipeliner pipeliner(forOp, numStages);
 
-      if (pipeliner.initialize().failed())
+      if (pipeliner.initialize().failed()) {
+        llvm::errs() << "failed\n";
         return;
+      }
 
       pipeliner.emitPrologue();
 

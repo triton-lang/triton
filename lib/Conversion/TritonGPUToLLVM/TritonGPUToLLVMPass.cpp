@@ -307,8 +307,7 @@ public:
     // Preprocess
     decomposeMmaToDotOperand(mod, numWarps);
     decomposeBlockedToDotOperand(mod);
-    if (failed(decomposeInsertSliceAsyncOp(mod)))
-      return signalPassFailure();
+    decomposeInsertSliceAsyncOp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -487,7 +486,7 @@ private:
     });
   }
 
-  LogicalResult decomposeInsertSliceAsyncOp(ModuleOp mod) const {
+  void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
@@ -515,6 +514,7 @@ private:
       // Get the vectorized load size
       auto src = insertSliceAsyncOp.getSrc();
       auto dst = insertSliceAsyncOp.getDst();
+      auto mask = insertSliceAsyncOp.getMask();
       auto srcTy = src.getType().cast<RankedTensorType>();
       auto dstTy = dst.getType().cast<RankedTensorType>();
       auto srcBlocked =
@@ -523,6 +523,9 @@ private:
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
       unsigned inVec = axisInfoAnalysis.getPtrContiguity(src);
+      if (mask)
+        inVec =
+            std::min<unsigned>(axisInfoAnalysis.getMaskAlignment(mask), inVec);
       unsigned outVec = resSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       auto maxBitWidth =
@@ -530,6 +533,7 @@ private:
       auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
       auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
       auto byteWidth = bitWidth / 8;
+      llvm::errs() << "byteWidth: " << byteWidth << "\n";
 
       // If the load byte width is not eligible or the current compute
       // capability does not support async copy, then we do decompose
@@ -586,7 +590,6 @@ private:
         asyncWaitOp.erase();
       }
     });
-    return success();
   }
 };
 
