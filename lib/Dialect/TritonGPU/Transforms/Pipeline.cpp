@@ -25,8 +25,13 @@ namespace ttg = triton::gpu;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+#define int_attr(num) builder.getI64IntegerAttr(num)
+
+
+namespace {
+
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
-static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
+void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
   NamedAttrList attrs = op->getDiscardableAttrs();
   // Collect the attributes to propagate: the ones in dictAttrs and not yet on
   // the operation.
@@ -41,10 +46,6 @@ static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
     op->setDiscardableAttrs(attrs);
   }
 }
-
-#define int_attr(num) builder.getI64IntegerAttr(num)
-
-namespace {
 
 class LoopPipeliner {
   /// Cache forOp we are working on
@@ -903,14 +904,13 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     getOperation()->walk([&](scf::ForOp forOp) -> void {
       LoopPipeliner pipeliner(forOp, numStages);
 
-      if (pipeliner.initialize().failed()) {
-        llvm::errs() << "failed\n";
+      if (pipeliner.initialize().failed())
         return;
-      }
 
       pipeliner.emitPrologue();
 
       scf::ForOp newForOp = pipeliner.createNewForOp();
+
       pipeliner.emitEpilogue();
 
       // replace the original loop
