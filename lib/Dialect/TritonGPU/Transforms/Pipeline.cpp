@@ -903,10 +903,8 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     getOperation()->walk([&](scf::ForOp forOp) -> void {
       LoopPipeliner pipeliner(forOp, numStages);
 
-      if (pipeliner.initialize().failed()) {
-        llvm::errs() << "failed\n";
+      if (pipeliner.initialize().failed())
         return;
-      }
 
       pipeliner.emitPrologue();
 
