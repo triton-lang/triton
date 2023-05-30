@@ -193,7 +193,7 @@ LogicalResult LoopPipeliner::collectDeps(Value v, int stage,
     if (arg.getArgNumber() > 0) {
       // If we've found the first definition of this arg, we're done, don't
       // recurse
-      if (addDep(v, stage, depStage).failed())
+      if (addDep(v, stage, depStage).succeeded())
         if (collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stage - 1,
                         depStage)
                 .failed())
