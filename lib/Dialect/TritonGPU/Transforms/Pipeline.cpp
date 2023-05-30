@@ -11,44 +11,46 @@
 #include "llvm/ADT/MapVector.h"
 
 //===----------------------------------------------------------------------===//
+// This file implements software pipelining for loops. The implementation here
+// is inspired by the pipeline pass in Triton (version 2.0) and SCF's
+// LoopPipelining.
 //
-// This file implements loop software pipelining.
-// The implementation here is inspired by the pipeline pass in Triton (-v2.0)
-// and SCF's LoopPipelining.
+// We divide the loop body into the following phases:
+// a. Pre-load operations: for instance, index computation.
+// b. Load operations: loading from global memory to shared memory.
+// c. Compute operations: for instance, Triton dot.
+// d. Post-load operations: for instance, index computation.
 //
-// We divide the loop body into the following phases.
-// a. pre-load ops: e.g., index computation
-// b. load ops: load from global memory to shared memory
-// c. compute ops: e.g., triton dot
-// d. post-load ops: e.g., index computation
+// To pipeline the loop, we need to:
+// - Hoist the load operations out of the loop body.
+// - Find all the dependencies of the load operations.
+// - Repeat the dependencies (numStage-1) times.
+// - Assemble the loop body (numStage) and prefetch (numStage + 1).
 //
-// To pipeline the loop, we need to
-// - hoist the load ops out of the loop body
-// - find all the dependencies of the load ops
-// - repeat the dependencies (numStage-1) times
-// - assemble the loop body (numStage) and prefetch (numStage + 1)
-//
-// In the prologue, the sequence of ops are the same as the original loop body,
-// following the (a) -> (b) -> (c) -> (d) order.
-// In the loop body, however, we first execute the compute ops, then pre-load
-// ops, post-load ops, and eventually the load ops---in the (c) -> (a) -> (d) ->
-// (b) order. This is used to better hide the latency of the load ops.
-// Because of this, if post-load ops have direct dependencies on the load ops,
-// we could repeat the post-load ops.
-// More specifically, it occurs when:
-// 1. any load operand has an immedidate dependency argument used at numStage-1,
+// In the prologue, the sequence of operations is the same as the original loop
+// body, following the (a) -> (b) -> (c) -> (d) order. In the loop body,
+// however, we first execute the compute operations, then pre-load operations,
+// post-load operations, and eventually the load operations - in the (c) -> (a)
+// -> (d) -> (b) order. This is used to better hide the latency of the load
+// operations. Because of this, if post-load operations have direct dependencies
+// on the load operations, we could repeat the post-load operations. More
+// specifically, this occurs when:
+// 1. Any load operand has an immediate dependency argument used at numStage-1,
 // and
-// 2. the argument is first defined at numStage-2.
-// See the example below about the definition of immediate and non-immediate
+// 2. The argument is first defined at numStage-2.
+//
+// See the example below for the definition of immediate and non-immediate
 // dependencies.
 //
-// Different from SCF's LoopPipelining, our pipelining pass
-// 1. can handle loop carried dependencies of distance > 1,
-// 2. requires each loop carried value has one first use and first def stage,
-// because we don't create new values that are likely to increase register
-// pressure, and
-// 3. doesn't have a complicated epilogue but instead use masking to handle
+// Our pipelining pass, different from SCF's LoopPipelining, has the following
+// characteristics:
+// 1. It can handle loop-carried dependencies of distance greater than 1.
+// 2. It requires each loop-carried value to have one first use and one first
+// definition stage because we do not create new values that are likely to
+// increase register pressure.
+// 3. It does not have a complicated epilogue but instead uses masking to handle
 // boundary conditions.
+//
 //===----------------------------------------------------------------------===//
 
 using llvm::MapVector;
