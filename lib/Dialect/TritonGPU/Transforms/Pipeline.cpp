@@ -38,18 +38,18 @@
 // 1. Any load operand has an immediate dependency argument used at numStage-1,
 // and
 // 2. The argument is first defined at numStage-2.
-//
-// See the example below for the definition of immediate and non-immediate
-// dependencies.
+// To avoid the repeat, we peeled off post-load operations in the prologue that
+// satisfy the above two conditions. See the example below for the definition of
+// immediate and non-immediate dependencies.
 //
 // Our pipelining pass share some common characteristics with SCF's
-// LoopPipelining, such as each op can only have one definition stage. However,
-// it is also noteworthy that our pipelining pass has the following
+// LoopPipelining, such as each op can only have one first dependent stage.
+// However, it is also noteworthy that our pipelining pass has the following
 // characteristics different from SCF's LoopPipelining:
 // 1. It can handle loop-carried dependencies of distance greater than 1.
 // 2. It requires each loop-carried value to have one first use and one first
-// definition stage because we do not create new values that are likely to
-// increase register pressure.
+// definition stage because we do not create new loop-carried values that are
+// likely to increase register pressure.
 // 3. It does not have a complicated epilogue but instead uses masking to handle
 // boundary conditions.
 //
