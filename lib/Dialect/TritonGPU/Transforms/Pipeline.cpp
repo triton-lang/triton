@@ -43,9 +43,8 @@
 // immediate and non-immediate dependencies.
 //
 // Our pipelining pass share some common characteristics with SCF's
-// LoopPipelining, such as each op can only have one first dependent stage.
-// However, it is also noteworthy that our pipelining pass has the following
-// characteristics different from SCF's LoopPipelining:
+// LoopPipelining. However, it is also noteworthy that our pipelining pass has
+// the following characteristics different from SCF's LoopPipelining:
 // 1. It can handle loop-carried dependencies of distance greater than 1.
 // 2. It requires each loop-carried value to have one first use and one first
 // definition stage because we do not create new loop-carried values that are
