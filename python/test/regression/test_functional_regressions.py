@@ -1,8 +1,8 @@
 import numpy as np
+import pytest
 import torch
 from numpy.random import RandomState
 
-import pytest
 import triton
 import triton.language as tl
 
