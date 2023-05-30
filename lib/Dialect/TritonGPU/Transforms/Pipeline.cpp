@@ -178,14 +178,9 @@ class LoopPipeliner {
 
   /// Collect values that `v` depends prior to `stage` on and are defined inside
   /// the loop
+  /// Each op can only have a single stage of dependencies
   LogicalResult collectValueDepStage(Value v, int stage,
                                      MapVector<Value, int> &depStage);
-
-  /// Collect all operand dependencies
-  /// Each op can only have a single stage of dependencies
-  LogicalResult collectOperandDeps(
-      SetVector<Operation *> &ops,
-      MapVector<Operation *, SmallVector<MapVector<Value, int>>> &loadDeps);
 
   /// Check if ops have dependencies that are not pipelinable
   LogicalResult checkOpDeps(SetVector<Operation *> &ops);
@@ -517,20 +512,6 @@ void LoopPipeliner::collectDeps(
       SetVector<Value> deps;
       collectValueDep(v, numStages - 1, deps);
       valueDeps[op] = deps;
-    }
-  }
-}
-
-LogicalResult LoopPipeliner::collectOperandDeps(
-    SetVector<Operation *> &ops,
-    MapVector<Operation *, SmallVector<MapVector<Value, int>>>
-        &loadOperandDeps) {
-  for (Operation *op : ops) {
-    for (Value v : op->getOperands()) {
-      MapVector<Value, int> operandDepStage;
-      if (collectValueDepStage(v, numStages - 1, operandDepStage).failed())
-        return failure();
-      loadOperandDeps[op].push_back(operandDepStage);
     }
   }
 }
