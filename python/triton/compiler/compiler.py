@@ -21,7 +21,6 @@ from ..tools.disasm import extract
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
 
-
 def inline_triton_ir(mod):
     pm = _triton.ir.pass_manager(mod.context)
     pm.enable_debug()
@@ -70,6 +69,9 @@ def optimize_ttgir(mod, num_stages, arch):
     pm.add_tritongpu_remove_layout_conversions_pass()
     if _is_cuda(arch):
         pm.add_tritongpu_accelerate_matmul_pass(arch)
+    # TODO change interface of accelerate_matmul_pass
+    if is_hip() and gpu_has_mfma():
+        pm.add_tritongpu_accelerate_matmul_pass(80)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     # TODO enable this pass for AMD GPU when it is ready
@@ -330,6 +332,7 @@ def is_hip():
         raise ImportError("Triton requires PyTorch to be installed")
     return torch.version.hip is not None
 
+from ..language.semantic import gpu_has_mfma
 
 def get_architecture_descriptor(capability):
     try:

@@ -15,9 +15,6 @@ using triton::gpu::MmaEncodingAttr;
 using triton::gpu::SliceEncodingAttr;
 
 int computeCapabilityToMMAVersion(int computeCapability) {
-#ifdef USE_ROCM
-  return 1;
-#endif
   if (computeCapability < 70) {
     return 0;
   } else if (computeCapability < 80) {
@@ -78,6 +75,125 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
   } while (true);
   return ret;
 }
+
+#ifdef USE_ROCM
+SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
+                                           const ArrayRef<int64_t> shape,
+                                           int numWarps) {
+  // TODO: needs to be updated with appropriate shapePerWarp etc.
+  SetVector<Operation *> slices;
+  mlir::getForwardSlice(dotOp.getResult(), &slices);
+  if (llvm::find_if(slices, [](Operation *op) {
+        return isa<triton::DotOp>(op);
+      }) != slices.end())
+    return {(unsigned)numWarps, 1};
+  SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
+  SmallVector<unsigned, 2> ret = {1, 1};
+  SmallVector<int64_t, 2> shapePerWarp = {32, 32};
+  bool changed = false;
+  // TODO (@daadaada): double-check.
+  // original logic in
+  // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
+  // seems buggy for shape = [32, 16] ?
+
+  // TODO(@B1tway): the comment above is also true for AMDGPU for shape =
+  // [64,32], as a temporary solution the dims have been swapped
+  if (shape[0] == 2 * shape[1])
+    tensorShape = {shape[1], shape[0]};
+
+  do {
+    changed = false;
+    if (ret[0] * ret[1] >= numWarps)
+      break;
+    if (tensorShape[0] / shapePerWarp[0] / ret[0] >=
+        tensorShape[1] / (shapePerWarp[1] * 2) / ret[1]) {
+      if (ret[0] < tensorShape[0] / shapePerWarp[0]) {
+        ret[0] *= 2;
+      } else
+        ret[1] *= 2;
+    } else {
+      ret[1] *= 2;
+    }
+  } while (true);
+
+  if (ret[1] * shapePerWarp[1] > tensorShape[1]) {
+    return {ret[1], ret[0]};
+  }
+
+  return ret;
+}
+
+class BlockedToMFMA : public mlir::RewritePattern {
+public:
+  BlockedToMFMA(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto dotOp = cast<triton::DotOp>(op);
+
+    auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
+    if (!oldRetType.getEncoding() ||
+        !oldRetType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>())
+      return failure();
+
+    if (!supportMFMA(dotOp))
+      return failure();
+
+    // get MFMA encoding for the given number of warps
+    auto retShape = oldRetType.getShape();
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+
+    // operands
+    Value a = dotOp.getA();
+    Value b = dotOp.getB();
+    auto oldAType = a.getType().cast<RankedTensorType>();
+    auto oldBType = b.getType().cast<RankedTensorType>();
+    auto ctx = oldAType.getContext();
+
+    triton::gpu::MfmaEncodingAttr mfmaEnc;
+    auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
+    mfmaEnc = triton::gpu::MfmaEncodingAttr::get(oldRetType.getContext(),
+                                                 warpsPerTile);
+
+    auto newRetType =
+        RankedTensorType::get(retShape, oldRetType.getElementType(), mfmaEnc);
+
+    // convert accumulator
+    auto oldAcc = dotOp.getOperand(2);
+    auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        oldAcc.getLoc(), newRetType, oldAcc);
+    auto oldAOrder = oldAType.getEncoding()
+                         .cast<triton::gpu::DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<triton::gpu::BlockedEncodingAttr>()
+                         .getOrder();
+    auto oldBOrder = oldBType.getEncoding()
+                         .cast<triton::gpu::DotOperandEncodingAttr>()
+                         .getParent()
+                         .cast<triton::gpu::BlockedEncodingAttr>()
+                         .getOrder();
+
+    auto newAType = RankedTensorType::get(
+        oldAType.getShape(), oldAType.getElementType(),
+        triton::gpu::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc));
+    auto newBType = RankedTensorType::get(
+        oldBType.getShape(), oldBType.getElementType(),
+        triton::gpu::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc));
+    a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
+    b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
+    auto newDot = rewriter.create<triton::DotOp>(
+        dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.getAllowTF32());
+
+    rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
+        op, oldRetType, newDot.getResult());
+    return success();
+  }
+};
+
+#endif
 
 class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
@@ -213,7 +329,11 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
+#ifdef USE_ROCM
+    patterns.add<::BlockedToMFMA>(context);
+#else
     patterns.add<::BlockedToMMA>(context, computeCapability);
+#endif
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }

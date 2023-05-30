@@ -8,11 +8,11 @@ from .matmul_perf_model import early_config_prune, estimate_matmul_time
 def init_to_zero(name):
     return lambda nargs: nargs[name].zero_()
 
-
 def get_configs_io_bound():
     configs = []
     for num_stages in [2, 3, 4, 5, 6]:
-        for block_m in [16, 32]:
+# TODO support block size 16 for MFMA dot op
+        for block_m in [16, 32] if torch.version.hip is None else [32]:
             for block_k in [32, 64]:
                 for block_n in [32, 64, 128, 256]:
                     num_warps = 2 if block_n <= 64 else 4

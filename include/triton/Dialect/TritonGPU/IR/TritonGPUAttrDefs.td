@@ -78,6 +78,15 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
                      "Type":$eltTy), [{
+
+#ifdef USE_ROCM
+        // ---- begin MI200 ----
+        auto mfmaEnc = dotOpEnc.getParent().dyn_cast<MfmaEncodingAttr>();
+        if (mfmaEnc) {
+          // Swizzling is currently disabled for MFMA
+          return $_get(context, 1, 1, 1, order);
+        }
+#endif
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
 
         if(!mmaEnc)
@@ -427,7 +436,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       return $_get(context, versionMajor, versionMinor, wpt);
     }]>,
 
-
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
                      "ArrayRef<int64_t>":$shapeA,
@@ -452,6 +460,61 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     // Here 5 bits can hold 32 IDs in a single module.
     static constexpr int numBitsToHoldMmaV1ID{5};
   }];
+
+  let hasCustomAssemblyFormat = 1;
+}
+
+def MfmaEncodingAttr : DistributedEncoding<"MfmaEncoding"> {
+  let mnemonic = "mfma";
+
+  let description = [{
+An encoding for tensors that have been produced by MI100 && MI200 tensor cores.
+It is characterized by parameter `warpsPerCTA` that indicates how data should be partitioned
+between waves (analogous to the term 'warp' used in NVIDIA's CUDA programming model).
+
+Suppose we have a tensor with a shape of [32, 64] and warpsPerCTA set to [1, 2].
+The data will be distributed between threads as follows:
+
+                wave 0                                 wave 1
+-----------------/\--------------      -----------------/\--------------
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 0   1   2   3  ...... 30  31 ]      [ 64  65  66  67 ...... 94   95  ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+[ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+}];
+
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$warpsPerCTA
+  );
 
   let hasCustomAssemblyFormat = 1;
 }
@@ -524,6 +587,14 @@ section 9.7.13.4.1 for more details.
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned MMAv2kWidth = 32 / bitwidth;
       return $_get(context, opIdx, parent, MMAv2kWidth);
+    }]>,
+
+    // Specially for MFMA(MI100/MI200)
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent), [{
+      assert(llvm::isa<MfmaEncodingAttr>(parent));
+      unsigned MMAv2kWidth = 0; // unused for MFMA ops
+      return $_get(context, opIdx, parent, MMAv2kWidth);
     }]>
   ];
 
@@ -538,7 +609,11 @@ section 9.7.13.4.1 for more details.
     //
     SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
                                      int bitwidth) const;
-
+#ifdef USE_ROCM
+    SmallVector<int64_t> getMFMAElemsPerThread(Type elemTy) const;
+    SmallVector<int64_t> getMFMARep(ArrayRef<int64_t> operandShape,
+                                    Type elemType) const;
+#endif
   }];
 }
 
