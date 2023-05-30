@@ -42,8 +42,10 @@
 // See the example below for the definition of immediate and non-immediate
 // dependencies.
 //
-// Our pipelining pass, different from SCF's LoopPipelining, has the following
-// characteristics:
+// Our pipelining pass share some common characteristics with SCF's
+// LoopPipelining, such as each op can only have one definition stage. However,
+// it is also noteworthy that our pipelining pass has the following
+// characteristics different from SCF's LoopPipelining:
 // 1. It can handle loop-carried dependencies of distance greater than 1.
 // 2. It requires each loop-carried value to have one first use and one first
 // definition stage because we do not create new values that are likely to
@@ -171,14 +173,13 @@ class LoopPipeliner {
 
   /// Associate each value `v` with a unique `stage`. If `v` is defined
   /// at multiple stages, we return failure.
-  LogicalResult addDepStage(Value v, int stage, MapVector<Value, int> &depStage,
-                            DenseSet<Value> *visited);
+  LogicalResult addDepStage(Value v, int stage,
+                            MapVector<Value, int> &depStage);
 
   /// Collect values that `v` depends prior to `stage` on and are defined inside
   /// the loop
   LogicalResult collectValueDepStage(Value v, int stage,
-                                     MapVector<Value, int> &depStage,
-                                     DenseSet<Value> visited);
+                                     MapVector<Value, int> &depStage);
 
   /// Collect all operand dependencies
   /// Each op can only have a single stage of dependencies
@@ -364,8 +365,7 @@ LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
     for (Value v : op->getOperands()) {
       MapVector<Value, int> operandDepStage;
       DenseSet<Value> visited;
-      if (collectValueDepStage(v, numStages - 1, operandDepStage, visited)
-              .failed())
+      if (collectValueDepStage(v, numStages - 1, operandDepStage).failed())
         return failure();
       for (auto [v, stage] : operandDepStage) {
         auto immediate = operandDepStage.front().first.isa<BlockArgument>();
@@ -376,7 +376,7 @@ LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
           else
             nonImmediateDepArgs.insert(arg);
         }
-        if (addDepStage(v, stage, depStage, nullptr).failed())
+        if (addDepStage(v, stage, depStage).failed())
           return failure();
       }
     }
@@ -393,9 +393,8 @@ LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
   // Check if immedidateDepArgs and nonImmedidateDepArgs are disjoint
   // If yes, we cannot pipeline the loop for now
   for (BlockArgument arg : immediateDepArgs)
-    if (nonImmediateDepArgs.contains(arg)) {
+    if (nonImmediateDepArgs.contains(arg))
       return failure();
-    }
 
   return success();
 }
@@ -440,15 +439,10 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
 }
 
 LogicalResult LoopPipeliner::addDepStage(Value v, int stage,
-                                         MapVector<Value, int> &depStage,
-                                         DenseSet<Value> *visited) {
+                                         MapVector<Value, int> &depStage) {
   // If we've seen this value before while searching dependency, it means we
   // have found the first def op.
-  if (visited && visited->count(v))
-    return success();
   if (!depStage.contains(v)) {
-    if (visited)
-      visited->insert(v);
     depStage.insert(std::make_pair(v, stage));
   } else if (depStage[v] != stage)
     return failure();
@@ -457,8 +451,7 @@ LogicalResult LoopPipeliner::addDepStage(Value v, int stage,
 
 LogicalResult
 LoopPipeliner::collectValueDepStage(Value v, int stage,
-                                    MapVector<Value, int> &depStage,
-                                    DenseSet<Value> visited) {
+                                    MapVector<Value, int> &depStage) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return success();
@@ -469,23 +462,24 @@ LoopPipeliner::collectValueDepStage(Value v, int stage,
     return success();
 
   if (auto arg = v.dyn_cast<BlockArgument>()) {
+    // Skip the first arg (loop induction variable)
+    // Otherwise the op idx is arg.getArgNumber()-1
     if (arg.getArgNumber() > 0) {
-      // Skip the first arg (loop induction variable)
-      // Otherwise the op idx is arg.getArgNumber()-1
-      if (addDepStage(v, stage, depStage, &visited).failed())
-        return failure();
-      if (collectValueDepStage(yieldOp->getOperand(arg.getArgNumber() - 1),
-                               stage - 1, depStage, visited)
-              .failed())
-        return failure();
+      // If we've found the first definition of this arg, we're done, don't
+      // recurse
+      if (addDepStage(v, stage, depStage).succeeded()) {
+        if (collectValueDepStage(yieldOp->getOperand(arg.getArgNumber() - 1),
+                                 stage - 1, depStage)
+                .failed())
+          return failure();
+      }
     }
   } else { // value
-    // v might be in deps, but we still need to visit v.
-    // This is because v might depend on value in previous iterations
-    if (addDepStage(v, stage, depStage, &visited).failed())
+    // An operation cannot be dependent on different stages
+    if (addDepStage(v, stage, depStage).failed())
       return failure();
     for (Value op : v.getDefiningOp()->getOperands())
-      if (collectValueDepStage(op, stage, depStage, visited).failed())
+      if (collectValueDepStage(op, stage, depStage).failed())
         return failure();
   }
   return success();
@@ -534,9 +528,7 @@ LogicalResult LoopPipeliner::collectOperandDeps(
   for (Operation *op : ops) {
     for (Value v : op->getOperands()) {
       MapVector<Value, int> operandDepStage;
-      DenseSet<Value> visited;
-      if (collectValueDepStage(v, numStages - 1, operandDepStage, visited)
-              .failed())
+      if (collectValueDepStage(v, numStages - 1, operandDepStage).failed())
         return failure();
       loadOperandDeps[op].push_back(operandDepStage);
     }
