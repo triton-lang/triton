@@ -9,7 +9,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/ADT/MapVector.h"
-#include <set>
 
 //===----------------------------------------------------------------------===//
 // This file implements software pipelining for loops. The implementation here
@@ -137,9 +136,9 @@ class LoopPipeliner {
   SmallVector<Operation *> orderedDeps;
 
   /// The first use stage of each block argument that loads depend on
-  MapVector<BlockArgument, std::set<int>> depArgUseStages;
+  MapVector<BlockArgument, DenseSet<int>> depArgUseStages;
   /// The first def stage of each operation that loads depend on
-  MapVector<Operation *, std::set<int>> depOpDefStages;
+  MapVector<Operation *, DenseSet<int>> depOpDefStages;
 
   /// If we have a load that immediately depends on a block argument in the
   /// current iteration, it is an immediate dependency. Otherwise, it is a
@@ -173,7 +172,7 @@ class LoopPipeliner {
   /// Collect values that `v` depends prior to `stage` on and are defined inside
   /// the loop
   void collectValueDepStage(Value v, int stage,
-                            MapVector<Value, std::set<int>> &depStage);
+                            MapVector<Value, DenseSet<int>> &depStage);
 
   /// Check if ops have dependencies that are not pipelinable
   LogicalResult checkOpDeps(SetVector<Operation *> &ops);
@@ -278,6 +277,42 @@ LogicalResult LoopPipeliner::collectOps(SetVector<Operation *> &ops) {
     return success();
 }
 
+void LoopPipeliner::collectValueDep(Value v, int stage,
+                                    SetVector<Value> &deps) {
+  // Loop-invariant value, skip
+  if (v.getParentRegion() != &forOp.getLoopBody())
+    return;
+
+  // Since we only need to peel the loop numStages-1 times, don't worry
+  // about depends that are too far away
+  if (stage < 0)
+    return;
+
+  if (auto arg = v.dyn_cast<BlockArgument>()) {
+    if (arg.getArgNumber() > 0) {
+      deps.insert(v);
+      collectValueDep(yieldOp->getOperand(arg.getArgNumber() - 1), stage - 1,
+                      deps);
+    }
+  } else { // value
+    deps.insert(v);
+    for (Value op : v.getDefiningOp()->getOperands())
+      collectValueDep(op, stage, deps);
+  }
+}
+
+void LoopPipeliner::collectDeps(
+    SetVector<Operation *> &ops,
+    MapVector<Operation *, SetVector<Value>> &valueDeps) {
+  for (auto op : ops) {
+    for (Value v : op->getOperands()) {
+      SetVector<Value> deps;
+      collectValueDep(v, numStages - 1, deps);
+      valueDeps[op] = deps;
+    }
+  }
+}
+
 LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
   DenseSet<Operation *> invalidOps;
   // Collect all ops' dependencies
@@ -347,11 +382,40 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
     return success();
 }
 
+void LoopPipeliner::collectValueDepStage(
+    Value v, int stage, MapVector<Value, DenseSet<int>> &depStage) {
+  // Loop-invariant value, skip
+  if (v.getParentRegion() != &forOp.getLoopBody())
+    return;
+
+  // Since we only need to peel the loop numStages-1 times, don't worry about
+  // depends that are too far away
+  if (stage < 0)
+    return;
+
+  if (auto arg = v.dyn_cast<BlockArgument>()) {
+    // Skip the first arg (loop induction variable)
+    // Otherwise the op idx is arg.getArgNumber()-1
+    if (arg.getArgNumber() > 0) {
+      // If we've found the first definition of this arg, we're done, don't
+      // recurse
+      if (depStage[v].insert(stage).second)
+        collectValueDepStage(yieldOp->getOperand(arg.getArgNumber() - 1),
+                             stage - 1, depStage);
+    }
+  } else { // value
+    // An operation cannot be dependent on different stages
+    if (depStage[v].insert(stage).second)
+      for (Value op : v.getDefiningOp()->getOperands())
+        collectValueDepStage(op, stage, depStage);
+  }
+}
+
 LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
-  MapVector<Value, std::set<int>> depStage;
+  MapVector<Value, DenseSet<int>> depStage;
   for (Operation *op : ops) {
     for (Value v : op->getOperands()) {
-      MapVector<Value, std::set<int>> operandDepStage;
+      MapVector<Value, DenseSet<int>> operandDepStage;
       collectValueDepStage(v, numStages - 1, operandDepStage);
       for (auto [v, stages] : operandDepStage) {
         auto immediate = operandDepStage.front().first.isa<BlockArgument>();
@@ -375,8 +439,8 @@ LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
       depOpDefStages[dep.getDefiningOp()].insert(stages.begin(), stages.end());
   }
 
-  // Check if immedidateDepArgs and nonImmedidateDepArgs are disjoint
-  // If yes, we cannot pipeline the loop due to our reordering strategy
+  // Check if immediateDepArgs and nonImmediateDepArgs are disjoint.
+  // If not, we cannot pipeline the loop due to our reordering strategy
   for (BlockArgument arg : immediateDepArgs)
     if (nonImmediateDepArgs.contains(arg))
       return failure();
@@ -421,71 +485,6 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
   if (valueMapping.find(origin) == valueMapping.end())
     return origin;
   return valueMapping[origin][stage];
-}
-
-void LoopPipeliner::collectValueDepStage(
-    Value v, int stage, MapVector<Value, std::set<int>> &depStage) {
-  // Loop-invariant value, skip
-  if (v.getParentRegion() != &forOp.getLoopBody())
-    return;
-
-  // Since we only need to peel the loop numStages-1 times, don't worry about
-  // depends that are too far away
-  if (stage < 0)
-    return;
-
-  if (auto arg = v.dyn_cast<BlockArgument>()) {
-    // Skip the first arg (loop induction variable)
-    // Otherwise the op idx is arg.getArgNumber()-1
-    if (arg.getArgNumber() > 0) {
-      // If we've found the first definition of this arg, we're done, don't
-      // recurse
-      if (depStage[v].insert(stage).second)
-        collectValueDepStage(yieldOp->getOperand(arg.getArgNumber() - 1),
-                             stage - 1, depStage);
-    }
-  } else { // value
-    // An operation cannot be dependent on different stages
-    if (depStage[v].insert(stage).second)
-      for (Value op : v.getDefiningOp()->getOperands())
-        collectValueDepStage(op, stage, depStage);
-  }
-}
-
-void LoopPipeliner::collectValueDep(Value v, int stage,
-                                    SetVector<Value> &deps) {
-  // Loop-invariant value, skip
-  if (v.getParentRegion() != &forOp.getLoopBody())
-    return;
-
-  // Since we only need to peel the loop numStages-1 times, don't worry
-  // about depends that are too far away
-  if (stage < 0)
-    return;
-
-  if (auto arg = v.dyn_cast<BlockArgument>()) {
-    if (arg.getArgNumber() > 0) {
-      deps.insert(v);
-      collectValueDep(yieldOp->getOperand(arg.getArgNumber() - 1), stage - 1,
-                      deps);
-    }
-  } else { // value
-    deps.insert(v);
-    for (Value op : v.getDefiningOp()->getOperands())
-      collectValueDep(op, stage, deps);
-  }
-}
-
-void LoopPipeliner::collectDeps(
-    SetVector<Operation *> &ops,
-    MapVector<Operation *, SetVector<Value>> &valueDeps) {
-  for (auto op : ops) {
-    for (Value v : op->getOperands()) {
-      SetVector<Value> deps;
-      collectValueDep(v, numStages - 1, deps);
-      valueDeps[op] = deps;
-    }
-  }
 }
 
 void LoopPipeliner::createBufferTypes() {
@@ -828,9 +827,6 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
 
 void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
                                           OpBuilder &builder) {
-  assert(depOpDefStages.size() + validLoads.size() == orderedDeps.size() &&
-         "depOps contains invalid values");
-
   // Map the dep args of the next iteration to the dep args of the current
   size_t argIdx = 0;
   for (auto [depArg, useStages] : depArgUseStages) {
