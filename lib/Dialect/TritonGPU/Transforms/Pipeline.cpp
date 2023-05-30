@@ -96,13 +96,12 @@ class LoopPipeliner {
   ///   value
   /// }
   /// Collect values that v depends on and are defined inside the loop
-  LogicalResult collectDeps(Value v, int stage, MapVector<Value, int> &depStage,
-                            DenseSet<Value> visited);
+  LogicalResult collectDeps(Value v, int stage,
+                            MapVector<Value, int> &depStage);
 
   /// Associate each variable with a unique stage. If a variable is defined
   /// at multiple stages, we don't pipeline it.
-  LogicalResult addDep(Value v, int stage, MapVector<Value, int> &depStage,
-                       DenseSet<Value> *visited);
+  LogicalResult addDep(Value v, int stage, MapVector<Value, int> &depStage);
 
   int getArgDefStage(Value v, int stage);
 
@@ -169,15 +168,8 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
 }
 
 LogicalResult LoopPipeliner::addDep(Value v, int stage,
-                                    MapVector<Value, int> &depStage,
-                                    DenseSet<Value> *visited) {
-  // If we've seen this value before while searching dependency, it means we
-  // have found the first def op.
-  if (visited && visited->count(v))
-    return success();
+                                    MapVector<Value, int> &depStage) {
   if (!depStage.contains(v)) {
-    if (visited)
-      visited->insert(v);
     depStage.insert(std::make_pair(v, stage));
   } else if (depStage[v] != stage)
     return failure();
@@ -185,8 +177,7 @@ LogicalResult LoopPipeliner::addDep(Value v, int stage,
 }
 
 LogicalResult LoopPipeliner::collectDeps(Value v, int stage,
-                                         MapVector<Value, int> &depStage,
-                                         DenseSet<Value> visited) {
+                                         MapVector<Value, int> &depStage) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return success();
@@ -197,23 +188,23 @@ LogicalResult LoopPipeliner::collectDeps(Value v, int stage,
     return success();
 
   if (auto arg = v.dyn_cast<BlockArgument>()) {
+    // Skip the first arg (loop induction variable)
+    // Otherwise the op idx is arg.getArgNumber()-1
     if (arg.getArgNumber() > 0) {
-      // Skip the first arg (loop induction variable)
-      // Otherwise the op idx is arg.getArgNumber()-1
-      if (addDep(v, stage, depStage, &visited).failed())
-        return failure();
-      if (collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stage - 1,
-                      depStage, visited)
-              .failed())
-        return failure();
+      // If we've found the first definition of this arg, we're done, don't
+      // recurse
+      if (addDep(v, stage, depStage).failed())
+        if (collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stage - 1,
+                        depStage)
+                .failed())
+          return failure();
     }
   } else { // value
-    // v might be in deps, but we still need to visit v.
-    // This is because v might depend on value in previous iterations
-    if (addDep(v, stage, depStage, &visited).failed())
+    // An operation cannot be dependent on different stages
+    if (addDep(v, stage, depStage).failed())
       return failure();
     for (Value op : v.getDefiningOp()->getOperands())
-      if (collectDeps(op, stage, depStage, visited).failed())
+      if (collectDeps(op, stage, depStage).failed())
         return failure();
   }
   return success();
@@ -291,8 +282,7 @@ LogicalResult LoopPipeliner::initialize() {
   for (triton::LoadOp loadOp : validLoads) {
     for (Value op : loadOp->getOperands()) {
       MapVector<Value, int> operandDepStage;
-      DenseSet<Value> visited;
-      if (collectDeps(op, numStages - 1, operandDepStage, visited).failed())
+      if (collectDeps(op, numStages - 1, operandDepStage).failed())
         return failure();
       for (auto [v, stage] : operandDepStage) {
         auto immedidate = operandDepStage.front().first.isa<BlockArgument>();
@@ -304,7 +294,7 @@ LogicalResult LoopPipeliner::initialize() {
             nonImmediateDepArgs.insert(arg);
         }
         loadDeps[loadOp].insert(v);
-        if (addDep(v, stage, depStage, nullptr).failed())
+        if (addDep(v, stage, depStage).failed())
           return failure();
       }
     }
