@@ -406,7 +406,7 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
 // CHECK-LABEL: @store_constant_align
 tt.func @store_constant_align(%addr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n: i32 {tt.divisibility = 16 : i32}) {
   // CHECK: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
-  %pid = tt.get_program_id {axis = 0 : i32} : i32
+  %pid = tt.get_program_id x : i32
   // CHECK-NEXT: contiguity = [1], divisibility = [128], constancy = [1], constant_value = 128
   %c128_i32 = arith.constant 128 : i32
   // CHECK-NEXT: contiguity = [1], divisibility = [128], constancy = [1], constant_value = <none>
@@ -438,7 +438,7 @@ tt.func @store_constant_align(%addr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
 // CHECK-LABEL: @vecadd_mask_align_16
 tt.func @vecadd_mask_align_16(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32 {tt.divisibility = 16 : i32}) {
   %c64_i32 = arith.constant 64 : i32
-  %0 = tt.get_program_id {axis = 0 : i32} : i32
+  %0 = tt.get_program_id x : i32
   %1 = arith.muli %0, %c64_i32 : i32
   %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
   %3 = tt.splat %1 : (i32) -> tensor<64xi32>
@@ -467,7 +467,7 @@ tt.func @vecadd_mask_align_16(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
 // CHECK-LABEL: @vecadd_mask_align_1
 tt.func @vecadd_mask_align_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32) {
   %c64_i32 = arith.constant 64 : i32
-  %0 = tt.get_program_id {axis = 0 : i32} : i32
+  %0 = tt.get_program_id x : i32
   %1 = arith.muli %0, %c64_i32 : i32
   %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
   %3 = tt.splat %1 : (i32) -> tensor<64xi32>
