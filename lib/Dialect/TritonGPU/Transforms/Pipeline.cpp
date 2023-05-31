@@ -134,10 +134,10 @@ class LoopPipeliner {
   /// Dependency ops by program order
   SmallVector<Operation *> orderedDeps;
 
-  /// The first use stage of each block argument that loads depend on
-  MapVector<BlockArgument, DenseSet<int>> depArgUseStages;
-  /// The first def stage of each operation that loads depend on
-  MapVector<Operation *, DenseSet<int>> depOpDefStages;
+  /// The use stages of each block argument that loads depend on
+  MapVector<BlockArgument, DenseSet<int>> depArgStages;
+  /// The def stages of each operation that loads depend on
+  MapVector<Operation *, DenseSet<int>> depOpStages;
 
   /// If we have a load that immediately depends on a block argument in the
   /// current iteration, it is an immediate dependency. Otherwise, it is a
@@ -171,7 +171,7 @@ class LoopPipeliner {
   /// Collect values that `v` depends prior to `stage` on and are defined inside
   /// the loop
   void collectValueDepStage(Value v, int stage,
-                            MapVector<Value, DenseSet<int>> &depStage);
+                            MapVector<Value, DenseSet<int>> &depStages);
 
   /// Check if ops have dependencies that are not pipelinable
   LogicalResult checkOpDeps(SetVector<Operation *> &ops);
@@ -382,7 +382,7 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
 }
 
 void LoopPipeliner::collectValueDepStage(
-    Value v, int stage, MapVector<Value, DenseSet<int>> &depStage) {
+    Value v, int stage, MapVector<Value, DenseSet<int>> &depStages) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
     return;
@@ -398,44 +398,43 @@ void LoopPipeliner::collectValueDepStage(
     if (arg.getArgNumber() > 0) {
       // If we've found the first definition of this arg, we're done, don't
       // recurse
-      if (depStage[v].insert(stage).second)
+      if (depStages[v].insert(stage).second)
         collectValueDepStage(yieldOp->getOperand(arg.getArgNumber() - 1),
-                             stage - 1, depStage);
+                             stage - 1, depStages);
     }
   } else { // value
     // An operation cannot be dependent on different stages
-    if (depStage[v].insert(stage).second)
+    if (depStages[v].insert(stage).second)
       for (Value op : v.getDefiningOp()->getOperands())
-        collectValueDepStage(op, stage, depStage);
+        collectValueDepStage(op, stage, depStages);
   }
 }
 
 LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
-  MapVector<Value, DenseSet<int>> depStage;
+  MapVector<Value, DenseSet<int>> depStages;
   for (Operation *op : ops) {
     for (Value v : op->getOperands()) {
       MapVector<Value, DenseSet<int>> operandDepStage;
       collectValueDepStage(v, numStages - 1, operandDepStage);
-      for (auto [v, stages] : operandDepStage) {
+      for (auto [dep, stages] : operandDepStage) {
         auto immediate = operandDepStage.front().first.isa<BlockArgument>();
-        if (v.isa<BlockArgument>()) {
-          auto arg = v.cast<BlockArgument>();
+        if (auto arg = dyn_cast<BlockArgument>(dep)) {
           if (immediate)
             immediateDepArgs.insert(arg);
           else
             nonImmediateDepArgs.insert(arg);
         }
-        depStage[v].insert(stages.begin(), stages.end());
+        depStages[dep].insert(stages.begin(), stages.end());
       }
     }
   }
 
   // Update depArgs & depOps
-  for (auto [dep, stages] : depStage) {
+  for (auto [dep, stages] : depStages) {
     if (auto arg = dep.dyn_cast<BlockArgument>())
-      depArgUseStages[arg].insert(stages.begin(), stages.end());
+      depArgStages[arg].insert(stages.begin(), stages.end());
     else
-      depOpDefStages[dep.getDefiningOp()].insert(stages.begin(), stages.end());
+      depOpStages[dep.getDefiningOp()].insert(stages.begin(), stages.end());
   }
 
   // Check if immediateDepArgs and nonImmediateDepArgs are disjoint.
@@ -523,7 +522,7 @@ void LoopPipeliner::createBufferTypes() {
 
 void LoopPipeliner::createOrderedDeps() {
   for (Operation &op : forOp.getLoopBody().front()) {
-    if (depOpDefStages.contains(&op))
+    if (depOpStages.contains(&op))
       orderedDeps.push_back(&op);
     else if (op.getNumResults() > 0 && validLoads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
@@ -534,10 +533,9 @@ int LoopPipeliner::getArgDefStage(Value v, int stage) {
   if (stage < 0)
     return -1;
   if (auto arg = v.dyn_cast<BlockArgument>()) {
-    if (arg.getArgNumber() > 0) {
+    if (arg.getArgNumber() > 0)
       return getArgDefStage(yieldOp->getOperand(arg.getArgNumber() - 1),
                             stage - 1);
-    }
     llvm_unreachable("Loop induction variable should not be a dependency");
   } else
     return stage;
@@ -548,10 +546,9 @@ ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(triton::LoadOp loadOp,
   // Allocate a buffer for each pipelined tensor
   // shape: e.g. (numStages==4), <32x64xbf16> -> <4x32x64xbf16>
   Value convertLayout = loadsMapping[loadOp];
-  if (auto tensorType = convertLayout.getType().dyn_cast<RankedTensorType>()) {
+  if (auto tensorType = convertLayout.getType().dyn_cast<RankedTensorType>())
     return builder.create<ttg::AllocTensorOp>(convertLayout.getLoc(),
                                               loadsBufferType[loadOp]);
-  }
   llvm_unreachable("Async copy's return should be of RankedTensorType");
 }
 
@@ -572,7 +569,7 @@ LogicalResult LoopPipeliner::initialize() {
 
   createOrderedDeps();
 
-  assert(depOpDefStages.size() + validLoads.size() == orderedDeps.size() &&
+  assert(depOpStages.size() + validLoads.size() == orderedDeps.size() &&
          "depOps contains invalid values");
 
   return success();
@@ -755,17 +752,18 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
     newLoopArgs.push_back(loadsExtract[loadOp]);
 
   depArgsBeginIdx = newLoopArgs.size();
-  for (auto [depArg, useStages] : depArgUseStages) {
+  for (auto [depArg, useStages] : depArgStages) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    auto defStage = numStages - 1;
-    if (useStages.count(numStages - 1))
-      defStage = getArgDefStage(depArg, numStages - 1);
-    if (immediateDepArgs.contains(depArg) && defStage == numStages - 2)
-      // Peel off post load ops in numStages - 1
+    if (immediateDepArgs.contains(depArg) &&
+        ((useStages.contains(numStages - 2) && // used in numStage-2
+          llvm::to_vector(depArg.getUsers()).size() > 1) ||
+         (useStages.contains(numStages - 1) && // defined in numStage-2
+          getArgDefStage(depArg, numStages - 1) == numStages - 2))) {
+      // Peel off post load ops in numStage-1
       newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
-    else
+    } else
       newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
-    assert(defStage >= 0 && newLoopArgs.back() &&
+    assert(newLoopArgs.back() &&
            "newLoopArgs has null args without a define op. Consider either "
            "rewrite the loop to reduce cross iteration dependencies or "
            "increase the num_stages value.");
@@ -828,7 +826,7 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
                                           OpBuilder &builder) {
   // Map the dep args of the next iteration to the dep args of the current
   size_t argIdx = 0;
-  for (auto [depArg, useStages] : depArgUseStages) {
+  for (auto [depArg, useStages] : depArgStages) {
     BlockArgument nextArg =
         newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
     nextMapping.map(depArg, nextArg);
@@ -855,8 +853,8 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
   // Prefetch load deps
   for (Operation *op : orderedDeps)
     if (!validLoads.contains(op->getResult(0))) {
-      if (depOpDefStages[op].count(numStages - 2) &&
-          !depOpDefStages[op].count(numStages - 1))
+      if (depOpStages[op].count(numStages - 2) &&
+          !depOpStages[op].count(numStages - 1))
         // A post load op at numStage - 2
         nextMapping.map(forOp.getInductionVar(), curIV);
       else
