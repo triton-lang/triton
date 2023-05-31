@@ -155,13 +155,13 @@ class LoopPipeliner {
   /// Dependency ops by program order
   SmallVector<Operation *> orderedDeps;
 
-  /// arg => source operand
+  /// arg => source operand defined stages
   DenseMap<BlockArgument, DenseSet<int>> immediateArgStages;
 
   /// block arguments that loads depend on
   SetVector<BlockArgument> depArgs;
 
-  /// operation => source operand
+  /// operation => source operand defined stages
   DenseMap<Operation *, DenseSet<int>> immediateOpStages;
 
   /// operations that loads depend on
