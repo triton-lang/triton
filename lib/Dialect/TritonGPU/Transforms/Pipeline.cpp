@@ -46,10 +46,7 @@
 // LoopPipelining. However, it is also noteworthy that our pipelining pass has
 // the following characteristics different from SCF's LoopPipelining:
 // 1. It can handle loop-carried dependencies of distance greater than 1.
-// 2. It requires each loop-carried value to have one first use and one first
-// definition stage because we do not create new loop-carried values that are
-// likely to increase register pressure.
-// 3. It does not have a complicated epilogue but instead uses masking to handle
+// 2. It does not have a complicated epilogue but instead uses masking to handle
 // boundary conditions.
 //
 //===----------------------------------------------------------------------===//
@@ -154,6 +151,10 @@ class LoopPipeliner {
   /// }
   SetVector<BlockArgument> immediateDepArgs;
   SetVector<BlockArgument> nonImmediateDepArgs;
+  /// arg => source operand
+  DenseMap<BlockArgument, DenseSet<Value>> depArgGroups;
+  /// operation => source operand
+  DenseMap<Operation *, DenseSet<Value>> depOpGroups;
 
   /// Collect all pipelinable ops
   LogicalResult collectOps(SetVector<Operation *> &ops);
@@ -423,7 +424,9 @@ LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
             immediateDepArgs.insert(arg);
           else
             nonImmediateDepArgs.insert(arg);
-        }
+          depArgGroups[arg].insert(v);
+        } else
+          depOpGroups[dep.getDefiningOp()].insert(v);
         depStages[dep].insert(stages.begin(), stages.end());
       }
     }
@@ -731,7 +734,6 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   //   (extracted tensor) for each load
   //   (depArgs at stage numStages - 1)
   //   (depArgs at stage numStages - 2)
-  //   (depArgs at stage numStages - 3)
   //   ...
   //   (iv at stage numStages - 2)
   //   (pipeline iteration index)
@@ -754,13 +756,19 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   depArgsBeginIdx = newLoopArgs.size();
   for (auto [depArg, useStages] : depArgStages) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    if (immediateDepArgs.contains(depArg) &&
-        ((useStages.contains(numStages - 2) && // used in numStage-2
-          llvm::to_vector(depArg.getUsers()).size() > 1) ||
-         (useStages.contains(numStages - 1) && // defined in numStage-2
-          getArgDefStage(depArg, numStages - 1) == numStages - 2))) {
-      // Peel off post load ops in numStage-1
-      newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
+    if (immediateDepArgs.contains(depArg)) {
+      DenseSet<int> defStages;
+      for (auto v : depArgGroups[depArg])
+        defStages.insert(getArgDefStage(v, numStages - 1));
+      if (defStages.contains(numStages - 2)) {
+        // Peel off post load ops in numStage-1
+        assert(defStages.size() == 1 &&
+               "Triton doesn't support an argument provides values for "
+               "immediate loads from multiple stages. Consider removing post "
+               "load instructions dependency on this argument.");
+        newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
+      } else
+        newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
     } else
       newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
     assert(newLoopArgs.back() &&
@@ -853,11 +861,20 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
   // Prefetch load deps
   for (Operation *op : orderedDeps)
     if (!validLoads.contains(op->getResult(0))) {
-      if (depOpStages[op].count(numStages - 2) &&
-          !depOpStages[op].count(numStages - 1))
-        // A post load op at numStage - 2
+      DenseSet<int> defStages;
+      for (auto v : depOpGroups[op])
+        if (auto arg = v.dyn_cast<BlockArgument>())
+          if (immediateDepArgs.contains(arg)) {
+            defStages.insert(getArgDefStage(v, numStages - 1));
+          }
+      if (defStages.contains(numStages - 2)) {
+        assert(defStages.size() == 1 &&
+               "Triton doesn't support an argument provides values for "
+               "immediate loads from multiple stages. Consider removing post "
+               "load instructions dependency on this argument.");
+        // A post load op that provides values for numStage - 2
         nextMapping.map(forOp.getInductionVar(), curIV);
-      else
+      } else
         nextMapping.map(forOp.getInductionVar(), nextIV);
       Operation *nextOp;
       if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
