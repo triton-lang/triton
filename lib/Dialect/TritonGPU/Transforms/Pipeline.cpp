@@ -169,13 +169,8 @@ class LoopPipeliner {
   /// Check if none of the ops has valid uses
   LogicalResult checkOpUses(SetVector<Operation *> &ops);
 
-  /// Collect values that `v` depends prior to `stage` on and are defined inside
-  /// the loop
-  void collectValueDepStage(Value v, int stage,
-                            MapVector<Value, DenseSet<int>> &depStages);
-
   /// Check if ops have dependencies that are not pipelinable
-  LogicalResult checkOpDeps(SetVector<Operation *> &ops);
+  void checkOpDeps(SetVector<Operation *> &ops);
 
   void createBufferTypes();
 
@@ -382,81 +377,64 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
     return success();
 }
 
-void LoopPipeliner::collectValueDepStage(
-    Value v, int stage, MapVector<Value, DenseSet<int>> &depStages) {
-  // Loop-invariant value, skip
-  if (v.getParentRegion() != &forOp.getLoopBody())
-    return;
-
-  // Since we only need to peel the loop numStages-1 times, don't worry about
-  // depends that are too far away
-  if (stage < 0)
-    return;
-
-  if (auto arg = v.dyn_cast<BlockArgument>()) {
-    // Skip the first arg (loop induction variable)
-    // Otherwise the op idx is arg.getArgNumber()-1
-    if (arg.getArgNumber() > 0) {
-      // If we've found the first definition of this arg, we're done, don't
-      // recurse
-      if (depStages[v].insert(stage).second)
-        collectValueDepStage(yieldOp->getOperand(arg.getArgNumber() - 1),
-                             stage - 1, depStages);
-    }
-  } else { // value
-    // An operation cannot be dependent on different stages
-    if (depStages[v].insert(stage).second)
-      for (Value op : v.getDefiningOp()->getOperands())
-        collectValueDepStage(op, stage, depStages);
-  }
-}
-
-LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
+void LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
   SetVector<BlockArgument> nonImmediateDepArgs;
+  SetVector<Operation *> nonImmediateOps;
   for (Operation *op : ops) {
     for (Value v : op->getOperands()) {
-      MapVector<Value, DenseSet<int>> operandDepStage;
-      collectValueDepStage(v, numStages - 1, operandDepStage);
+      SetVector<Value> deps;
+      collectValueDep(v, numStages - 1, deps);
       int defStage = getValueDefStage(v, numStages - 1);
       assert(defStage >= 0 &&
              "newLoopArgs has null args without a define op. Consider either "
              "rewrite the loop to reduce cross iteration dependencies or "
              "increase the num_stages value.");
-      for (auto [dep, stages] : operandDepStage) {
-        auto immediate = operandDepStage.front().first.isa<BlockArgument>();
+      for (auto dep : deps) {
+        auto immediate = deps.front().isa<BlockArgument>();
         if (auto arg = dyn_cast<BlockArgument>(dep)) {
           depArgs.insert(arg);
-          if (immediate) {
+          if (immediate)
             immediateArgStages[arg].insert(defStage);
-            assert(
-                immediateArgStages[arg].size() == 1 &&
-                "Triton doesn't support an argument provides values for "
-                "immediate loads from multiple stages. Consider removing post "
-                "load instructions dependency on this argument.");
-          } else
+          else
             nonImmediateDepArgs.insert(arg);
         } else {
           depOps.insert(dep.getDefiningOp());
-          if (immediate) {
+          if (immediate)
             immediateOpStages[dep.getDefiningOp()].insert(defStage);
-            assert(
-                immediateOpStages[dep.getDefiningOp()].size() == 1 &&
-                "Triton doesn't support an argument provides values for "
-                "immediate loads from multiple stages. Consider removing post "
-                "load instructions dependency on this argument.");
-          }
+          else
+            nonImmediateOps.insert(dep.getDefiningOp());
         }
       }
     }
   }
 
+  // XXX: We could remove the following constraints if we can rematerialize in
+  // the loop.
   // Check if immediateDepArgs and nonImmediateDepArgs are disjoint.
-  // If not, we cannot pipeline the loop due to our reordering strategy
-  for (auto &[arg, stages] : immediateArgStages)
-    if (nonImmediateDepArgs.contains(arg))
-      return failure();
+  for (auto &[arg, stages] : immediateArgStages) {
+    assert(stages.size() == 1 &&
+           "Triton doesn't support an argument provides values for "
+           "immediate operands of loads from multiple stages. Consider "
+           "removing post load instructions dependency on this argument.");
+    assert(!(nonImmediateDepArgs.contains(arg) &&
+             stages.contains(numStages - 2)) &&
+           "Loop-carried arguments provide values for both immediate and "
+           "non-immediate operands of loads. Please consider removing "
+           "pre/post load instructions dependency on this argument.");
+  }
 
-  return success();
+  // Check if immediateOps and nonImmediateOps are disjoint.
+  for (auto &[op, stages] : immediateOpStages) {
+    assert(stages.size() == 1 &&
+           "Triton doesn't support an operation provides values for "
+           "immediate operands of loads from multiple stages. Consider "
+           "removing post load instructions dependency on this argument.");
+    assert(!(nonImmediateOps.contains(op) && stages.contains(numStages - 2)) &&
+           "Operations provide values for both immediate and "
+           "non-immediate operands of loads.  Please consider "
+           "removing pre/post load instructions dependency on this "
+           "operation.");
+  }
 }
 
 // helpers
@@ -540,6 +518,8 @@ void LoopPipeliner::createOrderedDeps() {
     else if (op.getNumResults() > 0 && validLoads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
+  assert(depOps.size() + validLoads.size() == orderedDeps.size() &&
+         "depOps contains invalid values");
 }
 
 int LoopPipeliner::getValueDefStage(Value v, int stage) {
@@ -575,15 +555,11 @@ LogicalResult LoopPipeliner::initialize() {
   if (checkOpUses(ops).failed())
     return failure();
 
-  if (checkOpDeps(ops).failed())
-    return failure();
+  checkOpDeps(ops);
 
   createBufferTypes();
 
   createOrderedDeps();
-
-  assert(depOps.size() + validLoads.size() == orderedDeps.size() &&
-         "depOps contains invalid values");
 
   return success();
 }
@@ -695,9 +671,8 @@ void LoopPipeliner::emitPrologue() {
         iv.getLoc(), pipelineIterIdx,
         builder.create<arith::ConstantIntOp>(iv.getLoc(), 1, 32));
     // Some values have not been used by any ops in the loop body
-    for (BlockArgument arg : forOp.getRegionIterArgs()) {
+    for (BlockArgument arg : forOp.getRegionIterArgs())
       setValueMappingYield(arg, valueMapping[arg][stage], stage + 1);
-    }
   } // for (int stage = 0; stage < numStages - 1; ++stage)
 
   // async.wait & extract_slice
