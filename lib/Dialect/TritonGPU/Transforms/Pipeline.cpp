@@ -61,6 +61,17 @@
 // 1. It can handle loop-carried dependencies of distance greater than 1.
 // 2. It does not have a complicated epilogue but instead uses masking to handle
 // boundary conditions.
+// 3. Each operation/loop-carried argument cannot provide values to both
+// immediate and non-immediate dependencies. Otherwise, we have to rematerialize
+// the operation and arguments, which would likely increase register pressure.
+// For example:
+// scf.for (%arg0, %arg1, %arg2) {
+//  %0 = load %arg0
+//  %1 = load %arg1, %0  <--- %0 is both a post-load op at numStages-2 and a
+//  pre-load op at numStages-1, so that we need two versions of %0.
+//  %2 = add %0, %arg2
+//  scf.yield %arg0, %2, %arg2
+//  }
 //
 //===----------------------------------------------------------------------===//
 
@@ -345,19 +356,15 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
           use = *use->getResult(0).getUsers().begin();
         }
 
-        auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use);
-        if (!convertLayout)
-          continue;
-        auto tensorType =
-            convertLayout.getResult().getType().dyn_cast<RankedTensorType>();
-        if (!tensorType)
-          continue;
-        auto dotOpEnc =
-            tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
-        if (!dotOpEnc)
-          continue;
-        isCandidate = true;
-        loadsMapping[loadOp] = convertLayout;
+        if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use))
+          if (auto tensorType = convertLayout.getResult()
+                                    .getType()
+                                    .dyn_cast<RankedTensorType>())
+            if (auto dotOpEnc = tensorType.getEncoding()
+                                    .dyn_cast<ttg::DotOperandEncodingAttr>()) {
+              isCandidate = true;
+              loadsMapping[loadOp] = convertLayout;
+            }
       } else
         isCandidate = false;
 
