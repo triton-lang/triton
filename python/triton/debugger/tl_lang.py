@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import triton
 from .core import ExecutionContext
 from .memory_map import MemoryMap
@@ -405,7 +407,9 @@ class TritonLangProxy:
         return torch.zeros(size=shape, dtype=dtype, device="cuda")
 
     @_tensor_operation
-    def dequantize(self, input, scale, shift, nbit, dst_ty=torch.float16):
+    def dequantize(self, input, scale, shift, nbit, dst_ty=None):
+        if dst_ty is None:
+            dst_ty = torch.float16
         raise NotImplementedError()
 
     @_tensor_operation
