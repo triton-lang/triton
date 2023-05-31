@@ -533,7 +533,6 @@ private:
       auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
       auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
       auto byteWidth = bitWidth / 8;
-      llvm::errs() << "byteWidth: " << byteWidth << "\n";
 
       // If the load byte width is not eligible or the current compute
       // capability does not support async copy, then we do decompose
