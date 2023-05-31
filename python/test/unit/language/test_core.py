@@ -467,6 +467,21 @@ def test_broadcast(dtype):
     broadcast_kernel[(1,)](x_tri, y_tri, y_broadcasted_tri, M=M, N=N)
     assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
 
+# ------------------
+# test invalid slice
+# ------------------
+
+
+def test_invalid_slice():
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst):
+        dst[10:]
+
+    with pytest.raises(triton.CompilationError, match='unsupported tensor index'):
+        _kernel[(1,)](dst=dst)
+
 
 # ----------------
 # test expand_dims
