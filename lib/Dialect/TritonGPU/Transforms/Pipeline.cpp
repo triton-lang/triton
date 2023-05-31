@@ -857,11 +857,10 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
   // Prefetch load deps
   for (Operation *op : orderedDeps)
     if (!validLoads.contains(op->getResult(0))) {
-      if (immediateOpStages[op].contains(numStages - 2)) {
-        llvm::errs() << "Prefetching immediate op " << *op << "\n";
+      if (immediateOpStages[op].contains(numStages - 2))
         // A post load op that provides values for numStage - 2
         nextMapping.map(forOp.getInductionVar(), curIV);
-      } else
+      else
         nextMapping.map(forOp.getInductionVar(), nextIV);
       Operation *nextOp;
       if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
