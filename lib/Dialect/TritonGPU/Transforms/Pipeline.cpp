@@ -41,6 +41,19 @@
 // To avoid the repeat, we peeled off post-load operations in the prologue that
 // satisfy the above two conditions. See the example below for the definition of
 // immediate and non-immediate dependencies.
+// If we have a load that immediately depends on a block argument in the
+// current iteration, it is an immediate dependency. Otherwise, it is a
+// non-immediate dependency, which means the load depends on a block argument
+// in the previous iterations.
+// For example:
+// scf.for (%arg0, %arg1, %arg2) {
+//   %0 = load %arg0  <--- immediate dep, this address is initialized before
+//   numStages-1.
+//   %1 = load %arg1
+//   %2 = add %1, %arg2
+//   %3 = load %2  <--- non-immediate dep, %arg1 must be an
+//   update-to-date value.
+// }
 //
 // Our pipelining pass share some common characteristics with SCF's
 // LoopPipelining. However, it is also noteworthy that our pipelining pass has
@@ -131,30 +144,17 @@ class LoopPipeliner {
   /// Dependency ops by program order
   SmallVector<Operation *> orderedDeps;
 
-  /// The use stages of each block argument that loads depend on
-  MapVector<BlockArgument, DenseSet<int>> depArgStages;
-  /// The def stages of each operation that loads depend on
-  MapVector<Operation *, DenseSet<int>> depOpStages;
-
-  /// If we have a load that immediately depends on a block argument in the
-  /// current iteration, it is an immediate dependency. Otherwise, it is a
-  /// non-immediate dependency, which means the load depends on a block argument
-  /// in the previous iterations.
-  /// For example:
-  /// scf.for (%arg0, %arg1, %arg2) {
-  ///   %0 = load %arg0  <--- immediate dep, this address is initialized before
-  ///   numStages-1.
-  ///   %1 = load %arg1
-  ///   %2 = add %1, %arg2
-  ///   %3 = load %2  <--- non-immediate dep, %arg1 must be an
-  ///   update-to-date value.
-  /// }
-  SetVector<BlockArgument> immediateDepArgs;
-  SetVector<BlockArgument> nonImmediateDepArgs;
   /// arg => source operand
-  DenseMap<BlockArgument, DenseSet<Value>> depArgGroups;
+  DenseMap<BlockArgument, DenseSet<int>> immediateArgStages;
+
+  /// block arguments that loads depend on
+  SetVector<BlockArgument> depArgs;
+
   /// operation => source operand
-  DenseMap<Operation *, DenseSet<Value>> depOpGroups;
+  DenseMap<Operation *, DenseSet<int>> immediateOpStages;
+
+  /// operations that loads depend on
+  SetVector<Operation *> depOps;
 
   /// Collect all pipelinable ops
   LogicalResult collectOps(SetVector<Operation *> &ops);
@@ -182,7 +182,7 @@ class LoopPipeliner {
   void createOrderedDeps();
 
   /// Return the stage at which `v` is defined prior to `stage`
-  int getArgDefStage(Value v, int stage);
+  int getValueDefStage(Value v, int stage);
 
   /// Map `origin` to `newValue` at `stage`
   void setValueMapping(Value origin, Value newValue, int stage);
@@ -412,37 +412,47 @@ void LoopPipeliner::collectValueDepStage(
 }
 
 LogicalResult LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
-  MapVector<Value, DenseSet<int>> depStages;
+  SetVector<BlockArgument> nonImmediateDepArgs;
   for (Operation *op : ops) {
     for (Value v : op->getOperands()) {
       MapVector<Value, DenseSet<int>> operandDepStage;
       collectValueDepStage(v, numStages - 1, operandDepStage);
+      int defStage = getValueDefStage(v, numStages - 1);
+      assert(defStage >= 0 &&
+             "newLoopArgs has null args without a define op. Consider either "
+             "rewrite the loop to reduce cross iteration dependencies or "
+             "increase the num_stages value.");
       for (auto [dep, stages] : operandDepStage) {
         auto immediate = operandDepStage.front().first.isa<BlockArgument>();
         if (auto arg = dyn_cast<BlockArgument>(dep)) {
-          if (immediate)
-            immediateDepArgs.insert(arg);
-          else
+          depArgs.insert(arg);
+          if (immediate) {
+            immediateArgStages[arg].insert(defStage);
+            assert(
+                immediateArgStages[arg].size() == 1 &&
+                "Triton doesn't support an argument provides values for "
+                "immediate loads from multiple stages. Consider removing post "
+                "load instructions dependency on this argument.");
+          } else
             nonImmediateDepArgs.insert(arg);
-          depArgGroups[arg].insert(v);
-        } else
-          depOpGroups[dep.getDefiningOp()].insert(v);
-        depStages[dep].insert(stages.begin(), stages.end());
+        } else {
+          depOps.insert(dep.getDefiningOp());
+          if (immediate) {
+            immediateOpStages[dep.getDefiningOp()].insert(defStage);
+            assert(
+                immediateOpStages[dep.getDefiningOp()].size() == 1 &&
+                "Triton doesn't support an argument provides values for "
+                "immediate loads from multiple stages. Consider removing post "
+                "load instructions dependency on this argument.");
+          }
+        }
       }
     }
   }
 
-  // Update depArgs & depOps
-  for (auto [dep, stages] : depStages) {
-    if (auto arg = dep.dyn_cast<BlockArgument>())
-      depArgStages[arg].insert(stages.begin(), stages.end());
-    else
-      depOpStages[dep.getDefiningOp()].insert(stages.begin(), stages.end());
-  }
-
   // Check if immediateDepArgs and nonImmediateDepArgs are disjoint.
   // If not, we cannot pipeline the loop due to our reordering strategy
-  for (BlockArgument arg : immediateDepArgs)
+  for (auto &[arg, stages] : immediateArgStages)
     if (nonImmediateDepArgs.contains(arg))
       return failure();
 
@@ -525,20 +535,20 @@ void LoopPipeliner::createBufferTypes() {
 
 void LoopPipeliner::createOrderedDeps() {
   for (Operation &op : forOp.getLoopBody().front()) {
-    if (depOpStages.contains(&op))
+    if (depOps.contains(&op))
       orderedDeps.push_back(&op);
     else if (op.getNumResults() > 0 && validLoads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
 }
 
-int LoopPipeliner::getArgDefStage(Value v, int stage) {
+int LoopPipeliner::getValueDefStage(Value v, int stage) {
   if (stage < 0)
     return -1;
   if (auto arg = v.dyn_cast<BlockArgument>()) {
     if (arg.getArgNumber() > 0)
-      return getArgDefStage(yieldOp->getOperand(arg.getArgNumber() - 1),
-                            stage - 1);
+      return getValueDefStage(yieldOp->getOperand(arg.getArgNumber() - 1),
+                              stage - 1);
     llvm_unreachable("Loop induction variable should not be a dependency");
   } else
     return stage;
@@ -572,7 +582,7 @@ LogicalResult LoopPipeliner::initialize() {
 
   createOrderedDeps();
 
-  assert(depOpStages.size() + validLoads.size() == orderedDeps.size() &&
+  assert(depOps.size() + validLoads.size() == orderedDeps.size() &&
          "depOps contains invalid values");
 
   return success();
@@ -754,27 +764,13 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
     newLoopArgs.push_back(loadsExtract[loadOp]);
 
   depArgsBeginIdx = newLoopArgs.size();
-  for (auto [depArg, useStages] : depArgStages) {
+  for (auto depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    if (immediateDepArgs.contains(depArg)) {
-      DenseSet<int> defStages;
-      for (auto v : depArgGroups[depArg])
-        defStages.insert(getArgDefStage(v, numStages - 1));
-      if (defStages.contains(numStages - 2)) {
-        // Peel off post load ops in numStage-1
-        assert(defStages.size() == 1 &&
-               "Triton doesn't support an argument provides values for "
-               "immediate loads from multiple stages. Consider removing post "
-               "load instructions dependency on this argument.");
-        newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
-      } else
-        newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
-    } else
+    if (immediateArgStages[depArg].contains(numStages - 2))
+      // Peel off post load ops in numStage-1
+      newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
+    else
       newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
-    assert(newLoopArgs.back() &&
-           "newLoopArgs has null args without a define op. Consider either "
-           "rewrite the loop to reduce cross iteration dependencies or "
-           "increase the num_stages value.");
   }
 
   ivIndex = newLoopArgs.size();
@@ -834,7 +830,7 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
                                           OpBuilder &builder) {
   // Map the dep args of the next iteration to the dep args of the current
   size_t argIdx = 0;
-  for (auto [depArg, useStages] : depArgStages) {
+  for (auto depArg : depArgs) {
     BlockArgument nextArg =
         newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
     nextMapping.map(depArg, nextArg);
@@ -861,17 +857,8 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
   // Prefetch load deps
   for (Operation *op : orderedDeps)
     if (!validLoads.contains(op->getResult(0))) {
-      DenseSet<int> defStages;
-      for (auto v : depOpGroups[op])
-        if (auto arg = v.dyn_cast<BlockArgument>())
-          if (immediateDepArgs.contains(arg)) {
-            defStages.insert(getArgDefStage(v, numStages - 1));
-          }
-      if (defStages.contains(numStages - 2)) {
-        assert(defStages.size() == 1 &&
-               "Triton doesn't support an argument provides values for "
-               "immediate loads from multiple stages. Consider removing post "
-               "load instructions dependency on this argument.");
+      if (immediateOpStages[op].contains(numStages - 2)) {
+        llvm::errs() << "Prefetching immediate op " << *op << "\n";
         // A post load op that provides values for numStage - 2
         nextMapping.map(forOp.getInductionVar(), curIV);
       } else
