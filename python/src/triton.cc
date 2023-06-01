@@ -1534,6 +1534,10 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createCombineOpsPass());
            })
+      .def("add_delay_broadcast_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::triton::createDelayBroadcastPass());
+           })
       .def("add_rewrite_tensor_pointer_pass",
            [](mlir::PassManager &self, int computeCapability) {
              self.addPass(mlir::triton::createRewriteTensorPointerPass(
