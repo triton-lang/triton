@@ -1227,8 +1227,8 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                            [32, 256, 32, 8],
                                            ]
                           for allow_tf32 in [False, True]
-                          for col_a in [False]
-                          for col_b in [False]
+                          for col_a in [True,False]
+                          for col_b in [True,False]
                           for dtype in ['int8', 'float16', 'float32']])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
