@@ -467,6 +467,21 @@ def test_broadcast(dtype):
     broadcast_kernel[(1,)](x_tri, y_tri, y_broadcasted_tri, M=M, N=N)
     assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
 
+# ------------------
+# test invalid slice
+# ------------------
+
+
+def test_invalid_slice():
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst):
+        dst[10:]
+
+    with pytest.raises(triton.CompilationError, match='unsupported tensor index'):
+        _kernel[(1,)](dst=dst)
+
 
 # ----------------
 # test expand_dims
@@ -1379,6 +1394,9 @@ reduce_configs2 = [
     for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for shape in reduce2d_shapes
     for axis in [0, 1]
+] + [
+    (op, 'float32', [16, 32], None)
+    for op in ['min', 'max', 'sum']
 ]
 
 
@@ -1393,7 +1411,9 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         range_n = tl.arange(0, BLOCK_N)
         x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
         z = GENERATE_TEST_HERE
-        if AXIS == 1:
+        if AXIS is None:
+            tl.store(Z, z)
+        elif AXIS == 1:
             tl.store(Z + range_m, z)
         else:
             tl.store(Z + range_n, z)
@@ -1418,7 +1438,8 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     else:
         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
-    z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
+    ret_numel = 1 if axis is None else shape[1 - axis]
+    z_tri = to_triton(numpy_random((ret_numel,), dtype_str=z_dtype_str, rs=rs),
                       device=device, dst_type=z_tri_dtype_str)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
     z_tri = to_numpy(z_tri)
