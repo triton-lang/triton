@@ -388,7 +388,8 @@ class CodeGenerator(ast.NodeVisitor):
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             value = _unwrap_if_constexpr(value)
-            if not _is_triton_tensor(value) and \
+            if value is not None and \
+               not _is_triton_tensor(value) and \
                not isinstance(value, native_nontensor_types):
                 value = language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
