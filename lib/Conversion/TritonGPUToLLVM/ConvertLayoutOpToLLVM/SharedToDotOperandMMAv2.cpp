@@ -303,6 +303,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else {
+    if (needTrans && (4 / elemBytes) != kWidth)
+      llvm_unreachable("unimplemented Shared -> DotOperandMmav2 code path");
     // base pointers
     std::array<std::array<Value, 4>, 2> ptrs;
     int vecWidth = 4 / elemBytes;
@@ -329,8 +331,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
     // row + trans and col + no-trans are equivalent
     bool isActualTrans =
         (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
-    if (isActualTrans)
-      std::swap(vptrs[1], vptrs[2]);
     // pack loaded vectors into 4 32-bit values
     int inc = needTrans ? 1 : kWidth;
     VectorType packedTy = vec_ty(int_ty(8 * elemBytes), inc);
@@ -348,12 +348,15 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
         Value val = load(ptr);
         Value canonval = bitcast(val, vec_ty(canonInt, canonWidth));
         for (int w = 0; w < canonWidth; ++w) {
-          retElems[idx + w * kWidth / vecWidth] =
-              insert_element(retElems[idx + w * kWidth / vecWidth],
+          int ridx = idx + w * kWidth / vecWidth;
+          retElems[ridx] =
+              insert_element(retElems[ridx],
                              extract_element(canonval, i32_val(w)), i32_val(e));
         }
       }
     }
+    if (isActualTrans)
+      std::swap(retElems[1], retElems[2]);
     return {bitcast(retElems[0], i32_ty), bitcast(retElems[1], i32_ty),
             bitcast(retElems[2], i32_ty), bitcast(retElems[3], i32_ty)};
   }

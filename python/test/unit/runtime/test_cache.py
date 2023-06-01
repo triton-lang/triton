@@ -160,12 +160,12 @@ def test_jit_debug() -> None:
     assert len(kernel_add.cache[device]) == 1
     kernel_add.debug = False
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
-    assert len(kernel_add.cache[device]) == 1
+    assert len(kernel_add.cache[device]) == 2
     kernel_add.debug = True
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
-    assert len(kernel_add.cache[device]) == 2
+    assert len(kernel_add.cache[device]) == 3
     bins = list(kernel_add.cache[device].values())
-    assert bins[0].asm['ttir'] != bins[1].asm['ttir']
+    assert bins[2].asm['ttir'] != bins[1].asm['ttir']
 
 
 @triton.jit

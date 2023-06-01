@@ -440,10 +440,10 @@ struct GetProgramIdOpConversion
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(op.getAxis() < 3);
+    assert(op.getAxisAsInt() < 3);
 
     Value blockId =
-        rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxis()]);
+        rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxisAsInt()]);
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
     return success();
   }

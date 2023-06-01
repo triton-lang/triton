@@ -1280,6 +1280,13 @@ def where(condition: tl.tensor,
 def reduction(
     inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
 ) -> Tuple[tl.tensor, ...]:
+    if axis is None:
+        new_inputs = []
+        for i in range(len(inputs)):
+            new_shape = [inputs[i].numel.value]
+            new_inputs.append(view(inputs[i], new_shape, builder))
+        inputs = tuple(new_inputs)
+        axis = 0
     # get result shape
     shape = inputs[0].type.shape
     ret_shape = [s for i, s in enumerate(shape) if i != axis]

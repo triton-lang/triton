@@ -76,40 +76,64 @@ tt.func @load_store_ops_scalar(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   tt.return
 }
 
+// CHECK-LABEL: reduce_ops_infer
 tt.func @reduce_ops_infer(%ptr: !tt.ptr<f32>, %v : tensor<1x2x4xf32>) {
   // Test if reduce ops infer types correctly
 
-  // CHECK: }) {axis = 0 : i32} : (tensor<1x2x4xf32>) -> tensor<2x4xf32>
+  // CHECK: tt.reduce
+  // CHECK-SAME: axis = 0
+  // CHECK: tt.reduce.return
+  // CHECK-NEXT: (tensor<1x2x4xf32>) -> tensor<2x4xf32>
   %a = "tt.reduce" (%v) ({
   ^bb0(%arg0: f32, %arg1: f32):
     %add = arith.addf %arg0, %arg1 : f32
     tt.reduce.return %add : f32
   }) {axis = 0 : i32}  : (tensor<1x2x4xf32>) -> tensor<2x4xf32>
-  // CHECK: }) {axis = 1 : i32}  : (tensor<1x2x4xf32>) -> tensor<1x4xf32>
+
+  // CHECK: tt.reduce
+  // CHECK-SAME: axis = 1
+  // CHECK: tt.reduce.return
+  // CHECK-NEXT: (tensor<1x2x4xf32>) -> tensor<1x4xf32>
   %b = "tt.reduce" (%v) ({
   ^bb0(%arg0: f32, %arg1: f32):
     %add = arith.addf %arg0, %arg1 : f32
     tt.reduce.return %add : f32
   }) {axis = 1 : i32}  : (tensor<1x2x4xf32>) -> tensor<1x4xf32>
-  // CHECK: }) {axis = 2 : i32}  : (tensor<1x2x4xf32>) -> tensor<1x2xf32>
+
+  // CHECK: tt.reduce
+  // CHECK-SAME: axis = 2
+  // CHECK: tt.reduce.return
+  // CHECK-NEXT: (tensor<1x2x4xf32>) -> tensor<1x2xf32>
   %c = "tt.reduce" (%v) ({
   ^bb0(%arg0: f32, %arg1: f32):
     %add = arith.addf %arg0, %arg1 : f32
     tt.reduce.return %add : f32
   }) {axis = 2 : i32}  : (tensor<1x2x4xf32>) -> tensor<1x2xf32>
-  // CHECK: }) {axis = 1 : i32}  : (tensor<1x4xf32>) -> tensor<1xf32>
+
+  // CHECK: tt.reduce
+  // CHECK-SAME: axis = 1
+  // CHECK: tt.reduce.return
+  // CHECK-NEXT: (tensor<1x4xf32>) -> tensor<1xf32>
   %e = "tt.reduce" (%b) ({
   ^bb0(%arg0: f32, %arg1: f32):
     %add = arith.addf %arg0, %arg1 : f32
     tt.reduce.return %add : f32
   }) {axis = 1 : i32}  : (tensor<1x4xf32>) -> tensor<1xf32>
-  // CHECK: }) {axis = 0 : i32}  : (tensor<2x4xf32>) -> tensor<4xf32>
+
+  // CHECK: tt.reduce
+  // CHECK-SAME: axis = 0
+  // CHECK: tt.reduce.return
+  // CHECK-NEXT: (tensor<2x4xf32>) -> tensor<4xf32>
   %f = "tt.reduce" (%a) ({
   ^bb0(%arg0: f32, %arg1: f32):
     %add = arith.addf %arg0, %arg1 : f32
     tt.reduce.return %add : f32
   }) {axis = 0 : i32}  : (tensor<2x4xf32>) -> tensor<4xf32>
-  // CHECK: }) {axis = 0 : i32}  : (tensor<4xf32>) -> f32
+
+  // CHECK: tt.reduce
+  // CHECK-SAME: axis = 0
+  // CHECK: tt.reduce.return
+  // CHECK-NEXT: (tensor<4xf32>) -> f32
   %g = "tt.reduce" (%f) ({
   ^bb0(%arg0: f32, %arg1: f32):
     %add = arith.addf %arg0, %arg1 : f32
@@ -152,5 +176,14 @@ tt.func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
   tt.store %ptr32x32, %r2 : tensor<32x32xf32>
   tt.store %ptr128x128, %r3 : tensor<128x128xf32>
   tt.store %ptr1x1, %r4 : tensor<1x1xf32>
+  tt.return
+}
+
+// CHECK-LABEL: @print_no_arg
+tt.func @print_no_arg(%arg0: !tt.ptr<f32>) {
+// CHECK: tt.print "test"
+  tt.print "test"
+  %0 = tt.load %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : f32
+  tt.store %arg0, %0 {cache = 1 : i32, evict = 1 : i32} : f32
   tt.return
 }

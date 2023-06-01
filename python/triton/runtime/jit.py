@@ -356,7 +356,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         # when called with a grid using __getitem__
         self.kernel_decorators = []
         self.kernel = None
-        self.debug = os.environ.get("TRITON_DEBUG", "0") == "1" if debug is None else debug
+        self.debug = True if os.environ.get("TRITON_DEBUG", "0") == "1" else debug
         self.noinline = noinline
         # annotations
         normalize_ty = lambda ty: ty.__name__ if isinstance(ty, type) else ty

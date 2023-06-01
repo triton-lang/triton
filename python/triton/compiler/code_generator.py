@@ -97,6 +97,97 @@ class enter_sub_region:
         self.generator.local_defs = self.prev_defs
 
 
+# Check if the given syntax node has an "early" return
+class ContainsReturnChecker(ast.NodeVisitor):
+    def __init__(self, gscope):
+        self.gscope = gscope
+
+    def _visit_stmts(self, body) -> bool:
+        for s in body:
+            if self.visit(s):
+                return True
+        return False
+
+    def _visit_function(self, fn) -> bool:
+        # Currently we only support JITFunctions defined in the global scope
+        if isinstance(fn, JITFunction) and not fn.noinline:
+            fn_node = fn.parse()
+            return ContainsReturnChecker(self.gscope).visit(fn_node)
+        return False
+
+    def generic_visit(self, node) -> bool:
+        ret = False
+        for _, value in ast.iter_fields(node):
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        ret = ret or self.visit(item)
+            elif isinstance(value, ast.AST):
+                ret = ret or self.visit(value)
+        return ret
+
+    def visit_Attribute(self, node: ast.Attribute) -> bool:
+        # If the left part is a name, it's possible that
+        # we call triton native function or a jit function from another module.
+        # If the left part is not a name, it must return a tensor or a constexpr
+        # whose methods do not contain return statements
+        # e.g., (tl.load(x)).to(y)
+        # So we only check if the expressions within value have return or not
+        if isinstance(node.value, ast.Name):
+            if node.value.id in self.gscope:
+                value = self.gscope[node.value.id]
+                fn = getattr(value, node.attr)
+                return self._visit_function(fn)
+            return False
+        return self.visit(node.value)
+
+    def visit_Name(self, node: ast.Name) -> bool:
+        if type(node.ctx) == ast.Store:
+            return False
+        if node.id in self.gscope:
+            fn = self.gscope[node.id]
+            return self._visit_function(fn)
+        return False
+
+    def visit_Return(self, node: ast.Return) -> bool:
+        return True
+
+    def visit_Assign(self, node: ast.Assign) -> bool:
+        # There couldn't be an early return
+        # x = ...
+        return False
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> bool:
+        # There couldn't be an early return
+        # x += ...
+        return False
+
+    def visit_Module(self, node: ast.Module) -> bool:
+        return self._visit_stmts(node.body)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> bool:
+        return self._visit_stmts(node.body)
+
+    def visit_If(self, node: ast.If) -> bool:
+        # TODO: optimize the following case in which we actually don't have
+        # a return when static_cond is false:
+        # if dynamic_cond
+        #   if static_cond
+        #     func_with_return
+        #   else
+        #     func_without_return
+        ret = self._visit_stmts(node.body)
+        if node.orelse:
+            ret = ret or self._visit_stmts(node.orelse)
+        return ret
+
+    def visit_IfExp(self, node: ast.IfExp) -> bool:
+        return self.visit(node.body) or self.visit(node.orelse)
+
+    def visit_Call(self, node: ast.Call) -> bool:
+        return self.visit(node.func)
+
+
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, function_name,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None,
@@ -165,63 +256,6 @@ class CodeGenerator(ast.NodeVisitor):
             ret_type = self.visit(stmt)
             if ret_type is not None and isinstance(stmt, ast.Return):
                 self.last_ret_type = ret_type
-
-    # TODO: should be its own AST visitor
-    def contains_return_op(self, node):
-        if isinstance(node, ast.Return):
-            return True
-        elif isinstance(node, ast.Assign):
-            return self.contains_return_op(node.value)
-        elif isinstance(node, ast.Module):
-            pred = lambda s: self.contains_return_op(s)
-            return any(pred(s) for s in node.body)
-        elif isinstance(node, ast.FunctionDef):
-            pred = lambda s: self.contains_return_op(s)
-            return any(pred(s) for s in node.body)
-        elif isinstance(node, ast.Call):
-            def check_undefined_name(cur_node):
-                # Check if name is an undefined local variable,
-                # which can only be a tensor or a constexpr
-                if isinstance(cur_node.func, ast.Attribute):
-                    if isinstance(cur_node.func.value, ast.Name):
-                        name = cur_node.func.value.id
-                        if name not in self.lscope and name not in self.gscope:
-                            return True
-                        return False
-                    # chain of calls
-                    # e.g., tl.load(a).to(tl.float32)
-                    return check_undefined_name(cur_node.func.value)
-                return False
-            if check_undefined_name(node):
-                return False
-            fn = self.visit(node.func)
-            if isinstance(fn, JITFunction) and fn.noinline is not True:
-                old_gscope = self.gscope
-                self.gscope = sys.modules[fn.fn.__module__].__dict__
-                ret = self.contains_return_op(fn.parse())
-                self.gscope = old_gscope
-                return ret
-            return False
-        elif isinstance(node, ast.If):
-            pred = lambda s: self.contains_return_op(s)
-            ret = any(pred(s) for s in node.body)
-            if node.orelse:
-                ret = ret or any(pred(s) for s in node.orelse)
-            return ret
-        elif isinstance(node, ast.IfExp):
-            return self.contains_return_op(node.body) or self.contains_return_op(node.orelse)
-        elif isinstance(node, ast.Expr):
-            ret = False
-            for _, value in ast.iter_fields(node):
-                if isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, ast.AST):
-                            ret = ret or self.contains_return_op(item)
-                elif isinstance(value, ast.AST):
-                    ret = ret or self.contains_return_op(value)
-            return ret
-        else:
-            return False
 
     def visit_Module(self, node):
         ast.NodeVisitor.generic_visit(self, node)
@@ -354,7 +388,8 @@ class CodeGenerator(ast.NodeVisitor):
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             value = _unwrap_if_constexpr(value)
-            if not _is_triton_tensor(value) and \
+            if value is not None and \
+               not _is_triton_tensor(value) and \
                not isinstance(value, native_nontensor_types):
                 value = language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
@@ -526,7 +561,11 @@ class CodeGenerator(ast.NodeVisitor):
         cond = self.visit(node.test)
         if _is_triton_tensor(cond):
             cond = cond.to(language.int1, _builder=self.builder)
-            if self.scf_stack or not self.contains_return_op(node):
+            contains_return = ContainsReturnChecker(self.gscope).visit(node)
+            if self.scf_stack and contains_return:
+                raise UnsupportedLanguageConstruct(None, node,
+                                                   "Cannot have `return` statements inside `while` or `for` statements in triton")
+            elif self.scf_stack or not contains_return:
                 self.visit_if_scf(cond, node)
             else:
                 self.visit_if_top_level(cond, node)
@@ -825,7 +864,9 @@ class CodeGenerator(ast.NodeVisitor):
         if not self.module.has_function(fn_name):
             prototype = language.function_type([], arg_types)
             gscope = sys.modules[fn.fn.__module__].__dict__
-            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=fn.debug, noinline=fn.noinline)
+            # If the callee is not set, we use the same debug setting as the caller
+            debug = self.debug if fn.debug is None else fn.debug
+            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=debug, noinline=fn.noinline)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type

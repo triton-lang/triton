@@ -446,10 +446,11 @@ mlir::LogicalResult mlir::triton::ReduceOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
+  Properties *prop = properties.as<Properties *>();
+  int axis = prop->axis.getInt();
   for (auto arg : operands) {
     auto argTy = arg.getType().cast<RankedTensorType>();
     auto retEltTy = argTy.getElementType();
-    int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
     if (inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes)
             .failed()) {
       return failure();
@@ -557,7 +558,8 @@ mlir::LogicalResult mlir::triton::ExpandDimsOp::inferReturnTypes(
   auto arg = operands[0];
   auto argTy = arg.getType().cast<RankedTensorType>();
   auto retShape = argTy.getShape().vec();
-  int axis = attributes.get("axis").cast<IntegerAttr>().getInt();
+  Properties *prop = properties.as<Properties *>();
+  int axis = prop->axis.getInt();
   retShape.insert(retShape.begin() + axis, 1);
   // infer encoding
   Attribute argEncoding = argTy.getEncoding();
@@ -740,7 +742,7 @@ void triton::FuncOp::print(OpAsmPrinter &printer) {
 LogicalResult
 triton::CallOp::verifySymbolUses(mlir::SymbolTableCollection &symbolTable) {
   // Check that the callee attribute was specified.
-  auto fnAttr = (*this)->getAttrOfType<FlatSymbolRefAttr>("callee");
+  auto fnAttr = (*this).getProperties().callee;
   if (!fnAttr)
     return emitOpError("requires a 'callee' symbol reference attribute");
   FuncOp fn = symbolTable.lookupNearestSymbolFrom<FuncOp>(*this, fnAttr);

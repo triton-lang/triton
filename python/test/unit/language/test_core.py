@@ -130,6 +130,17 @@ class BlockedLayout:
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
 
+class SharedLayout:
+    def __init__(self, vec, per_phase, max_phase, order):
+        self.vec = str(vec)
+        self.per_phase = str(per_phase)
+        self.max_phase = str(max_phase)
+        self.order = str(order)
+
+    def __str__(self):
+        return f"#triton_gpu.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}}}>"
+
+
 @pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
 def test_empty_kernel(dtype_x, device='cuda'):
     SIZE = 128
@@ -456,6 +467,21 @@ def test_broadcast(dtype):
     broadcast_kernel[(1,)](x_tri, y_tri, y_broadcasted_tri, M=M, N=N)
     assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
 
+# ------------------
+# test invalid slice
+# ------------------
+
+
+def test_invalid_slice():
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst):
+        dst[10:]
+
+    with pytest.raises(triton.CompilationError, match='unsupported tensor index'):
+        _kernel[(1,)](dst=dst)
+
 
 # ----------------
 # test expand_dims
@@ -535,6 +561,20 @@ def test_expand_dims_error_cases():
 
     with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
         duplicate_dim2[(1,)](dummy_tensor, N)
+
+
+# ----------------------------
+# test invalid program id axis
+# ----------------------------
+def test_invalid_pid_axis():
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst):
+        pid = tl.program_id(20)
+
+    with pytest.raises(triton.CompilationError, match=r"program_id must be in \[0,3\]"):
+        _kernel[(1,)](dst)
 
 
 # ---------------
@@ -1368,6 +1408,9 @@ reduce_configs2 = [
     for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for shape in reduce2d_shapes
     for axis in [0, 1]
+] + [
+    (op, 'float32', [16, 32], None)
+    for op in ['min', 'max', 'sum']
 ]
 
 
@@ -1382,7 +1425,9 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         range_n = tl.arange(0, BLOCK_N)
         x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
         z = GENERATE_TEST_HERE
-        if AXIS == 1:
+        if AXIS is None:
+            tl.store(Z, z)
+        elif AXIS == 1:
             tl.store(Z + range_m, z)
         else:
             tl.store(Z + range_n, z)
@@ -1407,7 +1452,8 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     else:
         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
-    z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
+    ret_numel = 1 if axis is None else shape[1 - axis]
+    z_tri = to_triton(numpy_random((ret_numel,), dtype_str=z_dtype_str, rs=rs),
                       device=device, dst_type=z_tri_dtype_str)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
     z_tri = to_numpy(z_tri)
@@ -1957,6 +2003,23 @@ def test_full(dtype_str):
     assert torch.all(out_static == 2)
     assert torch.all(out_dynamic == 2)
 
+
+@pytest.mark.parametrize("literal, dtype_str",
+                         [(1e+50, "f64"), (1e+10, "f32"), (1.0, "f32"),
+                          ('float("inf")', "f32"), ('float("-inf")', "f32"),
+                          ('float("nan")', "f32"), ('float("-nan")', "f32"),
+                          (0., "f32"),
+                          (5, "i32"), (2**40, "i64"),])
+def test_constexpr(literal, dtype_str):
+    @triton.jit
+    def kernel(out_ptr):
+        val = GENERATE_TEST_HERE
+        tl.store(out_ptr.to(tl.pointer_type(val.dtype)), val)
+
+    kernel_patched = patch_kernel(kernel, {'GENERATE_TEST_HERE': f"{literal}"})
+    out = torch.zeros((1,), dtype=torch.float32, device="cuda")
+    h = kernel_patched[(1,)](out)
+    assert re.search(r"arith.constant .* : " + dtype_str, h.asm["ttir"]) is not None
 
 # TODO: uncomment once DotOperandEncoding::getElemsPerThread is implemented
 # @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
@@ -2628,41 +2691,64 @@ def add_fn_static_cond(x, cond: tl.constexpr):
         return x + 1
 
 
-@pytest.mark.parametrize("call_type", ["attribute", "jit_function", "jit_function_return",
-                                       "ifexp", "expr", "jit_function_static_cond", "jit_function_noinline"])
+@pytest.mark.parametrize("call_type", ["attribute", "attribute_jit",
+                                       "jit", "jit_if", "jit_ifexp", "jit_expr",
+                                       "jit_static_cond", "jit_noinline", "jit_extern"])
 def test_if_call(call_type):
     @triton.jit
     def kernel(Out, call_type: tl.constexpr):
         pid = tl.program_id(0)
         o = tl.load(Out)
-        if pid == 0:
-            if call_type == "attribute":
-                # call attribute
-                a = o + 1
-                a = a.to(tl.int32).to(tl.int32)
-                o = a
-            else:
+        if call_type == "attribute":
+            # call attribute
+            if pid == 0:
                 a = o
-                if call_type == "jit_function":
-                    # regular function call
-                    a = add_fn(a)
-                elif call_type == "jit_function_return":
-                    # function without end_if block
-                    a = add_fn_return(a, pid)
-                elif call_type == "ifexp":
-                    # ifexp expression
-                    a = add_fn(a) if pid == 0 else add_fn_return(a, pid)
-                elif call_type == "expr":
-                    if pid == 1:
-                        return
-                    a = add_fn(a)
-                    if pid == 0:
-                        # call without return
-                        add_fn_expr(Out, a)
-                elif call_type == "jit_function_static_cond":
-                    a = add_fn_static_cond(a, call_type)
-                elif call_type == "jit_function_noinline":
-                    a = add_fn_noinline(a)
+                a = a.to(tl.int32).to(tl.int32) + 1
+                o = a
+        elif call_type == "attribute_jit":
+            # call attribute and jit function
+            if pid == 0:
+                a = o
+                a = tl.load(Out + add_fn(a) - 1).to(tl.int32) + 1
+                o = a
+        elif call_type == "jit":
+            if pid == 0:
+                # regular function call
+                a = o
+                a = add_fn(a)
+                o = a
+        elif call_type == "jit_if":
+            # function without end_if block
+            if pid == 0:
+                a = o
+                a = add_fn_return(a, pid)
+                o = a
+        elif call_type == "jit_ifexp":
+            # ifexp expression
+            if pid == 0:
+                a = o
+                a = add_fn(a) if pid == 0 else add_fn_return(a, pid)
+                o = a
+        elif call_type == "jit_expr":
+            # call without return
+            if pid == 0:
+                a = o + 1
+                add_fn_expr(Out, a)
+                o = a
+        elif call_type == "jit_static_cond":
+            if pid == 0:
+                a = o + 1
+                add_fn_static_cond(o, call_type)
+                o = a
+        elif call_type == "jit_noinline":
+            if pid == 0:
+                a = o + 1
+                add_fn_noinline(a)
+                o = a
+        elif call_type == "jit_extern":
+            if pid == 0:
+                a = o + 1
+                tl.cdiv(a, a)
                 o = a
 
         tl.store(Out, o)
@@ -2766,7 +2852,7 @@ def test_globaltimer():
     def kernel(Out1, Out2):
         start = tl.extra.cuda.globaltimer()
         off = tl.arange(0, 128)
-        for i in range(100):
+        for i in range(10000):
             tl.store(Out1 + off, tl.load(Out1 + off) + 1)
         end = tl.extra.cuda.globaltimer()
         tl.store(Out2, end - start)
@@ -2810,22 +2896,49 @@ layouts = [
     BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0])
 ]
 
+intermediate_layouts = [
+    None,
+    SharedLayout(1, 1, 1, [1, 0]),
+    SharedLayout(4, 2, 4, [1, 0]),
+    SharedLayout(2, 2, 4, [1, 0]),
+]
+
 
 @pytest.mark.parametrize("shape", [(128, 128)])
 @pytest.mark.parametrize("dtype", ['float16'])
 @pytest.mark.parametrize("src_layout", layouts)
+@pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
-def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
+def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device='cuda'):
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
         pytest.skip()
 
-    ir = f"""
-#src = {src_layout}
-#dst = {dst_layout}
-""" + """
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
+    layouts = f"""
+    #src = {src_layout}
+    #dst = {dst_layout}
+    """ if interm_layout is None else f"""
+    #src = {src_layout}
+    #interm = {interm_layout}
+    #dst = {dst_layout}
+    """
+
+    conversion = f"""
+    %12 = triton_gpu.convert_layout %9 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #dst>
+    %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
+    """ if interm_layout is None else f"""
+    %15 = triton_gpu.convert_layout %9 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #interm>
+    %16 = triton_gpu.convert_layout %15 : (tensor<128x128xi32, #interm>) -> tensor<128x128xi32, #src>
+    %17 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #interm>
+    %18 = triton_gpu.convert_layout %17 : (tensor<128x128xf16, #interm>) -> tensor<128x128xf16, #src>
+
+    %12 = triton_gpu.convert_layout %16 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #dst>
+    %13 = triton_gpu.convert_layout %18 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
+    """
+
+    ir = layouts + """
+    module attributes {"triton_gpu.num-warps" = 4 : i32} {
   tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<128> : tensor<128x1xi32, #src>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>
@@ -2840,8 +2953,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     %10 = tt.addptr %2, %9 : tensor<128x128x!tt.ptr<f16>, #src>, tensor<128x128xi32, #src>
     %11 = tt.load %10 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<128x128xf16, #src>
     %3 = tt.splat %arg1 : (!tt.ptr<f16>) -> tensor<128x128x!tt.ptr<f16>, #dst>
-    %12 = triton_gpu.convert_layout %9 : (tensor<128x128xi32, #src>) -> tensor<128x128xi32, #dst>
-    %13 = triton_gpu.convert_layout %11 : (tensor<128x128xf16, #src>) -> tensor<128x128xf16, #dst>
+    """ + conversion + """
     %14 = tt.addptr %3, %12 : tensor<128x128x!tt.ptr<f16>, #dst>, tensor<128x128xi32, #dst>
     tt.store %14, %13 : tensor<128x128xf16, #dst>
     tt.return

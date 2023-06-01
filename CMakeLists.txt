@@ -222,6 +222,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     ${conversion_libs}
 
     # optimizations
+    MLIRBytecodeWriter
     MLIRPass
     MLIRTransforms
     MLIRLLVMDialect

@@ -81,15 +81,18 @@ public:
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
                              1, context) {}
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
+  static mlir::LogicalResult
+  isBlockedToDotOperand(mlir::Operation *op,
+                        triton::gpu::DotOperandEncodingAttr &retEncoding,
+                        triton::gpu::BlockedEncodingAttr &srcEncoding) {
+    if (!op)
+      return failure();
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
     auto srcTy = cvt.getOperand().getType().cast<RankedTensorType>();
     auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
-    auto retEncoding =
+    retEncoding =
         retTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-    auto srcEncoding =
+    srcEncoding =
         srcTy.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
     if (!retTy)
       return failure();
@@ -101,6 +104,51 @@ public:
       return failure();
     if (!srcEncoding)
       return failure();
+    return success();
+  }
+
+  static bool isTrans(const triton::gpu::DotOperandEncodingAttr &retEncoding,
+                      const triton::gpu::BlockedEncodingAttr &srcEncoding) {
+    int kOrder = retEncoding.getOpIdx() ^ 1;
+    return kOrder != srcEncoding.getOrder()[0];
+  }
+
+  static bool isDotNT(triton::DotOp dotOp) {
+    triton::gpu::DotOperandEncodingAttr aRetEncoding;
+    triton::gpu::DotOperandEncodingAttr bRetEncoding;
+    triton::gpu::BlockedEncodingAttr aSrcEncoding;
+    triton::gpu::BlockedEncodingAttr bSrcEncoding;
+    if (isBlockedToDotOperand(dotOp.getOperand(0).getDefiningOp(), aRetEncoding,
+                              aSrcEncoding)
+            .failed())
+      return false;
+    if (isBlockedToDotOperand(dotOp.getOperand(1).getDefiningOp(), bRetEncoding,
+                              bSrcEncoding)
+            .failed())
+      return false;
+    if (!aRetEncoding || !bRetEncoding || !aSrcEncoding || !bSrcEncoding)
+      return false;
+    return !isTrans(aRetEncoding, aSrcEncoding) &&
+           !isTrans(bRetEncoding, bSrcEncoding);
+  }
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
+    triton::gpu::DotOperandEncodingAttr retEncoding;
+    triton::gpu::BlockedEncodingAttr srcEncoding;
+    if (isBlockedToDotOperand(op, retEncoding, srcEncoding).failed())
+      return mlir::failure();
+
+    // only supports dot NT
+    auto users = cvt->getUsers();
+    auto dotOp = dyn_cast_or_null<DotOp>(*users.begin());
+    if (!dotOp)
+      return failure();
+    if (!isDotNT(dotOp))
+      return failure();
+
     // don't move things around when cvt operand is a block arg
     Operation *argOp = cvt.getOperand().getDefiningOp();
     if (!argOp)
@@ -129,8 +177,8 @@ public:
         return failure();
       // we don't want to use ldmatrix for 8-bit data that requires trans
       // since Nvidia GPUs can't do it efficiently
-      bool isTrans =
-          (retEncoding.getOpIdx() == 1) ^ (srcEncoding.getOrder()[0] == 0);
+      int kOrder = retEncoding.getOpIdx() ^ 1;
+      bool isTrans = kOrder != srcEncoding.getOrder()[0];
       bool isInt8 = srcTy.getElementType().getIntOrFloatBitWidth() == 8;
       if (isTrans && isInt8)
         return failure();

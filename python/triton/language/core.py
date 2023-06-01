@@ -55,7 +55,17 @@ def _to_tensor(x, builder):
         else:
             raise RuntimeError(f'Nonrepresentable integer {x}.')
     elif isinstance(x, float):
-        return tensor(builder.get_fp32(x), float32)
+        min_float32 = 2 ** -126
+        max_float32 = (2 - 2**-23) * 2**127
+        abs_x = __builtins__['abs'](x)
+        if abs_x == float("inf") or\
+           abs_x == 0.0 or \
+           x != x or \
+           min_float32 <= abs_x <= max_float32:
+            return tensor(builder.get_fp32(x), float32)
+        else:
+            return tensor(builder.get_fp64(x), float64)
+
     elif isinstance(x, constexpr):
         return _to_tensor(x.value, builder)
     elif isinstance(x, tensor):
@@ -701,7 +711,7 @@ class tensor:
         for dim, sl in enumerate(slices):
             if isinstance(sl, constexpr) and sl.value is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif sl == slice(None, None, None):
+            elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
                 pass
             else:
                 assert False, f"unsupported tensor index: {sl}"
@@ -1307,8 +1317,8 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
             else:
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
-
-    axis = _constexpr_to_value(axis)
+    if axis is not None:
+        axis = _constexpr_to_value(axis)
     return semantic.reduction(input, axis, make_combine_region, _builder)
 
 
@@ -1379,7 +1389,7 @@ def _max_combine(a, b):
 
 @triton.jit
 @_add_reduction_docstr("maximum")
-def max(input, axis):
+def max(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _max_combine)
 
@@ -1409,7 +1419,7 @@ def _min_combine(a, b):
 
 @triton.jit
 @_add_reduction_docstr("minimum")
-def min(input, axis):
+def min(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _min_combine)
 
@@ -1438,7 +1448,7 @@ def _sum_combine(a, b):
 
 @triton.jit
 @_add_reduction_docstr("sum")
-def sum(input, axis):
+def sum(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _sum_combine)
 
@@ -1450,7 +1460,7 @@ def _xor_combine(a, b):
 
 @builtin
 @_add_reduction_docstr("xor sum")
-def xor_sum(input, axis, _builder=None, _generator=None):
+def xor_sum(input, axis=None, _builder=None, _generator=None):
     scalar_ty = input.type.scalar
     if not scalar_ty.is_int():
         raise ValueError("xor_sum only supported for integers")
@@ -1461,12 +1471,15 @@ def xor_sum(input, axis, _builder=None, _generator=None):
 
 
 # -----------------------
-# Internal for debugging
+# Compiler Hint Ops
 # -----------------------
 
 
 @builtin
 def debug_barrier(_builder=None):
+    '''
+    Insert a barrier to synchronize all threads in a block.
+    '''
     return semantic.debug_barrier(_builder)
 
 
@@ -1508,16 +1521,28 @@ def max_contiguous(input, values, _builder=None):
 
 @builtin
 def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
+    '''
+    Print the values at compile time. The parameters are the same as the builtin :code:`print`.
+    '''
     pass
 
 
 @builtin
 def static_assert(cond, msg="", _builder=None):
+    '''
+    Assert the condition at compile time. The parameters are the same as the builtin :code:`assert`.
+    '''
     pass
 
 
 @builtin
 def device_print(prefix, *args, _builder=None):
+    '''
+    Print the values at runtime from the device.
+
+    :param prefix: a prefix to print before the values. This is required to be a string literal.
+    :param args: the values to print. They can be any tensor or scalar.
+    '''
     import string
     prefix = _constexpr_to_value(prefix)
     assert isinstance(prefix, str), f"{prefix} is not string"
@@ -1535,6 +1560,12 @@ def device_print(prefix, *args, _builder=None):
 
 @builtin
 def device_assert(cond, msg="", _builder=None):
+    '''
+    Assert the condition at runtime from the device.
+
+    :param cond: the condition to assert. This is required to be a boolean tensor.
+    :param msg: the message to print if the assertion fails. This is required to be a string literal.
+    '''
     msg = _constexpr_to_value(msg)
     import inspect
     frame = inspect.currentframe()
@@ -1560,7 +1591,22 @@ def device_assert(cond, msg="", _builder=None):
 
 class static_range:
 
-    """Iterator that counts upward forever."""
+    """
+    Iterator that counts upward forever.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.jit
+        def kernel(...):
+            for i in tl.static_range(10):
+                ...
+    :note: This is a special iterator used to implement similar semantics to Python's :code:`range` in the context of
+        :code:`triton.jit` functions. In addition, it also guides the compiler to unroll the loop aggressively.
+    :param arg1: the start value.
+    :param arg2: the end value.
+    :param step: the step value.
+    """
 
     def __init__(self, arg1, arg2=None, step=None):
         assert isinstance(arg1, constexpr)

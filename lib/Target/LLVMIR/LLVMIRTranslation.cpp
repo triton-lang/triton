@@ -158,12 +158,12 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
       funcs.push_back(func);
   });
 
-  for (auto &func : funcs) {
-    if (func.getOperation()->hasAttr("libname")) {
-      auto name =
-          func.getOperation()->getAttr("libname").dyn_cast<StringAttr>();
-      auto path =
-          func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
+  for (LLVM::LLVMFuncOp func : funcs) {
+    if (auto libnameAttr = func->getDiscardableAttr("libname")) {
+      auto name = libnameAttr.dyn_cast<StringAttr>();
+      auto path = func.getOperation()
+                      ->getDiscardableAttr("libpath")
+                      .dyn_cast<StringAttr>();
       if (name) {
         std::string libName = name.str();
         externLibs[libName] = path.str();
@@ -171,11 +171,8 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
     }
   }
 
-  if (module.getOperation()->hasAttr("triton_gpu.externs")) {
-    auto dict = module.getOperation()
-                    ->getAttr("triton_gpu.externs")
-                    .dyn_cast<DictionaryAttr>();
-    for (auto &attr : dict) {
+  if (auto externsAttr = module->getDiscardableAttr("triton_gpu.externs")) {
+    for (auto &attr : externsAttr.cast<DictionaryAttr>()) {
       externLibs[attr.getName().strref().trim().str()] =
           attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
     }

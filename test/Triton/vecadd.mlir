@@ -2,7 +2,7 @@
 
 module {
   tt.func @add_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32__(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32, %arg5: i32) {
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %c256_i32 = arith.constant 256 : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
@@ -49,7 +49,7 @@ module {
 //     %c0 = arith.constant 0 : index
 //     %cst = arith.constant 0.000000e+00 : f32
 //     %c256_i32 = arith.constant 256 : i32
-//     %0 = tt.get_program_id {axis = 0 : i32} : i32
+//     %0 = tt.get_program_id x : i32
 //     %1 = arith.muli %0, %c256_i32 : i32
 //     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #triton_gpu<"coalesced encoding<threadTileSize = 1, blockTileSize = 32, order = 0>">>
 //     %3 = tt.broadcast %1 : (i32) -> tensor<256xi32, #triton_gpu<"coalesced encoding<threadTileSize = 1, blockTileSize = 32, order = 0>">>

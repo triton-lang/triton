@@ -8,6 +8,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "llvm/ADT/MapVector.h"
 
 //===----------------------------------------------------------------------===//
 //
@@ -17,6 +18,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+using llvm::MapVector;
 using namespace mlir;
 namespace ttg = triton::gpu;
 
@@ -25,9 +27,19 @@ namespace ttg = triton::gpu;
 
 // pass named attrs (e.g., tt.contiguity) from Triton to Triton
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
-  for (const NamedAttribute attr : dictAttrs.getValue())
-    if (!op->hasAttr(attr.getName()))
-      op->setAttr(attr.getName(), attr.getValue());
+  NamedAttrList attrs = op->getDiscardableAttrs();
+  // Collect the attributes to propagate: the ones in dictAttrs and not yet on
+  // the operation.
+  SmallVector<NamedAttribute> toPropagate;
+  for (const NamedAttribute attr : dictAttrs.getValue()) {
+    if (!attrs.get(attr.getName()))
+      toPropagate.push_back(attr);
+  }
+  // If we found any, let's set them here as a single step.
+  if (toPropagate.size()) {
+    attrs.append(toPropagate);
+    op->setDiscardableAttrs(attrs);
+  }
 }
 
 #define int_attr(num) builder.getI64IntegerAttr(num)
@@ -69,31 +81,46 @@ class LoopPipeliner {
   /// value (in loop) => value at stage N
   DenseMap<Value, SmallVector<Value>> valueMapping;
 
-  /// Block arguments that loads depend on
-  SetVector<BlockArgument> depArgs;
-
+  /// For each argument, we need to record at which stage it is defined.
   /// If we have a load that immediately depends on a block argument in the
   /// current iteration, it is an immediate dependency. Otherwise, it is a
   /// non-immediate dependency, which means the load depends on a block argument
   /// in the previous iterations.
   /// For example:
   /// scf.for (%arg0, %arg1, %arg2) {
-  ///   %0 = load %arg0  <--- immediate dep, this address is initialized at
-  ///   numStages-2
+  ///   %0 = load %arg0  <--- immediate dep, this address is initialized before
+  ///   numStages-1
   ///   %1 = load %arg1
   ///   %2 = add %1, %arg2
   ///   %3 = load %2  <--- non-immediate dep, %arg1 must be an update-to-date
   ///   value
   /// }
-  SetVector<BlockArgument> immedidateDepArgs;
+  /// Collect values that v depends on and are defined inside the loop
+  LogicalResult collectDeps(Value v, int stage,
+                            MapVector<Value, int> &depStage);
 
-  SetVector<BlockArgument> nonImmedidateDepArgs;
+  /// Associate each variable with a unique stage. If a variable is defined
+  /// at multiple stages, we don't pipeline it.
+  LogicalResult addDep(Value v, int stage, MapVector<Value, int> &depStage);
+
+  int getArgDefStage(Value v, int stage);
+
+  /// Block arguments that loads depend on
+  MapVector<BlockArgument, int> depArgUseStage;
+
+  /// Block arguments that loads depend on (defined in the loop body)
+  MapVector<BlockArgument, int> depArgDefStage;
 
   /// Operations (inside the loop body) that loads depend on
-  SetVector<Operation *> depOps;
+  MapVector<Operation *, int> depOpDefStage;
 
-  /// collect values that v depends on and are defined inside the loop
-  void collectDeps(Value v, int stages, SetVector<Value> &deps);
+  /// Operations (inside the loop body) that loads depend on (defined in the
+  /// loop body)
+  SetVector<BlockArgument> immediateDepArgs;
+
+  /// Operations (inside the loop body) that loads depend on (defined in the
+  /// previous iterations)
+  SetVector<BlockArgument> nonImmediateDepArgs;
 
   void setValueMapping(Value origin, Value newValue, int stage);
 
@@ -140,31 +167,60 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
   return valueMapping[origin][stage];
 }
 
-void LoopPipeliner::collectDeps(Value v, int stages, SetVector<Value> &deps) {
+LogicalResult LoopPipeliner::addDep(Value v, int stage,
+                                    MapVector<Value, int> &depStage) {
+  if (!depStage.contains(v)) {
+    depStage.insert(std::make_pair(v, stage));
+  } else if (depStage[v] != stage)
+    return failure();
+  return success();
+}
+
+LogicalResult LoopPipeliner::collectDeps(Value v, int stage,
+                                         MapVector<Value, int> &depStage) {
   // Loop-invariant value, skip
   if (v.getParentRegion() != &forOp.getLoopBody())
-    return;
+    return success();
 
   // Since we only need to peel the loop numStages-1 times, don't worry about
   // depends that are too far away
-  if (stages < 0)
-    return;
+  if (stage < 0)
+    return success();
 
   if (auto arg = v.dyn_cast<BlockArgument>()) {
+    // Skip the first arg (loop induction variable)
+    // Otherwise the op idx is arg.getArgNumber()-1
     if (arg.getArgNumber() > 0) {
-      // Skip the first arg (loop induction variable)
-      // Otherwise the op idx is arg.getArgNumber()-1
-      deps.insert(v);
-      collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stages - 1,
-                  deps);
+      // If we've found the first definition of this arg, we're done, don't
+      // recurse
+      if (addDep(v, stage, depStage).succeeded())
+        if (collectDeps(yieldOp->getOperand(arg.getArgNumber() - 1), stage - 1,
+                        depStage)
+                .failed())
+          return failure();
     }
   } else { // value
-    // v might be in deps, but we still need to visit v.
-    // This is because v might depend on value in previous iterations
-    deps.insert(v);
+    // An operation cannot be dependent on different stages
+    if (addDep(v, stage, depStage).failed())
+      return failure();
     for (Value op : v.getDefiningOp()->getOperands())
-      collectDeps(op, stages, deps);
+      if (collectDeps(op, stage, depStage).failed())
+        return failure();
   }
+  return success();
+}
+
+int LoopPipeliner::getArgDefStage(Value v, int stage) {
+  if (stage < 0)
+    return -1;
+  if (auto arg = v.dyn_cast<BlockArgument>()) {
+    if (arg.getArgNumber() > 0) {
+      return getArgDefStage(yieldOp->getOperand(arg.getArgNumber() - 1),
+                            stage - 1);
+    }
+    llvm_unreachable("Loop induction variable should not be a dependency");
+  } else
+    return stage;
 }
 
 ttg::AllocTensorOp LoopPipeliner::allocateEmptyBuffer(Operation *op,
@@ -188,7 +244,8 @@ LogicalResult LoopPipeliner::initialize() {
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-  // can we use forOp.walk(...) here?
+  // We cannot use forOp.walk(...) here because we only want to visit the
+  // operations in the loop body block. Nested blocks are handled separately.
   SmallVector<triton::LoadOp, 2> validLoads;
   for (Operation &op : *loop)
     if (auto loadOp = dyn_cast<triton::LoadOp>(&op)) {
@@ -205,7 +262,11 @@ LogicalResult LoopPipeliner::initialize() {
                     .cast<triton::PointerType>()
                     .getPointeeType();
       unsigned width = vec * ty.getIntOrFloatBitWidth();
-      // cp.async's cp-size can only be 4, 8 and 16.
+      // We do not pipeline all loads for the following reasons:
+      // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8 and 16.
+      // 2. It's likely that pipling small load won't offer much performance
+      //    improvement and may even hurt performance by increasing register
+      //    pressure.
       if (width >= 32)
         validLoads.push_back(loadOp);
     }
@@ -215,12 +276,28 @@ LogicalResult LoopPipeliner::initialize() {
     return failure();
 
   // load => values that it depends on
+  // Don't pipeline if any load's operands
   DenseMap<Value, SetVector<Value>> loadDeps;
+  MapVector<Value, int> depStage;
   for (triton::LoadOp loadOp : validLoads) {
-    SetVector<Value> deps;
-    for (Value op : loadOp->getOperands())
-      collectDeps(op, numStages - 1, deps);
-    loadDeps[loadOp] = deps;
+    for (Value op : loadOp->getOperands()) {
+      MapVector<Value, int> operandDepStage;
+      if (collectDeps(op, numStages - 1, operandDepStage).failed())
+        return failure();
+      for (auto [v, stage] : operandDepStage) {
+        auto immedidate = operandDepStage.front().first.isa<BlockArgument>();
+        if (v.isa<BlockArgument>()) {
+          auto arg = v.cast<BlockArgument>();
+          if (immedidate)
+            immediateDepArgs.insert(arg);
+          else
+            nonImmediateDepArgs.insert(arg);
+        }
+        loadDeps[loadOp].insert(v);
+        if (addDep(v, stage, depStage).failed())
+          return failure();
+      }
+    }
   }
 
   // Don't pipeline valid loads that depend on other valid loads
@@ -268,9 +345,7 @@ LogicalResult LoopPipeliner::initialize() {
         continue;
       isCandidate = true;
       loadsMapping[loadOp] = convertLayout;
-    }
-
-    else
+    } else
       isCandidate = false;
 
     if (isCandidate)
@@ -306,7 +381,7 @@ LogicalResult LoopPipeliner::initialize() {
     bufferShape.insert(bufferShape.begin(), numStages);
     auto sharedEnc = ttg::SharedEncodingAttr::get(
         ty.getContext(), dotOpEnc, ty.getShape(),
-        triton::gpu::getOrder(ty.getEncoding()), loadsSmallestType[loadOp]);
+        ttg::getOrder(ty.getEncoding()), loadsSmallestType[loadOp]);
     loadsBufferType[loadOp] =
         RankedTensorType::get(bufferShape, ty.getElementType(), sharedEnc);
   }
@@ -314,27 +389,19 @@ LogicalResult LoopPipeliner::initialize() {
   // We have some loads to pipeline
   if (!loads.empty()) {
     // Update depArgs & depOps
-    for (Value loadOp : loads) {
-      auto &deps = loadDeps[loadOp];
-      for (auto &dep : deps) {
-        if (auto arg = dep.dyn_cast<BlockArgument>()) {
-          depArgs.insert(arg);
-          if (deps.front().isa<BlockArgument>()) {
-            immedidateDepArgs.insert(arg);
-          } else {
-            nonImmedidateDepArgs.insert(arg);
-          }
-        } else
-          depOps.insert(dep.getDefiningOp());
-      }
+    for (auto [dep, stage] : depStage) {
+      if (auto arg = dep.dyn_cast<BlockArgument>())
+        depArgUseStage.insert({arg, stage});
+      else
+        depOpDefStage.insert({dep.getDefiningOp(), stage});
     }
     return success();
   }
 
   // Check if immedidateDepArgs and nonImmedidateDepArgs are disjoint
   // If yes, we cannot pipeline the loop for now
-  for (BlockArgument arg : immedidateDepArgs)
-    if (nonImmedidateDepArgs.contains(arg)) {
+  for (BlockArgument arg : immediateDepArgs)
+    if (nonImmediateDepArgs.contains(arg)) {
       return failure();
     }
 
@@ -365,12 +432,13 @@ Value LoopPipeliner::getLoadMask(triton::LoadOp loadOp, Value mappedMask,
 
 void LoopPipeliner::emitPrologue() {
   OpBuilder builder(forOp);
+  // Get init operands for loop carried values
   for (BlockArgument &arg : forOp.getRegionIterArgs()) {
     OpOperand &operand = forOp.getOpOperandForRegionIterArg(arg);
     setValueMapping(arg, operand.get(), 0);
   }
 
-  // prologue from [0, numStage-1)
+  // Emit prologue from [0, numStage-1)
   Value iv = forOp.getLowerBound();
   pipelineIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   for (int stage = 0; stage < numStages - 1; ++stage) {
@@ -386,12 +454,12 @@ void LoopPipeliner::emitPrologue() {
     // Rematerialize peeled values
     SmallVector<Operation *> orderedDeps;
     for (Operation &op : forOp.getLoopBody().front()) {
-      if (depOps.contains(&op))
+      if (depOpDefStage.contains(&op))
         orderedDeps.push_back(&op);
       else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
         orderedDeps.push_back(&op);
     }
-    assert(depOps.size() + loads.size() == orderedDeps.size() &&
+    assert(depOpDefStage.size() + loads.size() == orderedDeps.size() &&
            "depOps contains invalid values");
     for (Operation *op : orderedDeps) {
       Operation *newOp = nullptr;
@@ -406,14 +474,13 @@ void LoopPipeliner::emitPrologue() {
           Value newMask =
               getLoadMask(loadOp, lookupOrDefault(loadOp.getMask(), stage),
                           loopCond, builder);
-          // TODO: check if the hardware supports async copy
-          newOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
+          newOp = builder.create<ttg::InsertSliceAsyncOp>(
               op->getLoc(), loadsBuffer[loadOp].getType(),
               lookupOrDefault(loadOp.getPtr(), stage),
               loadStageBuffer[loadOp][stage], pipelineIterIdx, newMask,
               lookupOrDefault(loadOp.getOther(), stage), loadOp.getCache(),
               loadOp.getEvict(), loadOp.getIsVolatile(), /*axis*/ 0);
-          builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
+          builder.create<ttg::AsyncCommitGroupOp>(op->getLoc());
           loadStageBuffer[loadOp].push_back(newOp->getResult(0));
         } else
           llvm_unreachable("This should be LoadOp");
@@ -428,10 +495,9 @@ void LoopPipeliner::emitPrologue() {
               lookupOrDefault(loadOp.getOther(), stage),
               loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
               loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-          addNamedAttrs(newOp, op->getAttrDictionary());
-        } else {
+          addNamedAttrs(newOp, op->getDiscardableAttrDictionary());
+        } else
           newOp = builder.clone(*op);
-        }
         // Update loop-carried uses
         for (unsigned opIdx = 0; opIdx < op->getNumOperands(); ++opIdx) {
           auto it = valueMapping.find(op->getOperand(opIdx));
@@ -443,32 +509,40 @@ void LoopPipeliner::emitPrologue() {
         }
       }
 
-      // Update mapping of results
-      // if (stage == numStages - 2)
-      //   continue;
-
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
-        Value originalResult = op->getResult(dstIdx);
+        Value originResult = op->getResult(dstIdx);
         // copy_async will update the value of its only use
-        // TODO: load should not be used in the preheader?
-        if (loads.contains(originalResult)) {
+        if (loads.contains(originResult))
           break;
-          // originalResult = loadsMapping[originalResult];
-        }
-        setValueMapping(originalResult, newOp->getResult(dstIdx), stage);
+        setValueMapping(originResult, newOp->getResult(dstIdx), stage);
         // update mapping for loop-carried values (args)
         for (OpOperand &operand : yieldOp->getOpOperands()) {
-          if (operand.get() == op->getResult(dstIdx))
-            setValueMapping(
-                forOp.getRegionIterArgs()[operand.getOperandNumber()],
-                newOp->getResult(dstIdx), stage + 1);
+          if (operand.get() == op->getResult(dstIdx)) {
+            auto yieldIdx = operand.getOperandNumber();
+            auto value = forOp.getRegionIterArgs()[yieldIdx];
+            setValueMapping(value, newOp->getResult(dstIdx), stage + 1);
+          }
         }
       }
     } // for (Operation *op : orderedDeps)
 
+    // Update pipeline index
     pipelineIterIdx = builder.create<arith::AddIOp>(
         iv.getLoc(), pipelineIterIdx,
         builder.create<arith::ConstantIntOp>(iv.getLoc(), 1, 32));
+
+    // Some values have not been used by any ops in the loop body
+    for (BlockArgument arg : forOp.getRegionIterArgs()) {
+      // Check if arg has a yieldOp use
+      for (OpOperand &operand : arg.getUses()) {
+        if (operand.getOwner() == yieldOp) {
+          auto yieldIdx = operand.getOperandNumber();
+          auto value = forOp.getRegionIterArgs()[yieldIdx];
+          if (!valueMapping[value][stage + 1])
+            setValueMapping(value, valueMapping[arg][stage], stage + 1);
+        }
+      }
+    }
   } // for (int stage = 0; stage < numStages - 1; ++stage)
 
   // async.wait & extract_slice
@@ -484,7 +558,7 @@ void LoopPipeliner::emitPrologue() {
     sliceType = RankedTensorType::get({bufferShape[1], bufferShape[2]},
                                       sliceType.getElementType(),
                                       loadsBufferType[loadOp].getEncoding());
-    Value extractSlice = builder.create<triton::gpu::ExtractSliceOp>(
+    Value extractSlice = builder.create<ttg::ExtractSliceOp>(
         loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][numStages - 1],
         SmallVector<OpFoldResult>{int_attr(0), int_attr(0), int_attr(0)},
         SmallVector<OpFoldResult>{int_attr(1),
@@ -505,7 +579,7 @@ void LoopPipeliner::emitEpilogue() {
   OpBuilder builder(forOp);
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointAfter(forOp);
-  builder.create<triton::gpu::AsyncWaitOp>(forOp.getLoc(), 0);
+  builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
 }
 
 scf::ForOp LoopPipeliner::createNewForOp() {
@@ -537,21 +611,23 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     newLoopArgs.push_back(loadsExtract[loadOp]);
 
   size_t depArgsBeginIdx = newLoopArgs.size();
-  for (BlockArgument depArg : depArgs) {
+  for (auto [depArg, useStage] : depArgUseStage) {
     depArgsIdx[depArg] = newLoopArgs.size();
-    if (immedidateDepArgs.contains(depArg)) {
+    auto defStage = getArgDefStage(depArg, useStage);
+    assert(defStage >= 0 &&
+           "newLoopArgs has null args without a define op. Consider either "
+           "rewrite the loop to reduce cross iteration dependencies or "
+           "increase the num_stages value.");
+    if (immediateDepArgs.contains(depArg) && defStage == numStages - 2) {
       newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
     } else
       newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
   }
 
-  size_t nextIVIdx = newLoopArgs.size();
+  size_t ivIndex = newLoopArgs.size();
   newLoopArgs.push_back(valueMapping[forOp.getInductionVar()][numStages - 2]);
   newLoopArgs.push_back(pipelineIterIdx);
   newLoopArgs.push_back(loopIterIdx);
-
-  for (size_t i = 0; i < newLoopArgs.size(); ++i)
-    assert(newLoopArgs[i]);
 
   // 1. signature of the new ForOp
   auto newForOp = builder.create<scf::ForOp>(
@@ -565,7 +641,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
-  // 2. clone the loop body, replace original args with args of the new ForOp
+  // 3. clone the loop body, replace original args with args of the new ForOp
   // Insert async wait if necessary.
   DenseSet<Value> isModified;
   for (Operation &op : forOp.getBody()->without_terminator()) {
@@ -597,50 +673,54 @@ scf::ForOp LoopPipeliner::createNewForOp() {
     isModified.insert(op.getResult(0));
   }
 
-  // 3. prefetch the next iteration
+  // 4. prefetch the next iteration
   SmallVector<Operation *> orderedDeps;
   for (Operation &op : forOp.getLoopBody().front()) {
-    if (depOps.contains(&op))
+    if (depOpDefStage.contains(&op))
       orderedDeps.push_back(&op);
     else if (op.getNumResults() > 0 && loads.contains(op.getResult(0)))
       orderedDeps.push_back(&op);
   }
-  assert(depOps.size() + loads.size() == orderedDeps.size() &&
+  assert(depOpDefStage.size() + loads.size() == orderedDeps.size() &&
          "depOps contains invalid values");
   IRMapping nextMapping;
   DenseMap<BlockArgument, Value> depArgsMapping;
   size_t argIdx = 0;
-  for (BlockArgument arg : depArgs) {
+  for (auto [depArg, useStage] : depArgUseStage) {
     BlockArgument nextArg =
         newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
-    nextMapping.map(arg, nextArg);
+    nextMapping.map(depArg, nextArg);
     ++argIdx;
   }
 
   // Special handling for iv & loop condition
+  Value curIV = newForOp.getRegionIterArgs()[ivIndex];
   Value nextIV = builder.create<arith::AddIOp>(
-      newForOp.getInductionVar().getLoc(),
-      newForOp.getRegionIterArgs()[nextIVIdx], newForOp.getStep());
+      newForOp.getInductionVar().getLoc(), curIV, newForOp.getStep());
   Value nextLoopCond =
       builder.create<arith::CmpIOp>(nextIV.getLoc(), arith::CmpIPredicate::slt,
                                     nextIV, newForOp.getUpperBound());
-  nextMapping.map(forOp.getInductionVar(), nextIV);
 
   // Slice index
   SmallVector<Value> nextBuffers;
   SmallVector<Value> extractSlices;
 
-  pipelineIterIdx = newForOp.getRegionIterArgs()[nextIVIdx + 1];
+  pipelineIterIdx = newForOp.getRegionIterArgs()[ivIndex + 1];
   Value insertSliceIndex = builder.create<arith::RemSIOp>(
       nextIV.getLoc(), pipelineIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
-  loopIterIdx = newForOp.getRegionIterArgs()[nextIVIdx + 2];
+  loopIterIdx = newForOp.getRegionIterArgs()[ivIndex + 2];
   Value extractSliceIndex = builder.create<arith::RemSIOp>(
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
 
+  // Prefetch load deps
   for (Operation *op : orderedDeps)
     if (!loads.contains(op->getResult(0))) {
+      if (depOpDefStage[op] == numStages - 2)
+        nextMapping.map(forOp.getInductionVar(), curIV);
+      else
+        nextMapping.map(forOp.getInductionVar(), nextIV);
       Operation *nextOp;
       if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
         auto newMask =
@@ -652,20 +732,20 @@ scf::ForOp LoopPipeliner::createNewForOp() {
             nextMapping.lookupOrDefault(loadOp.getOther()),
             loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
             loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-        addNamedAttrs(nextOp, op->getAttrDictionary());
+        addNamedAttrs(nextOp, op->getDiscardableAttrDictionary());
         nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
       } else {
         nextOp = builder.clone(*op, nextMapping);
       }
 
-      auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
-        for (OpOperand &operand : originYield->getOpOperands()) {
+        for (OpOperand &operand : yieldOp->getOpOperands()) {
           if (operand.get() == op->getResult(dstIdx)) {
-            size_t originIdx = operand.getOperandNumber();
-            size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
-            BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
-            nextMapping.map(forOp.getRegionIterArgs()[originIdx],
+            size_t yieldIdx = operand.getOperandNumber();
+            size_t depYieldIdx =
+                depArgsIdx[forOp.getRegionIterArgs()[yieldIdx]];
+            BlockArgument newArg = newForOp.getRegionIterArgs()[depYieldIdx];
+            nextMapping.map(forOp.getRegionIterArgs()[yieldIdx],
                             nextOp->getResult(dstIdx));
             depArgsMapping[newArg] = nextOp->getResult(dstIdx);
           }
@@ -673,6 +753,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       }
     }
 
+  // loads -> async loads
   for (Operation *op : orderedDeps) {
     Operation *nextOp = nullptr;
     // Update loading mask
@@ -689,14 +770,14 @@ scf::ForOp LoopPipeliner::createNewForOp() {
           nextMapping.map(loadOp.getMask(), newMask);
         newMask = nextMapping.lookupOrDefault(mask);
       }
-      Value insertAsyncOp = builder.create<triton::gpu::InsertSliceAsyncOp>(
+      Value insertAsyncOp = builder.create<ttg::InsertSliceAsyncOp>(
           op->getLoc(), loadsBuffer[loadOp].getType(),
           nextMapping.lookupOrDefault(loadOp.getPtr()),
           newForOp.getRegionIterArgs()[bufferIdx + nextBuffers.size()],
           insertSliceIndex, newMask,
           nextMapping.lookupOrDefault(loadOp.getOther()), loadOp.getCache(),
           loadOp.getEvict(), loadOp.getIsVolatile(), /*axis*/ 0);
-      builder.create<triton::gpu::AsyncCommitGroupOp>(op->getLoc());
+      builder.create<ttg::AsyncCommitGroupOp>(op->getLoc());
       nextBuffers.push_back(insertAsyncOp);
       // ExtractSlice
       auto bufferType = insertAsyncOp.getType().cast<RankedTensorType>();
@@ -706,7 +787,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
                                         sliceType.getElementType(),
                                         loadsBufferType[loadOp].getEncoding());
 
-      nextOp = builder.create<triton::gpu::ExtractSliceOp>(
+      nextOp = builder.create<ttg::ExtractSliceOp>(
           op->getLoc(), sliceType, insertAsyncOp,
           SmallVector<OpFoldResult>{extractSliceIndex, int_attr(0),
                                     int_attr(0)},
@@ -720,14 +801,29 @@ scf::ForOp LoopPipeliner::createNewForOp() {
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
         nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
         // If this is a loop-carried value, update the mapping for yield
-        auto originYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-        for (OpOperand &operand : originYield->getOpOperands()) {
+        for (OpOperand &operand : yieldOp->getOpOperands()) {
           if (operand.get() == op->getResult(dstIdx)) {
-            size_t originIdx = operand.getOperandNumber();
-            size_t newArgIdx = depArgsIdx[forOp.getRegionIterArgs()[originIdx]];
-            BlockArgument newArg = newForOp.getRegionIterArgs()[newArgIdx];
+            auto yieldIdx = operand.getOperandNumber();
+            auto depYieldIdx = depArgsIdx[forOp.getRegionIterArgs()[yieldIdx]];
+            auto newArg = newForOp.getRegionIterArgs()[depYieldIdx];
             depArgsMapping[newArg] = nextOp->getResult(dstIdx);
           }
+        }
+      }
+    }
+  }
+
+  // Some values have not been used by any ops in the loop body
+  for (BlockArgument arg : forOp.getRegionIterArgs()) {
+    // Check if arg has a yieldOp use
+    for (OpOperand &operand : arg.getUses()) {
+      if (operand.getOwner() == yieldOp) {
+        auto yieldIdx = operand.getOperandNumber();
+        auto depYieldIdx = depArgsIdx[forOp.getRegionIterArgs()[yieldIdx]];
+        auto newArg = newForOp.getRegionIterArgs()[depYieldIdx];
+        if (!depArgsMapping.contains(newArg)) {
+          auto argIdx = depArgsIdx[arg];
+          depArgsMapping[newArg] = newForOp.getRegionIterArgs()[argIdx];
         }
       }
     }
@@ -751,14 +847,14 @@ scf::ForOp LoopPipeliner::createNewForOp() {
 
   // Finally, the YieldOp, need to sync with the order of newLoopArgs
   SmallVector<Value> yieldValues;
-  for (Value v : forOp.getBody()->getTerminator()->getOperands())
+  for (Value v : yieldOp->getOperands())
     yieldValues.push_back(mapping.lookup(v));
   for (Value nextBuffer : nextBuffers)
     yieldValues.push_back(nextBuffer);
   for (Value nextSlice : extractSlices)
     yieldValues.push_back(nextSlice);
 
-  for (size_t i = depArgsBeginIdx; i < nextIVIdx; ++i) {
+  for (size_t i = depArgsBeginIdx; i < ivIndex; ++i) {
     auto arg = newForOp.getRegionIterArgs()[i];
     assert(depArgsMapping.count(arg) && "Missing loop-carried value");
     yieldValues.push_back(depArgsMapping[arg]);
@@ -768,8 +864,7 @@ scf::ForOp LoopPipeliner::createNewForOp() {
   yieldValues.push_back(loopIterIdx);
 
   builder.setInsertionPointToEnd(newForOp.getBody());
-  builder.create<scf::YieldOp>(forOp.getBody()->getTerminator()->getLoc(),
-                               yieldValues);
+  builder.create<scf::YieldOp>(yieldOp->getLoc(), yieldValues);
   return newForOp;
 }
 
