@@ -2852,7 +2852,7 @@ def test_globaltimer():
     def kernel(Out1, Out2):
         start = tl.extra.cuda.globaltimer()
         off = tl.arange(0, 128)
-        for i in range(100):
+        for i in range(10000):
             tl.store(Out1 + off, tl.load(Out1 + off) + 1)
         end = tl.extra.cuda.globaltimer()
         tl.store(Out2, end - start)
