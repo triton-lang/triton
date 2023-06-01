@@ -50,6 +50,6 @@ jobs:
 
       - name: Upload wheels to ADO
         env:
-          VSS_NUGET_EXTERNAL_FEED_ENDPOINTS: ${{ steps.generate-token.outputs.access_token }}"
+          VSS_NUGET_EXTERNAL_FEED_ENDPOINTS: ${{ steps.generate-token.outputs.access_token }}
         run: |
           python3 -m twine upload -r Triton-Nightly-Test --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
