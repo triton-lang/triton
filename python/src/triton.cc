@@ -3,6 +3,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 
+#include "mlir/Bytecode/BytecodeWriter.h"
+
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -348,6 +350,14 @@ void init_triton_ir(py::module &&m) {
              self.print(os);
              return str;
            })
+      .def("bytecode",
+           [](mlir::ModuleOp &self) -> py::bytearray {
+             std::string bytecode;
+             llvm::raw_string_ostream os(bytecode);
+             if (failed(mlir::writeBytecodeToFile(self, os)))
+               throw std::runtime_error("Failed to write module bytecode");
+             return py::bytearray(bytecode);
+           })
       .def("push_back",
            [](mlir::ModuleOp &self, mlir::triton::FuncOp &funcOp) -> void {
              self.push_back(funcOp);
@@ -439,11 +449,15 @@ void init_triton_ir(py::module &&m) {
              // 1. Unreachable code after return
              self.walk([&](mlir::Block *block) {
                mlir::Operation *retOp = nullptr;
-               block->walk([&](mlir::Operation *op) {
+               // It's better to not use walk here because we only want to
+               // check operations in the current block
+               for (auto &op : block->getOperations()) {
                  if (mlir::isa<mlir::triton::ReturnOp>(op))
-                   if (retOp == nullptr)
-                     retOp = op;
-               });
+                   if (retOp == nullptr) {
+                     retOp = &op;
+                     break;
+                   }
+               }
                if (retOp && retOp != &block->back()) {
                  auto pos = retOp->getIterator();
                  pos++;
