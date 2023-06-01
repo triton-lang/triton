@@ -563,6 +563,20 @@ def test_expand_dims_error_cases():
         duplicate_dim2[(1,)](dummy_tensor, N)
 
 
+# ----------------------------
+# test invalid program id axis
+# ----------------------------
+def test_invalid_pid_axis():
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst):
+        pid = tl.program_id(20)
+
+    with pytest.raises(triton.CompilationError, match=r"program_id must be in \[0,3\]"):
+        _kernel[(1,)](dst)
+
+
 # ---------------
 # test where
 # ---------------

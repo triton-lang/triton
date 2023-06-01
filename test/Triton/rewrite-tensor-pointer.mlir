@@ -10,8 +10,8 @@ tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, 
   %c32_i32 = arith.constant 32 : i32
   %c128_i32 = arith.constant 128 : i32
   %c8_i32 = arith.constant 8 : i32
-  %0 = tt.get_program_id {axis = 0 : i32} : i32
-  %1 = tt.get_program_id {axis = 1 : i32} : i32
+  %0 = tt.get_program_id x : i32
+  %1 = tt.get_program_id y : i32
   %2 = arith.addi %arg3, %c127_i32 : i32
   %3 = arith.divsi %2, %c128_i32 : i32
   %4 = arith.addi %arg4, %c31_i32 : i32
