@@ -135,7 +135,7 @@ class ExtensionBackend(BaseBackend):
         for filter_out_key in filter_out_stages:
             stages.pop(filter_out_key)
 
-    def add_meta_info(self, ir, module, metadata, asm):
+    def add_meta_info(self, ir, cur_module, next_module, metadata, asm):
         metadata["name"] = "extension_backend_name"
 
     def get_driver(self):

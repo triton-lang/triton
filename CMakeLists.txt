@@ -22,6 +22,7 @@ endif()
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
+set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 
 # Ensure Python3 vars are set correctly
 # used conditionally in this file and by lit tests
@@ -261,6 +262,13 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   endif()
 
   target_link_libraries(triton ${CUTLASS_LIBRARIES} ${PYTHON_LDFLAGS})
+endif()
+
+if (NOT "X${TRITON_CODEGEN_BACKENDS}" STREQUAL "X")
+  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+    string(TOLOWER ${CODEGEN_BACKEND} lower_codegen_backend)
+    add_subdirectory(third_party/${lower_codegen_backend})
+  endforeach()
 endif()
 
 add_subdirectory(test)

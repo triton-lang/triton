@@ -1,4 +1,6 @@
 
+import importlib
+import importlib.util
 from typing import Dict
 
 from triton.runtime.driver import DriverBase
@@ -14,7 +16,7 @@ class BaseBackend:
         """
         raise NotImplementedError
 
-    def add_meta_info(self, ir, module, metadata, asm):
+    def add_meta_info(self, ir, cur_module, next_module, metadata, asm):
         """
         Custom the ir, module, metadata and asm per backend specific requirement
         """
@@ -82,4 +84,13 @@ def register_backend(device_type: str, backend_cls: type):
 
 
 def get_backend(device_type: str):
+    if device_type not in _backends:
+        device_backend_package_name = f"triton.third_party.{device_type}"
+        if importlib.util.find_spec(device_backend_package_name):
+            try:
+                importlib.import_module(device_backend_package_name)
+            except Exception:
+                return None
+        else:
+            return None
     return _backends[device_type] if device_type in _backends else None

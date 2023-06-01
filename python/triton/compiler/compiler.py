@@ -515,7 +515,7 @@ def compile(fn, **kwargs):
             metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
             asm["hsaco_path"] = next_module[1]
         if not is_cuda and not is_hip:
-            _device_backend.add_meta_info(ir, next_module, metadata, asm)
+            _device_backend.add_meta_info(ir, module, next_module, metadata, asm)
         module = next_module
     # write-back metadata, if it didn't come from the cache
     if metadata_path is None:
