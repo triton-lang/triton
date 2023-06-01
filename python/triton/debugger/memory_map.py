@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dataclasses
 
 from triton.debugger import torch_wrapper
