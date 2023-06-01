@@ -3,6 +3,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 
+#include "mlir/Bytecode/BytecodeWriter.h"
+
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -347,6 +349,14 @@ void init_triton_ir(py::module &&m) {
              llvm::raw_string_ostream os(str);
              self.print(os);
              return str;
+           })
+      .def("bytecode",
+           [](mlir::ModuleOp &self) -> py::bytearray {
+             std::string bytecode;
+             llvm::raw_string_ostream os(bytecode);
+             if (failed(mlir::writeBytecodeToFile(self, os)))
+               throw std::runtime_error("Failed to write module bytecode");
+             return py::bytearray(bytecode);
            })
       .def("push_back",
            [](mlir::ModuleOp &self, mlir::triton::FuncOp &funcOp) -> void {
