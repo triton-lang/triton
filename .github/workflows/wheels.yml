@@ -49,8 +49,6 @@ jobs:
           python3 -m cibuildwheel python --output-dir wheelhouse
 
       - name: Upload wheels to ADO
-        env:
-          VSS_NUGET_EXTERNAL_FEED_ENDPOINTS: ${{ steps.generate-token.outputs.access_token }}
         run: |
           export VSS_NUGET_EXTERNAL_FEED_ENDPOINTS='{"endpointCredentials": [{"endpoint":"https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly-Test/pypi/upload/", "username":"TritonArtifactsSP", "password":${{ steps.generate-token.outputs.access_token }}}]}'
           echo $VSS_NUGET_EXTERNAL_FEED_ENDPOINTS
