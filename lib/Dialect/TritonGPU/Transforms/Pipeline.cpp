@@ -22,21 +22,22 @@
 // d. Post-load operations: for instance, index computation.
 //
 // To pipeline the loop, we need to:
-// - Hoist the load operations out of the loop body.
+// - Hoist the pipelinable load operations for the first numStages-1 iterations
+// to the loop pre-header
 // - Find all the dependencies of the load operations.
-// - Repeat the dependencies (numStage-1) times.
+// - Rematerialize the dependencies for their values at the first numStage-1
+// iterations
 // - Assemble the loop body (numStage) and prefetch (numStage + 1).
 //
 // In the prologue, the sequence of operations is the same as the original loop
 // body, following the (a) -> (b) -> (c) -> (d) order. In the loop body,
 // however, we first execute the compute operations, then pre-load operations,
-// post-load operations, and eventually the load operations - in the (c) -> (a)
-// -> (d) -> (b) order. This is used to better hide the latency of the load
-// operations. Because of this, if post-load operations have direct dependencies
-// on the load operations, we could repeat the post-load operations. More
-// specifically, this occurs when:
-// 1. Any load operand has an immediate dependency argument used at numStage-1,
-// and
+// post-load operations, and eventually the asynchronous load operations - in
+// the (c) -> (a) -> (d) -> (b) order. This is used to better hide the latency
+// of the load operations. Because of this, if post-load operations have direct
+// dependencies on the load operations, we could repeat the post-load
+// operations. More specifically, this occurs when:
+// 1. Any load operand has an immediate dependency argument used at numStage-1.
 // 2. The argument is first defined at numStage-2.
 // To avoid the repeat, we peeled off post-load operations in the prologue that
 // satisfy the above two conditions. See the example below for the definition of
