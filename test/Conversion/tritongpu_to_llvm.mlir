@@ -643,13 +643,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_program_id
   tt.func @basic_program_id() {
-<<<<<<< HEAD
     // PTX: nvvm.read.ptx.sreg.ctaid.x : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
-=======
-    // CHECK: nvvm.read.ptx.sreg.ctaid.x : i32
     %0 = tt.get_program_id x : i32
->>>>>>> oai/main
     tt.return
   }
 }
@@ -1533,24 +1528,15 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-<<<<<<< HEAD
-  %blockidx = tt.get_program_id {axis=0:i32} : i32
-  %blockidy = tt.get_program_id {axis=1:i32} : i32
-  %blockidz = tt.get_program_id {axis=2:i32} : i32
+  %blockidx = tt.get_program_id x : i32
+  %blockidy = tt.get_program_id y : i32
+  %blockidz = tt.get_program_id z : i32
   // PTX: nvvm.read.ptx.sreg.ctaid.x
   // PTX: nvvm.read.ptx.sreg.ctaid.y
   // PTX: nvvm.read.ptx.sreg.ctaid.z
   // GCN: rocdl.workgroup.id.x
   // GCN: rocdl.workgroup.id.y
   // GCN: rocdl.workgroup.id.z
-=======
-  %blockidx = tt.get_program_id x : i32
-  %blockidy = tt.get_program_id y : i32
-  %blockidz = tt.get_program_id z : i32
-  // CHECK: nvvm.read.ptx.sreg.ctaid.x
-  // CHECK: nvvm.read.ptx.sreg.ctaid.y
-  // CHECK: nvvm.read.ptx.sreg.ctaid.z
->>>>>>> oai/main
   %v0 = arith.addi %blockidx, %blockidy : i32
   %v1 = arith.addi %v0, %blockidz : i32
   %0 = tt.splat %v1 : (i32) -> tensor<32xi32, #blocked0>

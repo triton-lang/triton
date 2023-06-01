@@ -48,16 +48,11 @@ def test_assert(func: str):
     x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda')
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if func == "device_assert":
-<<<<<<< HEAD
         kernel_device_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
         kernel_device_assert_scalar[(1,)](x, y, num_warps=2, BLOCK=shape[0])
-=======
-        kernel_device_assert[(1,)](x, y, BLOCK=shape[0])
-        kernel_device_assert_scalar[(1,)](x, y, BLOCK=shape[0])
     elif func == "no_debug":
         # TRITON_DEBUG=True can override the debug flag
         kernel_device_assert_no_debug[(1,)](x, y, BLOCK=shape[0])
->>>>>>> oai/main
     elif func == "assert":
         kernel_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "static_assert":
