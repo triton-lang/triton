@@ -5,6 +5,7 @@ on:
     - cron: "0 2 * * *"
 
 jobs:
+
   Build-Wheels:
 
     runs-on: [self-hosted, V100]
@@ -31,7 +32,7 @@ jobs:
           echo "::add-mask::$AZ_TOKEN"
           echo "access_token=$AZ_TOKEN" >> "$GITHUB_OUTPUT"
 
-        - name: Patch setup.py
+      - name: Patch setup.py
         run: |
           sed -i 's/name\=\"triton\"/name="triton-nightly"/g' python/setup.py
           export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
@@ -40,7 +41,7 @@ jobs:
           echo "[build_ext]" >> python/setup.cfg
           echo "base-dir=/project" >> python/setup.cfg
 
-        - name: Build wheels
+      - name: Build wheels
         run: |
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
