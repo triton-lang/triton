@@ -35,7 +35,7 @@ jobs:
           python -m pip install cibuildwheel twine
           AZ_TOKEN=$(az account get-access-token --query accessToken)
           echo "::add-mask::$AZ_TOKEN"
-          echo access_token='{"endpointCredentials": [{"endpoint":"https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly-Test/pypi/upload/", "username":"TritonArtifactsSP", "password":'$AZ_TOKEN'}]}' >> "$GITHUB_OUTPUT"
+          echo "access_token=$AZ_TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Patch setup.py
         run: |
@@ -56,8 +56,5 @@ jobs:
           python3 -m cibuildwheel python --output-dir wheelhouse
 
       - name: Upload wheels to ADO
-        env:
-          VSS_NUGET_EXTERNAL_FEED_ENDPOINTS: ${{ steps.generate-token.outputs.access_token }}
         run: |
-          echo $VSS_NUGET_EXTERNAL_FEED_ENDPOINTS
-          python3 -m twine upload -r Triton-Nightly-Test --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
+          python3 -m twine upload -r Triton-Nightly-Test -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
