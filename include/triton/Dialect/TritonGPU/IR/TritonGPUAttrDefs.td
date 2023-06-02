@@ -238,39 +238,32 @@ for
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$sizePerThread,
                      "ArrayRef<unsigned>":$order,
-                     "unsigned":$numWarps), [{
+                     "unsigned":$numWarps,
+                     "unsigned":$threadsPerWarp), [{
       int rank = sizePerThread.size();
-#ifdef USE_ROCM
-      unsigned remainingLanes = 64;
-      unsigned remainingThreads = numWarps*64;
-#else
-      unsigned remainingLanes = 32;
-      unsigned remainingThreads = numWarps*32;
-#endif
+      unsigned remainingLanes = threadsPerWarp;
+      unsigned remainingThreads = numWarps*threadsPerWarp;
       unsigned remainingWarps = numWarps;
       unsigned prevLanes = 1;
       unsigned prevWarps = 1;
-      SmallVector<unsigned, 4> threadsPerWarp(rank);
+      SmallVector<unsigned, 4> rankedThreadsPerWarp(rank);
       SmallVector<unsigned, 4> warpsPerCTA(rank);
       for (int _dim = 0; _dim < rank - 1; ++_dim) {
         int i = order[_dim];
         unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, shape[i] / sizePerThread[i]);
-        threadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
-        warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / threadsPerWarp[i], 1, remainingWarps);
+        rankedThreadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
+        warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / rankedThreadsPerWarp[i], 1, remainingWarps);
         remainingWarps /= warpsPerCTA[i];
-        remainingLanes /= threadsPerWarp[i];
+        remainingLanes /= rankedThreadsPerWarp[i];
         remainingThreads /= threadsPerCTA;
-        prevLanes *= threadsPerWarp[i];
+        prevLanes *= rankedThreadsPerWarp[i];
         prevWarps *= warpsPerCTA[i];
       }
       // Expand the last dimension to fill the remaining lanes and warps
-#ifdef USE_ROCM
-      threadsPerWarp[order[rank-1]] = 64 / prevLanes;
-#else
-      threadsPerWarp[order[rank-1]] = 32 / prevLanes;
-#endif
+      rankedThreadsPerWarp[order[rank-1]] = threadsPerWarp / prevLanes;
       warpsPerCTA[order[rank-1]] = numWarps / prevWarps;
-      return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order);
+
+      return $_get(context, sizePerThread, rankedThreadsPerWarp, warpsPerCTA, order);
 
     }]>
   ];

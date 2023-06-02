@@ -1634,11 +1634,13 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createRewriteTensorPointerPass(
                  computeCapability));
            })
-      .def("add_convert_triton_to_tritongpu_pass",
-           [](mlir::PassManager &self, int numWarps) {
-             self.addPass(
-                 mlir::triton::createConvertTritonToTritonGPUPass(numWarps));
-           })
+      .def(
+          "add_convert_triton_to_tritongpu_pass",
+          [](mlir::PassManager &self, int numWarps, int threadsPerWarp) {
+            self.addPass(mlir::triton::createConvertTritonToTritonGPUPass(
+                numWarps, threadsPerWarp));
+          },
+          py::arg("numWarps") = 4, py::arg("threadsPerWarp") = 32)
       .def("add_tritongpu_pipeline_pass",
            [](mlir::PassManager &self, int numStages) {
              self.addPass(mlir::createTritonGPUPipelinePass(numStages));

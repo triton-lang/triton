@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu=num-warps=2 | FileCheck %s
 
 tt.func @ops() {
-  // CHECK: module attributes {"triton_gpu.num-warps" = 2 : i32} {{.*}}
+  // CHECK: module attributes {"triton_gpu.num-warps" = 2 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {{.*}}
   %a = arith.constant dense<1.00e+00> : tensor<128x32xf16>
   %b = arith.constant dense<2.00e+00> : tensor<32x128xf16>
   %c = arith.constant dense<3.00e+00> : tensor<128x128xf32>
@@ -33,10 +33,10 @@ tt.func @load_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
 tt.func @reduce_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
   // Test if the total number of threadsPerWarp is 64
   // Test if the total number of warps is 2
-  // CHECK: #[[blocked0:.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 16], warpsPerCTA = [1, 2], order = [0, 1]}>
-  // CHECK: #[[blocked1:.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 2], order = [0, 1]}>
-  // CHECK: #[[blocked2:.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 2], order = [0, 1]}>
-  // CHECK: module attributes {"triton_gpu.num-warps" = 2 : i32} {{.*}}
+  // CHECK: #[[blocked0:.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 2], order = [0, 1]}>
+  // CHECK: #[[blocked1:.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 2], order = [0, 1]}>
+  // CHECK: #[[blocked2:.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 2], order = [0, 1]}>
+  // CHECK: module attributes {"triton_gpu.num-warps" = 2 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {{.*}}
   %c0 = arith.constant dense<1.00e+00> : tensor<4x4xf32>
   %c1 = arith.constant dense<2.00e+00> : tensor<8x2xf32>
   %c2 = arith.constant dense<3.00e+00> : tensor<16x16xf32>
