@@ -17,10 +17,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Log in with Azure
+      - name: Az CLI login
         uses: azure/login@v1
         with:
-          creds: '${{ secrets.AZURE_CREDENTIALS }}'
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - id: generate-token
         name: Generate token
