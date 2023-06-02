@@ -313,3 +313,122 @@ tt.func @lut_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, tt
   }
   tt.return %79#0 : tensor<16x16xf32, #C>
 }
+
+// CHECK: tt.func @post_load_inv
+// CHECK: scf.for
+// CHECK: arith.index_cast
+// CHECK-DAG: %[[IV:.*]] = arith.index_cast
+// CHECK: %[[NEXT_IV:.*]] = arith.addi %[[IV]], %c1_i32 : i32
+// CHECK-NOT: arith.addi %[[NEXT_IV]]
+tt.func @post_load_inv(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+                       %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+                       %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+                       %arg3: i32 {tt.divisibility = 16 : i32},
+                       %arg4: i32 {tt.divisibility = 16 : i32},
+                       %arg5: i32 {tt.divisibility = 16 : i32},
+                       %arg6: i32 {tt.divisibility = 16 : i32},
+                       %arg7: i32 {tt.divisibility = 16 : i32},
+                       %arg8: i32 {tt.divisibility = 16 : i32}) -> tensor<32x32xf32, #C> {
+  %c0_index = arith.constant 0 : index
+  %c1_index = arith.constant 1 : index
+  %c1_i32 = arith.constant 1 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %84 = arith.constant 900 : index
+  %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #C>
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #AL>
+  %50 = tt.splat %arg3 : (i32) -> tensor<1x32xi32, #AL>
+  %59 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %81 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %66 = tt.splat %arg4 : (i32) -> tensor<32x1xi32, #AL>
+  %60 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %82 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %85:3 = scf.for %arg9 = %c0_index to %84 step %c1_index iter_args(%arg10 = %cst, %arg11 = %59, %arg12 = %81) -> (tensor<32x32xf32, #C>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>)  {
+    %130 = arith.index_cast %arg9 : index to i32
+    %107 = arith.muli %130, %c32_i32 : i32
+    %108 = arith.subi %arg5, %107 : i32
+    %109 = tt.splat %108 : (i32) -> tensor<1x32xi32, #AL>
+    %110 = "triton_gpu.cmpi"(%50, %109) <{predicate = 2 : i64}> : (tensor<1x32xi32, #AL>, tensor<1x32xi32, #AL>) -> tensor<1x32xi1, #AL>
+    %111 = tt.broadcast %110 : (tensor<1x32xi1, #AL>) -> tensor<32x32xi1, #AL>
+    %112 = tt.load %arg11, %111, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf32, #AL>
+    %113 = tt.splat %108 : (i32) -> tensor<32x1xi32, #AL>
+    %114 = "triton_gpu.cmpi"(%66, %113) <{predicate = 2 : i64}> : (tensor<32x1xi32, #AL>, tensor<32x1xi32, #AL>) -> tensor<32x1xi1, #AL>
+    %115 = tt.broadcast %114 : (tensor<32x1xi1, #AL>) -> tensor<32x32xi1, #AL>
+    %116 = tt.load %arg12, %115, %cst_0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf32, #AL>
+    %117 = triton_gpu.convert_layout %112 : (tensor<32x32xf32, #AL>) -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>>
+    %118 = triton_gpu.convert_layout %116 : (tensor<32x32xf32, #AL>) -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>>
+    %119 = tt.dot %117, %118, %arg10 {allowTF32 = true} : tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>> * tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>> -> tensor<32x32xf32, #C>
+    %131 = arith.index_cast %arg9 : index to i32
+    %120 = arith.addi %131, %c1_i32 : i32
+    %121 = arith.muli %120, %c32_i32 : i32
+    %122 = tt.splat %121 : (i32) -> tensor<32x32xi32, #AL>
+    %123 = tt.addptr %60, %122 : tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32xi32, #AL>
+    %124 = arith.muli %121, %arg7 : i32
+    %125 = tt.splat %124 : (i32) -> tensor<32x32xi32, #AL>
+    %126 = tt.addptr %82, %125 : tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32xi32, #AL>
+    scf.yield %119, %123, %126 : tensor<32x32xf32, #C>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>
+  }
+  tt.return %85#0 : tensor<32x32xf32, #C>
+}
+
+// CHECK: tt.func @cross_iter_dep
+// CHECK: triton_gpu.async_commit_group
+// CHECK: triton_gpu.async_commit_group
+// CHECK: triton_gpu.async_commit_group
+// CHECK: triton_gpu.async_commit_group
+// CHECK: %[[PTR0:.*]] = tt.addptr
+// CHECK: %[[PTR1:.*]] = tt.addptr
+// CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[BUF0:.*]] = %[[PTR0]], {{.*}}, %[[BUF1:.*]] = %[[PTR1]]
+// CHECK: scf.yield
+// CHECK-SAME: %[[BUF0]]
+// CHECK-SAME: %[[BUF1]]
+tt.func @cross_iter_dep(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+                        %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+                        %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+                        %arg3: i32 {tt.divisibility = 16 : i32},
+                        %arg4: i32 {tt.divisibility = 16 : i32},
+                        %arg5: i32 {tt.divisibility = 16 : i32},
+                        %arg6: i32 {tt.divisibility = 16 : i32},
+                        %arg7: i32 {tt.divisibility = 16 : i32},
+                        %arg8: i32 {tt.divisibility = 16 : i32}) -> tensor<32x32xf32, #C> {
+  %c0_i32 = arith.constant 0 : index
+  %118 = arith.constant 32 : index
+  %c1_i32 = arith.constant 1 : index
+  %c2_i32 = arith.constant 2 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #C>
+  %cst_1 = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #AL>
+  %78 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %110 = tt.splat %arg0 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %112 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %113 = tt.splat %arg1 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %116 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %65 = tt.splat %arg3 : (i32) -> tensor<1x32xi32, #AL>
+  %88 = tt.splat %arg4 : (i32) -> tensor<32x1xi32, #AL>
+  %80 = tt.splat %arg2 : (!tt.ptr<f32>) -> tensor<32x32x!tt.ptr<f32>, #AL>
+  %119:5 = scf.for %arg9 = %c0_i32 to %118 step %c1_i32 iter_args(%arg10 = %cst, %arg11 = %78, %arg12 = %110, %arg13 = %113, %arg14 = %116) -> (tensor<32x32xf32, #C>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>)  {
+    %161 = arith.index_cast %arg9 : index to i32
+    %141 = arith.muli %161, %c32_i32 : i32
+    %142 = arith.subi %arg5, %141 : i32
+    %143 = tt.splat %142 : (i32) -> tensor<1x32xi32, #AL>
+    %144 = "triton_gpu.cmpi"(%65, %143) <{predicate = 2 : i64}> : (tensor<1x32xi32, #AL>, tensor<1x32xi32, #AL>) -> tensor<1x32xi1, #AL>
+    %145 = tt.broadcast %144 : (tensor<1x32xi1, #AL>) -> tensor<32x32xi1, #AL>
+    %146 = tt.load %arg11, %145, %cst_1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf32, #AL>
+    %147 = tt.splat %142 : (i32) -> tensor<32x1xi32, #AL>
+    %148 = "triton_gpu.cmpi"(%88, %147) <{predicate = 2 : i64}> : (tensor<32x1xi32, #AL>, tensor<32x1xi32, #AL>) -> tensor<32x1xi1, #AL>
+    %149 = tt.broadcast %148 : (tensor<32x1xi1, #AL>) -> tensor<32x32xi1, #AL>
+    %150 = tt.load %arg12, %149, %cst_1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf32, #AL>
+    %151 = triton_gpu.convert_layout %146 : (tensor<32x32xf32, #AL>) -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>>
+    %152 = triton_gpu.convert_layout %150 : (tensor<32x32xf32, #AL>) -> tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>>
+    %153 = tt.dot %151, %152, %arg10 {allowTF32 = true} : tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth = 1}>> * tensor<32x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth = 1}>> -> tensor<32x32xf32, #C>
+    %162 = arith.index_cast %arg9 : index to i32
+    %154 = arith.addi %162, %c2_i32 : i32
+    %155 = arith.muli %154, %c32_i32 : i32
+    %156 = tt.splat %155 : (i32) -> tensor<32x32xi32, #AL>
+    %157 = tt.addptr %80, %156 : tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32xi32, #AL>
+    %158 = arith.muli %155, %arg7 : i32
+    %159 = tt.splat %158 : (i32) -> tensor<32x32xi32, #AL>
+    %160 = tt.addptr %112, %159 : tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32xi32, #AL>
+    scf.yield %153, %arg13, %arg14, %157, %160 : tensor<32x32xf32, #C>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>, tensor<32x32x!tt.ptr<f32>, #AL>
+  }
+  tt.return %119#0 : tensor<32x32xf32, #C>
+}

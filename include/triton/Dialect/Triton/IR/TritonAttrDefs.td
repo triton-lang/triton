@@ -52,4 +52,16 @@ def TT_AtomicRMWAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+// Program ID dimensions.
+def TT_ProgramDim : I32EnumAttr<
+    "ProgramIDDim", "",
+    [
+        I32EnumAttrCase<"X", 0, "x">,
+        I32EnumAttrCase<"Y", 1, "y">,
+        I32EnumAttrCase<"Z", 2, "z">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+
 #endif

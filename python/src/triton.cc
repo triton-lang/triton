@@ -1325,8 +1325,12 @@ void init_triton_ir(py::module &&m) {
       .def("create_get_program_id",
            [](mlir::OpBuilder &self, int axis) -> mlir::Value {
              auto loc = self.getUnknownLoc();
+             if (axis < 0 || axis > 3)
+               throw std::runtime_error("program_id must be in [0,3]");
              return self.create<mlir::triton::GetProgramIdOp>(
-                 loc, self.getI32Type(), self.getI32IntegerAttr(axis));
+                 loc, self.getI32Type(),
+                 mlir::triton::ProgramIDDimAttr::get(
+                     loc.getContext(), mlir::triton::ProgramIDDim(axis)));
            })
       .def("create_get_num_programs",
            [](mlir::OpBuilder &self, int axis) -> mlir::Value {
