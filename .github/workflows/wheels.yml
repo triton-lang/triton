@@ -22,7 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Az CLI login
+      - name: Azure login
         uses: azure/login@v1
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -55,6 +55,6 @@ jobs:
           export CIBW_BUILD="cp311-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
 
-      - name: Upload wheels to ADO
+      - name: Upload wheels to Azure DevOps
         run: |
           python3 -m twine upload -r Triton-Nightly-Test -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
