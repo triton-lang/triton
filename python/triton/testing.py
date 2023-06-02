@@ -40,29 +40,33 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     :type fast_flush: bool
     """
 
-    # Estimate the runtime of the function
     fn()
     torch.cuda.synchronize()
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        fn()
-    end_event.record()
-    torch.cuda.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
-    # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
+
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
-    start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
-    end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     if fast_flush:
         cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
     else:
         cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
+
+    # Estimate the runtime of the function
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(5):
+        cache.zero_()
+        fn()
+    end_event.record()
+    torch.cuda.synchronize()
+    estimate_ms = start_event.elapsed_time(end_event) / 5
+
+    # compute number of warmup and repeat
+    n_warmup = max(1, int(warmup / estimate_ms))
+    n_repeat = max(1, int(rep / estimate_ms))
+    start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
+    end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up
     for _ in range(n_warmup):
         fn()

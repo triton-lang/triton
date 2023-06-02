@@ -12,7 +12,7 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %c64_i32 = arith.constant 64 : i32
     %c63_i32 = arith.constant 63 : i32
     %c8_i32 = arith.constant 8 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.addi %arg3, %c63_i32 : i32
     %2 = arith.divsi %1, %c64_i32 : i32
     %3 = arith.addi %arg4, %c63_i32 : i32
