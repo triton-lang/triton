@@ -6,6 +6,10 @@ on:
     #schedule:
   #  - cron: "0 0 * * *"
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
 
   Build-Wheels:
