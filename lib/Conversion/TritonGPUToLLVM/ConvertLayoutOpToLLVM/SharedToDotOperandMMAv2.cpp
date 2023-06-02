@@ -128,7 +128,6 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   Value cMatOff = matOff[order[0]];
   Value sMatOff = matOff[order[1]];
   Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
-  cMatOff = add(cMatOff, cSwizzleMatOff);
 
   // row offset inside a matrix, each matrix has 8 rows.
   Value sOffInMat = c;
@@ -142,11 +141,12 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   //          ~~~~~~~ out-of-bound access
   Value sOff = urem(add(sOffInMat, mul(sMatOff, i32_val(sMatShape))),
                     i32_val(tileShape[order[1]]));
-  auto totalNumMats = tileShape[order[0]] / matShape[order[0]];
-  Value maxMatOffIndex = add(cSwizzleMatOff, i32_val(totalNumMats));
+  auto totalNumMats = i32_val(tileShape[order[0]] / matShape[order[0]]);
+
   for (int i = 0; i < numPtrs; ++i) {
     Value cMatOffI = add(cMatOff, i32_val(i * pLoadStrideInMat));
-    cMatOffI = urem(cMatOffI, maxMatOffIndex);
+    cMatOffI = urem(cMatOffI, totalNumMats);
+    cMatOffI = add(cMatOffI, cSwizzleMatOff);
     cMatOffI = xor_(cMatOffI, phase);
     offs[i] = add(mul(cMatOffI, i32_val(cMatShape)), mul(sOff, sStride));
   }
