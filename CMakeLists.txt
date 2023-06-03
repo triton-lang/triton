@@ -265,6 +265,7 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
 endif()
 
 if (NOT "X${TRITON_CODEGEN_BACKENDS}" STREQUAL "X")
+  set(PYTHON_THIRD_PARTY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party)
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     string(TOLOWER ${CODEGEN_BACKEND} lower_codegen_backend)
     add_subdirectory(third_party/${lower_codegen_backend})

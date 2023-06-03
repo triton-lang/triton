@@ -40,7 +40,7 @@ class BaseBackend:
         """
         raise NotImplementedError
 
-    def get_device_properties(self):
+    def get_device_properties(self, device):
         raise NotImplementedError
 
     def get_current_device(self):

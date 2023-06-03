@@ -38,7 +38,7 @@ def get_codegen_backends():
     for name, _ in os.environ.items():
         if name.startswith(env_prefix) and check_env_flag(name):
             assert name.count(env_prefix) <= 1
-            backends.append(name.removeprefix(env_prefix))
+            backends.append(name.replace(env_prefix, ''))
     return backends
 
 
@@ -272,9 +272,7 @@ setup(
         "triton/ops/blocksparse",
         "triton/runtime",
         "triton/runtime/backends",
-        "triton/third_party/cuda/bin",
-        "triton/third_party/cuda/include",
-        "triton/third_party/cuda/lib",
+        "triton/third_party",
         "triton/tools",
     ],
     install_requires=[

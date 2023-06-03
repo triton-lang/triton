@@ -145,7 +145,7 @@ class ExtensionBackend(BaseBackend):
         return ""
 
     @functools.lru_cache(None)
-    def get_device_properties(self):
+    def get_device_properties(self, device):
         return self.driver.utils.get_device_properties()
 
     def get_current_device(self):

@@ -572,7 +572,7 @@ class CompiledKernel:
             assert self.device_backend
             device = self.device_backend.get_current_device()
             bin_path = self.device_backend.get_kernel_bin()
-            max_shared = self.device_backend.get_device_properties()["max_shared_mem"]
+            max_shared = self.device_backend.get_device_properties(device)["max_shared_mem"]
             fn_load_binary = self.device_backend.get_load_binary_fn()
 
         if self.shared > max_shared:
