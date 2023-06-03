@@ -1319,7 +1319,7 @@ def _promote_reduction_input(t, _builder=None):
 
 
 @builtin
-def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
+def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None):
     axis = _constexpr_to_value(axis)
     n = input.shape[axis]
     index = arange(0, n, _builder=_builder)
@@ -1333,7 +1333,7 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
 
     rvalue, rindices = reduce((input, index), axis, combine_fn,
                               _builder=_builder, _generator=_generator)
-    return rindices
+    return rvalue, rindices
 
 
 @triton.jit
@@ -1361,17 +1361,12 @@ def maximum(x, y):
     """
     return where(x > y, x, y)
 
+# max and argmax
+
 
 @triton.jit
 def _max_combine(a, b):
     return maximum(a, b)
-
-
-@triton.jit
-@_add_reduction_docstr("maximum")
-def max(input, axis=None):
-    input = _promote_reduction_input(input)
-    return reduce(input, axis, _max_combine)
 
 
 @triton.jit
@@ -1385,23 +1380,28 @@ def _argmax_combine(value1, index1, value2, index2):
 
 
 @triton.jit
+@_add_reduction_docstr("maximum")
+def max(input, axis=None, return_indices=False):
+    input = _promote_reduction_input(input)
+    if return_indices:
+        return _reduce_with_indices(input, axis, _argmax_combine)
+    else:
+        return reduce(input, axis, _max_combine)
+
+
+@triton.jit
 @_add_reduction_docstr("maximum index")
 def argmax(input, axis):
-    input = _promote_reduction_input(input)
-    return _argreduce(input, axis, _argmax_combine)
+    (_, ret) = max(input, axis, return_indices=True)
+    return ret
+
+# min and argmin
 
 
 @triton.jit
 def _min_combine(a, b):
     # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
     return minimum(a, b)
-
-
-@triton.jit
-@_add_reduction_docstr("minimum")
-def min(input, axis=None):
-    input = _promote_reduction_input(input)
-    return reduce(input, axis, _min_combine)
 
 
 @triton.jit
@@ -1415,15 +1415,27 @@ def _argmin_combine(value1, index1, value2, index2):
 
 
 @triton.jit
+@_add_reduction_docstr("minimum")
+def min(input, axis=None, return_indices=False):
+    input = _promote_reduction_input(input)
+    if return_indices:
+        return _reduce_with_indices(input, axis, _argmin_combine)
+    else:
+        return reduce(input, axis, _min_combine)
+
+
+@triton.jit
 @_add_reduction_docstr("minimum index")
 def argmin(input, axis):
-    input = _promote_reduction_input(input)
-    return _argreduce(input, axis, _argmin_combine)
+    _, ret = min(input, axis, return_indices=True)
+    return ret
 
 
 @triton.jit
 def _sum_combine(a, b):
     return a + b
+
+# sum
 
 
 @triton.jit
@@ -1437,6 +1449,8 @@ def sum(input, axis=None):
 def _xor_combine(a, b):
     return a ^ b
 
+
+# xor sum
 
 @builtin
 @_add_reduction_docstr("xor sum")
