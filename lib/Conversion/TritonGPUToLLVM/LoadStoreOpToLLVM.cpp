@@ -465,6 +465,8 @@ struct AtomicRMWOpConversion
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
 
+    auto sem = op.getSem();
+    llvm::outs() << sem << "\n";
     auto atomicRmwAttr = op.getAtomicRmwOp();
 
     Value val = op.getVal();

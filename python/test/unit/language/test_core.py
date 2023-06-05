@@ -937,15 +937,16 @@ def test_noinline(mode):
 # ---------------
 # test atomics
 # ---------------
-@pytest.mark.parametrize("op, dtype_x_str, mode", itertools.chain.from_iterable([
+@pytest.mark.parametrize("op, dtype_x_str, mode, sem", itertools.chain.from_iterable([
     [
-        ('add', 'float16', mode),
-        ('add', 'uint32', mode), ('add', 'int32', mode), ('add', 'float32', mode),
-        ('max', 'uint32', mode), ('max', 'int32', mode), ('max', 'float32', mode),
-        ('min', 'uint32', mode), ('min', 'int32', mode), ('min', 'float32', mode),
+        ('add', 'float16', mode, sem),
+        ('add', 'uint32', mode, sem), ('add', 'int32', mode, sem), ('add', 'float32', mode, sem),
+        ('max', 'uint32', mode, sem), ('max', 'int32', mode, sem), ('max', 'float32', mode, sem),
+        ('min', 'uint32', mode, sem), ('min', 'int32', mode, sem), ('min', 'float32', mode, sem),
     ]
-    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
-def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
+    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
+    for sem in ['acquire', 'release', 'acq_rel', 'relaxed']]))
+def test_atomic_rmw(op, dtype_x_str, mode, sem, device='cuda'):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
         if dtype_x_str == 'float16':
@@ -959,7 +960,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
         x = tl.load(X + pid)
         old = GENERATE_TEST_HERE
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x)'})
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem="{sem}")'})
     numpy_op = {'add': np.sum, 'max': np.max, 'min': np.min}[op]
     max_neutral = float('-inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).min
     min_neutral = float('inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).max
