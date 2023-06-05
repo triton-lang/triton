@@ -1372,10 +1372,8 @@ def _max_combine(a, b):
 @triton.jit
 def _argmax_combine(value1, index1, value2, index2):
     gt = value1 > value2
-    lt = value1 < value2
-    index_min = minimum(index1, index2)
-    index_ret = where(gt, index1, where(lt, index2, index_min))
-    value_ret = maximum(value1, value2)
+    value_ret = where(gt, value1, value2)
+    index_ret = where(gt, index1, index2)
     return value_ret, index_ret
 
 
@@ -1407,10 +1405,8 @@ def _min_combine(a, b):
 @triton.jit
 def _argmin_combine(value1, index1, value2, index2):
     lt = value1 < value2
-    gt = value1 > value2
-    index_min = minimum(index1, index2)
-    index_ret = where(lt, index1, where(gt, index2, index_min))
-    value_ret = minimum(value1, value2)
+    value_ret = where(lt, value1, value2)
+    index_ret = where(lt, index1, index2)
     return value_ret, index_ret
 
 
