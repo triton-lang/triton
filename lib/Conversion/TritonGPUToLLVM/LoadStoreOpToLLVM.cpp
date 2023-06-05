@@ -430,6 +430,7 @@ struct AtomicCASOpConversion
     auto &st = *ptxBuilderStore.create<PTXInstr>("st");
     st.shared().o("b32");
     st(dstOprStore, valOprStore).predicate(mask);
+    auto ASMReturnTy = void_ty(ctx);
     ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
     barrier();
     Value ret = load(atomPtr);
