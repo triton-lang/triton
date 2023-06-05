@@ -115,7 +115,7 @@ BLOCK = 1024
                          [(size, seed) for size in ['10', '4,53', '10000']
                           for seed in [0, 42, 124, 54, 0xffffffff, 0xdeadbeefcafeb0ba]]
                          )
-def test_randint(size, seed, device='cuda'):
+def test_randint(size, seed, device):
     size = list(map(int, size.split(',')))
 
     @triton.jit
@@ -141,7 +141,7 @@ def test_randint(size, seed, device='cuda'):
                          [(size, seed) for size in [1000000]
                           for seed in [0, 42, 124, 54]]
                          )
-def test_rand(size, seed, device='cuda'):
+def test_rand(size, seed, device):
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
@@ -162,7 +162,7 @@ def test_rand(size, seed, device='cuda'):
                          [(size, seed) for size in [1000000]
                           for seed in [0, 42, 124, 54]]
                          )
-def test_randn(size, seed, device='cuda'):
+def test_randn(size, seed, device):
     @triton.jit
     def kernel(X, N, seed):
         offset = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
@@ -179,7 +179,7 @@ def test_randn(size, seed, device='cuda'):
 
 # tl.rand() should never produce >=1.0
 
-def test_rand_limits():
+def test_rand_limits(device):
     @triton.jit
     def kernel(input, output, n: tl.constexpr):
         idx = tl.arange(0, n)
@@ -190,8 +190,8 @@ def test_rand_limits():
     min_max_int32 = torch.tensor([
         torch.iinfo(torch.int32).min,
         torch.iinfo(torch.int32).max,
-    ], dtype=torch.int32, device='cuda')
-    output = torch.empty(2, dtype=torch.float32, device='cuda')
+    ], dtype=torch.int32, device=device)
+    output = torch.empty(2, dtype=torch.float32, device=device)
     kernel[(1,)](min_max_int32, output, 2)
 
     assert output[0] == output[1]
