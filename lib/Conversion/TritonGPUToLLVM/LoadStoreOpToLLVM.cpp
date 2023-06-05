@@ -406,11 +406,6 @@ struct AtomicCASOpConversion
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     Value mask = getMask(valueTy, rewriter, loc);
-    PTXBuilder ptxBuilderMemfence;
-    auto memfence = ptxBuilderMemfence.create<PTXInstr>("membar")->o("gl");
-    memfence();
-    auto ASMReturnTy = void_ty(ctx);
-    ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
 
     Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
     atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
@@ -436,7 +431,6 @@ struct AtomicCASOpConversion
     st.shared().o("b32");
     st(dstOprStore, valOprStore).predicate(mask);
     ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
-    ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
     barrier();
     Value ret = load(atomPtr);
     barrier();
@@ -578,11 +572,7 @@ struct AtomicRMWOpConversion
               vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
       } else {
-        PTXBuilder ptxBuilderMemfence;
-        auto memfenc = ptxBuilderMemfence.create<PTXInstr>("membar")->o("gl");
-        memfenc();
         auto ASMReturnTy = void_ty(ctx);
-        ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
         if (op->user_begin() == op->user_end()) {
