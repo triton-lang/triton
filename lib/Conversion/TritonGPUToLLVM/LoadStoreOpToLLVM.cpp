@@ -464,9 +464,7 @@ struct AtomicRMWOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
-
-    auto sem = op.getSem();
-    llvm::outs() << sem << "\n";
+    //
     auto atomicRmwAttr = op.getAtomicRmwOp();
 
     Value val = op.getVal();
@@ -567,7 +565,10 @@ struct AtomicRMWOpConversion
       default:
         return failure();
       }
-      atom.o(rmwOp).o(sTy);
+      std::string semStr;
+      llvm::raw_string_ostream os(semStr);
+      os << op.getSem();
+      atom.o(semStr).o(rmwOp).o(sTy);
       if (tensorTy) {
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
         auto retType = vec == 1 ? valueElemTy : vecTy;

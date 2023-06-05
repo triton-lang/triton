@@ -945,7 +945,7 @@ def test_noinline(mode):
         ('min', 'uint32', mode, sem), ('min', 'int32', mode, sem), ('min', 'float32', mode, sem),
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
-    for sem in ['acquire', 'release', 'acq_rel', 'relaxed']]))
+    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device='cuda'):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
@@ -960,7 +960,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device='cuda'):
         x = tl.load(X + pid)
         old = GENERATE_TEST_HERE
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem="{sem}")'})
+    sem_arg = sem if sem is None else f'"{sem}"'
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem={sem_arg})'})
     numpy_op = {'add': np.sum, 'max': np.max, 'min': np.min}[op]
     max_neutral = float('-inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).min
     min_neutral = float('inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).max
@@ -982,7 +983,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device='cuda'):
     x_tri = to_triton(x, device=device)
 
     z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device)
-    kernel[(n_programs, )](x_tri, z_tri)
+    h = kernel[(n_programs, )](x_tri, z_tri)
     # torch result
     z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
     # compare
@@ -991,6 +992,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device='cuda'):
         assert z_ref.item() == to_numpy(z_tri).item()
     else:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+    sem_str = "acq_rel" if sem is None else sem
+    assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
 
 
 def test_atomic_rmw_predicate(device="cuda"):
