@@ -18,9 +18,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Check Azure CLI version
+      - name: Install Azure CLI
         run: |
-          az --version
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
       - name: Azure login
         uses: azure/login@v1
