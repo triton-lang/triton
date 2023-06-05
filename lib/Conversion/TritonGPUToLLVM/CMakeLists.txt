@@ -50,7 +50,7 @@ add_mlir_conversion_library(TritonGPUToLLVM
     LINK_LIBS PUBLIC
     MLIRIR
     MLIRPass
-    MLIRGPUOps
+    MLIRGPUDialect
     MLIRGPUToNVVMTransforms
     MLIRGPUToROCDLTransforms
     MLIRGPUTransforms
