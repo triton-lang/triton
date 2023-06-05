@@ -582,6 +582,10 @@ struct AtomicRMWOpConversion
         ptxBuilderMemfence.launch(rewriter, loc, ASMReturnTy);
         atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
+        if (op->user_begin() == op->user_end()) {
+          rewriter.replaceOp(op, {old});
+          return success();
+        }
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, 3));
         // Only threads with rmwMask = True store the result
