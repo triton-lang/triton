@@ -91,6 +91,13 @@ void init_triton_ir(py::module &&m) {
       .value("CG", mlir::triton::CacheModifier::CG)
       .export_values();
 
+  py::enum_<mlir::triton::MemSemantic>(m, "MEM_SEMANTIC")
+      .value("ACQUIRE_RELEASE", mlir::triton::MemSemantic::ACQUIRE_RELEASE)
+      .value("ACQUIRE", mlir::triton::MemSemantic::ACQUIRE)
+      .value("RELEASE", mlir::triton::MemSemantic::RELEASE)
+      .value("RELAXED", mlir::triton::MemSemantic::RELAXED)
+      .export_values();
+
   py::enum_<mlir::triton::EvictionPolicy>(m, "EVICTION_POLICY")
       .value("NORMAL", mlir::triton::EvictionPolicy::NORMAL)
       .value("EVICT_FIRST", mlir::triton::EvictionPolicy::EVICT_FIRST)
@@ -1268,7 +1275,7 @@ void init_triton_ir(py::module &&m) {
       // // atomic
       .def("create_atomic_cas",
            [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &cmp,
-              mlir::Value &val) -> mlir::Value {
+              mlir::Value &val, mlir::triton::MemSemantic sem) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              mlir::Type dstType;
              if (auto srcTensorType =
@@ -1284,12 +1291,12 @@ void init_triton_ir(py::module &&m) {
                dstType = ptrType.getPointeeType();
              }
              return self.create<mlir::triton::AtomicCASOp>(loc, dstType, ptr,
-                                                           cmp, val);
+                                                           cmp, val, sem);
            })
       .def("create_atomic_rmw",
            [](mlir::OpBuilder &self, mlir::triton::RMWOp rmwOp,
-              mlir::Value &ptr, mlir::Value &val,
-              mlir::Value &mask) -> mlir::Value {
+              mlir::Value &ptr, mlir::Value &val, mlir::Value &mask,
+              mlir::triton::MemSemantic sem) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              mlir::Type dstType;
              if (auto srcTensorType =
@@ -1305,7 +1312,7 @@ void init_triton_ir(py::module &&m) {
                dstType = ptrType.getPointeeType();
              }
              return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
-                                                           ptr, val, mask);
+                                                           ptr, val, mask, sem);
            })
       // External
       .def("create_extern_elementwise",
