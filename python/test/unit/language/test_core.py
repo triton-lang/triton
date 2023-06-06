@@ -1147,7 +1147,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         assert to_numpy(z_tri) == z_ref
 
 
-@pytest.mark.parametrize("dtype_str, num_warps", [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [2, 4]])
+@pytest.mark.parametrize("dtype_str, num_warps", [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
 def test_cat(dtype_str, num_warps):
     check_type_supported(dtype_str)
 
@@ -1163,7 +1163,7 @@ def test_cat(dtype_str, num_warps):
     y = torch.randint(0, 10, (128,), dtype=getattr(torch, dtype_str), device='cuda')
     z_ref = torch.cat([x, y], dim=0).sum()
     z = torch.zeros((256,), dtype=getattr(torch, dtype_str), device='cuda')
-    kernel[(num_warps, )](x, y, z, N=128)
+    kernel[(1, )](x, y, z, N=128, num_warps=num_warps)
     assert z.sum() == z_ref
 
 
