@@ -422,7 +422,6 @@ struct AtomicCASOpConversion
     std::string semStr;
     llvm::raw_string_ostream os(semStr);
     os << op.getSem();
-    llvm::outs() << op.getSem() << "\n";
     atom.global().o(semStr).o("cas").o("b32");
     atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
     auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
