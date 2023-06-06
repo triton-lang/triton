@@ -1092,59 +1092,67 @@ def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
 @builtin
 @_add_atomic_docstr("compare-and-swap")
-def atomic_cas(pointer, cmp, val, _builder=None):
+def atomic_cas(pointer, cmp, val, sem=None, _builder=None):
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
-    return semantic.atomic_cas(pointer, cmp, val, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_cas(pointer, cmp, val, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer, val, mask=None, _builder=None):
+def atomic_xchg(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_xchg(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_xchg(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer, val, mask=None, _builder=None):
+def atomic_add(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_add(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_add(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer, val, mask=None, _builder=None):
+def atomic_max(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_max(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_max(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer, val, mask=None, _builder=None):
+def atomic_min(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_min(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_min(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer, val, mask=None, _builder=None):
+def atomic_and(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_and(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_and(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer, val, mask=None, _builder=None):
+def atomic_or(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_or(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_or(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer, val, mask=None, _builder=None):
+def atomic_xor(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_xor(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_xor(pointer, val, mask, sem, _builder)
 
 
 # -----------------------
@@ -1372,10 +1380,8 @@ def _max_combine(a, b):
 @triton.jit
 def _argmax_combine(value1, index1, value2, index2):
     gt = value1 > value2
-    lt = value1 < value2
-    index_min = minimum(index1, index2)
-    index_ret = where(gt, index1, where(lt, index2, index_min))
-    value_ret = maximum(value1, value2)
+    value_ret = where(gt, value1, value2)
+    index_ret = where(gt, index1, index2)
     return value_ret, index_ret
 
 
@@ -1407,10 +1413,8 @@ def _min_combine(a, b):
 @triton.jit
 def _argmin_combine(value1, index1, value2, index2):
     lt = value1 < value2
-    gt = value1 > value2
-    index_min = minimum(index1, index2)
-    index_ret = where(lt, index1, where(gt, index2, index_min))
-    value_ret = minimum(value1, value2)
+    value_ret = where(lt, value1, value2)
+    index_ret = where(lt, index1, index2)
     return value_ret, index_ret
 
 

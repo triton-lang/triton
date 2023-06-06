@@ -86,9 +86,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
         end_event[i].record()
     # Record clocks
     torch.cuda.synchronize()
-    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
+    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
     if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles)).tolist()
+        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
         if len(ret) == 1:
             ret = ret[0]
         return ret
