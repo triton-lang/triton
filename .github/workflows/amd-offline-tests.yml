@@ -12,7 +12,7 @@ jobs:
     runs-on: "ubuntu-latest"
 
     container:
-      image: rocm/rocm-terminal
+      image: ubuntu:22.04
       options: --user root
 
     steps:
@@ -27,30 +27,22 @@ jobs:
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
-      # - name: Check pre-commit
-      #   if: ${{ matrix.runner != 'macos-10.15' }}
-      #   run: |
-      #     apt remove -y cmake
-      #     apt update
-      #     apt install -y git
-      #     # python3 -m pip install --upgrade pre-commit
-      #     # python3 -m pre_commit run --all-files
-
       - name: Prerequisite
         run: |
-          # remove system cmake to use python cmake instead
-          apt remove -y cmake
-          pip3 install cmake
           apt update
-          apt install -y libpython3.8-dev
+          apt install -y libpython3-dev python3-pip git wget
+          # get rocm related utilities
+          wget https://repo.radeon.com/amdgpu-install/5.5/ubuntu/jammy/amdgpu-install_5.5.50500-1_all.deb
+          apt-get install -y ./amdgpu-install_5.5.50500-1_all.deb
+          amdgpu-install -y --usecase=rocm --no-dkms
+          # install pytorch
+          pip3 install torch==2.0.1 --index-url https://download.pytorch.org/whl/rocm5.4.2
 
       - name: Install Triton
         run: |
           cd python
-          # python3 -m pip install --upgrade pip
-          # python3 -m pip install cmake==3.24
-          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
-          DEBUG=TRUE TRITON_USE_ROCM=TRUE TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install --no-build-isolation -vvv -e '.[tests]'
+          # Install in system, because need to override system triton. Otherwise lit tests will use wrong version
+          DEBUG=TRUE TRITON_USE_ROCM=TRUE TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install --no-build-isolation -vvv .
 
       - name: Run lit tests
         run: |
