@@ -14,6 +14,17 @@ def TT_CacheModifierAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+def TT_MemSemanticAttr : I32EnumAttr<
+    "MemSemantic", "",
+    [
+      I32EnumAttrCase<"RELAXED", 1, "relaxed">,
+      I32EnumAttrCase<"ACQUIRE", 2, "acquire">,
+      I32EnumAttrCase<"RELEASE", 3, "release">,
+      I32EnumAttrCase<"ACQUIRE_RELEASE", 4, "acq_rel">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 def TT_EvictionPolicyAttr : I32EnumAttr<
     "EvictionPolicy", "",
     [
