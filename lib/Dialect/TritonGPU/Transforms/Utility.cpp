@@ -112,6 +112,8 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
     return true;
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return expensiveLoadOrStore(op, targetEncoding);
+  if (isa<triton::CatOp>(op))
+    return triton::gpu::expensiveCat(cast<triton::CatOp>(op), targetEncoding);
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))
@@ -173,8 +175,12 @@ int simulateBackwardRematerialization(
         continue;
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
-      if (canFoldConversion(opArgI))
+      if (canFoldConversion(opArgI)) {
+        if (isa<triton::CatOp>(opArgI) &&
+            triton::gpu::expensiveCat(cast<triton::CatOp>(opArgI), newEncoding))
+          return INT_MAX;
         continue;
+      }
 
       // We add one expensive conversion for the current operand
       numCvts += 1;

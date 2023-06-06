@@ -1147,6 +1147,26 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         assert to_numpy(z_tri) == z_ref
 
 
+@pytest.mark.parametrize("dtype_str, num_warps", [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [2, 4]])
+def test_cat(dtype_str, num_warps):
+    check_type_supported(dtype_str)
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        z = tl.cat(x, y, can_reorder=True)
+        tl.store(Z + tl.arange(0, 2 * N), z)
+
+    x = torch.randint(0, 10, (128,), dtype=getattr(torch, dtype_str), device='cuda')
+    y = torch.randint(0, 10, (128,), dtype=getattr(torch, dtype_str), device='cuda')
+    z_ref = torch.cat([x, y], dim=0).sum()
+    z = torch.zeros((256,), dtype=getattr(torch, dtype_str), device='cuda')
+    kernel[(num_warps, )](x, y, z, N=128)
+    assert z.sum() == z_ref
+
+
 @pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 def test_store_constant(dtype_str):
     check_type_supported(dtype_str)
