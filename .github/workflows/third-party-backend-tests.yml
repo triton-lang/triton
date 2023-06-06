@@ -1,0 +1,91 @@
+name: Third Party Backend Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+
+jobs:
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"openai/triton" ]; then
+            echo '::set-output name=matrix::[["self-hosted", "arc770"]]'
+          else
+            echo '::set-output name=matrix::["ubuntu-latest"]'
+          fi
+
+  Integration-Tests:
+    needs: Runner-Preparation
+
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set ARC770 ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'arc770')}}
+        run: |
+          source ${HOME}/triton_vars.sh
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        if: ${{ matrix.runner != 'macos-10.15' }}
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files
+
+      - name: Activate Triton Environment for Intel GPU
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          conda activate triton-xpu-ci
+          echo "TRITON_CODEGEN_INTEL_XPU_BACKEND=1" >> "${GITHUB_ENV}"
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Run python tests on Intel GPU
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          cd python/test/unit/language
+          python3 -m pytest --capture=tee-sys -rfs --verbose "test_device_backend.py::test_xpu_backend"
+
+      - name: Create artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'arc770')}}
+        run: |
+          tar -czvf artifacts.tar.gz ~/.triton/cache
+
+      - name: Upload artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'arc770')}}
+        uses: actions/upload-artifact@v2
+        with:
+          name: artifacts
+          path: artifacts.tar.gz
