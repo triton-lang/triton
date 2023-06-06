@@ -14,8 +14,8 @@ using namespace mlir::triton;
 template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);
-  std::sort(ret.begin(), ret.end(),
-            [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
+  std::stable_sort(ret.begin(), ret.end(),
+                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
   return ret;
 }
 
