@@ -1051,7 +1051,8 @@ def test_tensor_atomic_rmw_block(device="cuda"):
     assert torch.min(x).item() == 0.0
 
 
-def test_atomic_cas():
+@pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
+def test_atomic_cas(sem):
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock):
@@ -1064,9 +1065,9 @@ def test_atomic_cas():
 
     # 2. only one block enters the critical section
     @triton.jit
-    def serialized_add(data, Lock):
+    def serialized_add(data, Lock, SEM: tl.constexpr):
         ptrs = data + tl.arange(0, 128)
-        while tl.atomic_cas(Lock, 0, 1) == 1:
+        while tl.atomic_cas(Lock, 0, 1, SEM) == 1:
             pass
 
         tl.store(ptrs, tl.load(ptrs) + 1.0)
@@ -1077,8 +1078,10 @@ def test_atomic_cas():
     Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
     data = torch.zeros((128,), device='cuda', dtype=torch.float32)
     ref = torch.full((128,), 64.0)
-    serialized_add[(64,)](data, Lock)
+    h = serialized_add[(64,)](data, Lock, SEM=sem)
+    sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
+    assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
 
 # ---------------

@@ -1043,7 +1043,7 @@ def atomic_cas(ptr: tl.tensor,
     element_ty = ptr.type.scalar.element_ty
     if element_ty.primitive_bitwidth not in [16, 32, 64]:
         raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
-    return tl.tensor(builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle), val.type, sem)
+    return tl.tensor(builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, sem), val.type)
 
 
 def atom_red_typechecking_impl(ptr: tl.tensor,

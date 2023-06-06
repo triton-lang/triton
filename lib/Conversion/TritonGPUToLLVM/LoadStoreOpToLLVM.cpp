@@ -419,7 +419,11 @@ struct AtomicCASOpConversion
     auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, "r");
     auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, "r");
     auto &atom = *ptxBuilderAtomicCAS.create<PTXInstr>("atom");
-    atom.global().o("cas").o("b32");
+    std::string semStr;
+    llvm::raw_string_ostream os(semStr);
+    os << op.getSem();
+    llvm::outs() << op.getSem() << "\n";
+    atom.global().o(semStr).o("cas").o("b32");
     atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
     auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
     barrier();

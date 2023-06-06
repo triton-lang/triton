@@ -257,7 +257,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
     }];
 
     let arguments = (ins TT_PtrLike:$ptr, TT_Type:$cmp, TT_Type:$val,
-                     DefaultValuedAttr<TT_MemSemanticAttr, "triton::MemSemantic::ACQUIRE_RELEASE">:$sem);
+                     TT_MemSemanticAttr:$sem);
 
     let results = (outs TT_Type:$result);
 }
