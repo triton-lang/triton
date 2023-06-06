@@ -38,7 +38,7 @@ def get_codegen_backends():
     for name, _ in os.environ.items():
         if name.startswith(env_prefix) and check_env_flag(name):
             assert name.count(env_prefix) <= 1
-            backends.append(name.replace(env_prefix, ''))
+            backends.append(name.replace(env_prefix, '').lower())
     return backends
 
 
