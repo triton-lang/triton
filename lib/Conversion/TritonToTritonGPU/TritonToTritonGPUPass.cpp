@@ -393,7 +393,8 @@ struct TritonAtomicCASPattern
                   ConversionPatternRewriter &rewriter) const override {
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::AtomicCASOp>(
                       op, typeConverter->convertType(op.getType()),
-                      adaptor.getPtr(), adaptor.getCmp(), adaptor.getVal()),
+                      adaptor.getPtr(), adaptor.getCmp(), adaptor.getVal(),
+                      op.getSem()),
                   adaptor.getAttributes());
     return success();
   }
@@ -409,7 +410,7 @@ struct TritonAtomicRMWPattern
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::AtomicRMWOp>(
                       op, typeConverter->convertType(op.getType()),
                       adaptor.getAtomicRmwOp(), adaptor.getPtr(),
-                      adaptor.getVal(), adaptor.getMask()),
+                      adaptor.getVal(), adaptor.getMask(), op.getSem()),
                   adaptor.getAttributes());
     return success();
   }
