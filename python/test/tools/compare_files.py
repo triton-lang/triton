@@ -17,7 +17,7 @@ def get_file_with_extension(path: str, ext: str) -> Optional[str]:
     if len(files) == 0:
         return None
     # filter out files with grp in their name
-    files = [f for f in files if "grp" not in f]
+    files = [f for f in files if "__grp__" not in f]
     assert len(files) == 1, f"Found {len(files)} files in {path} with extension {ext}!"
     return files[0]
 
