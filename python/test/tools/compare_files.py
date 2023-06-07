@@ -135,6 +135,8 @@ def main(args) -> None:
         for name, mismatch in mismatches.items():
             print(f"{name}: {mismatch}")
         assert False, "Found mismatches!"
+    else:
+        print("No mismatches found!")
 
 
 if __name__ == "__main__":
