@@ -312,8 +312,8 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
                   ConversionPatternRewriter &rewriter) const override {
     // The cat op satisfy two conditions:
     // 1. output.numel = lhs.numel + rhs.numel
-    // 2. output.total_elems_per_thread = lhs.total_elems_per_thread +
-    // rhs.total_elems_per_thread
+    // 2. output.total_elems_per_thread =
+    // next_power_of_2(lhs.total_elems_per_thread + rhs.total_elems_per_thread)
     // For now, this behaves like generic, but this
     // will evolve when we add support for `can_reorder=False`.
     auto retType = this->getTypeConverter()

@@ -124,10 +124,11 @@ bool expensiveToRemat(Operation *op, Attribute &targetEncoding) {
   return false;
 }
 
-bool canFoldConversion(Operation *op) {
+bool canFoldConversion(Operation *op, Attribute &targetEncoding) {
+  if (isa<triton::CatOp>(op))
+    return !triton::gpu::expensiveCat(cast<triton::CatOp>(op), targetEncoding);
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::ViewOp,
-             triton::CatOp>(*op);
+             triton::MakeRangeOp, triton::SplatOp, triton::ViewOp>(op);
 }
 
 int simulateBackwardRematerialization(
@@ -175,12 +176,8 @@ int simulateBackwardRematerialization(
         continue;
       // If the conversion can be folded into opArgI then
       // we don't count this conversion as expensive
-      if (canFoldConversion(opArgI)) {
-        if (isa<triton::CatOp>(opArgI) &&
-            triton::gpu::expensiveCat(cast<triton::CatOp>(opArgI), newEncoding))
-          return INT_MAX;
+      if (canFoldConversion(opArgI, newEncoding))
         continue;
-      }
 
       // We add one expensive conversion for the current operand
       numCvts += 1;
