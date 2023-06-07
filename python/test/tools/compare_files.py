@@ -6,14 +6,14 @@ from typing import Dict, List, Optional, Tuple
 import yaml
 
 
-def list_files_with_extension(path: str, extension: str) -> List[str]:
+def listFilesWithExtension(path: str, extension: str) -> List[str]:
     files = glob.glob(os.path.join(path, f'*.{extension}'))
     return files
 
 
-def get_file_with_extension(path: str, ext: str) -> Optional[str]:
+def getFileWithExtension(path: str, ext: str) -> Optional[str]:
     # get all files in directory with extension
-    files = list_files_with_extension(path, ext)
+    files = listFilesWithExtension(path, ext)
     if len(files) == 0:
         return None
     # filter out files with grp in their name
@@ -22,13 +22,13 @@ def get_file_with_extension(path: str, ext: str) -> Optional[str]:
     return files[0]
 
 
-def load_yaml_file(file_path: str) -> List[Dict[str, str]]:
+def loadYamlFile(file_path: str) -> List[Dict[str, str]]:
     with open(file_path, 'r') as file:
         content = yaml.safe_load(file)
     return content
 
 
-def compare_files(file1: str, file2: str) -> bool:
+def compareFiles(file1: str, file2: str) -> bool:
     with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
         content1 = f1.read()
         content2 = f2.read()
@@ -36,12 +36,12 @@ def compare_files(file1: str, file2: str) -> bool:
     return content1 == content2
 
 
-def get_name_to_hashes_dict(path: str) -> Dict[str, List[str]]:
+def getNameToHashesDict(path: str) -> Dict[str, List[str]]:
     name_to_hashes = {}
     for hash in os.listdir(path):
         full_path = os.path.join(path, hash)
         assert os.path.isdir(full_path), f"Path {full_path} is not a directory!"
-        json_file = get_file_with_extension(full_path, "json")
+        json_file = getFileWithExtension(full_path, "json")
         if json_file is None:
             continue
         # load json file
@@ -53,30 +53,30 @@ def get_name_to_hashes_dict(path: str) -> Dict[str, List[str]]:
     return name_to_hashes
 
 
-def get_file_vec(path: str) -> List[Tuple[str, str]]:
+def getFileVec(path: str) -> List[Tuple[str, str]]:
     vec = []
     for ext in ["json", "ttir", "ttgir"]:
-        file = get_file_with_extension(path, ext)
+        file = getFileWithExtension(path, ext)
         if file is not None:
             vec.append((ext, file))
     return vec
 
 
 def do_files_match(path1: str, path2: str) -> bool:
-    files_vec1 = get_file_vec(path1)
-    files_vec2 = get_file_vec(path2)
+    filesVec1 = getFileVec(path1)
+    filesVec2 = getFileVec(path2)
     # both hashes must at least have 1 json file and 1 ttir or ttgir file
     # and the number of files must match
-    if len(files_vec1) <= 1 or len(files_vec2) <= 1 or len(files_vec1) != len(files_vec2):
+    if len(filesVec1) <= 1 or len(filesVec2) <= 1 or len(filesVec1) != len(filesVec2):
         return False
     # if either path does not have a json file, return false
-    if files_vec1[0][0] != "json" or files_vec2[0][0] != "json":
+    if filesVec1[0][0] != "json" or filesVec2[0][0] != "json":
         return False
 
-    for (ext1, file1), (ext2, file2) in zip(files_vec1, files_vec2):
+    for (ext1, file1), (ext2, file2) in zip(filesVec1, filesVec2):
         if ext1 != ext2:
             return False
-        if not compare_files(file1, file2):
+        if not compareFiles(file1, file2):
             return False
         else:
             # once we actually compared a ttir or ttgir file, we can break
@@ -85,9 +85,10 @@ def do_files_match(path1: str, path2: str) -> bool:
     return True
 
 
-def compare_matching_files(name: str, extension: str, name_to_hashes1: Dict[str, List[str]], name_to_hashes2: Dict[str, List[str]], args) -> Tuple[str]:
+def compare_matching_files(name: str, extension: str, name_to_hashes1: Dict[str, List[str]], name_to_hashes2: Dict[str, List[str]], args) -> Tuple[str, str]:
     hashes1 = name_to_hashes1[name]
     hashes2 = name_to_hashes2[name]
+    numComparisons = 0
     for hash1 in hashes1:
         path1 = os.path.join(args.path1, hash1)
         for hash2 in hashes2:
@@ -98,31 +99,33 @@ def compare_matching_files(name: str, extension: str, name_to_hashes1: Dict[str,
             # if any of these contraints is not met, then we can skip this pair of hashes since they are not a match
             if not do_files_match(path1, path2):
                 continue
-            ext_file1 = list_files_with_extension(path1, extension)[0]
-            ext_file2 = list_files_with_extension(path2, extension)[0]
-            if not compare_files(ext_file1, ext_file2):
+            numComparisons += 1
+            ext_file1 = listFilesWithExtension(path1, extension)[0]
+            ext_file2 = listFilesWithExtension(path2, extension)[0]
+            if not compareFiles(ext_file1, ext_file2):
                 return (ext_file1, ext_file2)
+    assert numComparisons > 0, f"Did not find any matching files for {name}"
     return ()
 
 
 def main(args) -> None:
     assert args.path1 != args.path2, "Cannot compare files in the same directory!"
     # Get kernel name to hashes dict, these hashes would have the same kernel name
-    name_to_hashes1 = get_name_to_hashes_dict(args.path1)
-    name_to_hashes2 = get_name_to_hashes_dict(args.path2)
+    nameToHashes1 = getNameToHashesDict(args.path1)
+    nameToHashes2 = getNameToHashesDict(args.path2)
 
-    yaml_file_path = args.kernels
-    assert os.path.exists(yaml_file_path), f"Path {yaml_file_path} does not exist!"
-    name_and_extension = load_yaml_file(yaml_file_path)["name_and_extension"]
+    yamlFilePath = args.kernels
+    assert os.path.exists(yamlFilePath), f"Path {yamlFilePath} does not exist!"
+    nameAndExtension = loadYamlFile(yamlFilePath)["name_and_extension"]
 
     mismatches = {}
     # iterate over the kernels that need to be checked
-    for d in name_and_extension:
+    for d in nameAndExtension:
         name = d["name"]  # kernel name
         extension = d["extension"]  # extension of the file to be compared (e.g. ptx)
         # Compare all hashes on path 1 with all hashes on path 2
         # result is either the mismatching (file1, file2) with "extension" or empty tuple if no mismatch
-        result = compare_matching_files(name, extension, name_to_hashes1, name_to_hashes2, args)
+        result = compare_matching_files(name, extension, nameToHashes1, nameToHashes2, args)
         # If mismatch exists, add it to mismatches dict
         if len(result) > 0:
             mismatches[name] = result
