@@ -354,6 +354,19 @@ bool isaDistributedLayout(Attribute layout) {
          layout.isa<SliceEncodingAttr>();
 }
 
+bool expensiveCat(triton::CatOp cat, Attribute &targetEncoding) {
+  // If the new elements per thread is less than the old one, we will need to do
+  // convert encoding that goes through shared memory anyway. So we consider it
+  // as expensive.
+  auto tensorTy = cat.getResult().getType().cast<RankedTensorType>();
+  auto totalElemsPerThread = triton::gpu::getTotalElemsPerThread(tensorTy);
+  auto shape = tensorTy.getShape();
+  auto elemTy = tensorTy.getElementType();
+  auto newTotalElemsPerThread =
+      triton::gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
+  return newTotalElemsPerThread < totalElemsPerThread;
+}
+
 } // namespace gpu
 } // namespace triton
 
@@ -1127,6 +1140,10 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
   }
   // cvt(cat) -> cat
   if (auto cat = dyn_cast<triton::CatOp>(arg)) {
+    auto encoding =
+        op->getResult(0).getType().cast<RankedTensorType>().getEncoding();
+    if (triton::gpu::expensiveCat(cat, encoding))
+      return mlir::failure();
     rewriter.replaceOpWithNewOp<triton::CatOp>(op, op->getResult(0).getType(),
                                                cat.getOperands());
     return mlir::success();

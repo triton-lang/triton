@@ -359,7 +359,7 @@ public:
 
     for (Operation *op : cvtSlices) {
       // don't rematerialize anything expensive
-      if (expensiveToRemat(op, dstEncoding))
+      if (expensiveToRemat(op, srcEncoding))
         return failure();
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
