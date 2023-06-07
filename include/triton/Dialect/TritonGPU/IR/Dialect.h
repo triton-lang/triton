@@ -23,6 +23,9 @@ namespace gpu {
 
 unsigned getTotalElemsPerThread(Type type);
 
+unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
+                                Type eltTy);
+
 SmallVector<unsigned> getElemsPerThread(Type type);
 
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
@@ -71,6 +74,8 @@ getShapePerCTA(Attribute layout,
 SmallVector<unsigned> getOrder(Attribute layout);
 
 bool isaDistributedLayout(Attribute layout);
+
+bool expensiveCat(triton::CatOp cat, Attribute &targetEncoding);
 
 } // namespace gpu
 } // namespace triton
