@@ -135,3 +135,74 @@ jobs:
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
           python3 -m pytest -vs .
           sudo nvidia-smi -i 0 -rgc
+
+  Compare-artifacts:
+    needs: Integration-Tests
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install gh CLI
+        run: |
+          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key 23F3D4EA75716059
+          echo "deb [arch=$(dpkg --print-architecture)] https://cli.github.com/packages focal main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh
+
+      - name: Download latest main artifacts
+        env:
+          ARTIFACT_NAME: artifacts
+          ARTIFACT_JOB_NAME: Integration-Tests
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER_REPO="${{ github.repository }}"
+          PR_NUMBER=$(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq ".[] | select(.merged_at != null) | .number" | head -1)
+          echo "Last merged PR number: $PR_NUMBER"
+
+          BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
+          echo "BRANCH_NAME: $BRANCH_NAME"
+          WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs | jq --arg branch_name "$BRANCH_NAME" '.workflow_runs[] | select(.head_branch == $branch_name)' | jq '.id' | head -1)
+          echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
+          ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq '.artifacts[].archive_download_url' --raw-output)
+          echo "ARTIFACT_URL: $ARTIFACT_URL"
+
+          if [ -n "$ARTIFACT_URL" ]; then
+            echo "Downloading artifact: $ARTIFACT_URL"
+            curl --location --remote-header-name -H "Authorization: token $GH_TOKEN" -o reference.zip "$ARTIFACT_URL"
+            # Print the size of the downloaded artifact
+            echo "Artifact size (stat): $(stat --printf="%s bytes" reference.zip)"
+            echo "Artifact size (du): $(du -sh reference.zip)"
+            unzip reference.zip
+            mkdir temp
+            tar -xzf artifacts.tar.gz -C temp
+            rm reference.zip
+            rm artifacts.tar.gz
+            mv temp/home/phil/.triton/cache reference
+            rm -rf temp
+          else
+            echo "No artifact found with the name: $ARTIFACT_NAME"
+          fi
+      - name: Download current job artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: artifacts
+      - name: Unzip current job artifacts
+        run: |
+          ls
+          pwd
+          # Print the size of the downloaded artifact
+          echo "Artifact size (stat): $(stat --printf="%s bytes" artifacts.tar.gz)"
+          echo "Artifact size (du): $(du -sh artifacts.tar.gz)"
+          mkdir temp1
+          tar -xzf artifacts.tar.gz -C temp1
+          rm artifacts.tar.gz
+          mv temp1/home/phil/.triton/cache current
+          rm -rf temp1
+      - name: Compare artifacts
+        run: |
+          pwd
+          ls
+          python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml
