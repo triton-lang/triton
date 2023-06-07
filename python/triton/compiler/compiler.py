@@ -445,7 +445,8 @@ def compile(fn, **kwargs):
         metadata = {"num_warps": num_warps,
                     "num_stages": num_stages,
                     "constants": _get_jsonable_constants(constants),
-                    "debug": debug}
+                    "debug": debug,
+                    "arch": arch, }
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]

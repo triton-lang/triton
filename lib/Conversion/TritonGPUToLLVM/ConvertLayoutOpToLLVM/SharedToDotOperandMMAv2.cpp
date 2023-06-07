@@ -18,7 +18,8 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 // Data loader for mma.16816 instruction.
 class MMA16816SmemLoader {
 public:
-  MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order, uint32_t kOrder,
+  MMA16816SmemLoader(int wpt, ArrayRef<uint32_t> order,
+                     ArrayRef<uint32_t> warpsPerCTA, uint32_t kOrder,
                      int kWidth, ArrayRef<Value> smemStrides,
                      ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
                      ArrayRef<int> matShape, int perPhase, int maxPhase,
@@ -54,6 +55,7 @@ public:
 
 private:
   SmallVector<uint32_t> order;
+  SmallVector<uint32_t> warpsPerCTA;
   int kOrder;
   int kWidth;
   SmallVector<int64_t> tileShape;
@@ -128,7 +130,6 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   Value cMatOff = matOff[order[0]];
   Value sMatOff = matOff[order[1]];
   Value cSwizzleMatOff = udiv(cSwizzleOffset, i32_val(cMatShape));
-  cMatOff = add(cMatOff, cSwizzleMatOff);
 
   // row offset inside a matrix, each matrix has 8 rows.
   Value sOffInMat = c;
@@ -142,8 +143,14 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   //          ~~~~~~~ out-of-bound access
   Value sOff = urem(add(sOffInMat, mul(sMatOff, i32_val(sMatShape))),
                     i32_val(tileShape[order[1]]));
+  auto totalNumMats = tileShape[order[0]] / matShape[order[0]];
+
   for (int i = 0; i < numPtrs; ++i) {
     Value cMatOffI = add(cMatOff, i32_val(i * pLoadStrideInMat));
+    if (warpsPerCTA[order[0]] > totalNumMats ||
+        totalNumMats % warpsPerCTA[order[0]] != 0)
+      cMatOffI = urem(cMatOffI, i32_val(totalNumMats));
+    cMatOffI = add(cMatOffI, cSwizzleMatOff);
     cMatOffI = xor_(cMatOffI, phase);
     offs[i] = add(mul(cMatOffI, i32_val(cMatShape)), mul(sOff, sStride));
   }
@@ -363,13 +370,15 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> offs,
 }
 
 MMA16816SmemLoader::MMA16816SmemLoader(
-    int wpt, ArrayRef<uint32_t> order, uint32_t kOrder, int kWidth,
-    ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
-    ArrayRef<int> instrShape, ArrayRef<int> matShape, int perPhase,
-    int maxPhase, int elemBytes, ConversionPatternRewriter &rewriter,
+    int wpt, ArrayRef<uint32_t> order, ArrayRef<uint32_t> warpsPerCTA,
+    uint32_t kOrder, int kWidth, ArrayRef<Value> smemStrides,
+    ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
+    ArrayRef<int> matShape, int perPhase, int maxPhase, int elemBytes,
+    ConversionPatternRewriter &rewriter,
     TritonGPUToLLVMTypeConverter *typeConverter, const Location &loc)
-    : order(order.begin(), order.end()), kOrder(kOrder), kWidth(kWidth),
-      tileShape(tileShape.begin(), tileShape.end()),
+    : order(order.begin(), order.end()),
+      warpsPerCTA(warpsPerCTA.begin(), warpsPerCTA.end()), kOrder(kOrder),
+      kWidth(kWidth), tileShape(tileShape.begin(), tileShape.end()),
       instrShape(instrShape.begin(), instrShape.end()),
       matShape(matShape.begin(), matShape.end()), perPhase(perPhase),
       maxPhase(maxPhase), elemBytes(elemBytes), rewriter(rewriter), loc(loc),
@@ -471,9 +480,9 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int a, int b) {
     MMA16816SmemLoader loader(
-        wpt, sharedLayout.getOrder(), kOrder, kWidth, smemObj.strides,
-        tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
-        maxPhase, elemBytes, rewriter, typeConverter, loc);
+        wpt, sharedLayout.getOrder(), mmaLayout.getWarpsPerCTA(), kOrder,
+        kWidth, smemObj.strides, tensorTy.getShape() /*tileShape*/, instrShape,
+        matShape, perPhase, maxPhase, elemBytes, rewriter, typeConverter, loc);
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs =
         loader.computeOffsets(warpId, lane, cSwizzleOffset);
