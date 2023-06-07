@@ -1159,12 +1159,14 @@ def test_cat(dtype_str, num_warps):
         z = tl.cat(x, y, can_reorder=True)
         tl.store(Z + tl.arange(0, 2 * N), z)
 
-    x = torch.randint(0, 10, (128,), dtype=getattr(torch, dtype_str), device='cuda')
-    y = torch.randint(0, 10, (128,), dtype=getattr(torch, dtype_str), device='cuda')
+    x = torch.arange(0, 128, device='cuda').to(getattr(torch, dtype_str))
+    y = torch.arange(-128, 0, device='cuda').to(getattr(torch, dtype_str))
     z_ref = torch.cat([x, y], dim=0).sum()
     z = torch.zeros((256,), dtype=getattr(torch, dtype_str), device='cuda')
     kernel[(1, )](x, y, z, N=128, num_warps=num_warps)
     assert z.sum() == z_ref
+    # check if there's no duplicate value in z
+    assert z.unique().size(0) == z.size(0)
 
 
 @pytest.mark.parametrize("dtype_str", list(torch_dtypes))
