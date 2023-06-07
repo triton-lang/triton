@@ -176,12 +176,10 @@ jobs:
             echo "Artifact size (stat): $(stat --printf="%s bytes" reference.zip)"
             echo "Artifact size (du): $(du -sh reference.zip)"
             unzip reference.zip
-            mkdir temp
-            tar -xzf artifacts.tar.gz -C temp
+            tar -xzf artifacts.tar.gz
             rm reference.zip
             rm artifacts.tar.gz
-            mv temp/home/phil/.triton/cache reference
-            rm -rf temp
+            mv cache reference
           else
             echo "No artifact found with the name: $ARTIFACT_NAME"
           fi
@@ -196,11 +194,9 @@ jobs:
           # Print the size of the downloaded artifact
           echo "Artifact size (stat): $(stat --printf="%s bytes" artifacts.tar.gz)"
           echo "Artifact size (du): $(du -sh artifacts.tar.gz)"
-          mkdir temp1
-          tar -xzf artifacts.tar.gz -C temp1
+          tar -xzf artifacts.tar.gz
           rm artifacts.tar.gz
-          mv temp1/home/phil/.triton/cache current
-          rm -rf temp1
+          mv cache current
       - name: Compare artifacts
         run: |
           pwd
