@@ -6,6 +6,7 @@
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
@@ -309,11 +310,43 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
   LogicalResult
   matchAndRewrite(triton::CatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // For now, this behaves like generic, but this will evolve when
-    // we add support for `can_reorder=False`
-    Type retType = this->getTypeConverter()->convertType(op.getType());
+    // The cat op satisfy two conditions:
+    // 1. output.numel = lhs.numel + rhs.numel
+    // 2. output.total_elems_per_thread =
+    // next_power_of_2(lhs.total_elems_per_thread + rhs.total_elems_per_thread)
+    // For now, this behaves like generic, but this
+    // will evolve when we add support for `can_reorder=False`.
+    auto retType = this->getTypeConverter()
+                       ->convertType(op.getType())
+                       .cast<RankedTensorType>();
+    auto retEncoding =
+        retType.getEncoding().cast<triton::gpu::BlockedEncodingAttr>();
+    auto lhsType = adaptor.getLhs().getType().cast<RankedTensorType>();
+    auto rhsType = adaptor.getRhs().getType().cast<RankedTensorType>();
+    auto lhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(lhsType);
+    auto rhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(rhsType);
+    auto retTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(retType);
+    auto retShape = retType.getShape();
+    auto retOrder = retEncoding.getOrder();
+    auto retSizePerThread = retEncoding.getSizePerThread();
+    auto retThreadsPerWarp = retEncoding.getThreadsPerWarp();
+    auto retWarpsPerCTA = retEncoding.getWarpsPerCTA();
+    // Get new retSizePerThread if ret elems per thread is not enough.
+    // We have to round it up to the next power of 2 due to triton's tensor size
+    // constraint.
+    auto newRetTotalElemsPerThread =
+        nextPowOf2(lhsTotalElemsPerThread + rhsTotalElemsPerThread);
+    auto newRetSizePerThread = retSizePerThread.vec();
+    newRetSizePerThread[retOrder[0]] *=
+        newRetTotalElemsPerThread / retTotalElemsPerThread;
+    triton::gpu::BlockedEncodingAttr newRetEncoding =
+        triton::gpu::BlockedEncodingAttr::get(getContext(), newRetSizePerThread,
+                                              retThreadsPerWarp, retWarpsPerCTA,
+                                              retOrder);
+    auto newRetType = RankedTensorType::get(retShape, retType.getElementType(),
+                                            newRetEncoding);
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::CatOp>(
-                      op, retType, adaptor.getOperands()),
+                      op, newRetType, adaptor.getOperands()),
                   adaptor.getAttributes());
     return success();
   }
