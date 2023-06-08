@@ -316,7 +316,7 @@ class JITFunction(KernelInterface[T]):
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None):
+def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
@@ -331,8 +331,10 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_1 = grid[1] if grid_size > 1 else 1
     grid_2 = grid[2] if grid_size > 2 else 1
 
-    device_types = [device_type for device_type in {device_types} if device_type != '']
-    device_type = self._conclude_device_type(device_types, {pinned_memory_flags})
+    if device_type is None:
+        device_types = [_device_type for _device_type in {device_types} if _device_type != '']
+        device_type = self._conclude_device_type(device_types, {pinned_memory_flags})
+
     device_backend = None
     if device_type not in ['cuda', 'hip']:
         device_backend = get_backend(device_type)
