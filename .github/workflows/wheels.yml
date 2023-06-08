@@ -16,7 +16,11 @@ jobs:
     steps:
 
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+
+      - name: Install Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
       - name: Azure login
         uses: azure/login@v1
@@ -46,8 +50,8 @@ jobs:
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
           export CIBW_BEFORE_BUILD="pip install cmake;"
-          export CIBW_SKIP="{cp,pp}35-*"
-          export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64 cp3*-musllinux_x86_64"
+          export CIBW_SKIP="{cp,pp}{35,36}-*"
+          export CIBW_BUILD="{cp,pp}3*-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
 
       - name: Publish wheels to Azure DevOps
