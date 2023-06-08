@@ -38,6 +38,7 @@ import triton.ops
                 (32, 128, 64, 1, 4, 2, None, None, None, AT, BT, DTYPE),
                 # 8 warp
                 (128, 256, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE),
+                (128, 256, 64, 1, 8, 3, 8192, 8192, 8192, AT, BT, DTYPE),
                 (256, 128, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE),
                 (256, 128, 32, 1, 8, 2, None, None, None, AT, BT, DTYPE),
                 # split-k
