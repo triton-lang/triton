@@ -92,11 +92,12 @@ jobs:
       - name: Install Triton on XPU
         if: ${{ env.BACKEND == 'XPU'}}
         run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
           cd python
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
-          source ${HOME}/miniconda3/bin/activate
-          conda activate triton-xpu-ci
           export TRITON_CODEGEN_INTEL_XPU_BACKEND=1
           python3 -m pip uninstall -y triton
           python3 setup.py build
