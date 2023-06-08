@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
+import json
 import time
 from typing import Dict
 
 from ..testing import do_bench
 from .jit import KernelInterface
-
+from .cache import get_cache_manager
 
 class OutOfResources(Exception):
     def __init__(self, required, limit, name):
@@ -38,6 +40,14 @@ class Autotuner(KernelInterface):
             self.configs = configs
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = {}
+
+        self.fn_cache_manager = get_cache_manager(hashlib.md5(str((fn, arg_names, configs, key, reset_to_zero,prune_configs_by)).encode('utf-8')).hexdigest())
+        self.cache_filename = f"autotune_result.json"
+        cache_path = self.fn_cache_manager.get_file(self.cache_filename)
+        if cache_path:
+            with open(cache_path) as f:
+                self.cache = json.load(f)
+
         # hook to reset all required tensor to zeros before relaunching a kernel
         self.hook = lambda args: 0
         if reset_to_zero is not None:
@@ -101,6 +111,7 @@ class Autotuner(KernelInterface):
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 self.hook(args)
                 self.configs_timings = timings
+                self.fn_cache_manager.put(json.dumps(self.cache), self.cache_filename) 
             config = self.cache[key]
         else:
             config = self.configs[0]
