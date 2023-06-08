@@ -204,9 +204,9 @@ def get_amdgpu_arch_fulldetails():
     """
     try:
         # TODO: package rocm.cc with Triton
-        rocm_path_dir = os.getenv("ROCM_PATH", default="/opt/rocm")
-        rocminfo = subprocess.check_output(rocm_path_dir + '/bin/rocminfo').decode()
-        gfx_arch_details = re.search('amd.*', rocminfo).group(0).strip().split('--')
+        arch_info = _triton.get_arch_info()
+        warpsize = _triton.get_warp_size()
+        gfx_arch_details = re.search('amd.*', arch_info).group(0).strip().split('--')
         arch_triple = gfx_arch_details[0]
         arch_name_features = gfx_arch_details[1].split(':')
         arch_name = arch_name_features[0]
