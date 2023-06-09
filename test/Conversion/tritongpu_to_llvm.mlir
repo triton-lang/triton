@@ -137,7 +137,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
   // CHECK-LABEL: global_load_store_no_vec
   tt.func @global_load_store_no_vec(%arg0: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg3: i32) {
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
@@ -229,7 +229,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
   // CHECK-LABEL: global_load_store_vec4
   tt.func @global_load_store_vec4(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32) {
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
@@ -306,7 +306,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 module attributes {"triton_gpu.num-warps" = 2 : i32} {
   tt.func @vecadd_masked_vec1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32) {
     %c64_i32 = arith.constant 64 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c64_i32 : i32
     %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
     %3 = tt.splat %1 : (i32) -> tensor<64xi32, #blocked>
@@ -340,7 +340,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: global_load_store_vec2
     tt.func @global_load_store_vec2(%arg0: !tt.ptr<f32> {tt.divisibility = 8 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 8 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 8 : i32}, %arg3: i32) {
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
@@ -461,7 +461,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: global_load_store_vec8
     tt.func @global_load_store_vec8(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32) {
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
@@ -644,7 +644,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_program_id
   tt.func @basic_program_id() {
     // PTX: nvvm.read.ptx.sreg.ctaid.x : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     tt.return
   }
 }
@@ -1528,9 +1528,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-  %blockidx = tt.get_program_id {axis=0:i32} : i32
-  %blockidy = tt.get_program_id {axis=1:i32} : i32
-  %blockidz = tt.get_program_id {axis=2:i32} : i32
+  %blockidx = tt.get_program_id x : i32
+  %blockidy = tt.get_program_id y : i32
+  %blockidz = tt.get_program_id z : i32
   // PTX: nvvm.read.ptx.sreg.ctaid.x
   // PTX: nvvm.read.ptx.sreg.ctaid.y
   // PTX: nvvm.read.ptx.sreg.ctaid.z

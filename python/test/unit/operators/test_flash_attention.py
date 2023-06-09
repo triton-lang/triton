@@ -5,7 +5,10 @@ import triton
 import triton.ops
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 16),
+                                                 (4, 48, 1024, 32),
+                                                 (4, 48, 1024, 64),
+                                                 (4, 48, 1024, 128)])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 def test_op(Z, H, N_CTX, D_HEAD, dtype):
     capability = torch.cuda.get_device_capability()
