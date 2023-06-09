@@ -104,6 +104,7 @@ jobs:
           source ${HOME}/triton_vars.sh
           source ${HOME}/miniconda3/bin/activate
           conda activate triton-xpu-ci
+          git submodule update --init --recursive
           cd python
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
