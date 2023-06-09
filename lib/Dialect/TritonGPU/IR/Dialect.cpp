@@ -364,7 +364,7 @@ bool expensiveCat(triton::CatOp cat, Attribute &targetEncoding) {
   auto elemTy = tensorTy.getElementType();
   auto newTotalElemsPerThread =
       triton::gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
-  return newTotalElemsPerThread <= totalElemsPerThread;
+  return newTotalElemsPerThread != totalElemsPerThread;
 }
 
 } // namespace gpu
