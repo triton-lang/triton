@@ -52,16 +52,16 @@ This is a Triton implementation of the Flash Attention algorithm
 
     fused-attention-batch4-head48-d64-fwd:
         N_CTX     Triton
-    0  1024.0   0.301700
-    1  2048.0   1.001204
-    2  4096.0   3.637642
-    3  8192.0  14.028654
+    0  1024.0   0.290582
+    1  2048.0   0.997649
+    2  4096.0   3.683840
+    3  8192.0  14.023681
     fused-attention-batch4-head48-d64-bwd:
         N_CTX     Triton
-    0  1024.0   1.233979
-    1  2048.0   3.915435
-    2  4096.0  13.726573
-    3  8192.0  51.244034
+    0  1024.0   1.200327
+    1  2048.0   3.852370
+    2  4096.0  13.707850
+    3  8192.0  51.033089
 
 
 
@@ -430,7 +430,7 @@ This is a Triton implementation of the Flash Attention algorithm
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  4.605 seconds)
+   **Total running time of the script:** ( 0 minutes  4.609 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
