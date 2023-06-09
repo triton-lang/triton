@@ -355,7 +355,7 @@ bool isaDistributedLayout(Attribute layout) {
 }
 
 bool expensiveCat(triton::CatOp cat, Attribute &targetEncoding) {
-  // If the new elements per thread is less than the old one, we will need to do
+  // If the new elements per thread is less than the required, we will need to do
   // convert encoding that goes through shared memory anyway. So we consider it
   // as expensive.
   auto lhsTy = cat.getLhs().getType().cast<RankedTensorType>();
