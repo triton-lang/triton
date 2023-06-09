@@ -25,7 +25,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "gfx908"]]'
+            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix::["ubuntu-latest"]'
           fi
@@ -53,6 +53,11 @@ jobs:
         run: |
           echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
 
+      - name: Set XPU ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'arc770')}}
+        run: |
+          echo "BACKEND=XPU" >> "${GITHUB_ENV}"
+
       - name: Clear cache
         run: |
           rm -rf ~/.triton
@@ -62,13 +67,22 @@ jobs:
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
       - name: Check pre-commit
-        if: ${{ matrix.runner != 'macos-10.15' }}
+        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] != 'arc770') }}
         run: |
           python3 -m pip install --upgrade pre-commit
           python3 -m pre_commit run --all-files
 
+      - name: Check pre-commit arc770
+        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] == 'arc770') }}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files
+
       - name: Install Triton
-        if: ${{ env.BACKEND != 'ROCM'}}
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python
           python3 -m pip install --upgrade pip
@@ -84,8 +98,23 @@ jobs:
           python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
+      - name: Install Triton on XPU
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          git submodule update --init --recursive
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          export TRITON_CODEGEN_INTEL_XPU_BACKEND=1
+          python3 -m pip uninstall -y triton
+          python3 setup.py build
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
       - name: Run lit tests
-        if: ${{ env.BACKEND != 'ROCM'}}
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           python3 -m pip install lit
           cd python
@@ -115,7 +144,7 @@ jobs:
           path: ~/.triton/artifacts.tar.gz
 
       - name: Run CXX unittests
-        if: ${{ env.BACKEND != 'ROCM'}}
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python
           cd "build/$(ls build | grep -i cmake)"
@@ -126,6 +155,15 @@ jobs:
         run: |
           cd python/test/unit/language
           python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
+
+      - name: Run python tests on XPU
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          cd python/test/backend/third_party_backends
+          python3 -m pytest --capture=tee-sys -rfs --verbose --backend xpu
 
       - name: Regression tests
         if: ${{ contains(matrix.runner, 'A100') }}
