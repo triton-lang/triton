@@ -359,7 +359,12 @@ bool expensiveCat(triton::CatOp cat, Attribute &targetEncoding) {
   // convert encoding that goes through shared memory anyway. So we consider it
   // as expensive.
   auto tensorTy = cat.getResult().getType().cast<RankedTensorType>();
-  auto totalElemsPerThread = triton::gpu::getTotalElemsPerThread(tensorTy);
+  auto lhsTy = cat.getLhs().getType().cast<RankedTensorType>();
+  auto rhsTy = cat.getRhs().getType().cast<RankedTensorType>();
+  auto lhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(lhsTy);
+  auto rhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(rhsTy);
+  auto totalElemsPerThread =
+      nextPowOf2(lhsTotalElemsPerThread + rhsTotalElemsPerThread);
   auto shape = tensorTy.getShape();
   auto elemTy = tensorTy.getElementType();
   auto newTotalElemsPerThread =
