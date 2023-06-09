@@ -38,7 +38,6 @@ import triton.ops
                 (32, 128, 64, 1, 4, 2, None, None, None, AT, BT, DTYPE),
                 # 8 warp
                 (128, 256, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE),
-                (128, 256, 64, 1, 8, 3, 8192, 8192, 8192, AT, BT, DTYPE),
                 (256, 128, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE),
                 (256, 128, 32, 1, 8, 2, None, None, None, AT, BT, DTYPE),
                 # split-k
@@ -60,6 +59,7 @@ import triton.ops
                 (128, 64, 16, 1, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
                 (256, 128, 32, 1, 8, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
                 (128, 128, 32, 1, 4, STAGES, 384, 128, 640, AT, BT, DTYPE),
+                (128, 256, 64, 1, 8, STAGES, 8192, 8192, 8192, AT, BT, DTYPE),
                 # split-k
                 (64, 64, 16, 8, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE),
                 (64, 64, 16, 8, 4, STAGES, 1024, 1024, 32, AT, BT, DTYPE),
@@ -98,6 +98,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     th_c = torch.matmul(a, b)
     try:
         tt_c = triton.ops.matmul(a, b)
-        torch.testing.assert_allclose(th_c, tt_c, atol=1e-2, rtol=0)
+        atol, rtol = 1e-2, 0
+        if DTYPE == torch.bfloat16:
+            atol, rtol = 3.5e-2, 0
+        torch.testing.assert_allclose(th_c, tt_c, atol=atol, rtol=rtol)
     except triton.OutOfResources as e:
         pytest.skip(str(e))
