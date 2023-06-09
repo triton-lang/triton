@@ -67,8 +67,17 @@ jobs:
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
       - name: Check pre-commit
-        if: ${{ matrix.runner != 'macos-10.15' }}
+        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] != 'arc770') }}
         run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files
+
+      - name: Check pre-commit arc770
+        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] == 'arc770') }}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
           python3 -m pip install --upgrade pre-commit
           python3 -m pre_commit run --all-files
 
