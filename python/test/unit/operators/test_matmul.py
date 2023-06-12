@@ -95,7 +95,6 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     M = BLOCK_M if M is None else M
     N = BLOCK_N if N is None else N
     K = BLOCK_K * SPLIT_K if K is None else K
-    # allocate/transpose inputs
 
     def get_input(n, m, t, dtype):
         if t:
@@ -104,6 +103,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dtype]
         return .1 * torch.randn((n, m), device="cuda", dtype=dtype)
 
+    # allocate/transpose inputs
     a = get_input(M, K, AT, ADTYPE)
     b = get_input(K, N, BT, BDTYPE)
     # run test
