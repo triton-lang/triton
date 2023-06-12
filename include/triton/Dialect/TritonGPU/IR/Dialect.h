@@ -73,7 +73,7 @@ getShapePerCTA(Attribute layout,
 
 SmallVector<unsigned> getOrder(Attribute layout);
 
-bool isDistributedLayout(Attribute layout);
+bool isaDistributedLayout(Attribute layout);
 
 bool isSharedEncoding(Value value);
 

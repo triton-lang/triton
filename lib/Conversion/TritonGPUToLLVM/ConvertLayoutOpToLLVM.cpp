@@ -9,7 +9,7 @@ using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::isDistributedLayout;
+using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Forward declarations
@@ -62,21 +62,23 @@ public:
     auto dstTy = dst.getType().cast<RankedTensorType>();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isDistributedLayout(srcLayout) && dstLayout.isa<SharedEncodingAttr>()) {
+    if (isaDistributedLayout(srcLayout) &&
+        dstLayout.isa<SharedEncodingAttr>()) {
       return lowerDistributedToShared(op, adaptor, rewriter);
     }
     if (srcLayout.isa<SharedEncodingAttr>() &&
         dstLayout.isa<DotOperandEncodingAttr>()) {
       return lowerSharedToDotOperand(op, adaptor, rewriter);
     }
-    if (isDistributedLayout(srcLayout) && isDistributedLayout(dstLayout)) {
+    if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
     if (srcLayout.isa<MmaEncodingAttr>() &&
         dstLayout.isa<DotOperandEncodingAttr>()) {
       return lowerMmaToDotOperand(op, adaptor, rewriter);
     }
-    if (srcLayout.isa<SharedEncodingAttr>() && isDistributedLayout(dstLayout)) {
+    if (srcLayout.isa<SharedEncodingAttr>() &&
+        isaDistributedLayout(dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, rewriter);
     }
     // TODO: to be implemented

@@ -350,7 +350,7 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   }
 }
 
-bool isDistributedLayout(Attribute layout) {
+bool isaDistributedLayout(Attribute layout) {
   return layout.isa<BlockedEncodingAttr>() || layout.isa<MmaEncodingAttr>() ||
          layout.isa<SliceEncodingAttr>();
 }
