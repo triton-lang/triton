@@ -188,9 +188,9 @@ SetVector<Operation *>
 multiRootTopologicalSort(const SetVector<Operation *> &toSort);
 
 /// This uses the toplogicalSort above
-SetVector<Operation *>
-multiRootGetSlice(Operation *op, TransitiveFilter backwardFilter = nullptr,
-                  TransitiveFilter forwardFilter = nullptr);
+SetVector<Operation *> multiRootGetSlice(
+    Operation *op, SliceOptions::TransitiveFilter backwardFilter = nullptr,
+    SliceOptions::TransitiveFilter forwardFilter = nullptr);
 
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
