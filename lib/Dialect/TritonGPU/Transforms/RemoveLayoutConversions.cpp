@@ -354,7 +354,7 @@ public:
       return failure();
 
     SetVector<Operation *> cvtSlices;
-    auto filter = [&](Operation *op) {
+    mlir::TransitiveFilter filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
              !isa<triton::gpu::ConvertLayoutOp, scf::YieldOp>(op) &&
              !(isa<triton::ReduceOp>(op) &&

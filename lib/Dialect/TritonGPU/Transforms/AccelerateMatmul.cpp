@@ -45,7 +45,7 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
                                         const ArrayRef<int64_t> shape,
                                         int numWarps) {
-  auto filter = [&dotOp](Operation *op) {
+  mlir::TransitiveFilter filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
   auto slices = mlir::getSlice(dotOp, {filter});
@@ -137,7 +137,9 @@ public:
     triton::gpu::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
       SetVector<Operation *> aBwdSlices, bBwdSlices;
-      auto isCvt = [](Operation *op) { return isa<ConvertLayoutOp>(op); };
+      mlir::TransitiveFilter isCvt = [](Operation *op) {
+        return isa<ConvertLayoutOp>(op);
+      };
       getBackwardSlice(a, &aBwdSlices, {isCvt});
       getBackwardSlice(b, &bBwdSlices, {isCvt});
       // get the source of the first conversion found in slices
