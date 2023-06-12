@@ -172,7 +172,7 @@ LogicalResult Prefetcher::initialize() {
         break;
       rets.push_back(op->getOperand(0));
       if (auto cvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op))
-        if (isSharedEncoding(cvt.getOperand())) {
+        if (triton::gpu::isSharedEncoding(cvt.getOperand())) {
           foundConvertFromShared = true;
           break;
         }

@@ -163,13 +163,6 @@ Type getElementType(Value value) {
   return type;
 }
 
-std::string getValueOperandName(Value value, AsmState &state) {
-  std::string opName;
-  llvm::raw_string_ostream ss(opName);
-  value.printAsOperand(ss, state);
-  return opName;
-}
-
 bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   // dot_op<opIdx=0, parent=#mma> = #mma
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>

@@ -73,14 +73,12 @@ getShapePerCTA(Attribute layout,
 
 SmallVector<unsigned> getOrder(Attribute layout);
 
-bool isaDistributedLayout(Attribute layout);
+bool isDistributedLayout(Attribute layout);
 
-bool expensiveCat(triton::CatOp cat, Attribute &targetEncoding);
+bool isSharedEncoding(Value value);
 
 } // namespace gpu
 } // namespace triton
-
-bool isSharedEncoding(Value value);
 
 } // namespace mlir
 

@@ -151,7 +151,7 @@ private:
     }
 
     for (Value result : op->getResults()) {
-      if (isSharedEncoding(result)) {
+      if (triton::gpu::isSharedEncoding(result)) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto tensorType = result.getType().dyn_cast<RankedTensorType>();

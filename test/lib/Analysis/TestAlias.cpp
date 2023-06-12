@@ -13,6 +13,13 @@ struct TestAliasPass
 
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAliasPass);
 
+  static std::string getValueOperandName(Value value, AsmState &state) {
+    std::string opName;
+    llvm::raw_string_ostream ss(opName);
+    value.printAsOperand(ss, state);
+    return opName;
+  }
+
   static void print(StringRef name, SmallVector<std::string, 4> &vals,
                     raw_ostream &os) {
     if (vals.empty())

@@ -10,7 +10,7 @@ using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::isaDistributedLayout;
+using ::mlir::triton::gpu::isDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 SmallVector<Value>

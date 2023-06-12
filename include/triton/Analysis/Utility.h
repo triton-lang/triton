@@ -69,9 +69,11 @@ bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
-Type getElementType(Value value);
+bool isSingleValue(Value value);
 
-std::string getValueOperandName(Value value, AsmState &state);
+bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
+
+Type getElementType(Value value);
 
 template <typename T_OUT, typename T_IN>
 inline SmallVector<T_OUT> convertType(ArrayRef<T_IN> in) {
@@ -119,10 +121,6 @@ template <typename T> T nextPowOf2(T n) {
   }
   return n + 1;
 }
-
-bool isSingleValue(Value value);
-
-bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
 
 /// Multi-root DAG topological sort.
 /// Performs a topological sort of the Operation in the `toSort` SetVector.
