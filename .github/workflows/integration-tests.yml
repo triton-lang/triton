@@ -208,6 +208,7 @@ jobs:
             echo "ADD_COMMENT=true" >> $GITHUB_ENV
           else
             echo "The Python script passed!"
+            echo "ADD_COMMENT=true" >> $GITHUB_ENV
           fi
       - name: Add comment on PR
         if: ${{ env.ADD_COMMENT == 'true' }}
