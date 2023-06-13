@@ -38,7 +38,7 @@ void SharedMemoryAliasAnalysis::visitOperation(
       // insert_slice %src into %dst[%offsets]
       aliasInfo = AliasInfo(operands[1]->getValue());
       pessimistic = false;
-    } else if (isSharedEncoding(result)) {
+    } else if (triton::gpu::isSharedEncoding(result)) {
       aliasInfo.insert(result);
       pessimistic = false;
     }
