@@ -86,8 +86,8 @@ def do_files_match(path1: str, path2: str) -> bool:
 
 
 def compare_matching_files(name: str, extension: str, name_to_hashes1: Dict[str, List[str]], name_to_hashes2: Dict[str, List[str]], args) -> Tuple[str, str]:
-    hashes1 = name_to_hashes1[name]
-    hashes2 = name_to_hashes2[name]
+    hashes1 = name_to_hashes1.get(name, [])
+    hashes2 = name_to_hashes2.get(name, [])
     numComparisons = 0
     for hash1 in hashes1:
         path1 = os.path.join(args.path1, hash1)

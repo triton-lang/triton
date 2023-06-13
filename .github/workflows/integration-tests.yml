@@ -203,12 +203,11 @@ jobs:
           ls
           python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml
           echo "RESULT=$?" >> $GITHUB_ENV
-          if [ $RESULT_CODE -ne 0 ]; then
+          if [ $RESULT -ne 0 ]; then
             echo "The Python script failed!"
             echo "ADD_COMMENT=true" >> $GITHUB_ENV
           else
             echo "The Python script passed!"
-            echo "ADD_COMMENT=true" >> $GITHUB_ENV
           fi
       - name: Add comment on PR
         if: ${{ env.ADD_COMMENT == 'true' }}
