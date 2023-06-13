@@ -4,7 +4,25 @@ import pytest
 import torch
 
 import triton
+import triton.language as tl
 import triton.ops
+
+
+def f8_to_f16(x):
+
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        y = x.to(tl.float8e5)
+        tl.store(Y + offs, y, mask=mask)
+
+    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
+    kernel[grid](ret, triton.reinterpret(x, tl.float8e5), ret.numel(), BLOCK_SIZE=1024)
+    return ret
 
 
 @pytest.mark.parametrize(
@@ -67,11 +85,14 @@ import triton.ops
         # mixed-precision
         *[
             [
+                (16, 16, 16, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
+                (128, 32, 32, 1, 2, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
+                (128, 256, 16, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (32, 64, 16, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
-            ] for (ADTYPE, BDTYPE) in [("float16", "float32"), ("float32", "float16"),
-                                       ("bfloat16", "float32"), ("float32", "bfloat16")
-                                       ] for AT in [False, True] for BT in [False, True]
-        ],
+                (128, 128, 32, 8, 4, 2, 1024, 1024, 1024, AT, BT, ADTYPE, BDTYPE),
+            ] for ADTYPE, BDTYPE in [("float8", "float16"), ("float16", "float32"), ("float32", "float16"),
+                                       ("bfloat16", "float32"), ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True]
+        ]
     ),
 )
 def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE):
@@ -99,7 +120,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     def get_input(n, m, t, dtype):
         if t:
             return get_input(m, n, False, dtype).t()
-
+        if dtype == "float8":
+            x = torch.randint(10, 50, (n, m), device="cuda", dtype=torch.int8)
+            return f8_to_f16(x)
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dtype]
         return .1 * torch.randn((n, m), device="cuda", dtype=dtype)
 

@@ -9,6 +9,8 @@
 // CHECK: [[$col_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
 // CHECK: [[$col_layout_novec:#.*]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 // CHECK-LABEL: cst
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
 tt.func @cst() -> tensor<1024xi32, #layout1> {
   %cst = arith.constant dense<0> : tensor<1024xi32, #layout0>
   %1 = triton_gpu.convert_layout %cst : (tensor<1024xi32, #layout0>) -> tensor<1024xi32, #layout1>
@@ -67,8 +69,6 @@ tt.func @remat_single_value(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   tt.return
 }
 
-
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %0 = tt.splat %arg : (!tt.ptr<i32>) -> tensor<16x!tt.ptr<i32>, #layout1>
   %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #layout1>
@@ -79,7 +79,6 @@ tt.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %5 = triton_gpu.convert_layout %2 : (tensor<16x!tt.ptr<i32>, #layout1>) -> tensor<16x!tt.ptr<i32>, #layout0>
   tt.store %5, %4 : tensor<16xi32, #layout0>
   tt.return
-}
 }
 
 // CHECK-LABEL: if
@@ -164,6 +163,8 @@ tt.func @if_else_both_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility =
   tt.return
 }
 
+}
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #slice1dim1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
@@ -173,6 +174,7 @@ tt.func @if_else_both_convert(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility =
 #blocked4 = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
 
 // CHECK-LABEL: transpose
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: triton_gpu.convert_layout
   // CHECK: [[loaded_val:%.*]] = tt.load {{.*}}, {{%cst.*}}, {{%cst.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x64xf32, [[$row_layout]]>
@@ -212,8 +214,10 @@ tt.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 
   tt.store %24, %25, %26 : tensor<64x64xf32, #blocked4>
   tt.return
 }
+}
 
 // CHECK-LABEL: loop
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {
   // CHECK-NOT: triton_gpu.convert_layout
   // CHECK: [[loop_ret:%.*]]:2 = scf.for {{.*}} -> (tensor<64x64xf32, [[$row_layout]]>, tensor<64x64x!tt.ptr<f32>, [[$row_layout]]>)
@@ -266,8 +270,10 @@ tt.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, 
   tt.store %20, %21, %22 : tensor<64x64xf32, #blocked1>
   tt.return
 }
+}
 
 // CHECK-LABEL: loop_if
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func @loop_if(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {
   %cst = arith.constant dense<true> : tensor<64x64xi1, #blocked1>
   %cst_0 = arith.constant dense<64> : tensor<64x64xi32, #blocked1>
@@ -318,8 +324,10 @@ tt.func @loop_if(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i3
   tt.store %20, %21, %22 : tensor<64x64xf32, #blocked1>
   tt.return
 }
+}
 
 // CHECK-LABEL: vecadd
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func @vecadd(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32) {
   // CHECK-NOT: triton_gpu.convert_layout
   %c256_i32 = arith.constant 256 : i32
@@ -349,9 +357,11 @@ tt.func @vecadd(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr
   tt.store %21, %22 : tensor<256xf32, #layout1>
   tt.return
 }
+}
 
 // Select has args with different element types
 // CHECK-LABEL: select
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func @select(%arg0: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: triton_gpu.convert_layout
   %cst = arith.constant dense<30000> : tensor<1x1xi32, #blocked2>
@@ -400,9 +410,11 @@ tt.func @select(%arg0: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr
   }
   tt.return
 }
+}
 
 // Make sure the following IR doesn't hang the compiler.
 // CHECK-LABEL: long_func
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func public @long_func(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg6: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg7: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg8: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg9: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg10: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg11: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg12: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg13: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg14: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg15: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}) {
   %cst = arith.constant dense<1.000000e+00> : tensor<1024xf32, #blocked0>
   %cst_0 = arith.constant dense<5.000000e-04> : tensor<1024xf32, #blocked0>
@@ -796,10 +808,12 @@ tt.func public @long_func(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg
   tt.store %365, %366 : tensor<1024xf64, #blocked0>
   tt.return
 }
+}
 
 // A mnist model from torch inductor.
 // Check if topological sort is working correct and there's no unnecessary convert
 // CHECK-LABEL: mnist
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func public @mnist(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: i32) {
   // CHECK-NOT: triton_gpu.convert_layout
   %cst = arith.constant dense<10> : tensor<16x1xi32, #blocked2>
@@ -884,17 +898,19 @@ tt.func public @mnist(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !
   tt.store %61, %62, %63 : tensor<16x16xf32, #blocked4>
   tt.return
 }
+}
 
 // -----
 
+// cmpf and cmpi have different operands and result types
+// CHECK-LABEL: cmp
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 4], order = [0, 1]}>
 #blocked3 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked4 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked5 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-// cmpf and cmpi have different operands and result types
-// CHECK-LABEL: cmp
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func public @cmp(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) {
   %c64 = arith.constant 64 : index
   %c2048 = arith.constant 2048 : index
@@ -1034,11 +1050,13 @@ tt.func public @cmp(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt
   }
   tt.return
 }
+}
 
 // -----
 
 // Just make sure it doesn't crash on non-tensor types.
 // CHECK-LABEL: if_no_tensor
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func public @if_no_tensor(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i64> {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: triton_gpu.convert_layout
   %c-1_i64 = arith.constant -1 : i64
@@ -1061,6 +1079,7 @@ tt.func public @if_no_tensor(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
   %9 = tt.addptr %arg1, %0 : !tt.ptr<f32>, i32
   tt.store %9, %8 {cache = 1 : i32, evict = 1 : i32} : f32
   tt.return
+}
 }
 
 // -----

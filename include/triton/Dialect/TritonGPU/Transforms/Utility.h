@@ -1,8 +1,12 @@
-#ifndef TRITON_LIB_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
-#define TRITON_LIB_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
+#ifndef TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
+#define TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
+
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "llvm/ADT/MapVector.h"
+
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -12,9 +16,11 @@ LogicalResult fixupLoops(ModuleOp mod);
 LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
                              Attribute &ret);
 
-bool expensiveLoadOrStore(Operation *op, Attribute &targetEncoding);
+bool isExpensiveLoadOrStore(Operation *op, Attribute &targetEncoding);
 
-bool expensiveToRemat(Operation *op, Attribute &targetEncoding);
+bool isExpensiveCat(triton::CatOp cat, Attribute &targetEncoding);
+
+bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding);
 
 // skipInit is True when we only consider the operands of the initOp but
 // not the initOp itself.
@@ -36,4 +42,4 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
 
 } // namespace mlir
 
-#endif // TRITON_LIB_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
+#endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
