@@ -12,14 +12,18 @@ from pathlib import Path
 from typing import Any, Tuple
 
 # import triton
-from .._C.libtriton.triton import ir, add_external_libs, translate_triton_gpu_to_llvmir, translate_llvmir_to_ptx, compile_ptx_to_cubin, translate_llvmir_to_hsaco, get_shared_memory_size
+from .._C.libtriton.triton import (add_external_libs, compile_ptx_to_cubin,
+                                   get_shared_memory_size, ir,
+                                   translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
+                                   translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend
-from ..runtime.driver import driver
-from ..runtime.jit import jit, JITFunction, get_current_device, get_device_capability, version_key, get_cuda_stream
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
+from ..runtime.driver import driver
+from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device,
+                           get_device_capability, version_key)
 from ..tools.disasm import extract
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub

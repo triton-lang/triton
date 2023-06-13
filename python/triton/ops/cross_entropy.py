@@ -2,8 +2,9 @@ import torch
 
 # import triton
 # import language as tl
-from .. import jit, heuristics, next_power_of_2
+from .. import heuristics, jit
 from .. import language as tl
+from .. import next_power_of_2
 
 
 def num_warps(N):

@@ -5,11 +5,10 @@ from enum import Enum
 from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
+from .._C.libtriton.triton import ir
 # import triton
 from ..runtime.jit import jit
-
 from . import semantic
-from .._C.libtriton.triton import ir
 
 T = TypeVar('T')
 

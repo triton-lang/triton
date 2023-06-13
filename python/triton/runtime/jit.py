@@ -20,6 +20,7 @@ from ..common.backend import get_backend
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
 
+
 def get_cuda_stream(idx=None):
     if idx is None:
         idx = get_current_device()

@@ -3,7 +3,10 @@ import sys
 
 from .._C.libtriton.triton import ir
 # import triton.compiler.compiler as tc
-from ..compiler.compile import optimize_ttir, ttir_to_ttgir, optimize_ttgir, ttgir_to_llir, llir_to_amdgcn_and_hsaco, get_amdgpu_arch_fulldetails, llir_to_ptx
+from ..compiler.compile import (get_amdgpu_arch_fulldetails, llir_to_amdgcn_and_hsaco,
+                                llir_to_ptx, optimize_ttgir, optimize_ttir,
+                                ttgir_to_llir, ttir_to_ttgir)
+
 if __name__ == '__main__':
 
     # valid source and target formats

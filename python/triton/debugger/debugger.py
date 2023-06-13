@@ -2,16 +2,17 @@ import itertools
 import random
 from typing import Tuple
 
-# import triton
-
+from .. import language as tl
 # import .language.core as lcore
 from ..language import core as lcore
-from .. import language as tl
+from . import torch_wrapper
 from .core import ExecutionContext
 from .memory_map import MemoryMap
 from .tl_lang import (TritonLangProxy, WrappedTensor, _primitive_to_tensor,
                       debugger_constexpr)
-from . import torch_wrapper
+
+# import triton
+
 
 torch = torch_wrapper.torch
 tl_method_backup = {}

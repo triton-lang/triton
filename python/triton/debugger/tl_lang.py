@@ -2,9 +2,9 @@ from __future__ import annotations
 
 # import triton
 from ..language import core as lcore
+from . import torch_wrapper
 from .core import ExecutionContext
 from .memory_map import MemoryMap
-from . import torch_wrapper
 
 torch = torch_wrapper.torch
 

@@ -2,8 +2,10 @@ import torch
 
 # import triton
 # import language as tl
-from ... import jit, next_power_of_2
+from ... import jit
 from ... import language as tl
+from ... import next_power_of_2
+
 
 def num_warps(n):
     if n <= 128:
