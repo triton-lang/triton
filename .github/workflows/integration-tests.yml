@@ -205,8 +205,7 @@ jobs:
           python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml
           RESULT_CODE=$?
           set -e
-          echo "RESULT=$RESULT_CODE" >> $GITHUB_ENV
-          if [ $RESULT -ne 0 ]; then
+          if [ $RESULT_CODE -ne 0 ]; then
             echo "The Python script failed!"
             echo "ADD_COMMENT=true" >> $GITHUB_ENV
           else
