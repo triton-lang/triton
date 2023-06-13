@@ -202,3 +202,25 @@ jobs:
           pwd
           ls
           python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml
+          echo "RESULT=$?" >> $GITHUB_ENV
+          if [ $RESULT_CODE -ne 0 ]; then
+            echo "The Python script failed!"
+            echo "ADD_COMMENT=true" >> $GITHUB_ENV
+          else
+            echo "The Python script passed!"
+          fi
+      - name: Add comment on PR
+        if: ${{ env.ADD_COMMENT == 'true' }}
+        uses: actions/github-script@v5
+        with:
+          script: |
+            const prComment = `
+              :warning: **The Python script failed in the latest build!**
+              Please review the logs and fix the issues.
+            `;
+            github.rest.issues.createComment({
+              issue_number: context.payload.pull_request.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: prComment
+            });
