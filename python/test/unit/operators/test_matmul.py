@@ -91,7 +91,7 @@ def f8_to_f16(x):
                 (32, 64, 16, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
                 (128, 128, 32, 8, 4, 2, 1024, 1024, 1024, AT, BT, ADTYPE, BDTYPE),
             ] for ADTYPE, BDTYPE in [("float8", "float16"), ("float16", "float32"), ("float32", "float16"),
-                                       ("bfloat16", "float32"), ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True]
+                                     ("bfloat16", "float32"), ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True]
         ]
     ),
 )
