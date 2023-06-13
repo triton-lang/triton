@@ -11,8 +11,6 @@ from collections import defaultdict, namedtuple
 from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast,
                     overload)
 
-import torch
-
 import triton
 from triton.common.backend import get_backend
 
