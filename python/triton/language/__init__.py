@@ -77,7 +77,7 @@ from .core import (
     static_range,
     tensor,
     trans,
-    triton,
+    # triton,
     uint16,
     uint32,
     uint64,

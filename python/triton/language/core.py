@@ -5,9 +5,11 @@ from enum import Enum
 from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
-import triton
+# import triton
+from ..runtime.jit import jit
+
 from . import semantic
-from triton._C.libtriton.triton import ir
+from .._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
@@ -1344,7 +1346,7 @@ def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None
     return rvalue, rindices
 
 
-@triton.jit
+@jit
 def minimum(x, y):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
@@ -1357,7 +1359,7 @@ def minimum(x, y):
     return where(x < y, x, y)
 
 
-@triton.jit
+@jit
 def maximum(x, y):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
@@ -1372,12 +1374,12 @@ def maximum(x, y):
 # max and argmax
 
 
-@triton.jit
+@jit
 def _max_combine(a, b):
     return maximum(a, b)
 
 
-@triton.jit
+@jit
 def _argmax_combine(value1, index1, value2, index2):
     gt = value1 > value2
     value_ret = where(gt, value1, value2)
@@ -1385,7 +1387,7 @@ def _argmax_combine(value1, index1, value2, index2):
     return value_ret, index_ret
 
 
-@triton.jit
+@jit
 @_add_reduction_docstr("maximum")
 def max(input, axis=None, return_indices=False):
     input = _promote_reduction_input(input)
@@ -1395,7 +1397,7 @@ def max(input, axis=None, return_indices=False):
         return reduce(input, axis, _max_combine)
 
 
-@triton.jit
+@jit
 @_add_reduction_docstr("maximum index")
 def argmax(input, axis):
     (_, ret) = max(input, axis, return_indices=True)
@@ -1404,13 +1406,13 @@ def argmax(input, axis):
 # min and argmin
 
 
-@triton.jit
+@jit
 def _min_combine(a, b):
     # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
     return minimum(a, b)
 
 
-@triton.jit
+@jit
 def _argmin_combine(value1, index1, value2, index2):
     lt = value1 < value2
     value_ret = where(lt, value1, value2)
@@ -1418,7 +1420,7 @@ def _argmin_combine(value1, index1, value2, index2):
     return value_ret, index_ret
 
 
-@triton.jit
+@jit
 @_add_reduction_docstr("minimum")
 def min(input, axis=None, return_indices=False):
     input = _promote_reduction_input(input)
@@ -1428,28 +1430,28 @@ def min(input, axis=None, return_indices=False):
         return reduce(input, axis, _min_combine)
 
 
-@triton.jit
+@jit
 @_add_reduction_docstr("minimum index")
 def argmin(input, axis):
     _, ret = min(input, axis, return_indices=True)
     return ret
 
 
-@triton.jit
+@jit
 def _sum_combine(a, b):
     return a + b
 
 # sum
 
 
-@triton.jit
+@jit
 @_add_reduction_docstr("sum")
 def sum(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _sum_combine)
 
 
-@triton.jit
+@jit
 def _xor_combine(a, b):
     return a ^ b
 

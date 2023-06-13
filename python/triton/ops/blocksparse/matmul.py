@@ -1,8 +1,10 @@
 import torch
 
-import triton
-import triton.language as tl
+# import triton
+# import language as tl
 
+from ... import jit, next_power_of_2, heuristics, cdiv
+from ... import language as tl
 # ********************************************************
 # --------------------------------------------------------
 # Sparse = Dense x Dense (SDD)
@@ -13,10 +15,10 @@ import triton.language as tl
 # ********************************************************
 
 
-@triton.heuristics({
+@heuristics({
     'EVEN_K': lambda nargs: nargs['K'] % nargs['TILE_K'] == 0,
 })
-@triton.jit
+@jit
 def _sdd_kernel(
     A, B, C,
     stride_za, stride_ha, stride_ma, stride_ak,
@@ -127,7 +129,7 @@ def sdd_lut(layout, block, device):
 # -----------------------------
 
 
-@triton.jit
+@jit
 def _dsd_kernel(
     A, B, C,
     stride_az, stride_ha, stride_am, stride_ak,
@@ -227,7 +229,7 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
     # meta-parameter heuristics
     TILE_N = 128
     # compute output
-    grid = lambda meta: [triton.cdiv(BS3, meta['TILE_N']), width, BS0]
+    grid = lambda meta: [cdiv(BS3, meta['TILE_N']), width, BS0]
     _dsd_kernel[grid](
         a, b, c,
         a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),

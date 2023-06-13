@@ -11,7 +11,7 @@ from ..language import constexpr, tensor
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure,
                      UnsupportedLanguageConstruct)
-from triton._C.libtriton.triton import ir
+from .._C.libtriton.triton import ir
 
 
 def mangle_ty(ty):
