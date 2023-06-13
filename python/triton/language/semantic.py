@@ -128,7 +128,7 @@ def add(input: tl.tensor,
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
     
-    if input.is_ptr() and other.is_ptr():
+    if input_scalar_ty.is_ptr() and other_scalar_ty.is_ptr():
         raise ValueError(f"Cannot add pointers together!")
 
     # offset + ptr
