@@ -74,9 +74,8 @@ public:
           dstType.getShape(), dstType.getElementType(), dstParentMma);
       auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
           convert.getLoc(), tmpType, convert.getOperand());
-      auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          convert.getLoc(), dstType, tmp);
-      rewriter.replaceOp(op, {newConvert});
+      rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(op, dstType,
+                                                                tmp);
       return mlir::success();
     }
     return mlir::failure();
