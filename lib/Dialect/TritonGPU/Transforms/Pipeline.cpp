@@ -717,7 +717,6 @@ void LoopPipeliner::emitEpilogue() {
   OpBuilder builder(forOp);
   OpBuilder::InsertionGuard g(builder);
   builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
 }
 
 SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
