@@ -3,7 +3,7 @@ import importlib
 import importlib.util
 from typing import Dict
 
-from triton.runtime.driver import DriverBase
+from ..runtime.driver import DriverBase
 
 
 class BaseBackend:
