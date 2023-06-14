@@ -353,7 +353,7 @@ public:
              !(isa<triton::ReduceOp>(op) &&
                !op->getResult(0).getType().isa<RankedTensorType>());
     };
-    mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
+    mlir::getForwardSlice(cvt.getResult(), &cvtSlices, {filter});
     if (cvtSlices.empty())
       return failure();
 
