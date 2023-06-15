@@ -60,9 +60,9 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
 
   auto argLayout = getSrcLayout();
   auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
-  if (argLayoutMma && argLayoutMma.getVersionMajor() == 2 &&
-      triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
-    return {{1, 1}, {1, 1}};
+  // if (argLayoutMma && argLayoutMma.getVersionMajor() == 2 &&
+  //     triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
+  //   return {{1, 1}, {1, 1}};
 
   /// shared memory block0
   smemShapes[0] = convertType<unsigned>(getSrcShape());
@@ -161,13 +161,6 @@ Type getElementType(Value value) {
   if (auto tensorType = type.dyn_cast<RankedTensorType>())
     return tensorType.getElementType();
   return type;
-}
-
-std::string getValueOperandName(Value value, AsmState &state) {
-  std::string opName;
-  llvm::raw_string_ostream ss(opName);
-  value.printAsOperand(ss, state);
-  return opName;
 }
 
 bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {

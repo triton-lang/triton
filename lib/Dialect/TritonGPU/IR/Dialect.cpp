@@ -7,6 +7,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -354,22 +355,6 @@ bool isaDistributedLayout(Attribute layout) {
          layout.isa<SliceEncodingAttr>();
 }
 
-bool expensiveCat(triton::CatOp cat, Attribute &targetEncoding) {
-  // If the new elements per thread is less than the old one, we will need to do
-  // convert encoding that goes through shared memory anyway. So we consider it
-  // as expensive.
-  auto tensorTy = cat.getResult().getType().cast<RankedTensorType>();
-  auto totalElemsPerThread = triton::gpu::getTotalElemsPerThread(tensorTy);
-  auto shape = tensorTy.getShape();
-  auto elemTy = tensorTy.getElementType();
-  auto newTotalElemsPerThread =
-      triton::gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
-  return newTotalElemsPerThread < totalElemsPerThread;
-}
-
-} // namespace gpu
-} // namespace triton
-
 bool isSharedEncoding(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
@@ -378,6 +363,9 @@ bool isSharedEncoding(Value value) {
   }
   return false;
 }
+
+} // namespace gpu
+} // namespace triton
 
 } // namespace mlir
 
@@ -1142,7 +1130,7 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
   if (auto cat = dyn_cast<triton::CatOp>(arg)) {
     auto encoding =
         op->getResult(0).getType().cast<RankedTensorType>().getEncoding();
-    if (triton::gpu::expensiveCat(cat, encoding))
+    if (isExpensiveCat(cat, encoding))
       return mlir::failure();
     rewriter.replaceOpWithNewOp<triton::CatOp>(op, op->getResult(0).getType(),
                                                cat.getOperands());
@@ -1151,7 +1139,7 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
   // cvt(alloc_tensor(x), type2) -> alloc_tensor(x, type2)
   auto alloc_tensor = dyn_cast<triton::gpu::AllocTensorOp>(arg);
   if (alloc_tensor) {
-    if (!isSharedEncoding(op->getResult(0))) {
+    if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
       return mlir::failure();
     }
     rewriter.replaceOpWithNewOp<triton::gpu::AllocTensorOp>(
@@ -1161,7 +1149,7 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
   // cvt(insert_slice(x), type2) -> insert_slice(cvt(x, type2))
   auto insert_slice = dyn_cast<triton::gpu::InsertSliceAsyncOp>(arg);
   if (insert_slice) {
-    if (!isSharedEncoding(op->getResult(0))) {
+    if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
       return mlir::failure();
     }
     auto newType = op->getResult(0).getType().cast<RankedTensorType>();
@@ -1183,7 +1171,7 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
   // cvt(extract_slice(x), type2) -> extract_slice(cvt(x, type2))
   auto extract_slice = dyn_cast<triton::gpu::ExtractSliceOp>(arg);
   if (extract_slice) {
-    if (!isSharedEncoding(op->getResult(0))) {
+    if (!triton::gpu::isSharedEncoding(op->getResult(0))) {
       return mlir::failure();
     }
     auto origType =
@@ -1213,12 +1201,13 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
   // cvt(cvt(x, type1), type2) -> cvt(x, type2)
   if (llvm::isa<triton::gpu::ConvertLayoutOp>(arg)) {
     if (arg->getOperand(0).getDefiningOp() &&
-        !isSharedEncoding(arg->getOperand(0)) &&
-        isSharedEncoding(op.getOperand()) &&
-        !isSharedEncoding(op.getResult())) {
+        !triton::gpu::isSharedEncoding(arg->getOperand(0)) &&
+        triton::gpu::isSharedEncoding(op.getOperand()) &&
+        !triton::gpu::isSharedEncoding(op.getResult())) {
       return mlir::failure();
     }
-    if (isSharedEncoding(op.getOperand()) && isSharedEncoding(op.getResult())) {
+    if (triton::gpu::isSharedEncoding(op.getOperand()) &&
+        triton::gpu::isSharedEncoding(op.getResult())) {
       return mlir::failure();
     }
     auto srcType = op.getOperand().getType().cast<RankedTensorType>();
