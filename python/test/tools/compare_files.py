@@ -7,11 +7,18 @@ import yaml
 
 
 def listFilesWithExtension(path: str, extension: str) -> List[str]:
+    """
+        Returns a list of files in the given path with the given extension
+        The files are returned with their full path
+    """
     files = glob.glob(os.path.join(path, f'*.{extension}'))
     return files
 
 
 def getFileWithExtension(path: str, ext: str) -> Optional[str]:
+    """
+        Returns a single file in the given path with the given extension
+    """
     # get all files in directory with extension
     files = listFilesWithExtension(path, ext)
     if len(files) == 0:
@@ -22,13 +29,19 @@ def getFileWithExtension(path: str, ext: str) -> Optional[str]:
     return files[0]
 
 
-def loadYamlFile(file_path: str) -> List[Dict[str, str]]:
-    with open(file_path, 'r') as file:
+def loadYamlFile(filePath: str) -> List[Dict[str, str]]:
+    """
+        Loads a yaml file and returns its content as a list of dictionaries
+    """
+    with open(filePath, 'r') as file:
         content = yaml.safe_load(file)
     return content
 
 
 def compareFiles(file1: str, file2: str) -> bool:
+    """
+        Compares two files and returns True if they are the same, False otherwise
+    """
     with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
         content1 = f1.read()
         content2 = f2.read()
@@ -36,24 +49,12 @@ def compareFiles(file1: str, file2: str) -> bool:
     return content1 == content2
 
 
-def getNameToHashesDict(path: str) -> Dict[str, List[str]]:
-    name_to_hashes = {}
-    for hash in os.listdir(path):
-        full_path = os.path.join(path, hash)
-        assert os.path.isdir(full_path), f"Path {full_path} is not a directory!"
-        json_file = getFileWithExtension(full_path, "json")
-        if json_file is None:
-            continue
-        # load json file
-        with open(json_file, 'r') as file:
-            content = yaml.safe_load(file)
-            # get name
-            name = content["name"]
-            name_to_hashes.setdefault(name, []).append(hash)
-    return name_to_hashes
-
-
 def getFileVec(path: str) -> List[Tuple[str, str]]:
+    """
+        Returns a list of tuples (extension, file) for the given path (note: the path includes the hash)
+        The returned list must have extensions (json, ttir, ttgir)
+        in this particular order, unless a file with a certain extension does not exist
+    """
     vec = []
     for ext in ["json", "ttir", "ttgir"]:
         file = getFileWithExtension(path, ext)
@@ -62,15 +63,41 @@ def getFileVec(path: str) -> List[Tuple[str, str]]:
     return vec
 
 
-def do_files_match(path1: str, path2: str) -> bool:
+def getNameToHashesDict(path: str) -> Dict[str, List[str]]:
+    """
+        Returns a dictionary that maps kernel names to a list of hashes that have the same kernel name
+        in the given path
+        Note: the hashes must have a json file and either a ttir or ttgir file, otherwise they are ignored
+    """
+    nameToHashes = {}
+    for hash in os.listdir(path):
+        fullPath = os.path.join(path, hash)
+        assert os.path.isdir(fullPath), f"Path {fullPath} is not a directory!"
+        fileVec = getFileVec(fullPath)
+        if len(fileVec) < 2 or fileVec[0][0] != "json":
+            continue
+        jsonFile = fileVec[0][1]
+        # load json file
+        with open(jsonFile, 'r') as file:
+            content = yaml.safe_load(file)
+            # get name
+            name = content["name"]
+            nameToHashes.setdefault(name, []).append(hash)
+    return nameToHashes
+
+
+def doFilesMatch(path1: str, path2: str) -> bool:
+    """
+        Returns True if the files in the given paths match, False otherwise
+        The files are considered to match if:
+        1. The number of files in both paths match
+        2. The json files match
+        3. Both paths have a ttir that match, if a ttir does not exist, the ttgir file must exist and match
+    """
     filesVec1 = getFileVec(path1)
     filesVec2 = getFileVec(path2)
-    # both hashes must at least have 1 json file and 1 ttir or ttgir file
-    # and the number of files must match
-    if len(filesVec1) <= 1 or len(filesVec2) <= 1 or len(filesVec1) != len(filesVec2):
-        return False
-    # if either path does not have a json file, return false
-    if filesVec1[0][0] != "json" or filesVec2[0][0] != "json":
+    # The number of files must match
+    if len(filesVec1) != len(filesVec2):
         return False
 
     for (ext1, file1), (ext2, file2) in zip(filesVec1, filesVec2):
@@ -85,9 +112,14 @@ def do_files_match(path1: str, path2: str) -> bool:
     return True
 
 
-def compare_matching_files(name: str, extension: str, name_to_hashes1: Dict[str, List[str]], name_to_hashes2: Dict[str, List[str]], args) -> Tuple[str, str]:
-    hashes1 = name_to_hashes1.get(name, [])
-    hashes2 = name_to_hashes2.get(name, [])
+def compareMatchingFiles(name: str, extension: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]], args) -> Tuple[str, str]:
+    """
+        Compare files with the given name/extension in all hashes in both paths
+        Return the first mismatching files as a tuple (file1, file2), otherwise, return an empty tuple
+        Note: asserts that at least one comparison was made
+    """
+    hashes1 = nameToHashes1.get(name, [])
+    hashes2 = nameToHashes2.get(name, [])
     numComparisons = 0
     for hash1 in hashes1:
         path1 = os.path.join(args.path1, hash1)
@@ -97,19 +129,23 @@ def compare_matching_files(name: str, extension: str, name_to_hashes1: Dict[str,
             # 1. json files that match
             # 2. ttir files that match (if they exist), otherwise ttgir files that match (if they exist)
             # if any of these contraints is not met, then we can skip this pair of hashes since they are not a match
-            if not do_files_match(path1, path2):
+            if not doFilesMatch(path1, path2):
                 continue
             numComparisons += 1
-            ext_file1 = listFilesWithExtension(path1, extension)[0]
-            ext_file2 = listFilesWithExtension(path2, extension)[0]
-            if not compareFiles(ext_file1, ext_file2):
-                return (ext_file1, ext_file2)
+            extFile1 = listFilesWithExtension(path1, extension)[0]
+            extFile2 = listFilesWithExtension(path2, extension)[0]
+            if not compareFiles(extFile1, extFile2):
+                return (extFile1, extFile2)
     assert numComparisons > 0, f"Did not find any matching files for {name}"
     print(f"Compared {numComparisons} matching files for {name}")
     return ()
 
 
 def main(args) -> None:
+    """
+        Iterates over all kernels in the given yaml file and compares them
+        in the given paths
+    """
     assert args.path1 != args.path2, "Cannot compare files in the same directory!"
     # Get kernel name to hashes dict, these hashes would have the same kernel name
     nameToHashes1 = getNameToHashesDict(args.path1)
@@ -126,7 +162,7 @@ def main(args) -> None:
         extension = d["extension"]  # extension of the file to be compared (e.g. ptx)
         # Compare all hashes on path 1 with all hashes on path 2
         # result is either the mismatching (file1, file2) with "extension" or empty tuple if no mismatch
-        result = compare_matching_files(name, extension, nameToHashes1, nameToHashes2, args)
+        result = compareMatchingFiles(name, extension, nameToHashes1, nameToHashes2, args)
         # If mismatch exists, add it to mismatches dict
         if len(result) > 0:
             mismatches[name] = result
