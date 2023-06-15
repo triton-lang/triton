@@ -3,7 +3,7 @@ from __future__ import annotations
 import triton
 from .core import ExecutionContext
 from .memory_map import MemoryMap
-from triton.debugger import torch_wrapper
+from triton.interpreter import torch_wrapper
 
 torch = torch_wrapper.torch
 

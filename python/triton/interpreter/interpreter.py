@@ -8,7 +8,7 @@ from .core import ExecutionContext
 from .memory_map import MemoryMap
 from .tl_lang import (TritonLangProxy, WrappedTensor, _primitive_to_tensor,
                       debugger_constexpr)
-from triton.debugger import torch_wrapper
+from triton.interpreter import torch_wrapper
 
 torch = torch_wrapper.torch
 tl_method_backup = {}
