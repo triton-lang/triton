@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from . import torch_wrapper
+from triton.interpreter import torch_wrapper
 
 torch = torch_wrapper.torch
 

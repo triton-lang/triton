@@ -265,7 +265,7 @@ setup(
         "triton/_C",
         "triton/common",
         "triton/compiler",
-        "triton/debugger",
+        "triton/interpreter",
         "triton/language",
         "triton/language/extra",
         "triton/ops",

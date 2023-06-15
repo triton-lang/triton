@@ -529,7 +529,7 @@ def jit(
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
         if interpret:
-            from ..debugger.debugger import GridSelector
+            from ..interpreter.interpreter import GridSelector
             return GridSelector(fn)
         else:
             return JITFunction(
