@@ -105,6 +105,7 @@ def compare_matching_files(name: str, extension: str, name_to_hashes1: Dict[str,
             if not compareFiles(ext_file1, ext_file2):
                 return (ext_file1, ext_file2)
     assert numComparisons > 0, f"Did not find any matching files for {name}"
+    print(f"Compared {numComparisons} matching files for {name}")
     return ()
 
 
