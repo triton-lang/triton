@@ -5,7 +5,6 @@ from ..language import core as lcore
 from . import torch_wrapper
 from .core import ExecutionContext
 from .memory_map import MemoryMap
-from triton.interpreter import torch_wrapper
 
 torch = torch_wrapper.torch
 
