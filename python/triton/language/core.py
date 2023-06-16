@@ -5,9 +5,10 @@ from enum import Enum
 from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
-import triton
+from .._C.libtriton.triton import ir
+# import triton
+from ..runtime.jit import jit
 from . import semantic
-from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
@@ -1092,59 +1093,67 @@ def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
 @builtin
 @_add_atomic_docstr("compare-and-swap")
-def atomic_cas(pointer, cmp, val, _builder=None):
+def atomic_cas(pointer, cmp, val, sem=None, _builder=None):
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
-    return semantic.atomic_cas(pointer, cmp, val, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_cas(pointer, cmp, val, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer, val, mask=None, _builder=None):
+def atomic_xchg(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_xchg(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_xchg(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer, val, mask=None, _builder=None):
+def atomic_add(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_add(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_add(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer, val, mask=None, _builder=None):
+def atomic_max(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_max(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_max(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer, val, mask=None, _builder=None):
+def atomic_min(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_min(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_min(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer, val, mask=None, _builder=None):
+def atomic_and(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_and(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_and(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer, val, mask=None, _builder=None):
+def atomic_or(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_or(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_or(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer, val, mask=None, _builder=None):
+def atomic_xor(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_xor(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_xor(pointer, val, mask, sem, _builder)
 
 
 # -----------------------
@@ -1319,7 +1328,7 @@ def _promote_reduction_input(t, _builder=None):
 
 
 @builtin
-def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
+def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None):
     axis = _constexpr_to_value(axis)
     n = input.shape[axis]
     index = arange(0, n, _builder=_builder)
@@ -1333,10 +1342,10 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
 
     rvalue, rindices = reduce((input, index), axis, combine_fn,
                               _builder=_builder, _generator=_generator)
-    return rindices
+    return rvalue, rindices
 
 
-@triton.jit
+@jit
 def minimum(x, y):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
@@ -1349,7 +1358,7 @@ def minimum(x, y):
     return where(x < y, x, y)
 
 
-@triton.jit
+@jit
 def maximum(x, y):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
@@ -1361,82 +1370,92 @@ def maximum(x, y):
     """
     return where(x > y, x, y)
 
+# max and argmax
 
-@triton.jit
+
+@jit
 def _max_combine(a, b):
     return maximum(a, b)
 
 
-@triton.jit
-@_add_reduction_docstr("maximum")
-def max(input, axis=None):
-    input = _promote_reduction_input(input)
-    return reduce(input, axis, _max_combine)
-
-
-@triton.jit
+@jit
 def _argmax_combine(value1, index1, value2, index2):
     gt = value1 > value2
-    lt = value1 < value2
-    index_min = minimum(index1, index2)
-    index_ret = where(gt, index1, where(lt, index2, index_min))
-    value_ret = maximum(value1, value2)
+    value_ret = where(gt, value1, value2)
+    index_ret = where(gt, index1, index2)
     return value_ret, index_ret
 
 
-@triton.jit
+@jit
+@_add_reduction_docstr("maximum")
+def max(input, axis=None, return_indices=False):
+    input = _promote_reduction_input(input)
+    if return_indices:
+        return _reduce_with_indices(input, axis, _argmax_combine)
+    else:
+        return reduce(input, axis, _max_combine)
+
+
+@jit
 @_add_reduction_docstr("maximum index")
 def argmax(input, axis):
-    input = _promote_reduction_input(input)
-    return _argreduce(input, axis, _argmax_combine)
+    (_, ret) = max(input, axis, return_indices=True)
+    return ret
+
+# min and argmin
 
 
-@triton.jit
+@jit
 def _min_combine(a, b):
     # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
     return minimum(a, b)
 
 
-@triton.jit
-@_add_reduction_docstr("minimum")
-def min(input, axis=None):
-    input = _promote_reduction_input(input)
-    return reduce(input, axis, _min_combine)
-
-
-@triton.jit
+@jit
 def _argmin_combine(value1, index1, value2, index2):
     lt = value1 < value2
-    gt = value1 > value2
-    index_min = minimum(index1, index2)
-    index_ret = where(lt, index1, where(gt, index2, index_min))
-    value_ret = minimum(value1, value2)
+    value_ret = where(lt, value1, value2)
+    index_ret = where(lt, index1, index2)
     return value_ret, index_ret
 
 
-@triton.jit
+@jit
+@_add_reduction_docstr("minimum")
+def min(input, axis=None, return_indices=False):
+    input = _promote_reduction_input(input)
+    if return_indices:
+        return _reduce_with_indices(input, axis, _argmin_combine)
+    else:
+        return reduce(input, axis, _min_combine)
+
+
+@jit
 @_add_reduction_docstr("minimum index")
 def argmin(input, axis):
-    input = _promote_reduction_input(input)
-    return _argreduce(input, axis, _argmin_combine)
+    _, ret = min(input, axis, return_indices=True)
+    return ret
 
 
-@triton.jit
+@jit
 def _sum_combine(a, b):
     return a + b
 
+# sum
 
-@triton.jit
+
+@jit
 @_add_reduction_docstr("sum")
 def sum(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _sum_combine)
 
 
-@triton.jit
+@jit
 def _xor_combine(a, b):
     return a ^ b
 
+
+# xor sum
 
 @builtin
 @_add_reduction_docstr("xor sum")

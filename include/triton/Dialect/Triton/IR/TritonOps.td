@@ -236,7 +236,8 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
     }];
 
     let arguments = (ins TT_AtomicRMWAttr:$atomic_rmw_op, TT_PtrLike:$ptr,
-                         TT_Type:$val, Optional<TT_BoolLike>:$mask);
+                         TT_Type:$val, Optional<TT_BoolLike>:$mask,
+                         TT_MemSemanticAttr:$sem);
 
     let results = (outs TT_Type:$result);
 }
@@ -257,7 +258,8 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
         return $old
     }];
 
-    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$cmp, TT_Type:$val);
+    let arguments = (ins TT_PtrLike:$ptr, TT_Type:$cmp, TT_Type:$val,
+                     TT_MemSemanticAttr:$sem);
 
     let results = (outs TT_Type:$result);
 }
@@ -445,7 +447,6 @@ class TT_ExternElementwiseOpBase<string mnemonic, list<Trait> traits = []> :
 
     let assemblyFormat = "operands attr-dict `:` functional-type(operands, $result)";
 }
-
 
 def TT_PureExternElementwiseOp : TT_ExternElementwiseOpBase<"pure_extern_elementwise", [Pure, Elementwise]> {
     let summary = "FFI for pure element-wise extern LLVM bitcode functions";
