@@ -101,6 +101,12 @@ private:
     Value axisSizePerThread = ints[sizePerThread[axis]];
     Value _8 = ints[8];
     Value _16 = ints[16];
+#ifdef USE_ROCM
+    Value _2 = ints[2];
+    Value _4 = ints[4];
+    Value _32 = ints[32];
+#endif
+
     if (layout.isa<BlockedEncodingAttr>()) {
       // A single thread owns axisSizePerThread contiguous values
       // on the reduction axis. After within thread reduction,
@@ -119,6 +125,17 @@ private:
         // is: (warp_index) x 8 + (row index within warp)
         writeIdx[axis] =
             add(mul(udiv(index[axis], _16), _8), urem(index[axis], _8));
+      } else {
+        // Same as BlockedEncodingAttr case
+        writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+      }
+    } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+      if (axis == 0) {
+        // Because warpTileSize = [32, 32] and threadsPerWarp = [2, 32], each 2
+        // rows in smem would correspond to a warp. The mapping
+        // is: (warp_index) x 2 + (row index within warp)
+        writeIdx[axis] = add(mul(udiv(index[axis], _32), _2),
+                             udiv(urem(index[axis], _32), _4));
       } else {
         // Same as BlockedEncodingAttr case
         writeIdx[axis] = udiv(index[axis], axisSizePerThread);
@@ -203,7 +220,11 @@ private:
     ints[sizePerThread[axis]] = i32_val(sizePerThread[axis]);
     ints[8] = i32_val(8);
     ints[16] = i32_val(16);
-
+#ifdef USE_ROCM
+    ints[2] = i32_val(2);
+    ints[4] = i32_val(4);
+    ints[32] = i32_val(32);
+#endif
     // reduce across threads
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
@@ -378,6 +399,20 @@ private:
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+
+#ifdef USE_ROCM
+    auto inputTy = srcTys[0].cast<RankedTensorType>();
+    auto inMfma =
+        inputTy.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
+    // Original logic is buggy for warpsPerCTA=[2, 2], but works fine for
+    // warpsPerCTA=[4, 1] (that is used in flash attention, thus tested).
+    // TODO: Check whether this is the case for MMA layout as well, if yes, this
+    // should be fixed in the upstream repo.
+    if (inMfma) {
+      multiDimLaneId = delinearize(rewriter, loc, laneId, threadsPerWarp);
+      multiDimWarpId = delinearize(rewriter, loc, warpId, warpsPerCTA);
+    }
+#endif
 
     Value laneIdAxis = multiDimLaneId[axis];
     Value warpIdAxis = multiDimWarpId[axis];

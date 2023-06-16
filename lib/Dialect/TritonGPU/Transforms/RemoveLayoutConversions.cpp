@@ -44,6 +44,28 @@ public:
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
                              1, context) {}
 
+  template <typename encTy>
+  mlir::LogicalResult processEncoding(encTy encoding,
+                                      triton::gpu::ConvertLayoutOp convert,
+                                      RankedTensorType &dstType,
+                                      mlir::PatternRewriter &rewriter) const {
+    SetVector<Operation *> bwdSlices;
+    mlir::getBackwardSlice(convert.getResult(), &bwdSlices);
+    if (llvm::find_if(bwdSlices, [](Operation *op) {
+          return isa<triton::DotOp>(op);
+        }) == bwdSlices.end())
+      return mlir::failure();
+
+    auto tmpType = RankedTensorType::get(dstType.getShape(),
+                                         dstType.getElementType(), encoding);
+    auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        convert.getLoc(), tmpType, convert.getOperand());
+    auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        convert.getLoc(), dstType, tmp);
+    rewriter.replaceOp(convert, {newConvert});
+    return mlir::success();
+  }
+
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -58,26 +80,23 @@ public:
           dstType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
       auto dstParent = dstDotOperand.getParent();
       if (dstDotOperand.getOpIdx() == 1 ||
-          !dstParent.isa<triton::gpu::MmaEncodingAttr>())
-        return mlir::failure();
-      auto dstParentMma = dstParent.cast<triton::gpu::MmaEncodingAttr>();
-      if (dstParentMma.isVolta() || dstParentMma.getWarpsPerCTA()[1] > 1)
-        return mlir::failure();
-      SetVector<Operation *> bwdSlices;
-      mlir::getBackwardSlice(convert.getResult(), &bwdSlices);
-      if (llvm::find_if(bwdSlices, [](Operation *op) {
-            return isa<triton::DotOp>(op);
-          }) == bwdSlices.end())
+          (!dstParent.isa<triton::gpu::MmaEncodingAttr>() &&
+           !dstParent.isa<triton::gpu::MfmaEncodingAttr>()))
         return mlir::failure();
 
-      auto tmpType = RankedTensorType::get(
-          dstType.getShape(), dstType.getElementType(), dstParentMma);
-      auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          convert.getLoc(), tmpType, convert.getOperand());
-      auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          convert.getLoc(), dstType, tmp);
-      rewriter.replaceOp(op, {newConvert});
-      return mlir::success();
+      if (dstParent.isa<triton::gpu::MmaEncodingAttr>()) {
+        auto dstParentMma = dstParent.cast<triton::gpu::MmaEncodingAttr>();
+        if (dstParentMma.isVolta() || dstParentMma.getWarpsPerCTA()[1] > 1)
+          return mlir::failure();
+        return processEncoding(dstParentMma, convert, dstType, rewriter);
+      }
+
+      if (dstParent.isa<triton::gpu::MfmaEncodingAttr>()) {
+        auto dstParentMfma = dstParent.cast<triton::gpu::MfmaEncodingAttr>();
+        if (dstParentMfma.getWarpsPerCTA()[1] > 1)
+          return mlir::failure();
+        return processEncoding(dstParentMfma, convert, dstType, rewriter);
+      }
     }
     return mlir::failure();
   }
@@ -123,7 +142,8 @@ public:
         newOperands[0].getType().cast<RankedTensorType>().getEncoding();
 
     // this may generate unsupported conversions in the LLVM codegen
-    if (newEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
+    if (newEncoding.isa<triton::gpu::MmaEncodingAttr>() ||
+        newEncoding.isa<triton::gpu::MfmaEncodingAttr>()) {
       return failure();
     }
 

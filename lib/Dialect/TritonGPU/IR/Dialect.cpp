@@ -50,6 +50,8 @@ SmallVector<unsigned> getElemsPerThread(Attribute layout,
     return sliceLayout.getElemsPerThread(shape, eltTy);
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     return mmaLayout.getElemsPerThread(shape, eltTy);
+  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+    return mfmaLayout.getElemsPerThread(shape, eltTy);
   } else {
     assert(0 && "getElemsPerThread not implemented");
     return SmallVector<unsigned>();
@@ -84,7 +86,7 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
       return {8, 4};
   }
   if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-    return {32, 2};
+    return {2, 32};
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
@@ -129,6 +131,10 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     return SmallVector<unsigned>(mmaLayout.getWarpsPerCTA().begin(),
                                  mmaLayout.getWarpsPerCTA().end());
+  }
+  if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+    return SmallVector<unsigned>(mfmaLayout.getWarpsPerCTA().begin(),
+                                 mfmaLayout.getWarpsPerCTA().end());
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
@@ -1247,7 +1253,8 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
   auto srcType = op.getOperand().getType().cast<RankedTensorType>();
   auto dstType = op.getType().cast<RankedTensorType>();
   if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
-      srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+      (srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() ||
+       srcType.getEncoding().isa<triton::gpu::MfmaEncodingAttr>()))
     return mlir::failure();
   // convert to the same layout -- we can delete
   if (op->getResultTypes() == op->getOperandTypes()) {

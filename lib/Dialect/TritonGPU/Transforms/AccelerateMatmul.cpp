@@ -77,12 +77,14 @@ SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
                                            const ArrayRef<int64_t> shape,
                                            int numWarps) {
   // TODO: needs to be updated with appropriate shapePerWarp etc.
-  SetVector<Operation *> slices;
-  mlir::getForwardSlice(dotOp.getResult(), &slices);
-  if (llvm::find_if(slices, [](Operation *op) {
-        return isa<triton::DotOp>(op);
-      }) != slices.end())
-    return {(unsigned)numWarps, 1};
+  auto filter = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  auto slices = mlir::getSlice(dotOp, filter);
+  for (Operation *op : slices)
+    if (isa<triton::DotOp>(op) && (op != dotOp))
+      return {(unsigned)numWarps, 1};
+
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {32, 32};
