@@ -1523,8 +1523,8 @@ def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=Fals
     '''
     Print the values at compile time. The parameters are the same as the Python builtin :code:`print`.
 
-    Calling the Python builtin :code:`print` inside your kernel is the same as calling this.  
-    
+    Calling the Python builtin :code:`print` inside your kernel is the same as calling this.
+
     .. highlight:: python
     .. code-block:: python
 
@@ -1539,7 +1539,7 @@ def static_assert(cond, msg="", _builder=None):
     '''
     Assert the condition at compile time.  Does not require that the :code:`TRITON_DEBUG` environment variable
     is set.
-    
+
     .. highlight:: python
     .. code-block:: python
 
@@ -1553,7 +1553,7 @@ def device_print(prefix, *args, _builder=None):
     '''
     Print the values at runtime from the device.  String formatting does not work, so you should
     provide the values you want to print as arguments.
-    
+
     .. highlight:: python
     .. code-block:: python
 
@@ -1582,11 +1582,11 @@ def device_assert(cond, msg="", _builder=None):
     '''
     Assert the condition at runtime from the device.  Requires that the environment variable :code:`TRITON_DEBUG`
     is set to a value besides :code:`0` in order for this to have any effect.
-    
+
     Using the Python :code:`assert` statement is the same as calling this function, except that the second argument
     must be provided and must be a string, e.g. :code:`assert pid == 0, "pid != 0"`.  The environment variable must
     be set for this :code:`assert` statement to have any effect.
-    
+
     .. highlight:: python
     .. code-block:: python
 
