@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonToLinalg/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 
 #include "mlir/InitAllPasses.h"
@@ -27,6 +28,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestMembarPass();
+  mlir::triton::registerTritonToLinalgPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
 

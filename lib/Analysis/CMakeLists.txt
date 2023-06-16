@@ -4,6 +4,10 @@ add_mlir_library(TritonAnalysis
   Membar.cpp
   Alias.cpp
   Utility.cpp
+  UseAnalysis.cpp
+  MaskAnalysis.cpp
+  PtrAnalysis.cpp
+  OpFoldResultUtils.cpp
 
   DEPENDS
   TritonTableGen
