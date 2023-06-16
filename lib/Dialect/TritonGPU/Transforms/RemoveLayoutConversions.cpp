@@ -76,7 +76,7 @@ public:
           convert.getLoc(), tmpType, convert.getOperand());
       auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
           convert.getLoc(), dstType, tmp);
-      rewriter.replaceOp(op, {newConvert});
+      rewriter.replaceOp(op, newConvert);
       return mlir::success();
     }
     return mlir::failure();
