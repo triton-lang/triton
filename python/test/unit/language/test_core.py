@@ -2484,11 +2484,11 @@ def test_call(type):
 # -------------
 
 
-@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and"])
+@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and_dynamic", "if_and_static"])
 def test_if(if_type):
 
     @triton.jit
-    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr):
+    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr, StaticVaue: tl.constexpr):
         pid = tl.program_id(0)
         cond = tl.load(Cond)
         if IfType == "if":
@@ -2498,8 +2498,13 @@ def test_if(if_type):
                 tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_exp":
             tl.store(Ret, tl.load(XTrue)) if pid % 2 else tl.store(Ret, tl.load(XFalse))
-        elif IfType == "if_and":
+        elif IfType == "if_and_dynamic":
             if BoolVar and pid % 2 == 0:
+                tl.store(Ret, tl.load(XTrue))
+            else:
+                tl.store(Ret, tl.load(XFalse))
+        elif IfType == "if_and_static":
+            if StaticVaue != 0 and StaticVaue != 0:
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))
@@ -2508,7 +2513,7 @@ def test_if(if_type):
     x_true = torch.tensor([3.14], dtype=torch.float32, device='cuda')
     x_false = torch.tensor([1.51], dtype=torch.float32, device='cuda')
     ret = torch.empty(1, dtype=torch.float32, device='cuda')
-    kernel[(1,)](cond, x_true, x_false, ret, if_type, True)
+    kernel[(1,)](cond, x_true, x_false, ret, if_type, True, 6)
     assert torch.equal(ret, x_true)
 
 

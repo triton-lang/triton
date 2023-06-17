@@ -595,12 +595,14 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Compare(self, node):
         if not (len(node.comparators) == 1 and len(node.ops) == 1):
             raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple comparison is not supported")
-        lhs = _unwrap_if_constexpr(self.visit(node.left))
-        rhs = _unwrap_if_constexpr(self.visit(node.comparators[0]))
+        lhs = self.visit(node.left)
+        rhs = self.visit(node.comparators[0])
+        lhs_value = _unwrap_if_constexpr(lhs)
+        rhs_value = _unwrap_if_constexpr(rhs)
         if type(node.ops[0]) == ast.Is:
-            return constexpr(lhs is rhs)
+            return constexpr(lhs_value is rhs_value)
         if type(node.ops[0]) == ast.IsNot:
-            return constexpr(lhs is not rhs)
+            return constexpr(lhs_value is not rhs_value)
         method_name = self._method_name_for_comp_op.get(type(node.ops[0]))
         if method_name is None:
             raise UnsupportedLanguageConstruct(None, node, "AST comparison operator '{}' is not (currently) implemented.".format(node.ops[0].__name__))
