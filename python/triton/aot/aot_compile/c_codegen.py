@@ -97,12 +97,6 @@ def signature_tt_to_c_args(
 class CodegenTemplates:
     # common_header: str
     kernel_header: str
-    default_load: str
-    """ Load cuda module and function using a global CUmodule & CUfunction pointers"""
-    default_launch: str
-    """ Launch kernel using the global CUfunction pointers """
-    user_launch: str
-    """ User handles kernel loading, and passes CUfunction as an argument """
 
 
 @dataclass
@@ -148,16 +142,13 @@ class CodeGenerator:
             out_filename = template_fields.kernel_name
 
         _fields_dict = asdict(template_fields)
+        print(_fields_dict)
         _code = self._template.format(**_fields_dict)
         code = split_template(_code)
 
         header = code.kernel_header
         source = [
             f'#include "{out_filename}.h"',
-            # code.common_header,
-            code.default_load,
-            code.default_launch,
-            code.user_launch,
         ]
         src_str = "\n".join(source)
 

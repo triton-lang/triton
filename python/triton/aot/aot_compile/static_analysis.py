@@ -54,7 +54,6 @@ class CollectJITandGlobals(ast.NodeVisitor):
             self._src_path = ""
 
         p = Path(src_path)
-        module_name = p.stem
         src = p.read_text()
 
         _init_state()
@@ -114,11 +113,6 @@ class CollectJITandGlobals(ast.NodeVisitor):
     def visit_Constant(self, node: ast.Constant):
         return node.value
 
-    def visit_Call(self, node: ast.Call):
-        name = self.visit(node.func)
-        # self.function_calls.add(name)
-        return
-
     def visit_Tuple(self, node: ast.Tuple) -> Any:
         return tuple(self.visit(elt) for elt in node.elts)
 
@@ -134,8 +128,6 @@ class CollectJITandGlobals(ast.NodeVisitor):
     def generic_visit(self, node):
         if node is None:
             return
-        typename = type(node).__name__
-        # print(f"[DEBUG] Unsupported node: {typename}")
         ast.NodeVisitor.generic_visit(self, node)
 
     def visit_Module(self, node: ast.Module):
@@ -185,7 +177,7 @@ class CollectJITandGlobals(ast.NodeVisitor):
 
                 return
 
-        msg = self._err_msg(f"[Skipping] Non-jitted function", node)
+        msg = self._err_msg(f"[Skipping] Non-jitted function {node}")
         print(msg)
 
     def _skip_global_visit(self, node):
@@ -289,11 +281,3 @@ def build_jit_stubs(*src_paths: Sequence[str]) -> Dict[str, JITStub]:
     import triton.language as tl
     gscope.update({"tl": tl, "triton": triton})
     return jit_stubs
-
-
-if __name__ == "__main__":
-    jit_stubs = build_jit_stubs(
-        "python/examples/vector_addition.py",
-        "python/examples/copy_strided.py",
-        "python/examples/layer-norm.py",
-    )
