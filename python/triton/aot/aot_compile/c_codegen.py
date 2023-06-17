@@ -5,7 +5,6 @@ from typing import Sequence, Tuple
 
 from dataclasses import asdict, dataclass
 
-from .compile_metadata import CompileMetadata
 from triton.compiler.make_launcher import ty_to_cpp
 
 THREADS_PER_WARP = 32
@@ -33,21 +32,20 @@ class TemplateFields:
 
 
 def metadata_to_template_strings(
-    compile_meta: CompileMetadata,
+    signature,
+    arg_names,
+    compiled_function_name,
+    docstr,
     bin_: bytes,
 ):
-    kernel_name = compile_meta.compiled_function_name
+    kernel_name = compiled_function_name
     binary_arg_name = f"{kernel_name}_cubin"
     binary_val, bin_size = bytes_to_uchar_array(bin_)
 
-    sig = [
-        compile_meta.signature[idx] for idx, arg in enumerate(compile_meta.arg_names)
-    ]
+    sig = [signature[idx] for idx, arg in enumerate(arg_names)]
 
-    signature, arg_pointers = signature_tt_to_c_args(
-        names=compile_meta.arg_names, tt_types=sig
-    )
-    num_args = len(compile_meta.arg_names)
+    signature, arg_pointers = signature_tt_to_c_args(names=arg_names, tt_types=sig)
+    num_args = len(arg_names)
 
     return TemplateFields(
         kernel_name=kernel_name,
@@ -59,7 +57,7 @@ def metadata_to_template_strings(
         arg_pointers=arg_pointers,
         num_args=num_args,
         threads_per_warp=THREADS_PER_WARP,
-        kernel_docstring=compile_meta.docstr,
+        kernel_docstring=docstr,
     )
 
 
@@ -131,10 +129,18 @@ class CodeGenerator:
         self._gen_code = []
 
     def make_source(
-        self, compile_meta: CompileMetadata, bin_: bytes, out_filename: str = None
+        self,
+        signature,
+        arg_names,
+        compiled_function_name,
+        docstr,
+        bin_: bytes, out_filename: str = None
     ) -> KernelCSource:
         template_fields = metadata_to_template_strings(
-            compile_meta=compile_meta,
+            signature=signature,
+            arg_names=arg_names,
+            compiled_function_name=compiled_function_name,
+            docstr=docstr,
             bin_=bin_,
         )
 
@@ -158,7 +164,7 @@ class CodeGenerator:
         return KernelCSource(
             source=src_str,
             header=header,
-            docstring=compile_meta.docstr,
+            docstring=docstr,
             name=template_fields.kernel_name,
         )
 
