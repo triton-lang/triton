@@ -990,7 +990,7 @@ class CodeGenerator(ast.NodeVisitor):
         if not (0 < arg_count <= 2) or len(node.keywords):
             raise TypeError("`static_assert` requires one or two positional arguments only")
 
-        passed = self.visit(node.args[0])
+        passed = _unwrap_if_constexpr(self.visit(node.args[0]))
         if not isinstance(passed, bool):
             raise NotImplementedError("Assertion condition could not be determined at compile-time. Make sure that it depends only on `constexpr` values")
         if not passed:
