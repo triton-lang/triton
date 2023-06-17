@@ -45,11 +45,19 @@ void unload_{kernel_name}(void) {{
     CUDA_CHECK(cuModuleUnload({kernel_name}_mod));
 }}
 
-void load_{kernel_name}(void) {{
-    void *image = (void *)&{binary_arg_name};
-    CUDA_CHECK(cuModuleLoadData(&{kernel_name}_mod, image));
+// TODO: some code duplication with `runtime/backend/cuda.c`
+void load_{kernel_name}(int dev = 0) {{
+    void *bin = (void *)&{binary_arg_name};
+    int shared = {shared};
+    CUDA_CHECK(cuModuleLoadData(&{kernel_name}_mod, bin));
     CUDA_CHECK(cuModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{compiled_func_name}"));
-    // TODO: shared memory
+    // set dynamic shared memory if necessary
+    int shared_optin;
+    CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev));
+    if (shared > 49152 && shared_optin > 49152) {{
+      CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
+      CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin))
+    }}
 }}
 
 /*
@@ -60,5 +68,6 @@ CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned
        load_{kernel_name}();
     void *args[{num_args}] = {{ {arg_pointers} }};
     // TODO: shared memory
-    return cuLaunchKernel({kernel_name}_func, gX, gY, gZ, numWarps * {threads_per_warp}, 1, 1, 0, stream, args, NULL);
+    if(gX * gY * gZ > 0)
+      return cuLaunchKernel({kernel_name}_func, gX, gY, gZ, numWarps * 32, 1, 1, {shared}, stream, args, NULL);
 }}

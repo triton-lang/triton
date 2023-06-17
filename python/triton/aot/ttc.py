@@ -69,6 +69,7 @@ if __name__ == "__main__":
         arg_names,
         func_name,
         "",
+        shared=ccinfo.shared,
         bin_=ccinfo.asm["cubin"],
         out_filename=out_filename,
     ).dump_to_file(args.out_path)

@@ -7,8 +7,6 @@ from dataclasses import asdict, dataclass
 
 from triton.compiler.make_launcher import ty_to_cpp
 
-THREADS_PER_WARP = 32
-
 
 @dataclass
 class TemplateFields:
@@ -28,7 +26,8 @@ class TemplateFields:
     num_args: int
     """ number of arguments """
     kernel_docstring: str
-    threads_per_warp: int = THREADS_PER_WARP
+    """ shared memory usage """
+    shared: int
 
 
 def metadata_to_template_strings(
@@ -36,6 +35,7 @@ def metadata_to_template_strings(
     arg_names,
     compiled_function_name,
     docstr,
+    shared,
     bin_: bytes,
 ):
     kernel_name = compiled_function_name
@@ -56,8 +56,8 @@ def metadata_to_template_strings(
         signature=signature,
         arg_pointers=arg_pointers,
         num_args=num_args,
-        threads_per_warp=THREADS_PER_WARP,
         kernel_docstring=docstr,
+        shared=shared,
     )
 
 
@@ -128,6 +128,7 @@ class CodeGenerator:
         arg_names,
         compiled_function_name,
         docstr,
+        shared,
         bin_: bytes, out_filename: str = None
     ) -> KernelCSource:
         template_fields = metadata_to_template_strings(
@@ -135,6 +136,7 @@ class CodeGenerator:
             arg_names=arg_names,
             compiled_function_name=compiled_function_name,
             docstr=docstr,
+            shared=shared,
             bin_=bin_,
         )
 
@@ -142,7 +144,6 @@ class CodeGenerator:
             out_filename = template_fields.kernel_name
 
         _fields_dict = asdict(template_fields)
-        print(_fields_dict)
         _code = self._template.format(**_fields_dict)
         code = split_template(_code)
 
