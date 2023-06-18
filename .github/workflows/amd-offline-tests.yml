@@ -37,12 +37,14 @@ jobs:
           amdgpu-install -y --usecase=rocm --no-dkms
           # install pytorch
           pip3 install torch==2.0.1 --index-url https://download.pytorch.org/whl/rocm5.4.2
+          # uninstall system triton to eliminate conflicts with testing version
+          pip3 uninstall -y pytorch-triton-rocm
 
       - name: Install Triton
         run: |
           cd python
           # Install in system, because need to override system triton. Otherwise lit tests will use wrong version
-          DEBUG=TRUE TRITON_USE_ROCM=TRUE TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install --no-build-isolation -vvv .
+          DEBUG=TRUE TRITON_USE_ROCM=TRUE TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install --no-build-isolation -vvv -e .
 
       - name: Run lit tests
         run: |
