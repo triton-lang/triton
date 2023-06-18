@@ -1,15 +1,14 @@
-/*[ kernel_header ]*/
 /* clang-format off */
-
-#ifndef TT_KERNEL_INCLUDES
-#define TT_KERNEL_INCLUDES
-
 #include <stdio.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <cuda.h>
 
-#endif
+
+// helpers to check for cuda errors
+#define CUDA_CHECK(ans) {{
+    gpuAssert((ans), __FILE__, __LINE__);
+  }}
 
 static inline void gpuAssert(CUresult code, const char *file, int line) {{
   if (code != CUDA_SUCCESS) {{
@@ -24,19 +23,8 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {{
   }}
 }}
 
-#define CUDA_CHECK(ans) {{
-    gpuAssert((ans), __FILE__, __LINE__);
-  }}
-
+// globals
 #define CUBIN_NAME {kernel_name}_cubin
-
-unsigned char CUBIN_NAME[{bin_size}];
-void load_{kernel_name}(void);
-void unload_{kernel_name}(void);
-
-// tt-linker: {kernel_name}:{signature}
-CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned int gZ,unsigned int numWarps, {signature});
-
 CUmodule {kernel_name}_mod = NULL;
 CUfunction {kernel_name}_func = NULL;
 unsigned char CUBIN_NAME[{bin_size}] = {{ {binary_val} }};
