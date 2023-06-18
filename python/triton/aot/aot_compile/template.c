@@ -27,7 +27,7 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {{
 #define CUBIN_NAME {kernel_name}_cubin
 CUmodule {kernel_name}_mod = NULL;
 CUfunction {kernel_name}_func = NULL;
-unsigned char CUBIN_NAME[{bin_size}] = {{ {binary_val} }};
+unsigned char CUBIN_NAME[{bin_size}] = {{ {bin_data} }};
 
 
 void unload_{kernel_name}(void) {{
