@@ -2,67 +2,14 @@ import binascii
 from argparse import ArgumentParser
 from collections import defaultdict
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import Tuple
 
 from aot_compile.static_analysis import build_jit_stubs
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 import triton
 from triton.compiler.code_generator import kernel_suffix
 from triton.compiler.make_launcher import ty_to_cpp
-
-
-@dataclass
-class TemplateFields:
-    kernel_name: str
-    compiled_func_name: str
-    """ compiler adds specialization info to kernel name. this is the full PTX name"""
-    binary_arg_name: str
-    """ the var names that stores the cubin/ptx in source"""
-    bin_size: int
-    """ lenght in bytes of kernels binary """
-    binary_val: str
-    """ Binary as hex string """
-    signature: str
-    """ Kernels input args signature """
-    arg_pointers: str
-    """ Singatures arguments by reference (passed to cuLaunchKernel) """
-    num_args: int
-    """ number of arguments """
-    kernel_docstring: str
-    """ shared memory usage """
-    shared: int
-
-
-def metadata_to_template_strings(
-    signature,
-    arg_names,
-    compiled_function_name,
-    docstr,
-    shared,
-    bin_: bytes,
-):
-    kernel_name = compiled_function_name
-    binary_arg_name = f"{kernel_name}_cubin"
-    binary_val, bin_size = bytes_to_uchar_array(bin_)
-
-    sig = list(signature.values())
-
-    signature, arg_pointers = signature_tt_to_c_args(names=arg_names, tt_types=sig)
-    num_args = len(arg_names)
-
-    return TemplateFields(
-        kernel_name=kernel_name,
-        compiled_func_name=kernel_name,
-        binary_arg_name=binary_arg_name,
-        bin_size=bin_size,
-        binary_val=binary_val,
-        signature=signature,
-        arg_pointers=arg_pointers,
-        num_args=num_args,
-        kernel_docstring=docstr,
-        shared=shared,
-    )
 
 
 def py_str_to_uchar_array(txt: str) -> Tuple[str, int]:  # (c_code, array len)
@@ -76,25 +23,6 @@ def bytes_to_uchar_array(arr: bytes) -> Tuple[str, int]:
     it = iter(hex_)
     data = ", ".join([f"0x{x}{next(it)}" for x in it])
     return data, len(hex_)
-
-
-def signature_tt_to_c_args(
-    names: Sequence[str], tt_types: Sequence[str]
-) -> Tuple[str, str]:  # (args function signature, args array of pointers)
-    """
-    Generate signature code from arg names and Triton type annotations
-    e.g.
-        CUDeviceptr X, int32_t n_elem
-        void *args[2] = { &X, &n_elem };
-    :return:
-        (args function signature, args array of pointers)
-    """
-    args_signature = ", ".join(
-        [f"{ty_to_cpp(ty)} {name}" for name, ty in zip(names, tt_types)]
-    )
-    arg_pointers = ", ".join([f"&{arg}" for arg in names])
-    # args_ptr_array = f"void *args[{len(tt_types)}] = {{ {arg_pointers} }};"
-    return args_signature, arg_pointers
 
 
 @dataclass
@@ -130,24 +58,30 @@ class CodeGenerator:
         self,
         signature,
         arg_names,
-        compiled_function_name,
+        func_name,
         docstr,
         shared,
         bin_: bytes, out_filename: str = None
     ) -> KernelCSource:
-        template_fields = metadata_to_template_strings(
-            signature=signature,
-            arg_names=arg_names,
-            compiled_function_name=compiled_function_name,
-            docstr=docstr,
-            shared=shared,
-            bin_=bin_,
-        )
 
         if out_filename is None:
-            out_filename = template_fields.kernel_name
+            out_filename = func_name
 
-        _fields_dict = asdict(template_fields)
+        binary_val, bin_size = bytes_to_uchar_array(bin_)
+        signature = ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, signature.values())])
+        arg_pointers = ", ".join([f"&{arg}" for arg in arg_names])
+        num_args = len(arg_names)
+        _fields_dict = {
+            "kernel_name": func_name,
+            "bin_size": bin_size,
+            "binary_val": binary_val,
+            "signature": signature,
+            "arg_pointers": arg_pointers,
+            "num_args": num_args,
+            "kernel_docstring": docstr,
+            "shared": shared,
+        }
+
         _code = self._template.format(**_fields_dict)
         code = split_template(_code)
 
@@ -161,7 +95,7 @@ class CodeGenerator:
             source=src_str,
             header=header,
             docstring=docstr,
-            name=template_fields.kernel_name,
+            name=func_name,
         )
 
     def dump(self, out_dir: str):
@@ -229,7 +163,6 @@ if __name__ == "__main__":
     def constexpr(s):
         try:
             ret = int(s)
-            print(ret)
             return ret
         except ValueError:
             pass

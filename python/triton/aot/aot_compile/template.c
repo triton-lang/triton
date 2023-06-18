@@ -28,8 +28,9 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {{
     gpuAssert((ans), __FILE__, __LINE__);
   }}
 
+#define CUBIN_NAME {kernel_name}_cubin
 
-unsigned char {binary_arg_name}[{bin_size}];
+unsigned char CUBIN_NAME[{bin_size}];
 void load_{kernel_name}(void);
 void unload_{kernel_name}(void);
 
@@ -38,7 +39,7 @@ CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned
 
 CUmodule {kernel_name}_mod = NULL;
 CUfunction {kernel_name}_func = NULL;
-unsigned char {binary_arg_name}[{bin_size}] = {{ {binary_val} }};
+unsigned char CUBIN_NAME[{bin_size}] = {{ {binary_val} }};
 
 
 void unload_{kernel_name}(void) {{
@@ -47,10 +48,10 @@ void unload_{kernel_name}(void) {{
 
 // TODO: some code duplication with `runtime/backend/cuda.c`
 void load_{kernel_name}(int dev = 0) {{
-    void *bin = (void *)&{binary_arg_name};
+    void *bin = (void *)&CUBIN_NAME;
     int shared = {shared};
     CUDA_CHECK(cuModuleLoadData(&{kernel_name}_mod, bin));
-    CUDA_CHECK(cuModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{compiled_func_name}"));
+    CUDA_CHECK(cuModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{kernel_name}"));
     // set dynamic shared memory if necessary
     int shared_optin;
     CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev));
