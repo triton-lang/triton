@@ -39,6 +39,6 @@ for ha in hints:
             sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, i32: 1, i32{hb}, i32: 1, i32{hc}, i32: 1, {BM}, {BN}, {BK}'
             sa = ha.split(":")[-1]
             sb = hb.split(":")[-1]
-            name = f"matmul_{dtype}_{BM}_{BN}_{BK}"
+            name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
             subprocess.run(["python", compile_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", tmp_dir + "/" + name, kernel_path], check=True)
 print(tmp_dir)

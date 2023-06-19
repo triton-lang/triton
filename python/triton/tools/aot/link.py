@@ -1,6 +1,6 @@
 from collections import defaultdict
 from pathlib import Path
-from typing import Callable, Iterable, Sequence, Tuple, Union
+from typing import Iterable, Sequence, Tuple, Union
 
 from dataclasses import dataclass
 
@@ -109,100 +109,22 @@ class HeaderParser:
         return
 
 
-def _make_dispatch_condition_expr(attr_names, attr_sizes: Sequence[int]):
-    conds = []
-    for arg, size_ in zip(attr_names, attr_sizes):
-
-        if size_ is None:
-            # non-specialized arg, no condition
-            continue
-
-        if size_ == 1:
-            conds.append(f"{arg} == 1")
-        else:
-            conds.append(f"{arg} % {size_} == 0")
-
-    return " & ".join(conds)
-
-
-def link_headers_to_dispatcher(headers: Sequence[str], prefix: str = "") -> Callable[[str], Tuple[str, str]]:
-
-    includes = []
-    parser = HeaderParser()
-
-    for header in headers:
-        h_path = Path(header)
-        h_str = h_path.read_text()
-        includes.append(h_path.name)
-        parser.extract_linker_meta(h_str)
-
-    dispatchers = []
-    func_sigs = []
-    for name, kers in parser.all_kernels():
-        dispatcher_src, dispatcher_fn_sig = make_kernel_dispatcher(
-            name=name, metas=kers, prefix=prefix
-        )
-        dispatchers.append(dispatcher_src)
-        func_sigs.append(dispatcher_fn_sig)
-
-    dispatchers = "\n\n".join(dispatchers)
-    includes = "\n".join([f'#include "{inc_}"' for inc_ in includes])
-    func_sigs = "\n".join([f"{fn_sig};" for fn_sig in func_sigs])
-
-    linked_cheader = """
-{includes}
-
-{func_sigs}
-
-    """
-    linked_csrc = """
-#include "{filename}.h"
-
-{dispatchers}
-
-    """
-
-    def _named_dispatcher(filename: str) -> Tuple[str, str]:
-        return linked_cheader.format(
-            includes=includes, func_sigs=func_sigs
-        ), linked_csrc.format(filename=filename, dispatchers=dispatchers)
-
-    return _named_dispatcher
-
-
-def make_dispatcher_func_sig(name: str, metas: Sequence[KernelLinkerMeta], prefix: str = "") -> str:
-    src = """CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned int gZ,unsigned int numWarps, {signature})"""
-    m = metas[-1]
-    signature = ", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)])
-    return src.format(kernel_name=f"{prefix}{name}", signature=signature)
-
-
-def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta], prefix: str = "") -> str:
-    src = """
-{func_sig} {{
-    {conds}
-}}
-    """
-
-    cond = """
-    if ({cond}) {{
-        return {call_name}(stream, gX, gY, gZ, numWarps, {arg_names});
-        }}
-    """
-    conds = []
+def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
+    src = f"// launcher for: {name}\n"
+    signature = lambda m: ", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)])
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        conds.append(
-            cond.format(
-                cond=_make_dispatch_condition_expr(meta.arg_names, meta.sizes),
-                call_name=f"{name}_{meta.suffix}",
-                arg_names=", ".join(meta.arg_names),
-            )
-        )
+        src += f"CUresult {name}_{meta.suffix}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {signature(meta)});\n"
+    src += "\n"
 
-    conds = "\n\n".join(conds)
-    dispatcher_fn_sig = make_dispatcher_func_sig(name, metas, prefix=prefix)
-
-    return src.format(func_sig=dispatcher_fn_sig, conds=conds), dispatcher_fn_sig
+    src += f"CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {signature(metas[-1])}){{"
+    src += "\n"
+    for meta in sorted(metas, key=lambda m: -m.num_specs):
+        cond_fn = lambda val, hint: f"({val} % {hint} == 0)" if hint == 16 else f"({val} == {hint})" if hint == 1 else None
+        conds = " && ".join([cond_fn(val, hint) for val, hint in zip(meta.arg_names, meta.sizes) if hint is not None])
+        src += f"  if ({conds})\n"
+        src += f"    return {name}_{meta.suffix}(stream, gX, gY, gZ, numWarps, {', '.join(meta.arg_names)});\n"
+    src += "}\n"
+    return src, signature
 
 
 if __name__ == "__main__":
@@ -218,8 +140,21 @@ if __name__ == "__main__":
     parser.add_argument("--prefix", type=str, default="", help="String to prefix kernel dispatcher names")
     args = parser.parse_args()
 
-    _codegen_func = link_headers_to_dispatcher(args.headers, prefix=args.prefix)
-    _header, _source = _codegen_func(args.out.name)
+    print(args.headers)
+    # metadata
+    parser = HeaderParser()
+    includes = []
+    for header in args.headers:
+        h_path = Path(header)
+        h_str = h_path.read_text()
+        includes.append(h_path.name)
+        parser.extract_linker_meta(h_str)
 
-    args.out.with_suffix(".h").write_text(_header)
-    args.out.with_suffix(".c").write_text(_source)
+    launchers = [make_kernel_dispatcher(name, meta)[0] for name, meta in parser.all_kernels()]
+    launchers = "\n".join(launchers)
+    print(launchers)
+
+    # _codegen_func = link_headers_to_dispatcher(args.headers, prefix=args.prefix)
+    # _header, _source = _codegen_func(args.out.name)
+
+    # print(_source)
