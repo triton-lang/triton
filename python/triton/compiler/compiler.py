@@ -384,7 +384,6 @@ def compile(fn, **kwargs):
     is_cuda = device_type == "cuda" and _is_cuda(arch)
     is_hip = device_type in ["cuda", "hip"] and not is_cuda
     context = ir.context()
-    asm = dict()
     constants = kwargs.get("constants", dict())
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else 2)
