@@ -109,14 +109,25 @@ class HeaderParser:
         return
 
 
+def gen_signature(m):
+    return ", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)])
+
+
+def make_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
+    return f"""
+CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {gen_signature(metas[-1])});
+void load_{name}();
+void unload_{name}();
+    """
+
+
 def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
-    signature = lambda m: ", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)])
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        src += f"CUresult {name}_{meta.suffix}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {signature(meta)});\n"
+        src += f"CUresult {name}_{meta.suffix}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {gen_signature(meta)});\n"
     src += "\n"
 
-    src += f"CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {signature(metas[-1])}){{"
+    src += f"CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {gen_signature(metas[-1])}){{"
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
         cond_fn = lambda val, hint: f"({val} % {hint} == 0)" if hint == 16 else f"({val} == {hint})" if hint == 1 else None
@@ -124,7 +135,17 @@ def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
         src += f"  if ({conds})\n"
         src += f"    return {name}_{meta.suffix}(stream, gX, gY, gZ, numWarps, {', '.join(meta.arg_names)});\n"
     src += "}\n"
-    return src, signature
+
+    for mode in ["load", "unload"]:
+        src += f"\n// {mode} for: {name}\n"
+        for meta in sorted(metas, key=lambda m: -m.num_specs):
+            src += f"void {mode}_{name}_{meta.suffix}();\n"
+        src += f"void {mode}_{name}() {{"
+        src += "\n"
+        for meta in sorted(metas, key=lambda m: -m.num_specs):
+            src += f"  {mode}_{name}_{meta.suffix}();\n"
+        src += "}\n"
+    return src
 
 
 if __name__ == "__main__":
@@ -140,7 +161,6 @@ if __name__ == "__main__":
     parser.add_argument("--prefix", type=str, default="", help="String to prefix kernel dispatcher names")
     args = parser.parse_args()
 
-    print(args.headers)
     # metadata
     parser = HeaderParser()
     includes = []
@@ -150,11 +170,17 @@ if __name__ == "__main__":
         includes.append(h_path.name)
         parser.extract_linker_meta(h_str)
 
-    launchers = [make_kernel_dispatcher(name, meta)[0] for name, meta in parser.all_kernels()]
-    launchers = "\n".join(launchers)
-    print(launchers)
+    # generate headers
+    decls = [make_decls(name, meta) for name, meta in parser.all_kernels()]
+    with args.out.with_suffix(".h").open("w") as fp:
+        fp.write("#include <cuda.h>\n" + "\n".join(decls))
 
-    # _codegen_func = link_headers_to_dispatcher(args.headers, prefix=args.prefix)
-    # _header, _source = _codegen_func(args.out.name)
-
-    # print(_source)
+    # generate source
+    defs = [make_kernel_dispatcher(name, meta) for name, meta in parser.all_kernels()]
+    with args.out.with_suffix(".c").open("w") as fp:
+        out = ""
+        out += "#include <cuda.h>\n"
+        out += "#include <stdint.h>\n"
+        out += "\n"
+        out += "\n".join(defs)
+        fp.write(out)

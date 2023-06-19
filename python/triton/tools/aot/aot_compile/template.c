@@ -2,13 +2,14 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <inttypes.h>
+#include <string.h>
 #include <cuda.h>
 
 
 // helpers to check for cuda errors
-#define CUDA_CHECK(ans) {{
-    gpuAssert((ans), __FILE__, __LINE__);
-  }}
+#define CUDA_CHECK(ans) {{\
+    gpuAssert((ans), __FILE__, __LINE__);\
+  }}\
 
 static inline void gpuAssert(CUresult code, const char *file, int line) {{
   if (code != CUDA_SUCCESS) {{
@@ -35,7 +36,8 @@ void unload_{kernel_name}(void) {{
 }}
 
 // TODO: some code duplication with `runtime/backend/cuda.c`
-void load_{kernel_name}(int dev = 0) {{
+void load_{kernel_name}() {{
+    int dev = 0;
     void *bin = (void *)&CUBIN_NAME;
     int shared = {shared};
     CUDA_CHECK(cuModuleLoadData(&{kernel_name}_mod, bin));
@@ -44,8 +46,8 @@ void load_{kernel_name}(int dev = 0) {{
     int shared_optin;
     CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev));
     if (shared > 49152 && shared_optin > 49152) {{
-      CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
-      CUDA_CHECK(cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin))
+      CUDA_CHECK(cuFuncSetCacheConfig({kernel_name}_func, CU_FUNC_CACHE_PREFER_SHARED));
+      CUDA_CHECK(cuFuncSetAttribute({kernel_name}_func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared_optin))
     }}
 }}
 
