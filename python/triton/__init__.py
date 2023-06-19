@@ -43,6 +43,7 @@ __all__ = [
     "runtime",
     "TensorWrapper",
     "testing",
+    "tools",
     "program_ids_from_grid",
 ]
 

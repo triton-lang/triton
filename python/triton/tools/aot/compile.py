@@ -23,7 +23,7 @@ if __name__ == "__main__":
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel")
     args = parser.parse_args()
 
-    # # execute python sources and extract functions wrapped in JITFunction
+    # execute python sources and extract functions wrapped in JITFunction
     src_files = [args.path]
     if args.include:
         src_files += args.include
@@ -61,7 +61,8 @@ if __name__ == "__main__":
     arg_names = [kernel.arg_names[i] for i in signature.keys()]
 
     # dump C stub code
-    func_name = '_'.join([kernel.__name__, kernel_suffix(signature.values(), config)])
+    suffix = kernel_suffix(signature.values(), config)
+    func_name = '_'.join([kernel.__name__, suffix])
     hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
     params = {
         "kernel_name": func_name,
@@ -75,5 +76,5 @@ if __name__ == "__main__":
     }
     for ext in ['h', 'c']:
         template_path = Path(__file__).parent / "aot_compile" / f"template.{ext}"
-        with args.out_path.with_suffix(f".{ext}").open("w") as fp:
+        with args.out_path.with_suffix(f".{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))
