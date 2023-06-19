@@ -53,35 +53,33 @@ int main() {
   cuMemFree(B);
   cuMemFree(C);
   cuCtxDestroy(ctx);
-
-  printf("Done!\\n");
 }
 """
 
-# with tempfile.TemporaryDirectory() as tmp_dir:
-tmp_dir = tempfile.mkdtemp()
-kernel_path = os.path.join(tmp_dir, "kernel.py")
-with open(kernel_path, "w") as file:
-    file.write(kernel_src)
 
-compile_path = Path(triton.tools.__path__[0]) / "aot" / "compile.py"
-dtype = "fp16"
-BM, BN, BK = 16, 16, 16
-hints = [":16", ""]
-for ha in hints:
-    for hb in hints:
-        for hc in [""]:
-            sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, i32: 1, i32{hb}, i32: 1, i32{hc}, i32: 1, {BM}, {BN}, {BK}'
-            sa = ha.split(":")[-1]
-            sb = hb.split(":")[-1]
-            name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
-            subprocess.run(["python", compile_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", tmp_dir + "/" + name, kernel_path], check=True)
+def test_compile_link_matmul():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        kernel_path = os.path.join(tmp_dir, "kernel.py")
+        with open(kernel_path, "w") as file:
+            file.write(kernel_src)
 
-link_path = Path(triton.tools.__path__[0]) / "aot" / "link.py"
-subprocess.run(["python", link_path] + glob.glob(tmp_dir + "/*.h") + ["-o", tmp_dir + "/kernel"], check=True)
+        compile_path = Path(triton.tools.__path__[0]) / "aot" / "compile.py"
+        dtype = "fp16"
+        BM, BN, BK = 16, 16, 16
+        # hints = [":16", ""]
+        hints = [":16"]
+        for ha in hints:
+            for hb in hints:
+                for hc in [""]:
+                    sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, i32: 1, i32{hb}, i32: 1, i32{hc}, i32: 1, {BM}, {BN}, {BK}'
+                    name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
+                    subprocess.run(["python", compile_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", tmp_dir + "/" + name, kernel_path], check=True)
 
-test_path = os.path.join(tmp_dir, "test.c")
-with open(test_path, "w") as file:
-    file.write(test_src)
-subprocess.run(["gcc"] + glob.glob(tmp_dir + "/*.c") + ["-I", "/usr/local/cuda/include/"] + ["-o", tmp_dir + "/test", "-L", "/usr/lib/wsl/lib/", "-l", "cuda"], check=True)
-subprocess.run([os.path.join(tmp_dir, "test")], check=True)
+        link_path = Path(triton.tools.__path__[0]) / "aot" / "link.py"
+        subprocess.run(["python", link_path] + glob.glob(tmp_dir + "/*.h") + ["-o", tmp_dir + "/kernel"], check=True)
+
+        test_path = os.path.join(tmp_dir, "test.c")
+        with open(test_path, "w") as file:
+            file.write(test_src)
+        subprocess.run(["gcc"] + glob.glob(tmp_dir + "/*.c") + ["-I", "/usr/local/cuda/include/"] + ["-o", tmp_dir + "/test", "-L", "/usr/lib/wsl/lib/", "-l", "cuda"], check=True)
+        subprocess.run([os.path.join(tmp_dir, "test")], check=True)
