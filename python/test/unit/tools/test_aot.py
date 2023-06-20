@@ -8,7 +8,19 @@ import numpy as np
 
 import triton
 
+kernel_utils_src = """
+import triton
+
+@triton.jit
+def mul(x, y):
+    return x * y
+"""
+
 kernel_src = """
+import triton
+import triton.language as tl
+import kernel_utils
+
 @triton.jit
 def kernel(C, A, B,
           stride_cm, stride_cn,
@@ -23,6 +35,7 @@ def kernel(C, A, B,
   a = tl.load(A + ms[:, None] * stride_am + ks[None, :] * stride_ak)
   b = tl.load(B + ks[:, None] * stride_bk + ns[None, :] * stride_bn)
   c = tl.dot(a, b)
+  c = kernel_utils.mul(c, c)
   tl.store(C + ms[:, None] * stride_cm + ns[None, :] * stride_cn, c)
 """
 
@@ -120,6 +133,10 @@ def test_compile_link_matmul():
     kernel_path = os.path.join(tmp_dir, "kernel.py")
     with open(kernel_path, "w") as file:
         file.write(kernel_src)
+
+    kernel_utils_path = os.path.join(tmp_dir, "kernel_utils.py")
+    with open(kernel_utils_path, "w") as file:
+        file.write(kernel_utils_src)
 
     compile_path = Path(triton.tools.__path__[0]) / "aot" / "compile.py"
     dtype = "fp16"

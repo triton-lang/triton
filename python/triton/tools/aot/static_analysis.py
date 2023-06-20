@@ -241,6 +241,7 @@ def build_jit_stubs(*src_paths: Sequence[str]) -> Dict[str, JITStub]:
     for src_path in src_paths:
         _scope = generator.extract_kernel_and_globals(src_path)
         globals_.append(_scope)
+    # print(globals_)
 
     # Find conflicting names
     all_globals = _merge_conflict_report(

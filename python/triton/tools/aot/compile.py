@@ -1,8 +1,11 @@
 import binascii
+import os
+import pickle
+import subprocess
+import sys
+import tempfile
 from argparse import ArgumentParser
 from pathlib import Path
-
-from static_analysis import build_jit_stubs
 
 import triton
 from triton.compiler.code_generator import kernel_suffix
@@ -27,8 +30,35 @@ if __name__ == "__main__":
     src_files = [args.path]
     if args.include:
         src_files += args.include
-    ast_gen_objects = build_jit_stubs(*src_files)
-    kernel = ast_gen_objects[args.kernel_name]
+
+    arg_path = Path(args.path)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        stub_path = os.path.join(tmp_dir, "stub.py")
+        with open(stub_path, "w") as fp:
+            fp.write(f"""
+from {arg_path.stem} import {args.kernel_name}
+import pickle
+
+print(kernel)
+with open("kernel.pkl", "w") as kernel_path:
+    pickle.dump({args.kernel_name}, kernel_path)
+""")
+        subprocess.run([sys.executable, stub_path], env={"PYTHONPATH": arg_path.parent}, cwd=tmp_dir)
+        with open(os.path.join(tmp_dir, "kernel.pkl"), "r") as kernel_path:
+            kernel = pickle.load(kernel_path)
+
+    # with open(kernel_utils_path, "w") as file:
+
+    # import os
+    # os.chdir(Path(args.path).parent)
+    # print(os.getcwd())
+    # scope = {}
+    # exec(Path(args.path).read_text(), scope)
+    # print(scope[args.kernel_name])
+    # ast_gen_objects = build_jit_stubs(*src_files)
+    # kernel = ast_gen_objects[args.kernel_name]
+    # scope = {}
+    # exec(Path(args.path).rea)
 
     # validate and parse signature
     signature = list(map(lambda s: s.strip(" "), args.signature.split(",")))

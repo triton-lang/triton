@@ -18,6 +18,8 @@ In doing so, you will learn about:
 # Compute Kernel
 # --------------
 
+import pickle
+
 import torch
 
 import triton
@@ -52,6 +54,8 @@ def add_kernel(
     # Write x + y back to DRAM.
     tl.store(output_ptr + offsets, output, mask=mask)
 
+
+pickle.dump(add_kernel, open("test.pkl", "w"))
 
 # %%
 # Let's also declare a helper function to (1) allocate the `z` tensor
