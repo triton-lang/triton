@@ -479,11 +479,7 @@ public:
       auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
       auto order = triton::gpu::getOrder(layout);
       auto shapePerCTA = triton::gpu::getShapePerCTA(layout, shape);
-#ifdef USE_ROCM
-      Value warpSize = i32_val(64);
-#else
-      Value warpSize = i32_val(32);
-#endif
+      Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
       Value laneId = urem(tid, warpSize);
       Value warpId = udiv(tid, warpSize);
       SmallVector<Value> multiDimWarpId =
@@ -719,11 +715,7 @@ private:
       const BlockedEncodingAttr &blocked_layout, RankedTensorType type) const {
     auto shape = type.getShape();
     Value threadId = getThreadId(rewriter, loc);
-#ifdef USE_ROCM
-    Value warpSize = i32_val(64);
-#else
-    Value warpSize = i32_val(32);
-#endif
+    Value warpSize = i32_val(triton::gpu::getWarpSize(blocked_layout));
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blocked_layout.getSizePerThread();
@@ -833,7 +825,7 @@ private:
     Value _2 = i32_val(2);
     Value _4 = i32_val(4);
     Value _16 = i32_val(16);
-    Value warpSize = i32_val(32);
+    Value warpSize = i32_val(triton::gpu::getWarpSize(mmaLayout));
     Value _fpw0 = i32_val(fpw[0]);
     Value _fpw1 = i32_val(fpw[1]);
 
@@ -949,7 +941,7 @@ private:
     SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
                                       i32_val(_warpsPerCTA[1])};
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    Value warpSize = i32_val(triton::gpu::getWarpSize(mmaLayout));
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / 16));
@@ -996,7 +988,7 @@ private:
                                       i32_val(_warpsPerCTA[1])};
 
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(64);
+    Value warpSize = i32_val(triton::gpu::getWarpSize(mmaLayout));
     Value laneId = urem(threadId, warpSize);
 
     Value warpId = udiv(threadId, warpSize);

@@ -149,7 +149,8 @@ private:
       SmallVector<Value> mmaColIdx(4);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
-      Value warpSize = i32_val(32);
+      unsigned iWaveSize = triton::gpu::getWarpSize(layout);
+      Value warpSize = i32_val(iWaveSize);
       Value laneId = urem(threadId, warpSize);
       Value warpId = udiv(threadId, warpSize);
       // TODO: fix the bug in MMAEncodingAttr document
@@ -207,7 +208,8 @@ private:
       SmallVector<Value> mfmaColIdx(4);
       SmallVector<Value> mfmaRowIdx(16);
       Value threadId = getThreadId(rewriter, loc);
-      Value warpSize = i32_val(64);
+      unsigned iWaveSize = triton::gpu::getWarpSize(layout);
+      Value warpSize = i32_val(iWaveSize);
       Value laneId = urem(threadId, warpSize);
       Value warpId = udiv(threadId, warpSize);
       // TODO: fix the bug in MMAEncodingAttr document

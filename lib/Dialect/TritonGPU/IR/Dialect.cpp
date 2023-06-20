@@ -101,6 +101,15 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   return {};
 }
 
+unsigned getWarpSize(Attribute layout) {
+  unsigned size = 1;
+  auto threadsPerWarp = getThreadsPerWarp(layout);
+  for (auto e : threadsPerWarp) {
+    size *= e;
+  }
+  return size;
+}
+
 SmallVector<unsigned>
 getThreadsPerWarpWithUniqueData(Attribute layout,
                                 ArrayRef<int64_t> tensorShape) {

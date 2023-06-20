@@ -54,8 +54,9 @@ if __name__ == '__main__':
             arch_name = ""
             arch_triple = "amdgcn-amd-amdhsa"
             arch_features = ""
+            arch_warpsize = 64
         else:
-            arch_triple, arch_name, arch_features = arch_details
+            arch_triple, arch_name, arch_features, arch_warpsize = arch_details
 
         # stop processing if architecture name is not automatically detected and is not set manually
         if not args.gfx and not arch_name:
@@ -71,7 +72,7 @@ if __name__ == '__main__':
 
         # triton-ir -> triton-gpu-ir
         # use compute_capability == 80
-        module = tc.ttir_to_ttgir(module, num_warps=args.num_warps)  # num_stages=3, compute_capability=80)
+        module = tc.ttir_to_ttgir(module, num_warps=args.num_warps, warpsize=arch_warpsize)  # num_stages=3, compute_capability=80)
         module = tc.optimize_ttgir(module, num_stages=3, arch=args.gfx)
         # triton-gpu-ir -> llvm-ir
         # use compute_capability == 80
@@ -92,7 +93,7 @@ if __name__ == '__main__':
         raise argparse.ArgumentError(None, "Must specify --sm or --gfx for ttgir compilation")
 
     # triton-ir -> triton-gpu-ir
-    module = tc.ttir_to_ttgir(module, num_warps=args.num_warps)
+    module = tc.ttir_to_ttgir(module, num_warps=args.num_warps, warpsize=tc.CUDA_DEFAULT_WARP_SIZE)
     module = tc.optimize_ttgir(module, num_stages=3, arch=arch)
     if args.target == 'triton-gpu-ir':
         print(module.str())

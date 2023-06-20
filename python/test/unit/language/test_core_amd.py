@@ -2143,7 +2143,12 @@ class BlockedLayout:
     def __str__(self):
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
-if torch.version.hip is not None:
+def _get_warp_size():
+    if torch.version.hip is None:
+        return 32 # CUDA_DEFAULT_WARP_SIZE
+    return _triton.get_warp_size()
+
+if _get_warp_size() == 64:
     layouts = [
         # MmaLayout(version=1, warps_per_cta=[1, 4]),
         # MmaLayout(version=(2, 0), warps_per_cta=[1, 4]),
@@ -2163,13 +2168,14 @@ else:
         MmaLayout(version=(2, 0), warps_per_cta=[1, 4]),
         # MmaLayout(version=1, warps_per_cta=[4, 1]),
         MmaLayout(version=(2, 0), warps_per_cta=[4, 1]),
-        BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0]),
-        BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0]),
+        BlockedLayout([1, 2], [2, 16], [2, 2], [1, 0]),
+        BlockedLayout([2, 2], [4, 8], [2, 2], [1, 0]),
         BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0]),
-        BlockedLayout([8, 1], [16, 2], [1, 4], [0, 1]),
-        BlockedLayout([4, 1], [8, 4], [2, 2], [0, 1]),
-        BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1]),
-        BlockedLayout([4, 4], [1, 32], [4, 1], [1, 0])
+        BlockedLayout([4, 2], [16, 2], [1, 4], [0, 1]),
+        BlockedLayout([4, 2], [8, 4], [2, 2], [0, 1]),
+        BlockedLayout([4, 2], [4, 8], [2, 2], [0, 1]),
+        BlockedLayout([1, 1], [16, 2], [2, 2], [0, 1]),
+        BlockedLayout([4, 2], [1, 32], [4, 1], [1, 0])
     ]
 
 @pytest.mark.parametrize("shape", [(128, 128)])
@@ -2186,7 +2192,7 @@ def test_convert2d(dtype, shape, src_layout, dst_layout, device='cuda'):
 #src = {src_layout}
 #dst = {dst_layout}
 """ + """
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = """ + str(_get_warp_size()) + """ : i32} {
   tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<128> : tensor<128x1xi32, #src>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>
@@ -2224,7 +2230,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     assert torch.equal(z, x)
 
 
-if torch.version.hip is not None:
+if _get_warp_size() == 64:
     layouts = [
         MfmaLayout(warps_per_cta=[4, 1]),
         MfmaLayout(warps_per_cta=[2, 2]),
@@ -2248,7 +2254,7 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
     ir = f"""
     #blocked = #triton_gpu.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}}>
     #src = {src_layout}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = {_get_warp_size()} : i32}} {{
     tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) {{
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #blocked}}>>
         %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #blocked}}>>) -> tensor<{M}x1xi32, #blocked>
@@ -2312,7 +2318,7 @@ def test_make_range(dtype, shape, src_layout, dst_layout, device='cuda'):
 #src = {src_layout}
 #dst = {dst_layout}
 """ + """
-module attributes {"triton_gpu.num-warps" = 2 : i32} {
+module attributes {"triton_gpu.num-warps" = """ + str(128 // _get_warp_size()) + """ : i32, "triton_gpu.threads-per-warp" = """ + str(_get_warp_size()) + """ : i32} {
   tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<64> : tensor<64x1xi32, #src>
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 1, parent = #src}>>

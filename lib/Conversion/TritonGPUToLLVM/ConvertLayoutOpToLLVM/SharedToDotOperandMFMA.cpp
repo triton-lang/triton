@@ -197,13 +197,14 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   auto numRepM = numReps[0];
   auto numRepK = numReps[1];
 
-  Value waveSize = i32_val(64);
+  unsigned iWaveSize = triton::gpu::getWarpSize(mfmaLayout);
+  Value waveSize = i32_val(iWaveSize);
   Value wave = udiv(thread, waveSize);
   Value lane = urem(thread, waveSize);
 
   Value waveM =
       getWaveM(rewriter, loc, wave, warpsPerCTA, mfmaInstrM, shape[0]);
-  int numOfElems = std::max<int>(mfmaInstrM * mfmaInstrK / 64 /*wave size*/, 1);
+  int numOfElems = std::max<int>(mfmaInstrM * mfmaInstrK / iWaveSize /*wave size*/, 1);
   unsigned int maxNumWarps = shape[0] / mfmaInstrM;
   int warpsPerGroupM = std::min(warpsPerCTA[0], maxNumWarps);
   SmallVector<Value> offsets = computeOffsetsAType(
@@ -262,13 +263,14 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   auto numRepK = numReps[0];
   auto numRepN = numReps[1];
 
-  Value waveSize = i32_val(64);
+  unsigned iWaveSize = triton::gpu::getWarpSize(mfmaLayout);
+  Value waveSize = i32_val(iWaveSize);
   Value wave = udiv(thread, waveSize);
   Value lane = urem(thread, waveSize);
 
-  Value waveN =
-      getWaveN(rewriter, loc, wave, warpsPerCTA, mfmaInstrN, shape[1]);
-  int numOfElems = std::max<int>(mfmaInstrK * mfmaInstrN / 64 /*wave size*/, 1);
+  Value waveN = getWaveN(rewriter, loc, wave, warpsPerCTA,
+                         mfmaInstrN, shape[1]);
+  int numOfElems = std::max<int>(mfmaInstrK * mfmaInstrN / iWaveSize /*wave size*/, 1);
 
   int macroTileM = std::max<int>(shape[0] / (warpsPerCTA[0] * 32), 1);
   int wptM = std::min<int>(warpsPerCTA[0], macroTileM);

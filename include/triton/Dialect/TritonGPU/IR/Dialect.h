@@ -27,6 +27,8 @@ SmallVector<unsigned> getElemsPerThread(Type type);
 
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
 
+unsigned getWarpSize(Attribute layout);
+
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
 SmallVector<unsigned> getSizePerThread(Attribute layout);
