@@ -57,7 +57,7 @@ if __name__ == "__main__":
     divisible_by_16 = [i for i, h in hints.items() if h == 16]
     equal_to_1 = [i for i, h in hints.items() if h == 1]
     config = triton.compiler.instance_descriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
-    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config])
+    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config], num_warps=1)
     arg_names = [kernel.arg_names[i] for i in signature.keys()]
 
     # dump C stub code
