@@ -4,6 +4,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import numpy as np
+
 import triton
 
 kernel_src = """
@@ -27,28 +29,62 @@ def kernel(C, A, B,
 test_src = """
 #include <cuda.h>
 #include <stdio.h>
+#include <stdint.h>
 #include "kernel.h"
 
-int main() {
+static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
+    FILE *file = fopen(filename, "r");
+    if (file == NULL) {
+        printf(\"Could not open file %s\\n\", filename);
+        return;
+    }
+    int index = 0;
+    while (fscanf(file, "%hd,", &buffer[index]) != EOF && index < size) {
+        index++;
+    }
+    fclose(file);
+}
+
+int main(int argc, char **argv) {
   int M = 16, N = 16, K = 16;
   int BM = 16, BN = 16, BK = 16;
+
+  // initialize CUDA handles
   CUdevice dev;
   CUcontext ctx;
   CUstream stream;
   CUdeviceptr A, B, C;
   CUresult err = 0;
   cuInit(0);
-  err |= cuDeviceGet(&dev, 0);
-  err |= cuCtxCreate(&ctx, 0, dev);
-  err |= cuMemAlloc(&A, M * K * 2);
-  err |= cuMemAlloc(&B, K * N * 2);
-  err |= cuMemAlloc(&C, M * N * 2);
-  err |= cuStreamCreate(&stream, 0);
+  cuDeviceGet(&dev, 0);
+  cuCtxCreate(&ctx, 0, dev);
+  cuMemAlloc(&A, M * K * 2);
+  cuMemAlloc(&B, K * N * 2);
+  cuMemAlloc(&C, M * N * 4);
+  cuStreamCreate(&stream, 0);
   load_kernel();
+
+  // initialize input data
+  int16_t hA[M*K];
+  int16_t hB[K*N];
+  read_csv_to_buffer(argv[0], hA, M*K);
+  read_csv_to_buffer(argv[1], hB, K*N);
+  cuMemcpyHtoD(A, hA, M*K*2);
+  cuMemcpyHtoD(B, hB, K*N*2);
+
+  // launch kernel
   int numWarps = 1;
   int gX = 1, gY = 1, gZ = 1;
   kernel(stream, M/BM, N/BN, 1, numWarps, C, A, B, N, 1, K, 1, N, 1);
 
+  // read data
+  int32_t hC[M*N];
+  cuMemcpyDtoH(hC, C, M*N*4);
+  printf("%f\\n", hC[0]);
+
+
+  // free cuda handles
+  unload_kernel();
   cuMemFree(A);
   cuMemFree(B);
   cuMemFree(C);
@@ -65,6 +101,8 @@ def test_compile_link_matmul():
 
         compile_path = Path(triton.tools.__path__[0]) / "aot" / "compile.py"
         dtype = "fp16"
+        np_dtype = np.float16
+        M, N, K = 16, 16, 16
         BM, BN, BK = 16, 16, 16
         # hints = [":16", ""]
         hints = [":16"]
@@ -82,4 +120,12 @@ def test_compile_link_matmul():
         with open(test_path, "w") as file:
             file.write(test_src)
         subprocess.run(["gcc"] + glob.glob(tmp_dir + "/*.c") + ["-I", "/usr/local/cuda/include/"] + ["-o", tmp_dir + "/test", "-L", "/usr/lib/wsl/lib/", "-l", "cuda"], check=True)
-        subprocess.run([os.path.join(tmp_dir, "test")], check=True)
+
+        # create data
+        a_path = os.path.join(tmp_dir, "a.csv")
+        b_path = os.path.join(tmp_dir, "b.csv")
+        for size, path in [(M * K, a_path), (K * N, b_path)]:
+            x = np.random.randn(size).astype(np_dtype)
+            np.savetxt(path, x, delimiter=",")
+
+        subprocess.run([os.path.join(tmp_dir, "test"), a_path, b_path], check=True)
