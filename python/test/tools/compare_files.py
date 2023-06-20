@@ -1,9 +1,25 @@
 import argparse
+import difflib
 import glob
 import os
 from typing import Dict, List, Optional, Tuple
 
 import yaml
+
+
+class ComparisonResult:
+    def __init__(self, name: str, extension: str, numComparisons: int, diffs: List[str] = None, errors: List[str] = None):
+        self.name = name
+        self.extension = extension
+        self.numComparisons = numComparisons
+        self.diffs = [] if diffs is None else diffs
+        self.errors = [] if errors is None else errors
+
+    def isSuccess(self) -> bool:
+        return len(self.diffs) == 0 and len(self.errors) == 0
+
+    def __str__(self) -> str:
+        return f"name={self.name}, extension={self.extension}, numComparisons={self.numComparisons}, success={self.isSuccess()}"
 
 
 def listFilesWithExtension(path: str, extension: str) -> List[str]:
@@ -47,6 +63,16 @@ def compareFiles(file1: str, file2: str) -> bool:
         content2 = f2.read()
 
     return content1 == content2
+
+
+def diffFiles(file1, file2):
+    with open(file1, 'r') as f1:
+        file1_lines = f1.readlines()
+    with open(file2, 'r') as f2:
+        file2_lines = f2.readlines()
+
+    diff = list(difflib.unified_diff(file1_lines, file2_lines, file1, file2))
+    return diff
 
 
 def getFileVec(path: str) -> List[Tuple[str, str]]:
@@ -112,14 +138,15 @@ def doFilesMatch(path1: str, path2: str) -> bool:
     return True
 
 
-def compareMatchingFiles(name: str, extension: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]], args) -> Tuple[str, str]:
+def compareMatchingFiles(name: str, extension: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]], args) -> ComparisonResult:
     """
         Compare files with the given name/extension in all hashes in both paths
         Return the first mismatching files as a tuple (file1, file2), otherwise, return an empty tuple
-        Note: asserts that at least one comparison was made
     """
     hashes1 = nameToHashes1.get(name, [])
     hashes2 = nameToHashes2.get(name, [])
+    diffs = []
+    errors = []
     numComparisons = 0
     for hash1 in hashes1:
         path1 = os.path.join(args.path1, hash1)
@@ -134,14 +161,32 @@ def compareMatchingFiles(name: str, extension: str, nameToHashes1: Dict[str, Lis
             numComparisons += 1
             extFile1 = listFilesWithExtension(path1, extension)[0]
             extFile2 = listFilesWithExtension(path2, extension)[0]
-            if not compareFiles(extFile1, extFile2):
-                return (extFile1, extFile2)
-    assert numComparisons > 0, f"Did not find any matching files for {name}"
-    print(f"Compared {numComparisons} matching files for {name}")
-    return ()
+            diff = diffFiles(extFile1, extFile2)
+            if len(diff) > 0:
+                diffs.append(diffFiles(extFile2, extFile1))
+    if numComparisons == 0:
+        errors.append(f"Did not find any matching files for {name}")
+    return ComparisonResult(name=name, extension=extension, numComparisons=numComparisons, diffs=diffs, errors=errors)
 
 
-def main(args) -> None:
+def dumpResults(results: List[ComparisonResult], fileName: str):
+    """
+        Dumps the results to the given file
+    """
+    with open(fileName, 'w') as file:
+        for result in results:
+            file.write(str(result) + "\n")
+            file.write("Diffs:\n")
+            for diff in result.diffs:
+                for line in diff:
+                    file.write(line)
+            file.write("Errors:\n")
+            for error in result.errors:
+                file.write(error)
+            file.write("\n\n")
+
+
+def main(args) -> bool:
     """
         Iterates over all kernels in the given yaml file and compares them
         in the given paths
@@ -155,7 +200,7 @@ def main(args) -> None:
     assert os.path.exists(yamlFilePath), f"Path {yamlFilePath} does not exist!"
     nameAndExtension = loadYamlFile(yamlFilePath)["name_and_extension"]
 
-    mismatches = {}
+    results = []
     # iterate over the kernels that need to be checked
     for d in nameAndExtension:
         name = d["name"]  # kernel name
@@ -163,17 +208,19 @@ def main(args) -> None:
         # Compare all hashes on path 1 with all hashes on path 2
         # result is either the mismatching (file1, file2) with "extension" or empty tuple if no mismatch
         result = compareMatchingFiles(name, extension, nameToHashes1, nameToHashes2, args)
-        # If mismatch exists, add it to mismatches dict
-        if len(result) > 0:
-            mismatches[name] = result
-    # If mismatches dict is not empty, print the mismatches and assert false
-    if len(mismatches) > 0:
-        print(f"Found {len(mismatches)} mismatches:")
-        for name, mismatch in mismatches.items():
-            print(f"{name}: {mismatch}")
-        assert False, "Found mismatches!"
-    else:
-        print("No mismatches found!")
+        print(result)
+        # Otherwise, add it to the mismatches
+        results.append(result)
+
+    # Dump results
+    dumpResults(results, "kernels_reference_check.txt")
+
+    if len(results) != 0:
+        print("Failed!")
+        return False
+
+    print("Passed!")
+    return True
 
 
 if __name__ == "__main__":
