@@ -25,7 +25,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
+            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "H100"], ["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix::["ubuntu-latest"]'
           fi
@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set CUDA ENV
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100')}}
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
 
@@ -131,13 +131,13 @@ jobs:
           python3 -m pytest
 
       - name: Create artifacts archive
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100')}}
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           cd ~/.triton
           tar -czvf artifacts.tar.gz cache
 
       - name: Upload artifacts archive
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100')}}
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         uses: actions/upload-artifact@v2
         with:
           name: artifacts

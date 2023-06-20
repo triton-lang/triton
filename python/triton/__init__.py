@@ -18,7 +18,6 @@ from .runtime import (
 )
 from .runtime.jit import jit
 from .compiler import compile, CompilationError
-from .debugger.debugger import program_ids_from_grid
 
 from . import language
 from . import testing
@@ -44,7 +43,6 @@ __all__ = [
     "TensorWrapper",
     "testing",
     "tools",
-    "program_ids_from_grid",
 ]
 
 

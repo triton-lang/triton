@@ -352,7 +352,14 @@ struct StoreOpConversion
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       auto &ptxStoreInstr =
-          ptxBuilder.create<>("st")->global().v(nWords).b(width);
+          ptxBuilder.create<>("st")
+              ->global()
+              .o("L1::evict_first",
+                 op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
+              .o("L1::evict_last",
+                 op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+              .v(nWords)
+              .b(width);
       ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
 
       Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));

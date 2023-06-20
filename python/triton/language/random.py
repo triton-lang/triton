@@ -1,4 +1,4 @@
-import triton
+from ..runtime.jit import jit
 from . import core as tl
 
 PHILOX_KEY_A: tl.constexpr = 0x9E3779B9
@@ -12,7 +12,7 @@ N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
 # -------------------
 
 
-@triton.jit
+@jit
 def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Run `n_rounds` rounds of Philox for state (c0, c1, c2, c3) and key (k0, k1).
@@ -33,7 +33,7 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
     return c0, c1, c2, c3
 
 
-@triton.jit
+@jit
 def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     seed = seed.to(tl.uint64)
     seed_hi = ((seed >> 32) & 0xffffffff).to(tl.uint32)
@@ -45,7 +45,7 @@ def philox(seed, c0, c1, c2, c3, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     return philox_impl(c0, c1, c2, c3, seed_lo, seed_hi, n_rounds)
 
 
-@triton.jit
+@jit
 def randint(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block, returns a single
@@ -61,7 +61,7 @@ def randint(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     return ret
 
 
-@triton.jit
+@jit
 def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block, returns four
@@ -82,7 +82,7 @@ def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 # rand
 # -------------------
 
-# @triton.jit
+# @jit
 # def uint32_to_uniform_float(x):
 #     """
 #     Numerically stable function to convert a random uint32 into a random float uniformly sampled in [0, 1).
@@ -90,7 +90,7 @@ def randint4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 #     two_to_the_minus_32: tl.constexpr = 2.328306e-10
 #     return x * two_to_the_minus_32
 
-@triton.jit
+@jit
 def uint32_to_uniform_float(x):
     """
     Numerically stable function to convert a random uint32 into a random float uniformly sampled in [0, 1).
@@ -102,7 +102,7 @@ def uint32_to_uniform_float(x):
     return x * scale
 
 
-@triton.jit
+@jit
 def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
@@ -116,7 +116,7 @@ def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     return uint32_to_uniform_float(source)
 
 
-@triton.jit
+@jit
 def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offsets` block,
@@ -138,7 +138,7 @@ def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 # -------------------
 
 
-@triton.jit
+@jit
 def pair_uniform_to_normal(u1, u2):
     """Box-Muller transform"""
     u1 = tl.maximum(1.0e-7, u1)
@@ -147,7 +147,7 @@ def pair_uniform_to_normal(u1, u2):
     return r * tl.cos(th), r * tl.sin(th)
 
 
-@triton.jit
+@jit
 def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
@@ -163,7 +163,7 @@ def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     return n1
 
 
-@triton.jit
+@jit
 def randn4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
