@@ -215,7 +215,8 @@ def main(args) -> bool:
     # Dump results
     dumpResults(results, "kernels_reference_check.txt")
 
-    success = any(not result.isSuccess() for result in results)
+    success = all(result.isSuccess() for result in results)
+
     if not success:
         print("Failed!")
         return False

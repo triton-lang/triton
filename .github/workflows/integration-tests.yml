@@ -198,11 +198,11 @@ jobs:
       - name: Compare artifacts
         run: |
           output=$(python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml)
-          echo "::set-output name=result::$output"
+          echo "COMPARISON_RESULT=$output" >> $GITHUB_STATE
 
       - name: Fetch Run ID
         id: get_run_id
-        run: echo "::set-output name=run_id::${{ github.run_id }}"
+        run: echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_STATE
 
       - name: Upload results as artifact
         uses: actions/upload-artifact@v2
@@ -211,21 +211,16 @@ jobs:
           path: kernels_reference_check.txt
 
       - name: Check output and comment on PR
-        if: ${{ env.ADD_COMMENT == 'true' }}
+        if: ${{ env.COMPARISON_RESULT == 'false' }}
         uses: actions/github-script@v5
         with:
           script: |
-            const runId = ${{ steps.get_run_id.outputs.run_id }};
-            const scriptOutput = ${{ steps.script_output.outputs.result }};
-            if (scriptOutput === 'False') {
-              const issue_number = context.payload.pull_request.number;
-              const message = `:warning: this PR does not produce bitwise identical kernels as the branch it's merged against. Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${runId}/artifacts).`;
-              await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue_number,
-                  body: message
-              });
-            } else {
-              echo "No comment posted on the PR"
-            }
+            const run_id = ${{ env.RUN_ID }};
+            const issue_number = context.payload.pull_request.number;
+            const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}/artifacts).`;
+            await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue_number,
+                body: message
+            });
