@@ -138,7 +138,7 @@ def test_compile_link_matmul():
     with open(kernel_utils_path, "w") as file:
         file.write(kernel_utils_src)
 
-    compile_path = Path(triton.tools.__path__[0]) / "aot" / "compile.py"
+    compile_path = Path(triton.tools.__path__[0]) / "compile.py"
     dtype = "fp16"
     M, N, K = 16, 16, 16
     BM, BN, BK = 16, 16, 16
@@ -150,7 +150,7 @@ def test_compile_link_matmul():
             name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
             subprocess.run(["python", compile_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", tmp_dir + "/" + name, kernel_path], check=True)
 
-    link_path = Path(triton.tools.__path__[0]) / "aot" / "link.py"
+    link_path = Path(triton.tools.__path__[0]) / "link.py"
     subprocess.run(["python", link_path] + glob.glob(tmp_dir + "/*.h") + ["-o", tmp_dir + "/kernel"], check=True)
 
     test_path = os.path.join(tmp_dir, "test.c")
@@ -172,4 +172,4 @@ def test_compile_link_matmul():
     c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
     c_tri = c.reshape((M, N)).view(np.float32)
     c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
-    np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-3, rtol=0.)
+    np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.)

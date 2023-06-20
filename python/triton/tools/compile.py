@@ -27,9 +27,7 @@ if __name__ == "__main__":
     src_files = [args.path]
     if args.include:
         src_files += args.include
-
     arg_path = Path(args.path)
-
     sys.path.insert(0, str(arg_path.parent))
     spec = importlib.util.spec_from_file_location(arg_path.stem, arg_path)
     mod = importlib.util.module_from_spec(spec)
@@ -81,6 +79,6 @@ if __name__ == "__main__":
         "shared": ccinfo.shared,
     }
     for ext in ['h', 'c']:
-        template_path = Path(__file__).parent / f"template.{ext}"
+        template_path = Path(__file__).parent / f"compile.{ext}"
         with args.out_path.with_suffix(f".{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))
