@@ -2,7 +2,7 @@ import binascii
 from argparse import ArgumentParser
 from pathlib import Path
 
-from aot_compile.static_analysis import build_jit_stubs
+from static_analysis import build_jit_stubs
 
 import triton
 from triton.compiler.code_generator import kernel_suffix
@@ -75,6 +75,6 @@ if __name__ == "__main__":
         "shared": ccinfo.shared,
     }
     for ext in ['h', 'c']:
-        template_path = Path(__file__).parent / "aot_compile" / f"template.{ext}"
+        template_path = Path(__file__).parent / f"template.{ext}"
         with args.out_path.with_suffix(f".{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))
