@@ -25,7 +25,7 @@ class KernelLinkerMeta:
 
 class HeaderParser:
     def __init__(self) -> None:
-        import regex as re
+        import re
 
         # [kernel_name, c signature]
         self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+)")
