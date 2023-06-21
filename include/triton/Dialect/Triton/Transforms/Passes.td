@@ -19,12 +19,12 @@ def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp">
   let dependentDialects = ["mlir::arith::ArithDialect"];
 }
 
-def TritonDelayBroadcast : Pass</*cli-arg*/"triton-delay-broadcast", /*Op*/"mlir::ModuleOp"> {
+def TritonReorderBroadcast : Pass</*cli-arg*/"triton-reorder-broadcast", /*Op*/"mlir::ModuleOp"> {
   let summary = "Moves broadcast and splat after elementwise operations";
   let description = [{
     elementwise(splat(a), splat(b), ...) => splat(elementwise(a, b, ...))
   }];
-  let constructor = "mlir::triton::createDelayBroadcastPass()";
+  let constructor = "mlir::triton::createReorderBroadcastPass()";
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 

@@ -11,7 +11,7 @@
 #include <memory>
 
 namespace mlir {
-#define GEN_PASS_DEF_TRITONDELAYBROADCAST
+#define GEN_PASS_DEF_TRITONREORDERBROADCAST
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 } // namespace mlir
 
@@ -214,8 +214,8 @@ public:
   }
 };
 
-class DelayBroadcastPass
-    : public mlir::impl::TritonDelayBroadcastBase<DelayBroadcastPass> {
+class ReorderBroadcastPass
+    : public mlir::impl::TritonReorderBroadcastBase<ReorderBroadcastPass> {
 public:
   void runOnOperation() override {
     mlir::MLIRContext *context = &getContext();
@@ -236,6 +236,6 @@ public:
 
 } // namespace
 
-std::unique_ptr<mlir::Pass> mlir::triton::createDelayBroadcastPass() {
-  return std::make_unique<DelayBroadcastPass>();
+std::unique_ptr<mlir::Pass> mlir::triton::createReorderBroadcastPass() {
+  return std::make_unique<ReorderBroadcastPass>();
 }
