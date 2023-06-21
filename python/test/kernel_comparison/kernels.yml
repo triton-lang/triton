@@ -1,4 +1,6 @@
 name_and_extension:
+  - name: abc
+    extension: ptx
   - name: _kernel_0d1d2d34567c89c1011c
     extension: ptx
   - name: _kernel_0d1d2d3d4d5d6d7c8d9c10d11c
