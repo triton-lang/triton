@@ -46,6 +46,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # execute python sources and extract functions wrapped in JITFunction
+    print("extract JITFunction")
     arg_path = Path(args.path)
     sys.path.insert(0, str(arg_path.parent))
     spec = importlib.util.spec_from_file_location(arg_path.stem, arg_path)
@@ -54,6 +55,7 @@ if __name__ == "__main__":
     kernel = getattr(mod, args.kernel_name)
 
     # validate and parse signature
+    print("parse sig")
     signature = list(map(lambda s: s.strip(" "), args.signature.split(",")))
 
     def constexpr(s):
@@ -84,6 +86,7 @@ if __name__ == "__main__":
     arg_names = [kernel.arg_names[i] for i in signature.keys()]
 
     # dump C stub code
+    print("dump stub")
     suffix = kernel_suffix(signature.values(), config)
     func_name = '_'.join([kernel.__name__, suffix])
     hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
@@ -101,3 +104,4 @@ if __name__ == "__main__":
         template_path = Path(__file__).parent / f"compile.{ext}"
         with args.out_path.with_suffix(f".{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))
+    print("done")
