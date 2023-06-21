@@ -52,6 +52,22 @@ def get_pybind11_package_info():
 
 # llvm
 
+def get_my_llvm_package_info():
+    system = platform.system()
+    system_suffix = {"Linux": "linux-gnu-ubuntu-22.04", "Darwin": "apple-darwin"}[
+        system
+    ]
+    LIB_ARCH = os.environ.get("LIB_ARCH", platform.machine())
+    assert LIB_ARCH, "empty LIB_ARCH"
+    if LIB_ARCH == "aarch64":
+        LIB_ARCH = "arm64"
+    LLVM_RELEASE_VERSION = os.environ.get("LLVM_RELEASE_VERSION", "17.0.0")
+    RELEASE_TAG = "llvm-17.0.0-f733b4fb9b8bf6c759262424dd9534fd2e51a56d"
+    assert LLVM_RELEASE_VERSION, "empty LLVM_RELEASE_VERSION"
+    name = f"llvm+mlir+openmp-{sys.version_info.major}.{sys.version_info.minor}-{LLVM_RELEASE_VERSION}-{LIB_ARCH}-{system_suffix}-release"
+    url = f"https://github.com/makslevental/llvm-releases/releases/download/{RELEASE_TAG}/{name}.tar.xz"
+    return Package("llvm", "llvm_install", url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+
 
 def get_llvm_package_info():
     # download if nothing is installed
@@ -74,7 +90,7 @@ def get_llvm_package_info():
 
 
 def get_thirdparty_packages(triton_cache_path):
-    packages = [get_pybind11_package_info(), get_llvm_package_info()]
+    packages = [get_pybind11_package_info(), get_my_llvm_package_info()]
     thirdparty_cmake_args = []
     for p in packages:
         package_root_dir = os.path.join(triton_cache_path, p.package)
@@ -89,7 +105,7 @@ def get_thirdparty_packages(triton_cache_path):
             except Exception:
                 pass
             os.makedirs(package_root_dir, exist_ok=True)
-            print(f'downloading and extracting {p.url} ...')
+            print(f'downloading and extracting {p.url} to {package_root_dir}...')
             ftpstream = urllib.request.urlopen(p.url)
             file = tarfile.open(fileobj=ftpstream, mode="r|*")
             file.extractall(path=package_root_dir)
@@ -184,6 +200,8 @@ class CMakeBuild(build_ext):
             "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
             "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
             "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
+            "-DTRITON_BUILD_MLIR_PYTHON_BINDINGS=1",
+            "-DCMAKE_INSTALL_PREFIX=" + extdir,
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
@@ -206,6 +224,7 @@ class CMakeBuild(build_ext):
         env = os.environ.copy()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=self.build_temp, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=self.build_temp)
+        subprocess.check_call(["cmake", "--build", ".", "--target", "install-triton-mlir-bindings"] + build_args, cwd=self.build_temp)
 
 
 download_and_copy_ptxas()

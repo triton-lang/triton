@@ -1,0 +1,9 @@
+PyYAML
+cmake
+ninja
+numpy
+pip
+pybind11
+setuptools>=42
+wheel
+patchelf; sys_platform == 'linux'

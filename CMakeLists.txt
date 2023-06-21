@@ -189,7 +189,7 @@ include(AddLLVM)
 include(AddMLIR)
 
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
 
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -253,9 +253,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 endif()
 
-if(UNIX AND NOT APPLE)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
-endif()
+#if(UNIX AND NOT APPLE)
+#  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
+#endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
@@ -271,3 +271,7 @@ endif()
 add_subdirectory(test)
 
 add_subdirectory(unittest)
+
+if(TRITON_BUILD_MLIR_PYTHON_BINDINGS)
+  add_subdirectory(python/mlir_bindings)
+endif()
