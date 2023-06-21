@@ -1,11 +1,11 @@
 triton.language
-================
+===============
 
 .. currentmodule:: triton.language
 
 
 Programming Model
--------------------
+-----------------
 
 .. autosummary::
     :toctree: generated
@@ -16,31 +16,36 @@ Programming Model
 
 
 Creation Ops
--------------
+------------
 
 .. autosummary::
     :toctree: generated
     :nosignatures:
 
     arange
+    cat
+    full
     zeros
 
 
 Shape Manipulation Ops
------------------------
+----------------------
 
 .. autosummary::
     :toctree: generated
     :nosignatures:
 
+    broadcast
     broadcast_to
-    reshape
+    expand_dims
     ravel
-
+    reshape
+    trans
+    view
 
 
 Linear Algebra Ops
--------------------
+------------------
 
 .. autosummary::
     :toctree: generated
@@ -48,8 +53,9 @@ Linear Algebra Ops
 
     dot
 
+
 Memory Ops
---------------------
+----------
 
 .. autosummary::
     :toctree: generated
@@ -62,7 +68,7 @@ Memory Ops
 
 
 Indexing Ops
---------------
+------------
 
 .. autosummary::
     :toctree: generated
@@ -72,34 +78,42 @@ Indexing Ops
 
 
 Math Ops
-----------
+--------
 
 .. autosummary::
     :toctree: generated
     :nosignatures:
 
+    abs
     exp
     log
+    fdiv
     cos
     sin
     sqrt
     sigmoid
     softmax
+    umulhi
 
 
 Reduction Ops
----------------
+-------------
 
 .. autosummary::
     :toctree: generated
     :nosignatures:
 
+    argmax
+    argmin
     max
     min
+    reduce
     sum
+    xor_sum
+
 
 Atomic Ops
----------------
+----------
 
 .. autosummary::
     :toctree: generated
@@ -112,7 +126,7 @@ Atomic Ops
 
 
 Comparison ops
----------------
+--------------
 
 .. autosummary::
     :toctree: generated
@@ -124,7 +138,7 @@ Comparison ops
 .. _Random Number Generation:
 
 Random Number Generation
--------------------------
+------------------------
 
 .. autosummary::
     :toctree: generated
@@ -135,11 +149,35 @@ Random Number Generation
     rand
     randn
 
+
 Compiler Hint Ops
--------------------
+-----------------
 
 .. autosummary::
     :toctree: generated
     :nosignatures:
 
+    debug_barrier
+    max_contiguous
     multiple_of
+
+Debug Ops
+-----------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    static_print
+    static_assert
+    device_print
+    device_assert
+
+Iterators
+-----------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    static_range

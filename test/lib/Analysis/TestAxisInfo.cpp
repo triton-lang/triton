@@ -1,25 +1,15 @@
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/Utility.h"
 
 using namespace mlir;
 
 namespace {
 
 struct TestAxisInfoPass
-    : public PassWrapper<TestAxisInfoPass, OperationPass<FuncOp>> {
+    : public PassWrapper<TestAxisInfoPass, OperationPass<ModuleOp>> {
 
-  // LLVM15+
-  // MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAlignmentPass);
-
-  void print(const std::string &name, raw_ostream &os, ArrayRef<int> vals) {
-    os << name << ": [";
-    for (size_t d = 0; d < vals.size(); d++) {
-      if (d != 0)
-        os << ", ";
-      os << vals[d];
-    }
-    os << "]";
-  }
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestAxisInfoPass);
 
   StringRef getArgument() const final { return "test-print-alignment"; }
   StringRef getDescription() const final {
@@ -28,34 +18,24 @@ struct TestAxisInfoPass
 
   void runOnOperation() override {
     Operation *operation = getOperation();
-    auto &os = llvm::errs();
-    os << "Testing: " << operation->getName() << "\n";
-    AxisInfoAnalysis analysis(&getContext());
-    analysis.run(operation);
-    operation->walk([&](Operation *op) {
-      if (op->getNumResults() < 1)
-        return;
-      for (Value result : op->getResults()) {
-        // std::ostringstream oss;
-        // result.print(oss);
-        // os << " => ";
-        LatticeElement<AxisInfo> *latticeElement =
-            analysis.lookupLatticeElement(result);
-        if (!latticeElement) {
-          os << "None\n";
+    ModuleOp moduleOp = cast<ModuleOp>(operation);
+    ModuleAxisInfoAnalysis moduleAxisInfoAnalysis(moduleOp);
+    moduleOp.walk([&](triton::FuncOp funcOp) {
+      auto &os = llvm::errs();
+      auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
+      os << "@" << opName << "\n";
+      funcOp.walk([&](Operation *op) {
+        if (op->getNumResults() < 1)
           return;
+        for (Value result : op->getResults()) {
+          result.print(os);
+          os << " => ";
+          auto *axisInfo = moduleAxisInfoAnalysis.getAxisInfo(result);
+          if (axisInfo)
+            axisInfo->print(os);
+          os << "\n";
         }
-        AxisInfo &info = latticeElement->getValue();
-        print("Contiguity", os, info.getContiguity());
-        os << " ; ";
-        print("Divisibility", os, info.getDivisibility());
-        os << " ; ";
-        print("Constancy", os, info.getConstancy());
-        os << " ( ";
-        result.print(os);
-        os << " ) ";
-        os << "\n";
-      }
+      });
     });
   }
 };

@@ -1,9 +1,9 @@
 #include "triton/Analysis/Allocation.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "triton/Analysis/Alias.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -32,11 +32,9 @@ namespace triton {
 constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
-getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
-  auto srcBlockedLayout = srcLayout.dyn_cast<BlockedEncodingAttr>();
+getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   auto srcMmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
   auto srcDotLayout = srcLayout.dyn_cast<DotOperandEncodingAttr>();
-  auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>();
   auto dstMmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>();
   auto dstDotLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>();
   assert(!(srcMmaLayout && dstMmaLayout) &&
@@ -54,19 +52,19 @@ getCvtOrder(const Attribute &srcLayout, const Attribute &dstLayout) {
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
-  auto srcTy = op.src().getType().cast<RankedTensorType>();
-  auto dstTy = op.result().getType().cast<RankedTensorType>();
+  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
   // MmaToDotShortcut doesn't use shared mem
-  if (auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>())
-    if (auto dotOperandLayout = dstLayout.dyn_cast<DotOperandEncodingAttr>())
-      if (isMmaToDotShortcut(mmaLayout, dotOperandLayout))
-        return {};
+  if (srcLayout.isa<MmaEncodingAttr>() &&
+      dstLayout.isa<DotOperandEncodingAttr>())
+    if (isMmaToDotShortcut(srcTy, dstTy))
+      return {};
 
   assert(srcLayout && dstLayout &&
-         "Unexpect layout in getScratchConfigForCvtLayout()");
+         "Unexpected layout in getScratchConfigForCvtLayout()");
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
   unsigned srcContigPerThread = getContigPerThread(srcLayout)[inOrd[0]];
   unsigned dstContigPerThread = getContigPerThread(dstLayout)[outOrd[0]];
@@ -101,7 +99,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
 // TODO: extend beyond scalars
 SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
   SmallVector<unsigned> smemShape;
-  if (op.ptr().getType().isa<RankedTensorType>()) {
+  if (op.getPtr().getType().isa<RankedTensorType>()) {
     // do nothing or just assert because shared memory is not used in tensor up
     // to now
   } else {
@@ -118,8 +116,11 @@ SmallVector<unsigned> getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
 
 class AllocationAnalysis {
 public:
-  AllocationAnalysis(Operation *operation, Allocation *allocation)
-      : operation(operation), allocation(allocation) {
+  AllocationAnalysis(Operation *operation,
+                     Allocation::FuncAllocMapT *funcAllocMap,
+                     Allocation *allocation)
+      : operation(operation), funcAllocMap(funcAllocMap),
+        allocation(allocation) {
     run();
   }
 
@@ -150,7 +151,7 @@ private:
     }
 
     for (Value result : op->getResults()) {
-      if (isSharedEncoding(result)) {
+      if (triton::gpu::isSharedEncoding(result)) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto tensorType = result.getType().dyn_cast<RankedTensorType>();
@@ -168,8 +169,8 @@ private:
       unsigned bytes = helper.getScratchSizeInBytes();
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtLayout.src().getType().cast<RankedTensorType>();
-      auto dstTy = cvtLayout.result().getType().cast<RankedTensorType>();
+      auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
+      auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();
       auto srcEncoding = srcTy.getEncoding();
       auto dstEncoding = dstTy.getEncoding();
       if (srcEncoding.isa<SharedEncodingAttr>() ||
@@ -220,14 +221,20 @@ private:
                        ? elems * kPtrBitWidth / 8
                        : elems * elemTy.getIntOrFloatBitWidth() / 8;
       allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+    } else if (auto callOp = dyn_cast<CallOpInterface>(op)) {
+      auto callable = callOp.resolveCallable();
+      auto funcOp = dyn_cast<FunctionOpInterface>(callable);
+      auto *funcAlloc = &(*funcAllocMap)[funcOp];
+      auto bytes = funcAlloc->getSharedMemorySize();
+      allocation->addBuffer<BufferT::BufferKind::Virtual>(op, bytes);
     }
   }
 
   void getValueAlias(Value value, SharedMemoryAliasAnalysis &analysis) {
-    LatticeElement<AliasInfo> *latticeElement =
-        analysis.lookupLatticeElement(value);
+    dataflow::Lattice<AliasInfo> *latticeElement =
+        analysis.getLatticeElement(value);
     if (latticeElement) {
-      auto &info = latticeElement->getValue();
+      AliasInfo &info = latticeElement->getValue();
       if (!info.getAllocs().empty()) {
         for (auto alloc : info.getAllocs()) {
           allocation->addAlias(value, alloc);
@@ -244,14 +251,19 @@ private:
       getScratchValueSize(op);
     });
     // Get the alias values
-    SharedMemoryAliasAnalysis aliasAnalysis(operation->getContext());
-    aliasAnalysis.run(operation);
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    SharedMemoryAliasAnalysis *aliasAnalysis =
+        solver->load<SharedMemoryAliasAnalysis>();
+    if (failed(solver->initializeAndRun(operation))) {
+      // TODO: return error instead of bailing out..
+      llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
+    }
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
       for (auto operand : op->getOperands()) {
-        getValueAlias(operand, aliasAnalysis);
+        getValueAlias(operand, *aliasAnalysis);
       }
       for (auto value : op->getResults()) {
-        getValueAlias(value, aliasAnalysis);
+        getValueAlias(value, *aliasAnalysis);
       }
     });
   }
@@ -294,15 +306,19 @@ private:
   /// allocated, but is used to store intermediate results.
   void resolveScratchBufferLiveness(
       const DenseMap<Operation *, size_t> &operationId) {
-    // Analyze liveness of scratch buffers
-    for (auto opScratchIter : allocation->opScratch) {
-      // Any scratch memory's live range is the current operation's live
-      // range.
-      auto *op = opScratchIter.first;
-      auto *buffer = opScratchIter.second;
-      bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                           operationId.lookup(op) + 1)});
-    }
+    // Analyze liveness of scratch buffers and vritual buffers.
+    auto processScratchMemory = [&](const auto &container) {
+      for (auto opScratchIter : container) {
+        // Any scratch memory's live range is the current operation's live
+        // range.
+        auto *op = opScratchIter.first;
+        auto *buffer = opScratchIter.second;
+        bufferRange.insert({buffer, Interval(operationId.lookup(op),
+                                             operationId.lookup(op) + 1)});
+      }
+    };
+    processScratchMemory(allocation->opScratch);
+    processScratchMemory(allocation->opVirtual);
   }
 
   /// Resolves liveness of all values involved under the root operation.
@@ -385,7 +401,9 @@ private:
     //  | ******t1 ^^^^^^^^^v1^^^^^^^^^ ************t3
     //  |---------------------------------------------| liveness range
     //    1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 ...
-    /// Start -> Liveness Range
+    // If the available triple's range is less than a given buffer range,
+    // we won't know if there has been an overlap without using graph coloring.
+    // Start -> Liveness Range
     using TripleMapT = std::multimap<size_t, Interval<size_t>>;
     TripleMapT tripleMap;
     tripleMap.insert(std::make_pair(0, Interval<size_t>()));
@@ -411,6 +429,10 @@ private:
         tripleMap.insert(
             {size + xSize, Interval{std::max(range.start(), xRange.start()),
                                     std::min(range.end(), xRange.end())}});
+        // We could either insert (range.start, xRange.start) or (range.start,
+        // xRange.end), both are correct and determine the potential buffer
+        // offset, and the graph coloring algorithm will solve the interference,
+        // if any
         if (range.start() < xRange.start())
           tripleMap.insert({size, Interval{range.start(), xRange.end()}});
         if (xRange.end() < range.end())
@@ -489,11 +511,15 @@ private:
 
 private:
   Operation *operation;
+  Allocation::FuncAllocMapT *funcAllocMap;
   Allocation *allocation;
   BufferRangeMapT bufferRange;
 };
+
 } // namespace triton
 
-void Allocation::run() { triton::AllocationAnalysis(getOperation(), this); }
+void Allocation::run(FuncAllocMapT &funcAllocMap) {
+  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+}
 
 } // namespace mlir

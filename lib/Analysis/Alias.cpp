@@ -18,15 +18,16 @@ AliasInfo AliasInfo::join(const AliasInfo &lhs, const AliasInfo &rhs) {
   return ret;
 }
 
-ChangeResult SharedMemoryAliasAnalysis::visitOperation(
-    Operation *op, ArrayRef<LatticeElement<AliasInfo> *> operands) {
+void SharedMemoryAliasAnalysis::visitOperation(
+    Operation *op, ArrayRef<const dataflow::Lattice<AliasInfo> *> operands,
+    ArrayRef<dataflow::Lattice<AliasInfo> *> results) {
   AliasInfo aliasInfo;
   bool pessimistic = true;
   if (maybeSharedAllocationOp(op)) {
     // These ops may allocate a new shared memory buffer.
     auto result = op->getResult(0);
     // XXX(Keren): the following ops are always aliasing for now
-    if (isa<tensor::ExtractSliceOp, triton::TransOp>(op)) {
+    if (isa<triton::gpu::ExtractSliceOp, triton::TransOp>(op)) {
       // extract_slice %src
       // trans %src
       aliasInfo = AliasInfo(operands[0]->getValue());
@@ -37,21 +38,18 @@ ChangeResult SharedMemoryAliasAnalysis::visitOperation(
       // insert_slice %src into %dst[%offsets]
       aliasInfo = AliasInfo(operands[1]->getValue());
       pessimistic = false;
-    } else if (isSharedEncoding(result)) {
+    } else if (triton::gpu::isSharedEncoding(result)) {
       aliasInfo.insert(result);
       pessimistic = false;
     }
   }
 
   if (pessimistic) {
-    return markAllPessimisticFixpoint(op->getResults());
+    return setAllToEntryStates(results);
   }
   // Join all lattice elements
-  ChangeResult result = ChangeResult::NoChange;
-  for (Value value : op->getResults()) {
-    result |= getLatticeElement(value).join(aliasInfo);
-  }
-  return result;
+  for (auto *result : results)
+    propagateIfChanged(result, result->join(aliasInfo));
 }
 
 AliasResult SharedMemoryAliasAnalysis::alias(Value lhs, Value rhs) {

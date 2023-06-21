@@ -1,18 +1,10 @@
 import torch
 
-import triton
-import triton.language as tl
-
-
-def next_power_of_2(n):
-    n -= 1
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    n += 1
-    return n
+# import triton
+# import language as tl
+from .. import heuristics, jit
+from .. import language as tl
+from .. import next_power_of_2
 
 
 def num_warps(N):
@@ -23,9 +15,9 @@ def num_warps(N):
     return 16
 
 
-@triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
-@triton.heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
-@triton.jit
+@heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
+@heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
+@jit
 def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
     cols = tl.arange(0, BLOCK)
@@ -48,9 +40,9 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     tl.store(LOSS + row, probs)
 
 
-@triton.heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
-@triton.heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
-@triton.jit
+@heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
+@heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
+@jit
 def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
     cols = tl.arange(0, BLOCK)

@@ -1,8 +1,5 @@
-import multiprocessing
 import os
-import re
 import shutil
-from collections import namedtuple
 
 import pytest
 import torch
@@ -107,33 +104,6 @@ def test_specialize(mode):
     assert counter == target
 
 
-@pytest.mark.parametrize("value, value_type", [
-    (-1, 'i32'), (0, 'i32'), (1, 'i32'), (-2**31, 'i32'), (2**31 - 1, 'i32'),
-    (2**32, 'i64'), (2**63 - 1, 'i64'), (-2**63, 'i64'),
-    (2**31, 'u32'), (2**32 - 1, 'u32'), (2**63, 'u64'), (2**64 - 1, 'u64')
-])
-def test_value_specialization(value: int, value_type: str, device='cuda') -> None:
-
-    @triton.jit
-    def kernel(VALUE, X):
-        pass
-
-    cache_str = None
-
-    def get_cache_str(*args, **kwargs):
-        nonlocal cache_str
-        cache_str = kwargs["repr"]
-    triton.JITFunction.cache_hook = get_cache_str
-    reset_tmp_dir()
-    x = torch.tensor([3.14159], device='cuda')
-    kernel[(1, )](value, x)
-    triton.JITFunction.cache_hook = None
-
-    cache_str_match = re.match(r".*VALUE: (\w+).*", cache_str)
-    spec_type = None if cache_str_match is None else cache_str_match.group(1)
-    assert spec_type == value_type
-
-
 def test_constexpr_not_callable() -> None:
     @triton.jit
     def kernel(X, c: tl.constexpr):
@@ -176,31 +146,63 @@ def test_jit_warmup_cache() -> None:
     assert len(kernel_add.cache) == 1
 
 
-def test_compile_in_subproc() -> None:
+def test_jit_debug() -> None:
     @triton.jit
-    def kernel_sub(a, b, o, N: tl.constexpr):
+    def kernel_add(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
+        tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx,
-                 tl.load(a + idx) - tl.load(b + idx) * 777)
+                 tl.load(a + idx) + tl.load(b + idx))
 
-    major, minor = torch.cuda.get_device_capability(0)
-    cc = major * 10 + minor
-    config = namedtuple("instance_descriptor", [
-        "divisible_by_16", "equal_to_1"])(
-        tuple(range(4)),
-        ())
+    device = torch.cuda.current_device()
+    assert len(kernel_add.cache[device]) == 0
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add.cache[device]) == 1
+    kernel_add.debug = False
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add.cache[device]) == 2
+    kernel_add.debug = True
+    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add.cache[device]) == 3
+    bins = list(kernel_add.cache[device].values())
+    assert bins[2].asm['ttir'] != bins[1].asm['ttir']
 
-    proc = multiprocessing.Process(
-        target=triton.compile,
-        kwargs=dict(
-            fn=kernel_sub,
-            signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
-            device=0,
-            constants={3: 32},
-            configs=[config],
-            warm_cache_only=True,
-            cc=cc,
-        ))
-    proc.start()
-    proc.join()
-    assert proc.exitcode == 0
+
+@triton.jit
+def add_fn(a, b, o, N: tl.constexpr):
+    idx = tl.arange(0, N)
+    tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
+
+
+def test_jit_noinline() -> None:
+    @triton.jit
+    def kernel_add_device(a, b, o, N: tl.constexpr):
+        add_fn(a, b, o, N)
+
+    device = torch.cuda.current_device()
+    assert len(kernel_add_device.cache[device]) == 0
+    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add_device.cache[device]) == 1
+    bins = list(kernel_add_device.cache[device].values())
+    inline_ttir = bins[0].asm['ttir']
+    add_fn.noinline = True
+    add_fn.hash = None
+    kernel_add_device.hash = None
+    kernel_add_device.cache[device].clear()
+    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
+    assert len(kernel_add_device.cache[device]) == 1
+    bins = list(kernel_add_device.cache[device].values())
+    noinline_ttir = bins[0].asm['ttir']
+    assert inline_ttir != noinline_ttir
+
+
+def test_memory_leak() -> None:
+    @triton.jit
+    def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
+        xnumel = 10
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)[:]
+        xmask = xindex < xnumel
+        x0 = xindex
+        tmp0 = tl.load(in_ptr0 + (x0), xmask)
+        tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)

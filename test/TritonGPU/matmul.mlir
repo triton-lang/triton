@@ -1,10 +1,10 @@
-// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu -tritongpu-combine -tritongpu-pipeline=num-stages=3 -tritongpu-combine -test-print-allocation 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu -tritongpu-remove-layout-conversions -tritongpu-pipeline=num-stages=3 -test-print-allocation 2>&1 | FileCheck %s
 
 // CHECK: offset = 0, size = 49152
 // CHECK: offset = 49152, size = 49152
 // CHECK: size = 98304
 module {
-func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c64_13c64_14c64_15c8(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32) {
+tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c64_13c64_14c64_15c8(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32) {
     %cst = arith.constant dense<true> : tensor<64x64xi1>
     %c64 = arith.constant 64 : index
     %c0 = arith.constant 0 : index
@@ -12,7 +12,7 @@ func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c6
     %c64_i32 = arith.constant 64 : i32
     %c63_i32 = arith.constant 63 : i32
     %c8_i32 = arith.constant 8 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.addi %arg3, %c63_i32 : i32
     %2 = arith.divsi %1, %c64_i32 : i32
     %3 = arith.addi %arg4, %c63_i32 : i32
@@ -22,7 +22,7 @@ func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c6
     %7 = arith.muli %6, %c8_i32 : i32
     %8 = arith.subi %2, %7 : i32
     %9 = arith.cmpi slt, %8, %c8_i32 : i32
-    %10 = select %9, %8, %c8_i32 : i32
+    %10 = arith.select %9, %8, %c8_i32 : i32
     %11 = arith.remsi %0, %10 : i32
     %12 = arith.addi %7, %11 : i32
     %13 = arith.remsi %0, %5 : i32
@@ -101,6 +101,6 @@ func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__12c6
     %74 = tt.broadcast %72 : (tensor<1x64xi1>) -> tensor<64x64xi1>
     %75 = arith.andi %73, %74 : tensor<64x64xi1>
     tt.store %66, %47#0, %75 : tensor<64x64xf32>
-    return
+    tt.return
   }
 }

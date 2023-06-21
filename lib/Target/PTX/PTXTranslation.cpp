@@ -6,16 +6,24 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+
+#include <mutex>
+#include <optional>
 
 namespace triton {
 
 static void initLLVM() {
-  LLVMInitializeNVPTXTargetInfo();
-  LLVMInitializeNVPTXTarget();
-  LLVMInitializeNVPTXTargetMC();
-  LLVMInitializeNVPTXAsmPrinter();
+  static std::once_flag init_flag;
+  std::call_once(init_flag, []() {
+    LLVMInitializeNVPTXTargetInfo();
+    LLVMInitializeNVPTXTarget();
+    LLVMInitializeNVPTXTargetMC();
+    LLVMInitializeNVPTXAsmPrinter();
+  });
 }
 
 static bool findAndReplace(std::string &str, const std::string &begin,
@@ -34,20 +42,19 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   // LLVM version in use may not officially support target hardware.
   // Supported versions for LLVM 14 are here:
   // https://github.com/llvm/llvm-project/blob/f28c006a5895fc0e329fe15fead81e37457cb1d1/clang/include/clang/Basic/BuiltinsNVPTX.def
-  int maxPTX = std::min(75, version);
-  int maxCC = std::min(86, cc);
+  int maxPTX = std::min(80, version);
+  int maxCC = std::min(90, cc);
   // options
   auto options = llvm::cl::getRegisteredOptions();
   auto *shortPtr =
       static_cast<llvm::cl::opt<bool> *>(options["nvptx-short-ptr"]);
   assert(shortPtr);
   shortPtr->setValue(true);
-  std::string sm = "sm_" + std::to_string(maxCC);
+  std::string sm = cc == 90 ? "sm_90a" : "sm_" + std::to_string(cc);
   // max PTX version
   int ptxMajor = maxPTX / 10;
   int ptxMinor = maxPTX % 10;
   // create
-  llvm::SmallVector<char, 0> buffer;
   std::string triple = "nvptx64-nvidia-cuda";
   std::string proc = "sm_" + std::to_string(maxCC);
   std::string layout = "";
@@ -72,24 +79,26 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   opt.NoNaNsFPMath = true;
   llvm::TargetMachine *machine = target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      llvm::None, llvm::CodeGenOpt::Aggressive);
+      std::nullopt, llvm::CodeGenOpt::Aggressive);
   // set data layout
   if (layout.empty())
     module.setDataLayout(machine->createDataLayout());
   else
     module.setDataLayout(layout);
   // emit machine code
-  for (llvm::Function &f : module.functions())
-    f.addFnAttr(llvm::Attribute::AlwaysInline);
-  llvm::legacy::PassManager pass;
-  llvm::raw_svector_ostream stream(buffer);
-  // emit
-  machine->addPassesToEmitFile(pass, stream, nullptr,
-                               llvm::CodeGenFileType::CGFT_AssemblyFile);
-  pass.run(module);
-
+  std::string result;
+  {
+    llvm::raw_string_ostream stream(result);
+    llvm::buffer_ostream pstream(stream);
+    for (llvm::Function &f : module.functions())
+      f.addFnAttr(llvm::Attribute::AlwaysInline);
+    llvm::legacy::PassManager pass;
+    // emit
+    machine->addPassesToEmitFile(pass, pstream, nullptr,
+                                 llvm::CodeGenFileType::CGFT_AssemblyFile);
+    pass.run(module);
+  }
   // post-process
-  std::string result(buffer.begin(), buffer.end());
   findAndReplace(result, ".version", "\n",
                  ".version " + std::to_string(ptxMajor) + "." +
                      std::to_string(ptxMinor) + "\n");

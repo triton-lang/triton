@@ -22,15 +22,27 @@ def TritonGPU_Dialect : Dialect {
 
   let extraClassDeclaration = [{
     static std::string getNumWarpsAttrName() { return "triton_gpu.num-warps"; }
-    static int getNumWarps(ModuleOp mod) { 
-      if(!mod->hasAttr("triton_gpu.num-warps"))
+    static int getNumWarps(ModuleOp mod) {
+      Attribute numWarps = mod->getDiscardableAttr("triton_gpu.num-warps");
+      if(!numWarps)
         llvm::report_fatal_error(
             "TritonGPU module should contain a triton_gpu.num-warps attribute");
-      return mod->getAttr("triton_gpu.num-warps").cast<IntegerAttr>().getInt();
+      return numWarps.cast<IntegerAttr>().getInt();
     }
-  }];
-  
 
+    static std::string getThreadsPerWarpAttrName() { return "triton_gpu.threads-per-warp"; }
+    static int getThreadsPerWarp(ModuleOp mod) {
+      Attribute threadsPerWarp = mod->getDiscardableAttr("triton_gpu.threads-per-warp");
+      if(!threadsPerWarp) {
+        return 32;
+      }
+      return threadsPerWarp.cast<IntegerAttr>().getInt();
+    }
+
+  }];
+
+  let useDefaultAttributePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
 }
 
 #endif

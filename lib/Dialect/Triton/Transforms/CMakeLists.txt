@@ -4,8 +4,14 @@ add_public_tablegen_target(TritonCombineIncGen)
 
 add_mlir_dialect_library(TritonTransforms
   Combine.cpp
+  RewriteTensorPointer.cpp
 
   DEPENDS
   TritonTransformsIncGen
   TritonCombineIncGen
+
+  LINK_LIBS PUBLIC
+  MLIRPass
+  MLIRTransformUtils
+  TritonIR
 )

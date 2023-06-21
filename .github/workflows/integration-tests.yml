@@ -3,9 +3,17 @@ name: Integration Tests
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - main
-      - triton-mlir
+    branches: [main]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
 
 jobs:
   Runner-Preparation:
@@ -17,9 +25,9 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A10"], ["self-hosted", "V100"], "macos-10.15"]' >> $GITHUB_OUTPUT
+            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "H100"], ["self-hosted", "gfx908"], ["self-hosted", "arc770"]]' >> $GITHUB_OUTPUT
           else
-            echo '::set-output name=matrix::["ubuntu-latest", "macos-10.15"]' >> $GITHUB_OUTPUT
+            echo '::set-output name=matrix::["ubuntu-latest"]' >> $GITHUB_OUTPUT
           fi
 
   Integration-Tests:
@@ -35,58 +43,133 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Set CUDA ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
+        run: |
+          echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
+
+      - name: Set ROCM ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
+        run: |
+          echo "BACKEND=ROCM" >> "${GITHUB_ENV}"
+
+      - name: Set XPU ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'arc770')}}
+        run: |
+          echo "BACKEND=XPU" >> "${GITHUB_ENV}"
+
       - name: Clear cache
         run: |
-          rm -rf ~/.triton/cache/
+          rm -rf ~/.triton
 
-      - name: Check imports
-        if: ${{ matrix.runner != 'macos-10.15' }}
+      - name: Update PATH
         run: |
-          pip install isort
-          isort -c ./python || ( echo '::error title=Imports not sorted::Please run \"isort ./python\"' ; exit 1 )
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
-      - name: Check python style
-        if: ${{ matrix.runner != 'macos-10.15' }}
+      - name: Check pre-commit
+        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] != 'arc770') }}
         run: |
-          pip install autopep8
-          autopep8 -a -r -d --exit-code ./python || ( echo '::error title=Style issues::Please run \"autopep8 -a -r -i ./python\"' ; exit 1 )
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files
 
-      - name: Check cpp style
-        if: ${{ matrix.runner != 'macos-10.15' }}
+      - name: Check pre-commit arc770
+        if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] == 'arc770') }}
         run: |
-          pip install clang-format
-          find . -regex '.*\.\(cpp\|hpp\|h\|cc\)' -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file --dry-run -Werror -i ||
-          (echo '::error title=Style issues:: Please run `find . -regex ".*\.\(cpp\|hpp\|h\|cc\)" -not -path "./python/build/*" -not -path "./include/triton/external/*" -print0 | xargs -0 -n1 clang-format -style=file -i`' ; exit 1)
-
-      - name: Flake8
-        if: ${{ matrix.runner != 'macos-10.15' }}
-        run: |
-          pip install flake8
-          flake8 --config ./python/setup.cfg ./python || ( echo '::error::Flake8 failed; see logs for errors.' ; exit 1 )
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files
 
       - name: Install Triton
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python
-          TRITON_USE_ASSERT_ENABLED_LLVM=TRUE pip3 install -e '.[tests]'
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Install Triton on ROCM
+        if: ${{ env.BACKEND == 'ROCM'}}
+        run: |
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Install Triton on XPU
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          git submodule update --init --recursive
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          export TRITON_CODEGEN_INTEL_XPU_BACKEND=1
+          python3 -m pip uninstall -y triton
+          python3 setup.py build
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Run lit tests
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
+          python3 -m pip install lit
           cd python
-          LIT_TEST_DIR="build/$(ls build)/test"
-          if [ ! -d "$LIT_TEST_DIR" ]; then
-            echo "Not found `$LIT_TEST_DIR`.  Did you change an installation method?" ; exit -1
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
           fi
-          lit -v "$LIT_TEST_DIR"
+          lit -v "${LIT_TEST_DIR}"
 
-      - name: Run python tests
-        if: ${{matrix.runner[0] == 'self-hosted'}}
+      - name: Run python tests on CUDA
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
-          cd python/test/unit/
-          pytest
+          cd python/test/unit
+          python3 -m pytest
 
+      - name: Create artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
+        run: |
+          cd ~/.triton
+          tar -czvf artifacts.tar.gz cache
+
+      - name: Upload artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
+        uses: actions/upload-artifact@v2
+        with:
+          name: artifacts
+          path: ~/.triton/artifacts.tar.gz
 
       - name: Run CXX unittests
+        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
-          cd python/
-          cd "build/$(ls build)"
+          cd python
+          cd "build/$(ls build | grep -i cmake)"
           ctest
+
+      - name: Run python tests on ROCM
+        if: ${{ env.BACKEND == 'ROCM'}}
+        run: |
+          cd python/test/unit/language
+          python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
+
+      - name: Run python tests on XPU
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          source ${HOME}/triton_vars.sh
+          source ${HOME}/miniconda3/bin/activate
+          conda activate triton-xpu-ci
+          cd python/test/backend/third_party_backends
+          python3 -m pytest --capture=tee-sys -rfs --verbose --backend xpu
+
+      - name: Regression tests
+        if: ${{ contains(matrix.runner, 'A100') }}
+        run: |
+          cd python/test/regression
+          sudo nvidia-smi -i 0 -pm 1
+          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+          python3 -m pytest -vs .
+          sudo nvidia-smi -i 0 -rgc

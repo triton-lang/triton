@@ -2,17 +2,17 @@ import heapq
 
 import torch
 
-import triton
-import triton._C.libtriton.triton as _triton
-from triton.testing import get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops
+# import triton
+from .. import cdiv
+from .._C.libtriton.triton import runtime
+from ..runtime import driver
+from ..testing import get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops
 
 
 def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
     ''' return compute throughput in TOPS '''
     total_warps = num_ctas * min(num_warps, 4)
-    triton.compiler.init_cuda_utils()
-
-    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
+    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
     tflops = min(num_subcores, total_warps) / num_subcores * get_max_tensorcore_tflops(dtype, backend, device)
     return tflops
 
@@ -20,7 +20,7 @@ def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
 def get_simd_tflops(backend, device, num_ctas, num_warps, dtype):
     ''' return compute throughput in TOPS '''
     total_warps = num_ctas * min(num_warps, 4)
-    num_subcores = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
+    num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4  # on recent GPUs
     tflops = min(num_subcores, total_warps) / num_subcores * get_max_simd_tflops(dtype, backend, device)
     return tflops
 
@@ -42,13 +42,13 @@ def estimate_matmul_time(
 ):
     ''' return estimated running time in ms
           = max(compute, loading) + store '''
-    backend = _triton.runtime.backend.CUDA
+    backend = runtime.backend.CUDA
     device = torch.cuda.current_device()
     dtype = A.dtype
     dtsize = A.element_size()
 
-    num_cta_m = triton.cdiv(M, BLOCK_M)
-    num_cta_n = triton.cdiv(N, BLOCK_N)
+    num_cta_m = cdiv(M, BLOCK_M)
+    num_cta_n = cdiv(N, BLOCK_N)
     num_cta_k = SPLIT_K
     num_ctas = num_cta_m * num_cta_n * num_cta_k
 
@@ -61,7 +61,7 @@ def estimate_matmul_time(
     compute_ms = total_ops / tput
 
     # time to load data
-    num_sm = triton.compiler.cuda_utils.get_device_properties(device)["multiprocessor_count"]
+    num_sm = driver.utils.get_device_properties(device)["multiprocessor_count"]
     active_cta_ratio = min(1, num_ctas / num_sm)
     active_cta_ratio_bw1 = min(1, num_ctas / 32)  # 32 active ctas are enough to saturate
     active_cta_ratio_bw2 = max(min(1, (num_ctas - 32) / (108 - 32)), 0)  # 32-108, remaining 5%
@@ -112,9 +112,7 @@ def early_config_prune(configs, named_args):
         BLOCK_M, BLOCK_N, BLOCK_K, num_stages = \
             kw['BLOCK_M'], kw['BLOCK_N'], kw['BLOCK_K'], config.num_stages
 
-        # TODO: move to `cuda_utils` submodule
-        triton.compiler.init_cuda_utils()
-        max_shared_memory = triton.compiler.cuda_utils.get_device_properties(device)["max_shared_mem"]
+        max_shared_memory = driver.utils.get_device_properties(device)["max_shared_mem"]
         required_shared_memory = (BLOCK_M + BLOCK_N) * BLOCK_K * num_stages * dtsize
         if required_shared_memory <= max_shared_memory:
             pruned_configs.append(config)

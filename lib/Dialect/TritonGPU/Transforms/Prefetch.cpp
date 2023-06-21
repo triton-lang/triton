@@ -26,8 +26,7 @@
 // }
 //===----------------------------------------------------------------------===//
 
-#include "mlir/IR/BlockAndValueMapping.h"
-#include "triton/Analysis/Utility.h"
+#include "mlir/IR/IRMapping.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
@@ -45,7 +44,7 @@ class Prefetcher {
   scf::YieldOp yieldOp;
   ///
   // TODO: add a hook to infer prefetchWidth
-  unsigned prefetchWidth = 16;
+  unsigned prefetchWidth = 32;
 
   /// dots to be prefetched
   SetVector<Value> dots;
@@ -56,6 +55,8 @@ class Prefetcher {
   DenseMap<Value, Value> dot2bHeaderDef;
   DenseMap<Value, Value> dot2aYield;
   DenseMap<Value, Value> dot2bYield;
+  DenseMap<Value, SmallVector<Value>> dot2aVals;
+  DenseMap<Value, SmallVector<Value>> dot2bVals;
   /// operand => defining
   DenseMap<Value, Value> operand2headPrefetch;
 
@@ -63,8 +64,11 @@ class Prefetcher {
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                          Attribute dotEncoding, OpBuilder &builder,
-                         llvm::Optional<int64_t> offsetK = llvm::None,
-                         llvm::Optional<int64_t> shapeK = llvm::None);
+                         std::optional<int64_t> offsetK = std::nullopt,
+                         std::optional<int64_t> shapeK = std::nullopt);
+
+  void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
+                           OpBuilder &builder);
 
 public:
   Prefetcher() = delete;
@@ -80,10 +84,28 @@ public:
   scf::ForOp createNewForOp();
 };
 
+void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
+                                     OpBuilder &builder) {
+  IRMapping mapping;
+  mapping.map(vals[0], ret);
+  for (int i = 1; i < vals.size(); i++) {
+    Value v = vals[i];
+    Value curr = builder.clone(*v.getDefiningOp(), mapping)->getResult(0);
+    auto retType = RankedTensorType::get(
+        ret.getType().cast<RankedTensorType>().getShape(),
+        curr.getType().cast<RankedTensorType>().getElementType(),
+        curr.getType().cast<RankedTensorType>().getEncoding());
+    curr.setType(retType);
+    mapping.map(v, curr);
+  }
+  if (vals.size() > 1)
+    ret = mapping.lookup(vals.back());
+}
+
 Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    Attribute dotEncoding, OpBuilder &builder,
-                                   llvm::Optional<int64_t> offsetK,
-                                   llvm::Optional<int64_t> shapeK) {
+                                   std::optional<int64_t> offsetK,
+                                   std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
   auto type = v.getType().cast<RankedTensorType>();
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
@@ -103,16 +125,14 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   if (offsetK)
     offset[kIdx] = *offsetK;
 
-  Value newSmem = builder.create<tensor::ExtractSliceOp>(
-      v.getLoc(),
-      // TODO: encoding?
-      RankedTensorType::get(shape, elementType, type.getEncoding()), v,
-      SmallVector<OpFoldResult>{intAttr(offset[0]), intAttr(offset[1])},
+  Value newSmem = builder.create<triton::gpu::ExtractSliceOp>(
+      v.getLoc(), RankedTensorType::get(shape, elementType, type.getEncoding()),
+      v, SmallVector<OpFoldResult>{intAttr(offset[0]), intAttr(offset[1])},
       SmallVector<OpFoldResult>{intAttr(shape[0]), intAttr(shape[1])},
       SmallVector<OpFoldResult>{intAttr(1), intAttr(1)});
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
-      builder.getContext(), opIdx, dotEncoding);
+      builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
   Value prefetchSlice = builder.create<triton::gpu::ConvertLayoutOp>(
       v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
       newSmem);
@@ -137,11 +157,32 @@ LogicalResult Prefetcher::initialize() {
     return failure();
 
   // returns source of cvt
-  auto getPrefetchSrc = [](Value v) -> Value {
-    if (auto cvt = v.getDefiningOp<triton::gpu::ConvertLayoutOp>())
-      if (isSharedEncoding(cvt.getOperand()))
-        return cvt.src();
-    return Value();
+
+  // returns source of cvt
+  auto getPrefetchSrc = [](Value v) -> SmallVector<Value> {
+    // walk back to conversion
+    Operation *op = v.getDefiningOp();
+    bool foundConvertFromShared = false;
+    SmallVector<Value> rets;
+    rets.push_back(op->getResult(0));
+    while (op) {
+      if (op->getNumOperands() != 1)
+        break;
+      if (!op->getResult(0).hasOneUse())
+        break;
+      rets.push_back(op->getOperand(0));
+      if (auto cvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op))
+        if (triton::gpu::isSharedEncoding(cvt.getOperand())) {
+          foundConvertFromShared = true;
+          break;
+        }
+      op = op->getOperand(0).getDefiningOp();
+    }
+    std::reverse(rets.begin(), rets.end());
+
+    if (foundConvertFromShared)
+      return rets;
+    return {};
   };
 
   auto getIncomingOp = [this](Value v) -> Value {
@@ -158,24 +199,39 @@ LogicalResult Prefetcher::initialize() {
   };
 
   for (triton::DotOp dot : dotsInFor) {
-    auto kSize = dot.a().getType().cast<RankedTensorType>().getShape()[1];
+    auto aType = dot.getA().getType().cast<RankedTensorType>();
+    auto bType = dot.getB().getType().cast<RankedTensorType>();
+    auto aEnc = aType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+    auto bEnc = bType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+    int aKWidth = aEnc.getMMAv2kWidth();
+    int bKWidth = bEnc.getMMAv2kWidth();
+    assert(aKWidth == bKWidth);
+
+    auto kSize = aType.getShape()[1];
 
     // works better with nvidia tensor cores
-    unsigned elementWidth =
-        dot.a().getType().cast<RankedTensorType>().getElementTypeBitWidth();
-    prefetchWidth = 256 / elementWidth;
+    unsigned elementWidth = aType.getElementTypeBitWidth();
+    if (aKWidth == 0)
+      prefetchWidth = 256 / elementWidth;
+    else
+      prefetchWidth = 8 * aKWidth;
 
     // Skip prefetching if kSize is less than prefetchWidth
     if (kSize < prefetchWidth)
       continue;
-    Value aSmem = getPrefetchSrc(dot.a());
-    Value bSmem = getPrefetchSrc(dot.b());
-    if (aSmem && bSmem) {
+    auto aVals = getPrefetchSrc(dot.getA());
+    auto bVals = getPrefetchSrc(dot.getB());
+
+    if (aVals.size() && bVals.size()) {
+      Value aSmem = aVals.front();
+      Value bSmem = bVals.front();
       Value aHeaderDef = getIncomingOp(aSmem);
       Value bHeaderDef = getIncomingOp(bSmem);
       // Only prefetch loop arg
       if (aHeaderDef && bHeaderDef) {
         dots.insert(dot);
+        dot2aVals[dot] = aVals;
+        dot2bVals[dot] = bVals;
         dot2aHeaderDef[dot] = aHeaderDef;
         dot2bHeaderDef[dot] = bHeaderDef;
         dot2aLoopArg[dot] = aSmem;
@@ -197,10 +253,15 @@ void Prefetcher::emitPrologue() {
         dot.getType().cast<RankedTensorType>().getEncoding();
     Value aPrefetched =
         generatePrefetch(dot2aHeaderDef[dot], 0, true, dotEncoding, builder);
-    operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().a()] = aPrefetched;
+    cloneElementwiseOps(aPrefetched, dot2aVals[dot], builder);
     Value bPrefetched =
         generatePrefetch(dot2bHeaderDef[dot], 1, true, dotEncoding, builder);
-    operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().b()] = bPrefetched;
+    cloneElementwiseOps(bPrefetched, dot2bVals[dot], builder);
+
+    operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().getA()] =
+        aPrefetched;
+    operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().getB()] =
+        bPrefetched;
   }
 }
 
@@ -212,23 +273,17 @@ scf::ForOp Prefetcher::createNewForOp() {
     loopArgs.push_back(v);
   for (Value dot : dots) {
     loopArgs.push_back(
-        operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().a()]);
+        operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().getA()]);
     loopArgs.push_back(
-        operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().b()]);
+        operand2headPrefetch[dot.getDefiningOp<triton::DotOp>().getB()]);
   }
 
   auto newForOp = builder.create<scf::ForOp>(
       forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
       forOp.getStep(), loopArgs);
 
-  auto largestPow2 = [](int64_t n) -> int64_t {
-    while ((n & (n - 1)) != 0)
-      n = n & (n - 1);
-    return n;
-  };
-
   builder.setInsertionPointToStart(newForOp.getBody());
-  BlockAndValueMapping mapping;
+  IRMapping mapping;
   for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
@@ -236,22 +291,23 @@ scf::ForOp Prefetcher::createNewForOp() {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     Operation *newOp = builder.clone(op, mapping);
     auto dot = dyn_cast<triton::DotOp>(&op);
-    if (dots.contains(dot)) {
+    if (dot && dots.contains(dot)) {
       Attribute dotEncoding =
           dot.getType().cast<RankedTensorType>().getEncoding();
       // prefetched dot
       Operation *firstDot = builder.clone(*dot, mapping);
-      if (Value a = operand2headPrefetch.lookup(dot.a()))
+      if (Value a = operand2headPrefetch.lookup(dot.getA()))
         firstDot->setOperand(
             0, newForOp.getRegionIterArgForOpOperand(*a.use_begin()));
-      if (Value b = operand2headPrefetch.lookup(dot.b()))
+      if (Value b = operand2headPrefetch.lookup(dot.getB()))
         firstDot->setOperand(
             1, newForOp.getRegionIterArgForOpOperand(*b.use_begin()));
 
       // remaining part
       int64_t kOff = prefetchWidth;
-      int64_t kRem = dot.a().getType().cast<RankedTensorType>().getShape()[1] -
-                     prefetchWidth;
+      int64_t kRem =
+          dot.getA().getType().cast<RankedTensorType>().getShape()[1] -
+          prefetchWidth;
       Operation *prevDot = firstDot;
       while (kRem != 0) {
         // int64_t kShape = largestPow2(kRem);
@@ -261,9 +317,11 @@ scf::ForOp Prefetcher::createNewForOp() {
         Value aRem =
             generatePrefetch(mapping.lookup(dot2aLoopArg[dot]), 0, false,
                              dotEncoding, builder, kOff, kShape);
+        cloneElementwiseOps(aRem, dot2aVals[dot], builder);
         Value bRem =
             generatePrefetch(mapping.lookup(dot2bLoopArg[dot]), 1, false,
                              dotEncoding, builder, kOff, kShape);
+        cloneElementwiseOps(bRem, dot2bVals[dot], builder);
         builder.restoreInsertionPoint(insertionPoint);
         newOp = builder.clone(*dot, mapping);
         newOp->setOperand(0, aRem);
@@ -286,13 +344,19 @@ scf::ForOp Prefetcher::createNewForOp() {
   for (Value dot : dots) {
     Attribute dotEncoding =
         dot.getType().cast<RankedTensorType>().getEncoding();
-    yieldValues.push_back(generatePrefetch(mapping.lookup(dot2aYield[dot]), 0,
-                                           true, dotEncoding, builder));
-    yieldValues.push_back(generatePrefetch(mapping.lookup(dot2bYield[dot]), 1,
-                                           true, dotEncoding, builder));
+    Value aToYield = generatePrefetch(mapping.lookup(dot2aYield[dot]), 0, true,
+                                      dotEncoding, builder);
+    cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
+    yieldValues.push_back(aToYield);
+    // bToYield
+    Value bToYield = generatePrefetch(mapping.lookup(dot2bYield[dot]), 1, true,
+                                      dotEncoding, builder);
+    cloneElementwiseOps(bToYield, dot2bVals[dot], builder);
+    yieldValues.push_back(bToYield);
   }
   // Update ops of yield
-  builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
+  if (!yieldValues.empty())
+    builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
   return newForOp;
 }
 

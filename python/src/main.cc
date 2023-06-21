@@ -1,4 +1,4 @@
-﻿#include <pybind11/pybind11.h>
+#include <pybind11/pybind11.h>
 
 void init_superblocking(pybind11::module &m);
 void init_torch_utils(pybind11::module &m);

@@ -1,7 +1,8 @@
 Welcome to Triton's documentation!
 ==================================
 
-Triton is a language and compiler for parallel programming. It aims to provide a Python-based programming environment for productively writing custom DNN compute kernels capable of running at maximal throughput on modern GPU hardware.
+Triton_ is a language and compiler for parallel programming. It aims to provide a Python-based programming environment for productively writing custom DNN compute kernels capable of running at maximal throughput on modern GPU hardware.
+
 
 Getting Started
 ---------------
@@ -17,8 +18,9 @@ Getting Started
    getting-started/installation
    getting-started/tutorials/index
 
+
 Python API
--------------------
+----------
 
 - :doc:`triton <python-api/triton>`
 - :doc:`triton.language <python-api/triton.language>`
@@ -34,9 +36,9 @@ Python API
    python-api/triton.language
    python-api/triton.testing
 
-   
+
 Going Further
-------------------
+-------------
 
 Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
 
@@ -50,3 +52,5 @@ Check out the following documents to learn more about Triton and how it compares
 
    programming-guide/chapter-1/introduction
    programming-guide/chapter-2/related-work
+
+.. _Triton: https://github.com/openai/triton

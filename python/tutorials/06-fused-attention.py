@@ -1,6 +1,7 @@
 """
 Fused Attention
 ===============
+
 This is a Triton implementation of the Flash Attention algorithm
 (see: Dao et al., https://arxiv.org/pdf/2205.14135v2.pdf; Rabe and Staats https://arxiv.org/pdf/2112.05682v2.pdf)
 """
@@ -61,10 +62,10 @@ def _fwd_kernel(
         l_curr = tl.sum(p, 1) + l_prev
         # rescale operands of matmuls
         l_rcp = 1. / l_curr
-        p *= l_rcp
+        p *= l_rcp[:, None]
         acc *= (l_prev * l_rcp)[:, None]
         # update acc
-        p = p.to(tl.float16)
+        p = p.to(Q.dtype.element_ty)
         v = tl.load(v_ptrs)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -168,7 +169,7 @@ def _bwd_kernel(
             p = tl.exp(qk * sm_scale - m[:, None])
             # compute dv
             do = tl.load(do_ptrs)
-            dv += tl.dot(tl.trans(p.to(tl.float16)), do)
+            dv += tl.dot(tl.trans(p.to(Q.dtype.element_ty)), do)
             # compute dp = dot(v, do)
             Di = tl.load(D_ptrs + offs_m_curr)
             dp = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32) - Di[:, None]
@@ -176,10 +177,10 @@ def _bwd_kernel(
             # compute ds = p * (dp - delta[:, None])
             ds = p * dp * sm_scale
             # compute dk = dot(ds.T, q)
-            dk += tl.dot(tl.trans(ds.to(tl.float16)), q)
+            dk += tl.dot(tl.trans(ds.to(Q.dtype.element_ty)), q)
             # compute dq
             dq = tl.load(dq_ptrs)
-            dq += tl.dot(ds.to(tl.float16), k)
+            dq += tl.dot(ds.to(Q.dtype.element_ty), k)
             tl.store(dq_ptrs, dq)
             # increment pointers
             dq_ptrs += BLOCK_M * stride_qm
@@ -223,6 +224,7 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=Lk, num_warps=num_warps,
             num_stages=2,
         )
+        # print(h.asm["ttgir"])
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.grid = grid
@@ -260,6 +262,7 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
             num_stages=1,
         )
+        # print(h.asm["ttgir"])
         return dq, dk, dv, None
 
 
@@ -296,10 +299,10 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
-    triton.testing.assert_almost_equal(ref_out, tri_out)
-    triton.testing.assert_almost_equal(ref_dv, tri_dv)
-    triton.testing.assert_almost_equal(ref_dk, tri_dk)
-    triton.testing.assert_almost_equal(ref_dq, tri_dq)
+    assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=0)
 
 
 try:
@@ -338,7 +341,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
     if provider == "flash":
         lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
@@ -350,7 +353,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
-        ms = triton.testing.do_bench(fn, percentiles=None, warmup=warmup, rep=rep)
+        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         return ms
 
 

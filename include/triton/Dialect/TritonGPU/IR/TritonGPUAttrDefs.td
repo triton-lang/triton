@@ -1,6 +1,7 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
+include "mlir/IR/AttrTypeBase.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 
@@ -34,7 +35,8 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
   }];
 
   code extraBaseClassDeclaration = [{
-    unsigned getElemsPerThread(ArrayRef<int64_t> shape) const;
+    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
+    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     ::mlir::LogicalResult verifyLayoutForArg(::mlir::Operation* op, unsigned argNo) const;
   }];
 }
@@ -80,6 +82,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         if(!mmaEnc)
           return $_get(context, 1, 1, 1, order);
+
 
         int opIdx = dotOpEnc.getOpIdx();
 
@@ -136,6 +139,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration;
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -225,31 +229,32 @@ for
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$sizePerThread,
                      "ArrayRef<unsigned>":$order,
-                     "unsigned":$numWarps), [{
+                     "unsigned":$numWarps,
+                     "unsigned":$threadsPerWarp), [{
       int rank = sizePerThread.size();
-      unsigned remainingLanes = 32;
-      unsigned remainingThreads = numWarps*32;
+      unsigned remainingLanes = threadsPerWarp;
+      unsigned remainingThreads = numWarps*threadsPerWarp;
       unsigned remainingWarps = numWarps;
       unsigned prevLanes = 1;
       unsigned prevWarps = 1;
-      SmallVector<unsigned, 4> threadsPerWarp(rank);
+      SmallVector<unsigned, 4> rankedThreadsPerWarp(rank);
       SmallVector<unsigned, 4> warpsPerCTA(rank);
       for (int _dim = 0; _dim < rank - 1; ++_dim) {
         int i = order[_dim];
         unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, shape[i] / sizePerThread[i]);
-        threadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
-        warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / threadsPerWarp[i], 1, remainingWarps);
+        rankedThreadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
+        warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / rankedThreadsPerWarp[i], 1, remainingWarps);
         remainingWarps /= warpsPerCTA[i];
-        remainingLanes /= threadsPerWarp[i];
+        remainingLanes /= rankedThreadsPerWarp[i];
         remainingThreads /= threadsPerCTA;
-        prevLanes *= threadsPerWarp[i];
+        prevLanes *= rankedThreadsPerWarp[i];
         prevWarps *= warpsPerCTA[i];
       }
       // Expand the last dimension to fill the remaining lanes and warps
-      threadsPerWarp[order[rank-1]] = 32 / prevLanes;
+      rankedThreadsPerWarp[order[rank-1]] = threadsPerWarp / prevLanes;
       warpsPerCTA[order[rank-1]] = numWarps / prevWarps;
 
-      return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order);
+      return $_get(context, sizePerThread, rankedThreadsPerWarp, warpsPerCTA, order);
 
     }]>
   ];
@@ -273,6 +278,7 @@ for
     // ArrayRefParameter<"unsigned">:$sizePerCTA
   );
 
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -339,7 +345,7 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html
 (mma.16816 section, FP32 accumulator).
 
 For example, the matrix L corresponding to blockTileSize=[32,16] is:
-                warp 0                          warp 1
+                warp 0                          warp 2
 -----------------/\-------------  ----------------/\-------------
 [ 0   0   1   1   2   2   3   3   32  32  33  33  34  34  35  35
 [ 4   4   5   5   6   6   7   7   36  36  37  37  38  38  39  39
@@ -350,7 +356,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 [ ..............................  ..............................
 [ 28  28  29  29  30  30  31  31  60  60  61  61  62  62  63  63
 
-              warp 3                           warp 4
+              warp 1                           warp 3
 ----------------/\-------------   ----------------/\-------------
 [ 64  64  65  65  66  66  67  67  96  96  97  97  98  98  99  99
 [ 68  68  69  69  70  70  71  71  100 100 101 101 102 102 103 103
@@ -371,44 +377,63 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   );
 
   let builders = [
-     // Specially for MMAV1(Volta)
+    // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
+                     "ArrayRef<int64_t>":$shapeC,
+                     "bool":$isARow,
+                     "bool":$isBRow,
+                     "bool":$isAVec4,
+                     "bool":$isBVec4,
                      "int":$id), [{
       assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
-      SmallVector<unsigned> wpt({static_cast<unsigned>(numWarps), 1});
-      int versionMinor = 0;
+      // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
+      int versionMinor = (isARow * (1<<0)) |\
+                         (isBRow * (1<<1)) |\
+                         (isAVec4 * (1<<2)) |\
+                         (isBVec4 * (1<<3));
 
-      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
-      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
-        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
+
+      // TODO: Share code with
+      // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
+      // rep,spw and fpw.
+      SmallVector<unsigned> wpt({1, 1});
+      SmallVector<unsigned> wpt_nm1;
+
+      SmallVector<int, 2> rep(2), spw(2);
+      std::array<int, 3> fpw{{2, 2, 1}};
+      int packSize0 = (isARow || isAVec4) ? 1 : 2;
+      rep[0] = 2 * packSize0;
+      spw[0] = fpw[0] * 4 * rep[0];
+
+      int packSize1 = (isBRow && !isBVec4) ? 2 : 1;
+      rep[1] = 2 * packSize1;
+      spw[1] = fpw[1] * 4 * rep[1];
+
+      do {
+        wpt_nm1 = wpt;
+        if (wpt[0] * wpt[1] < numWarps)
+          wpt[0] = std::clamp<int>(wpt[0] * 2, 1, shapeC[0] / spw[0]);
+        if (wpt[0] * wpt[1] < numWarps)
+          wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
+      } while (wpt_nm1 != wpt);
 
       return $_get(context, versionMajor, versionMinor, wpt);
     }]>,
 
-    // Specially for MMAV1(Volta)
+
     AttrBuilder<(ins "int":$versionMajor,
-                     "ArrayRef<unsigned>":$warpsPerCTA,
+                     "int":$numWarps,
                      "ArrayRef<int64_t>":$shapeA,
                      "ArrayRef<int64_t>":$shapeB,
+                     "ArrayRef<int64_t>":$shapeC,
                      "bool":$isARow,
                      "bool":$isBRow,
                      "int":$id), [{
       assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
-      // 4-bits to encode 4 booleans: [isARow, isBRow, isAVec4, isBVec4]
-      // 3-bits to encode the MMA ID to make each unique
-      int versionMinor = (isARow * (1<<0)) |\
-                         (isBRow * (1<<1)) |\
-                         (isAVec4 * (1<<2)) |\
-                         (isBVec4 * (1<<3));
-
-      assert(id < (1<<numBitsToHoldMmaV1ID) && "MMAv1 ID exceeds the maximum");
-      for (int i = 0; i < numBitsToHoldMmaV1ID; ++i)
-        versionMinor |= static_cast<bool>((1<<i) & id) * (1<<(4+i));
-
-      return $_get(context, versionMajor, versionMinor, warpsPerCTA);
+      return get(context, versionMajor, numWarps, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
     }]>
   ];
 
@@ -422,6 +447,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     static constexpr int numBitsToHoldMmaV1ID{5};
   }];
 
+  let hasCustomAssemblyFormat = 1;
 }
 
 def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
@@ -456,6 +482,8 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding"> {
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
   }];
+
+  let hasCustomAssemblyFormat = 1;
 }
 
 def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding"> {
@@ -476,23 +504,36 @@ section 9.7.13.4.1 for more details.
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    "Attribute":$isMMAv1Row
+    "unsigned":$MMAv2kWidth
   );
 
   let builders = [
+        // Specially for MMAV1(Volta)
     AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent), [{
-      Attribute isMMAv1Row;
-      if(parent.isa<MmaEncodingAttr>() &&
-         parent.cast<MmaEncodingAttr>().isVolta()){
-        isMMAv1Row = BoolAttr::get(context, true);
-      }
-      return $_get(context, opIdx, parent, isMMAv1Row);
+                     "Attribute":$parent,
+                     "Type":$eltTy), [{
+      MmaEncodingAttr parentAttr = parent.dyn_cast<MmaEncodingAttr>();
+      if (!parentAttr || !parentAttr.isAmpere())
+        return $_get(context, opIdx, parent, 0);
+      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned MMAv2kWidth = 32 / bitwidth;
+      return $_get(context, opIdx, parent, MMAv2kWidth);
     }]>
-
   ];
 
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    bool getMMAv1IsRow() const;
+    bool getMMAv1IsVec4() const;
+    SmallVector<int> getMMAv1Rep() const;
+    SmallVector<int> getMMAv1ShapePerWarp() const;
+    int getMMAv1Vec() const;
+    int getMMAv1NumOuter(ArrayRef<int64_t> shape) const;
+    //
+    SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
+                                     int bitwidth) const;
+
+  }];
 }
 
 

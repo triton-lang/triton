@@ -3,7 +3,7 @@
 
 include "mlir/IR/EnumAttr.td"
 
-// Attrs for LoadOp
+// Attributes for LoadOp
 def TT_CacheModifierAttr : I32EnumAttr<
     "CacheModifier", "",
     [
@@ -13,6 +13,18 @@ def TT_CacheModifierAttr : I32EnumAttr<
     ]> {
     let cppNamespace = "::mlir::triton";
 }
+
+def TT_MemSemanticAttr : I32EnumAttr<
+    "MemSemantic", "",
+    [
+      I32EnumAttrCase<"RELAXED", 1, "relaxed">,
+      I32EnumAttrCase<"ACQUIRE", 2, "acquire">,
+      I32EnumAttrCase<"RELEASE", 3, "release">,
+      I32EnumAttrCase<"ACQUIRE_RELEASE", 4, "acq_rel">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 def TT_EvictionPolicyAttr : I32EnumAttr<
     "EvictionPolicy", "",
     [
@@ -23,26 +35,12 @@ def TT_EvictionPolicyAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
-// reduction
-def TT_RedOpAttr : I32EnumAttr<
-    /*name*/"RedOp", /*summary*/"",
-    /*case*/
+def TT_PaddingOptionAttr : I32EnumAttr<
+    "PaddingOption", "",
     [
-        I32EnumAttrCase</*sym*/"ADD", 1, /*str*/"add">,
-        I32EnumAttrCase<"FADD", 2, "fadd">,
-        I32EnumAttrCase<"MIN", 3, "min">,
-        I32EnumAttrCase<"MAX", 4, "max">,
-        I32EnumAttrCase<"UMIN", 5, "umin">,
-        I32EnumAttrCase<"UMAX", 6, "umax">,
-        I32EnumAttrCase<"ARGMIN", 7, "argmin">,
-        I32EnumAttrCase<"ARGMAX", 8, "argmax">,
-        I32EnumAttrCase<"ARGUMIN", 9, "argumin">,
-        I32EnumAttrCase<"ARGUMAX", 10, "argumax">,
-        I32EnumAttrCase<"FMIN", 11, "fmin">,
-        I32EnumAttrCase<"FMAX", 12, "fmax">,
-        I32EnumAttrCase<"ARGFMIN", 13, "argfmin">,
-        I32EnumAttrCase<"ARGFMAX", 14, "argfmax">,
-        I32EnumAttrCase<"XOR", 15, "xor">
+        I32EnumAttrCase<"PAD_ZERO", 1, "zero">,
+        // We can not set the string value to "NAN" because it is a keyword in C++
+        I32EnumAttrCase<"PAD_NAN", 2, "nan">
     ]> {
     let cppNamespace = "::mlir::triton";
 }
@@ -64,5 +62,17 @@ def TT_AtomicRMWAttr : I32EnumAttr<
     ]> {
     let cppNamespace = "::mlir::triton";
 }
+
+// Program ID dimensions.
+def TT_ProgramDim : I32EnumAttr<
+    "ProgramIDDim", "",
+    [
+        I32EnumAttrCase<"X", 0, "x">,
+        I32EnumAttrCase<"Y", 1, "y">,
+        I32EnumAttrCase<"Z", 2, "z">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 
 #endif

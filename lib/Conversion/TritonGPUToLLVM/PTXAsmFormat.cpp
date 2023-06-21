@@ -1,26 +1,13 @@
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
-
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
 // TODO(Superjomn): unify to llvm::raw_string_ostream
 #include <sstream>
 
 namespace mlir {
 namespace triton {
-
-// TODO(Superjomn) Move to a global utility file?
-std::string strJoin(llvm::ArrayRef<std::string> strs,
-                    llvm::StringRef delimiter) {
-  std::string osStr;
-  llvm::raw_string_ostream os(osStr);
-  for (size_t i = 0; !strs.empty() && i < strs.size() - 1; ++i)
-    os << strs[i] << delimiter;
-  if (!strs.empty())
-    os << strs.back();
-  os.flush();
-  return osStr;
-}
 
 PTXInstr::Operand *
 PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
@@ -32,12 +19,34 @@ PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
   return opr;
 }
 
-PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint) {
+void PTXBuilder::initOperand(Operand *opr) {
+  auto numBits = 0;
+  // Derive numBits from the constraint.
+  if (opr->constraint[1] == 'c' || opr->constraint[1] == 'h')
+    numBits = 16;
+  else if (opr->constraint[1] == 'r')
+    numBits = 32;
+  else if (opr->constraint[1] == 'l')
+    numBits = 64;
+  else
+    llvm_unreachable(("Unknown constraint: " + opr->constraint).c_str());
+  // If numBits is less than 16, we use 16 as default because PTX does not
+  // support 8-bit mov.
+  numBits = numBits < 16 ? 16 : numBits;
+  auto *zero = newConstantOperand(0);
+  auto &init = create<>("mov")->o("u" + std::to_string(numBits));
+  init(opr, zero);
+}
+
+PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint, bool init) {
   // Constraint should be something like "=r"
-  assert(!constraint.empty() && constraint[0] == '=');
+  assert(constraint.size() == 2 && constraint[0] == '=');
   auto *opr = newOperand();
   opr->idx = oprCounter++;
   opr->constraint = constraint;
+  if (init) {
+    initOperand(opr);
+  }
   return opr;
 }
 
