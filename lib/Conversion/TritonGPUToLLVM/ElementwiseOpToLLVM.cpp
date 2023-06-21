@@ -1180,6 +1180,35 @@ struct AbsFOpConversion
   }
 };
 
+/// The lowering of index_cast becomes an integer conversion since index
+/// becomes an integer.  If the bit width of the source and target integer
+/// types is the same, just erase the cast.  If the target type is wider,
+/// sign-extend the value, otherwise truncate it.
+struct IndexCastOpLowering
+    : public ElementwiseOpConversionBase<arith::IndexCastOp,
+                                         IndexCastOpLowering> {
+  using Base =
+      ElementwiseOpConversionBase<arith::IndexCastOp, IndexCastOpLowering>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(arith::IndexCastOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+    auto inElemTy =
+        this->getTypeConverter()->convertType(getElementType(op.getIn()));
+    unsigned targetBits = elemTy.getIntOrFloatBitWidth();
+    unsigned sourceBits = inElemTy.getIntOrFloatBitWidth();
+
+    if (targetBits == sourceBits)
+      return operands[0];
+    if (targetBits < sourceBits)
+      return rewriter.replaceOpWithNewOp<LLVM::TruncOp>(op, elemTy,
+                                                        operands[0]);
+    return rewriter.replaceOpWithNewOp<LLVM::SExtOp>(op, elemTy, operands[0]);
+  }
+};
+
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
@@ -1240,6 +1269,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<TruncFOpConversion>(typeConverter, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, benefit);
+  patterns.add<IndexCastOpLowering>(typeConverter, benefit);
 
   patterns.add<FpToFpOpConversion>(typeConverter, benefit);
 
