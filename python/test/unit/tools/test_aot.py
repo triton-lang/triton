@@ -1,6 +1,7 @@
 import glob
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -151,11 +152,11 @@ def test_compile_link_matmul():
             for hb in hints:
                 sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, 1, i32{hb}, 1, i32:16, 1, {BM}, {BN}, {BK}'
                 name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
-                subprocess.run(["python", compiler_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", name, kernel_path], check=True, cwd=tmp_dir)
+                subprocess.run([sys.executable, compiler_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", name, kernel_path], check=True, cwd=tmp_dir)
 
         # link all desired configs
         h_files = glob.glob(os.path.join(tmp_dir, "*.h"))
-        subprocess.run(["python", linker_path] + h_files + ["-o", "kernel"], check=True, cwd=tmp_dir)
+        subprocess.run([sys.executable, linker_path] + h_files + ["-o", "kernel"], check=True, cwd=tmp_dir)
 
         # compile test case
         with open(os.path.join(tmp_dir, "test.c"), "w") as file:
