@@ -205,7 +205,7 @@ jobs:
           if [ $exit_code -eq 0 ]; then
             echo "Artifacts are identical"
             echo "COMPARISON_RESULT=true" >> $GITHUB_STATE
-          elif [$exit_code -eq 1 ]; then
+          elif [ $exit_code -eq 1 ]; then
             echo "Artifacts are different"
             echo "COMPARISON_RESULT=false" >> $GITHUB_STATE
           else
