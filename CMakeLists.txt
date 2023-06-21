@@ -52,7 +52,9 @@ include_directories(${PYBIND11_INCLUDE_DIR})
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
 
 if (TRITON_USE_ROCM)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_ROCM -Wno-unused-result -Wno-attributes")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_ROCM -Wno-unused-result -Wno-attributes -DTRITONGPU_DEFAULT_WARPSIZE=64")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -DTRITONGPU_DEFAULT_WARPSIZE=32")
 endif()
 
 if(APPLE)
