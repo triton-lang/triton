@@ -1370,9 +1370,7 @@ def get_reduced_dtype(dtype_str, op):
                           for op in ['min', 'max',
                                      'min-with-indices',
                                      'max-with-indices',
-                                     'argmin-tie-break-fast',
                                      'argmin-tie-break-left',
-                                     'argmax-tie-break-fast',
                                      'argmax-tie-break-left',
                                      'sum']
                           for dtype in dtypes_with_bfloat16
