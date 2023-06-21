@@ -595,14 +595,12 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Compare(self, node):
         if not (len(node.comparators) == 1 and len(node.ops) == 1):
             raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple comparison is not supported")
-        lhs = self.visit(node.left)
-        rhs = self.visit(node.comparators[0])
-        lhs_value = _unwrap_if_constexpr(lhs)
-        rhs_value = _unwrap_if_constexpr(rhs)
+        lhs = _unwrap_if_constexpr(self.visit(node.left))
+        rhs = _unwrap_if_constexpr(self.visit(node.comparators[0]))
         if type(node.ops[0]) == ast.Is:
-            return constexpr(lhs_value is rhs_value)
+            return constexpr(lhs is rhs)
         if type(node.ops[0]) == ast.IsNot:
-            return constexpr(lhs_value is not rhs_value)
+            return constexpr(lhs is not rhs)
         method_name = self._method_name_for_comp_op.get(type(node.ops[0]))
         if method_name is None:
             raise UnsupportedLanguageConstruct(None, node, "AST comparison operator '{}' is not (currently) implemented.".format(node.ops[0].__name__))
@@ -990,7 +988,7 @@ class CodeGenerator(ast.NodeVisitor):
         if not (0 < arg_count <= 2) or len(node.keywords):
             raise TypeError("`static_assert` requires one or two positional arguments only")
 
-        passed = _unwrap_if_constexpr(self.visit(node.args[0]))
+        passed = self.visit(node.args[0])
         if not isinstance(passed, bool):
             raise NotImplementedError("Assertion condition could not be determined at compile-time. Make sure that it depends only on `constexpr` values")
         if not passed:

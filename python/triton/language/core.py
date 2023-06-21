@@ -1374,65 +1374,88 @@ def maximum(x, y):
 
 
 @jit
-def _max_combine(a, b):
-    return maximum(a, b)
+def _argmax_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    gt = value1 > value2 or tie
+    v_ret = where(gt, value1, value2)
+    i_ret = where(gt, index1, index2)
+    return v_ret, i_ret
 
 
 @jit
-def _argmax_combine(value1, index1, value2, index2):
-    gt = value1 > value2
-    value_ret = where(gt, value1, value2)
-    index_ret = where(gt, index1, index2)
-    return value_ret, index_ret
+def _argmax_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, True)
+
+
+@jit
+def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, False)
 
 
 @jit
 @_add_reduction_docstr("maximum")
-def max(input, axis=None, return_indices=False):
+def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = _promote_reduction_input(input)
     if return_indices:
-        return _reduce_with_indices(input, axis, _argmax_combine)
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
     else:
-        return reduce(input, axis, _max_combine)
+        return reduce(input, axis, maximum)
 
 
 @jit
 @_add_reduction_docstr("maximum index")
-def argmax(input, axis):
-    (_, ret) = max(input, axis, return_indices=True)
+def argmax(input, axis, tie_break_left=True):
+    (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
 
 # min and argmin
 
 
 @jit
-def _min_combine(a, b):
-    # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
-    return minimum(a, b)
-
-
-@jit
-def _argmin_combine(value1, index1, value2, index2):
-    lt = value1 < value2
+def _argmin_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    lt = value1 < value2 or tie
     value_ret = where(lt, value1, value2)
     index_ret = where(lt, index1, index2)
     return value_ret, index_ret
 
 
 @jit
+def _argmin_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, True)
+
+
+@jit
+def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, False)
+
+
+@jit
 @_add_reduction_docstr("minimum")
-def min(input, axis=None, return_indices=False):
+def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = _promote_reduction_input(input)
     if return_indices:
-        return _reduce_with_indices(input, axis, _argmin_combine)
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
     else:
-        return reduce(input, axis, _min_combine)
+        return reduce(input, axis, minimum)
 
 
 @jit
 @_add_reduction_docstr("minimum index")
-def argmin(input, axis):
-    _, ret = min(input, axis, return_indices=True)
+def argmin(input, axis, tie_break_left=True):
+    _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
 
 
