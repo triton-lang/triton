@@ -128,48 +128,65 @@ int main(int argc, char **argv) {
 
 
 def test_compile_link_matmul():
-    # with tempfile.TemporaryDirectory() as tmp_dir:
-    tmp_dir = tempfile.mkdtemp()
-    kernel_path = os.path.join(tmp_dir, "kernel.py")
-    with open(kernel_path, "w") as file:
-        file.write(kernel_src)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        kernel_path = os.path.join(tmp_dir, "kernel.py")
+        with open(kernel_path, "w") as file:
+            file.write(kernel_src)
 
-    kernel_utils_path = os.path.join(tmp_dir, "kernel_utils.py")
-    with open(kernel_utils_path, "w") as file:
-        file.write(kernel_utils_src)
+        kernel_utils_path = os.path.join(tmp_dir, "kernel_utils.py")
+        with open(kernel_utils_path, "w") as file:
+            file.write(kernel_utils_src)
 
-    compile_path = Path(triton.tools.__path__[0]) / "compile.py"
-    dtype = "fp16"
-    M, N, K = 16, 16, 16
-    BM, BN, BK = 16, 16, 16
-    # hints = [":16", ""]
-    hints = [":16"]
-    for ha in hints:
-        for hb in hints:
-            sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, 1, i32{hb}, 1, i32:16, 1, {BM}, {BN}, {BK}'
-            name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
-            subprocess.run(["python", compile_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", tmp_dir + "/" + name, kernel_path], check=True)
+        compile_path = Path(triton.tools.__path__[0]) / "compile.py"
+        dtype = "fp16"
+        M, N, K = 16, 16, 16
+        BM, BN, BK = 16, 16, 16
+        # hints = [":16", ""]
+        hints = [":16"]
+        for ha in hints:
+            for hb in hints:
+                sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, 1, i32{hb}, 1, i32:16, 1, {BM}, {BN}, {BK}'
+                name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
+                subprocess.run(["python", compile_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", tmp_dir + "/" + name, kernel_path], check=True)
 
-    link_path = Path(triton.tools.__path__[0]) / "link.py"
-    subprocess.run(["python", link_path] + glob.glob(tmp_dir + "/*.h") + ["-o", tmp_dir + "/kernel"], check=True)
+        link_path = Path(triton.tools.__path__[0]) / "link.py"
+        subprocess.run(["python", link_path] + glob.glob(tmp_dir + "/*.h") + ["-o", tmp_dir + "/kernel"], check=True)
 
-    test_path = os.path.join(tmp_dir, "test.c")
-    with open(test_path, "w") as file:
-        file.write(test_src)
-    subprocess.run(["gcc"] + glob.glob(tmp_dir + "/*.c") + ["-I", "/usr/local/cuda/include/"] + ["-o", tmp_dir + "/test", "-L", "/usr/lib/wsl/lib/", "-l", "cuda"], check=True)
+        test_path = os.path.join(tmp_dir, "test.c")
+        with open(test_path, "w") as file:
+            file.write(test_src)
+        subprocess.run(["gcc"] + glob.glob(tmp_dir + "/*.c") + ["-I", "/usr/local/cuda/include/"] + ["-o", tmp_dir + "/test", "-L", "/usr/lib/wsl/lib/", "-l", "cuda"], check=True)
 
-    # create data
-    a = np.random.randn(M * K).astype(np.float16).reshape((M, K))
-    b = np.random.randn(M * K).astype(np.float16).reshape((K, N))
+        # create data
+        a = np.random.randn(M * K).astype(np.float16).reshape((M, K))
+        b = np.random.randn(M * K).astype(np.float16).reshape((K, N))
 
-    a_path = os.path.join(tmp_dir, "a.csv")
-    b_path = os.path.join(tmp_dir, "b.csv")
-    c_path = os.path.join(tmp_dir, "c.csv")
-    for x, path in [(a, a_path), (b, b_path)]:
-        x.view(np.int16).ravel().tofile(path, sep=",")
+        a_path = os.path.join(tmp_dir, "a.csv")
+        b_path = os.path.join(tmp_dir, "b.csv")
+        c_path = os.path.join(tmp_dir, "c.csv")
+        for x, path in [(a, a_path), (b, b_path)]:
+            x.view(np.int16).ravel().tofile(path, sep=",")
 
-    subprocess.run([os.path.join(tmp_dir, "test"), a_path, b_path, c_path], check=True)
-    c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
-    c_tri = c.reshape((M, N)).view(np.float32)
-    c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
-    np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.)
+        subprocess.run([os.path.join(tmp_dir, "test"), a_path, b_path, c_path], check=True)
+        c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
+        c_tri = c.reshape((M, N)).view(np.float32)
+        c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
+        np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.)
+
+
+def test_ttgir_to_ptx():
+    src = """
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
+    tt.return
+  }
+}
+"""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
+        with open(kernel_path, "w") as fp:
+            fp.write(src)
+        k = triton.compile(kernel_path, cc=80)
+        ptx = k.asm["ptx"]
+        assert ".target sm_80" in ptx
+        assert ".address_size 64" in ptx
