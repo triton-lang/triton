@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 import triton
+from triton.common import cuda_include_dir, libcuda_dirs
 
 kernel_utils_src = """
 import triton
@@ -137,37 +138,47 @@ def test_compile_link_matmul():
         with open(kernel_utils_path, "w") as file:
             file.write(kernel_utils_src)
 
-        compile_path = Path(triton.tools.__path__[0]) / "compile.py"
+        compiler_path = Path(triton.tools.__path__[0]) / "compile.py"
+        linker_path = Path(triton.tools.__path__[0]) / "link.py"
+
         dtype = "fp16"
         M, N, K = 16, 16, 16
         BM, BN, BK = 16, 16, 16
-        # hints = [":16", ""]
-        hints = [":16"]
+
+        # compile all desired configs
+        hints = [":16", ""]
         for ha in hints:
             for hb in hints:
                 sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, 1, i32{hb}, 1, i32:16, 1, {BM}, {BN}, {BK}'
                 name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
-                subprocess.run(["python", compile_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", tmp_dir + "/" + name, kernel_path], check=True)
+                subprocess.run(["python", compiler_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", name, kernel_path], check=True, cwd=tmp_dir)
 
-        link_path = Path(triton.tools.__path__[0]) / "link.py"
-        subprocess.run(["python", link_path] + glob.glob(tmp_dir + "/*.h") + ["-o", tmp_dir + "/kernel"], check=True)
+        # link all desired configs
+        h_files = glob.glob(os.path.join(tmp_dir, "*.h"))
+        subprocess.run(["python", linker_path] + h_files + ["-o", "kernel"], check=True, cwd=tmp_dir)
 
-        test_path = os.path.join(tmp_dir, "test.c")
-        with open(test_path, "w") as file:
+        # compile test case
+        with open(os.path.join(tmp_dir, "test.c"), "w") as file:
             file.write(test_src)
-        subprocess.run(["gcc"] + glob.glob(tmp_dir + "/*.c") + ["-I", "/usr/local/cuda/include/"] + ["-o", tmp_dir + "/test", "-L", "/usr/lib/wsl/lib/", "-l", "cuda"], check=True)
+        c_files = glob.glob(os.path.join(tmp_dir, "*.c"))
+        subprocess.run(["gcc"] + c_files + ["-I", cuda_include_dir(),
+                                            "-L", libcuda_dirs()[0],
+                                            "-l", "cuda",
+                                            "-o", "test"], check=True, cwd=tmp_dir)
 
-        # create data
+        # initialize test data
         a = np.random.randn(M * K).astype(np.float16).reshape((M, K))
         b = np.random.randn(M * K).astype(np.float16).reshape((K, N))
-
         a_path = os.path.join(tmp_dir, "a.csv")
         b_path = os.path.join(tmp_dir, "b.csv")
         c_path = os.path.join(tmp_dir, "c.csv")
         for x, path in [(a, a_path), (b, b_path)]:
             x.view(np.int16).ravel().tofile(path, sep=",")
 
-        subprocess.run([os.path.join(tmp_dir, "test"), a_path, b_path, c_path], check=True)
+        # run test case
+        subprocess.run(["./test", a_path, b_path, c_path], check=True, cwd=tmp_dir)
+
+        # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
         c_tri = c.reshape((M, N)).view(np.float32)
         c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
