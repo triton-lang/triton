@@ -2,6 +2,7 @@ import argparse
 import difflib
 import glob
 import os
+import sys
 from typing import Dict, List, Optional, Tuple
 
 import yaml
@@ -219,10 +220,10 @@ def main(args) -> bool:
 
     if not success:
         print("Failed!")
-        return False
+        sys.exit(1)
 
     print("Passed!")
-    return True
+    sys.exit(0)
 
 
 if __name__ == "__main__":
