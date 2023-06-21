@@ -65,6 +65,7 @@ def optimize_ttir(mod, arch):
 
 def ttir_to_ttgir(mod, num_warps):
     pm = ir.pass_manager(mod.context)
+    pm.enable_debug()
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.run(mod)
     return mod
