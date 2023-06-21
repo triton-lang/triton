@@ -77,7 +77,7 @@ jobs:
           python3 -m twine upload -r Triton-Nightly -u TritonArtifactsSP -p ${{ steps.generate-token.outputs.access_token }} --config-file utils/nightly.pypirc --non-interactive --verbose wheelhouse/*
 
       - name: Azure Logout
-        if: ${{ if: ${{ steps.check-version.outputs.new_commit == 'true' }} && (success() || failure()) }}
+        if: ${{ steps.check-version.outputs.new_commit == 'true' && (success() || failure()) }}
         run: |
           az logout
           az cache purge
