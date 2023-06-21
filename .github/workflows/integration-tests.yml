@@ -127,7 +127,7 @@ jobs:
       - name: Run python tests on CUDA
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
-          cd python/test/unit/tools
+          cd python/test/unit
           python3 -m pytest
 
       - name: Create artifacts archive
