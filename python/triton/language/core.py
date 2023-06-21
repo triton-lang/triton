@@ -1521,7 +1521,15 @@ def max_contiguous(input, values, _builder=None):
 @builtin
 def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
     '''
-    Print the values at compile time. The parameters are the same as the builtin :code:`print`.
+    Print the values at compile time. The parameters are the same as the Python builtin :code:`print`.
+
+    Calling the Python builtin :code:`print` inside your kernel is the same as calling this.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.static_print(f"{BLOCK_SIZE=}")
+        print(f"{BLOCK_SIZE=}")
     '''
     pass
 
@@ -1529,7 +1537,13 @@ def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=Fals
 @builtin
 def static_assert(cond, msg="", _builder=None):
     '''
-    Assert the condition at compile time. The parameters are the same as the builtin :code:`assert`.
+    Assert the condition at compile time.  Does not require that the :code:`TRITON_DEBUG` environment variable
+    is set.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.static_assert(BLOCK_SIZE == 1024)
     '''
     pass
 
@@ -1537,7 +1551,13 @@ def static_assert(cond, msg="", _builder=None):
 @builtin
 def device_print(prefix, *args, _builder=None):
     '''
-    Print the values at runtime from the device.
+    Print the values at runtime from the device.  String formatting does not work, so you should
+    provide the values you want to print as arguments.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.device_print("pid", pid)
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
@@ -1560,7 +1580,18 @@ def device_print(prefix, *args, _builder=None):
 @builtin
 def device_assert(cond, msg="", _builder=None):
     '''
-    Assert the condition at runtime from the device.
+    Assert the condition at runtime from the device.  Requires that the environment variable :code:`TRITON_DEBUG`
+    is set to a value besides :code:`0` in order for this to have any effect.
+
+    Using the Python :code:`assert` statement is the same as calling this function, except that the second argument
+    must be provided and must be a string, e.g. :code:`assert pid == 0, "pid != 0"`.  The environment variable must
+    be set for this :code:`assert` statement to have any effect.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.device_assert(pid == 0)
+        assert pid == 0, f"pid != 0"
 
     :param cond: the condition to assert. This is required to be a boolean tensor.
     :param msg: the message to print if the assertion fails. This is required to be a string literal.
