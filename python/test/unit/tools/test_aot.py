@@ -3,7 +3,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
 
 import numpy as np
 
@@ -141,8 +140,8 @@ def test_compile_link_matmul():
         with open(kernel_utils_path, "w") as file:
             file.write(kernel_utils_src)
 
-        compiler_path = Path(triton.tools.__path__[0]) / "compile.py"
-        linker_path = Path(triton.tools.__path__[0]) / "link.py"
+        compiler_path = os.path.join(triton.tools.__path__[0], "compile.py")
+        linker_path = os.path.join(triton.tools.__path__[0], "link.py")
 
         dtype = "fp16"
         M, N, K = 16, 16, 16
