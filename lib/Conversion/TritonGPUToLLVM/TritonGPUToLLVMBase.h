@@ -4,6 +4,8 @@
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/Support/Path.h"
 #include "triton/Analysis/Allocation.h"
 
 #include "TypeConverter.h"
@@ -62,6 +64,34 @@ protected:
   static auto wrapAsStructAttrs(OpBuilder &b, ArrayAttr attrs) {
     return DictionaryAttr::get(b.getContext(),
                                b.getNamedAttr("llvm.struct_attrs", attrs));
+  }
+
+  static LLVM::DISubprogramAttr
+  buildScopeAttr(ModuleOp moduleOp, StringRef funcName,
+                 LLVMTypeConverter *typeConverter) {
+    auto *context = &typeConverter->getContext();
+    Builder builder(context);
+    std::string inputFilePath("-");
+    if (auto fileLoc = dyn_cast<FileLineColLoc>(moduleOp.getLoc())) {
+      inputFilePath = fileLoc.getFilename().getValue();
+    }
+
+    auto fileAttr =
+        LLVM::DIFileAttr::get(context, llvm::sys::path::filename(inputFilePath),
+                              llvm::sys::path::parent_path(inputFilePath));
+    auto compileUnitAttr = LLVM::DICompileUnitAttr::get(
+        context, llvm::dwarf::DW_LANG_C17, fileAttr,
+        builder.getStringAttr("triton"), /*isOptimized=*/true,
+        LLVM::DIEmissionKind::Full);
+
+    auto funcNameAttr = builder.getStringAttr(funcName);
+    return LLVM::DISubprogramAttr::get(context, compileUnitAttr, fileAttr,
+                                       funcNameAttr, funcNameAttr, fileAttr,
+                                       /*line=*/1,
+                                       /*scopeline=*/1,
+                                       LLVM::DISubprogramFlags::Definition |
+                                           LLVM::DISubprogramFlags::Optimized,
+                                       nullptr);
   }
 
 protected:

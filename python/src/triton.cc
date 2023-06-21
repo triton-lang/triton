@@ -485,7 +485,9 @@ void init_triton_ir(py::module &&m) {
                              ret::reference)
       .def("create_module",
            [](mlir::OpBuilder &self) -> mlir::ModuleOp {
-             auto loc = self.getUnknownLoc();
+             auto context = self.getContext();
+             mlir::Location loc =
+                 mlir::FileLineColLoc::get(context, "filename", 1, 1);
              return self.create<mlir::ModuleOp>(loc);
            })
       .def("ret",
@@ -500,6 +502,8 @@ void init_triton_ir(py::module &&m) {
              auto callOp = self.create<mlir::triton::CallOp>(loc, func, args);
              return callOp;
            })
+      .def("get_unknown_loc",
+           [](mlir::OpBuilder &self) { return self.getUnknownLoc(); })
       // insertion block/point
       .def("set_insertion_point_to_start",
            [](mlir::OpBuilder &self, mlir::Block &block) -> void {
@@ -1626,7 +1630,6 @@ void init_triton_translation(py::module &m) {
               "failed to parse IR: " + error.getMessage() +
               "lineno: " + std::to_string(error.getLineNo()));
         }
-
         // translate module to PTX
         auto ptxCode =
             triton::translateLLVMIRToPTX(*module, capability, version);
