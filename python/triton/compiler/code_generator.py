@@ -191,8 +191,10 @@ class ContainsReturnChecker(ast.NodeVisitor):
 class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, function_name,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None,
-                 debug=False, noinline=False):
+                 debug=False, noinline=False, file_name: Optional[str] = None, begin_line=0):
         self.builder = ir.builder(context)
+        self.file_name = file_name
+        self.loc = self.builder.get_loc(file_name, begin_line)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
@@ -273,17 +275,19 @@ class CodeGenerator(ast.NodeVisitor):
         # post_ret_block = self.builder.create_block()
         # self.builder.create_branch(ret_block)
         # self.builder.set_insertion_point_to_end(ret_block)
+        # Get the current line number
+        loc = self.builder.get_loc(self.file_name, node.lineno)
         if ret_value is None:
-            self.builder.ret([])
+            self.builder.ret(loc, [])
             ret_ty = None
         elif isinstance(ret_value, tuple):
             ret_values = [language.core._to_tensor(v, self.builder) for v in ret_value]
             ret_types = [v.type for v in ret_values]
-            self.builder.ret([v.handle for v in ret_values])
+            self.builder.ret(loc, [v.handle for v in ret_values])
             ret_ty = tuple(ret_types)
         else:
             ret = language.core._to_tensor(ret_value, self.builder)
-            self.builder.ret([ret.handle])
+            self.builder.ret(loc, [ret.handle])
             ret_ty = ret.type
         # self.builder.create_branch(post_ret_block)
         # self.builder.set_insertion_point_to_end(post_ret_block)
@@ -328,9 +332,10 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.set_insertion_point_to_start(entry)
         # visit function body
         self.visit_compound_statement(node.body)
+        loc = self.builder.get_loc(self.file_name, node.end_lineno) 
         # finalize function
         if self.last_ret_type is None:
-            self.builder.ret([])
+            self.builder.ret(loc, [])
         else:
             # update return type
             if isinstance(self.last_ret_type, tuple):
@@ -494,6 +499,7 @@ class CodeGenerator(ast.NodeVisitor):
         return then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types
 
     def visit_if_top_level(self, cond, node):
+        loc = self.builder.get_loc(self.file_name, node.lineno)
         has_endif_block = True
         with enter_sub_region(self) as sr:
             liveins, ip_block = sr
@@ -503,7 +509,7 @@ class CodeGenerator(ast.NodeVisitor):
             endif_block = self.builder.create_block()
             # create branch
             self.builder.set_insertion_point_to_end(ip_block)
-            self.builder.create_cond_branch(cond.handle, then_block, else_block)
+            self.builder.create_cond_branch(loc, cond.handle, then_block, else_block)
             # visit then and else blocks
             then_defs, else_defs, then_block, else_block, names, ret_types, ir_ret_types = \
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
@@ -513,11 +519,11 @@ class CodeGenerator(ast.NodeVisitor):
                 has_endif_block = False
                 endif_block.erase()
             if not then_block.has_terminator() and has_endif_block:
-                self.builder.create_branch(endif_block, [then_defs[n].handle for n in names])
+                self.builder.create_branch(loc, endif_block, [then_defs[n].handle for n in names])
             # else terminator
             self.builder.set_insertion_point_to_end(else_block)
             if not else_block.has_terminator() and has_endif_block:
-                self.builder.create_branch(endif_block, [else_defs[n].handle for n in names])
+                self.builder.create_branch(loc, endif_block, [else_defs[n].handle for n in names])
             if has_endif_block:
                 for ty in ir_ret_types:
                     endif_block.add_argument(ty)
@@ -531,6 +537,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     # TODO: refactor
     def visit_if_scf(self, cond, node):
+        loc = self.builder.get_loc(self.file_name, node.lineno)
         with enter_sub_region(self) as sr:
             liveins, _ = sr
             ip = self.builder.get_insertion_point()
@@ -540,18 +547,18 @@ class CodeGenerator(ast.NodeVisitor):
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # create if op
             self.builder.restore_insertion_point(ip)
-            if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
+            if_op = self.builder.create_if_op(loc, [ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
             then_block.merge_block_before(if_op.get_then_block())
             self.builder.set_insertion_point_to_end(if_op.get_then_block())
             if len(names) > 0:
-                self.builder.create_yield_op([then_defs[n].handle for n in names])
+                self.builder.create_yield_op(loc, [then_defs[n].handle for n in names])
             if not node.orelse:
                 else_block = if_op.get_else_block()
             else:
                 else_block.merge_block_before(if_op.get_else_block())
             self.builder.set_insertion_point_to_end(if_op.get_else_block())
             if len(names) > 0:
-                self.builder.create_yield_op([else_defs[n].handle for n in names])
+                self.builder.create_yield_op(loc, [else_defs[n].handle for n in names])
         # update values
         for i, name in enumerate(names):
             new_tensor = language.core.tensor(if_op.get_result(i), ret_types[i])
@@ -622,6 +629,7 @@ class CodeGenerator(ast.NodeVisitor):
     _method_name_for_unary_op: Dict[Type[ast.unaryop], str] = {ast.USub: '__neg__', ast.UAdd: '__pos__', ast.Not: '__not__', ast.Invert: '__invert__'}
 
     def visit_While(self, node):
+        loc = self.builder.get_loc(self.file_name, node.lineno)
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
 
@@ -653,7 +661,7 @@ class CodeGenerator(ast.NodeVisitor):
             while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
                                                     [arg.handle for arg in init_args])
             # merge the condition region
-            before_block = self.builder.create_block_with_parent(while_op.get_before(),
+            before_block = self.builder.create_block_with_parent(loc, while_op.get_before(),
                                                                  [ty.to_ir(self.builder) for ty in ret_types])
             self.builder.set_insertion_point_to_start(before_block)
             for i, name in enumerate(names):
@@ -664,7 +672,7 @@ class CodeGenerator(ast.NodeVisitor):
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
             self.builder.create_condition_op(cond.handle, [before_block.arg(i) for i in range(len(init_args))])
             # merge the loop body
-            after_block = self.builder.create_block_with_parent(while_op.get_after(),
+            after_block = self.builder.create_block_with_parent(loc, while_op.get_after(),
                                                                 [ty.to_ir(self.builder) for ty in ret_types])
 
             # generate loop body
@@ -680,7 +688,7 @@ class CodeGenerator(ast.NodeVisitor):
             for name in loop_defs:
                 if name in liveins:
                     yields.append(loop_defs[name])
-            self.builder.create_yield_op([y.handle for y in yields])
+            self.builder.create_yield_op(loc, [y.handle for y in yields])
 
         # update global uses in while_op
         for i, name in enumerate(names):
@@ -791,8 +799,9 @@ class CodeGenerator(ast.NodeVisitor):
                     yields.append(language.core._to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
+            loc = self.builder.get_loc(self.file_name, node.lineno)
             self.builder.restore_insertion_point(ip)
-            for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
+            for_op = self.builder.create_for_op(loc, lb, ub, step, [arg.handle for arg in init_args])
 
             self.scf_stack.append(node)
             self.builder.set_insertion_point_to_start(for_op.get_body(0))
@@ -807,7 +816,7 @@ class CodeGenerator(ast.NodeVisitor):
 
             # create YieldOp
             if len(yields) > 0:
-                self.builder.create_yield_op([y.handle for y in yields])
+                self.builder.create_yield_op(loc, [y.handle for y in yields])
             for_op_region = for_op.get_body(0).get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
 
@@ -848,7 +857,7 @@ class CodeGenerator(ast.NodeVisitor):
         # Convert assert to triton's device_assert which happens on the device
         return language.core.device_assert(test, msg, _builder=self.builder)
 
-    def call_JitFunction(self, fn: JITFunction, args, kwargs):
+    def call_JitFunction(self, loc, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
         args = [arg if _is_triton_tensor(arg)
@@ -875,7 +884,7 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
-        call_op = self.builder.call(symbol, arg_vals)
+        call_op = self.builder.call(loc, symbol, loc, arg_vals)
         if call_op.get_num_results() == 0 or callee_ret_type is None:
             return None
         elif call_op.get_num_results() == 1:
@@ -889,6 +898,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))
+        loc = self.builder.get_loc(self.file_name, node.lineno)
 
         static_implementation = self.statically_implemented_functions.get(fn)
         if static_implementation is not None:
@@ -901,7 +911,7 @@ class CodeGenerator(ast.NodeVisitor):
                 return
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
-            return self.call_JitFunction(fn, args, kws)
+            return self.call_JitFunction(loc, fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_tensor(fn.__self__)) or language.core.is_builtin(fn):
             extra_kwargs = dict(_builder=self.builder)
             sig = inspect.signature(fn)
@@ -1067,11 +1077,13 @@ def ast_to_ttir(fn, signature, specialization, constants, debug):
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
+    file_name = fn.__code__.co_filename
+    begin_line = fn.__code__.co_firstlineno
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,
                               function_name=function_name, attributes=new_attrs,
-                              is_kernel=True, debug=debug)
+                              is_kernel=True, debug=debug, file_name=file_name, begin_line=begin_line)
     try:
         generator.visit(fn.parse())
     except CompilationError as e:
