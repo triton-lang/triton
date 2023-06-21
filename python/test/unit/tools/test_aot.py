@@ -131,7 +131,8 @@ int main(int argc, char **argv) {
 def test_compile_link_matmul():
     np.random.seed(3)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    curr_dir = os.path.dirname(os.path.realpath(__file__))
+    with tempfile.TemporaryDirectory(dir=curr_dir) as tmp_dir:
         kernel_path = os.path.join(tmp_dir, "kernel.py")
         with open(kernel_path, "w") as file:
             file.write(kernel_src)
