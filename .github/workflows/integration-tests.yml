@@ -196,10 +196,12 @@ jobs:
           rm artifacts.tar.gz
           mv cache current
       - name: Compare artifacts
-        continue-on-error: true
         run: |
+          set +e
           python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml
           exit_code=$?
+          set -e
+          echo $exit_code
           if [ $exit_code -eq 0 ]; then
             echo "Artifacts are identical"
             echo "COMPARISON_RESULT=true" >> $GITHUB_STATE
