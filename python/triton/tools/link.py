@@ -157,7 +157,7 @@ python link.py /path/to/headers/*.h -o kernel_name
 if __name__ == "__main__":
     from argparse import ArgumentParser
 
-    parser = ArgumentParser(description="Triton AOT Linker")
+    parser = ArgumentParser(description=desc)
     parser.add_argument(
         "headers",
         nargs="+",
