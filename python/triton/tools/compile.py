@@ -101,6 +101,7 @@ if __name__ == "__main__":
         "shared": ccinfo.shared,
     }
     for ext in ['h', 'c']:
+        print("writing ")
         template_path = Path(__file__).parent / f"compile.{ext}"
         with args.out_path.with_suffix(f".{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))
