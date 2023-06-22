@@ -154,7 +154,7 @@ jobs:
 
       - name: Download latest main artifacts
         env:
-          ARTIFACT_NAME: artifacts
+          ARTIFACT_NAME: artifacts A100
           ARTIFACT_JOB_NAME: Integration-Tests
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -166,7 +166,7 @@ jobs:
           echo "BRANCH_NAME: $BRANCH_NAME"
           WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs | jq --arg branch_name "$BRANCH_NAME" '.workflow_runs[] | select(.head_branch == $branch_name)' | jq '.id' | head -1)
           echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
-          ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq '.artifacts[].archive_download_url' --raw-output)
+          ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq --arg artifact_name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $artifact_name).archive_download_url' --raw-output)
           echo "ARTIFACT_URL: $ARTIFACT_URL"
 
           if [ -n "$ARTIFACT_URL" ]; then
@@ -186,7 +186,7 @@ jobs:
       - name: Download current job artifacts
         uses: actions/download-artifact@v2
         with:
-          name: artifacts
+          name: artifacts A100
       - name: Unzip current job artifacts
         run: |
           # Print the size of the downloaded artifact
