@@ -204,14 +204,15 @@ jobs:
           echo $exit_code
           if [ $exit_code -eq 0 ]; then
             echo "Artifacts are identical"
-            echo "COMPARISON_RESULT=true" >> $GITHUB_STATE
+            echo "COMPARISON_RESULT=true" >> $GITHUB_ENV
           elif [ $exit_code -eq 1 ]; then
             echo "Artifacts are different"
-            echo "COMPARISON_RESULT=false" >> $GITHUB_STATE
+            echo "COMPARISON_RESULT=false" >> $GITHUB_ENV
           else
             echo "Error while comparing artifacts"
-            echo "COMPARISON_RESULT=error" >> $GITHUB_STATE
+            echo "COMPARISON_RESULT=error" >> $GITHUB_ENV
           fi
+          echo "COMPARISON_RESULT=env.COMPARISON_RESULT"
       - name: Check exit code and handle failure
         if: ${{ env.COMPARISON_RESULT == 'error' }}
         run: |
@@ -219,7 +220,7 @@ jobs:
           exit 1
       - name: Fetch Run ID
         id: get_run_id
-        run: echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_STATE
+        run: echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
 
       - name: Upload results as artifact
         uses: actions/upload-artifact@v2
