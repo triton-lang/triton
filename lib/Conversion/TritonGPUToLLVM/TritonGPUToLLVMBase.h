@@ -879,11 +879,9 @@ private:
 
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-    if (order[0] == 1) {
-      multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(warpsPerCTA[0]));
-    } else {
-      multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(warpsPerCTA[1]));
-    }
+    unsigned lastAxis = order[order.size() - 1];
+    multiDimWarpId[lastAxis] =
+        urem(multiDimWarpId[lastAxis], i32_val(warpsPerCTA[lastAxis]));
     multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
     multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
     Value offWarp0 = mul(multiDimWarpId[0], i32_val(16));
