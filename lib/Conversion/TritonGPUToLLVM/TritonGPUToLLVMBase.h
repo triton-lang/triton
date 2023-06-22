@@ -935,9 +935,9 @@ private:
     Value warpSize = i32_val(32);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
-    Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / 16));
-    Value warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
-                         i32_val(shape[1] / 8));
+    Value warpId0 = urem(urem(udiv(warpId, warpsPerCTA[1]), warpsPerCTA[0]),
+                         i32_val(shape[0] / 16));
+    Value warpId1 = urem(urem(warpId, warpsPerCTA[1]), i32_val(shape[1] / 8));
     Value offWarp0 = mul(warpId0, i32_val(16));
     Value offWarp1 = mul(warpId1, i32_val(8));
 

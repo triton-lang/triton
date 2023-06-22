@@ -144,8 +144,8 @@ private:
       Value warpId = udiv(threadId, warpSize);
       // TODO: fix the bug in MMAEncodingAttr document
       SmallVector<Value> multiDimWarpId(2);
-      multiDimWarpId[0] = urem(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
-      multiDimWarpId[1] = udiv(warpId, i32_val(mmaLayout.getWarpsPerCTA()[0]));
+      multiDimWarpId[0] = udiv(warpId, i32_val(mmaLayout.getWarpsPerCTA()[1]));
+      multiDimWarpId[1] = urem(warpId, i32_val(mmaLayout.getWarpsPerCTA()[1]));
       Value _1 = i32_val(1);
       Value _2 = i32_val(2);
       Value _4 = i32_val(4);

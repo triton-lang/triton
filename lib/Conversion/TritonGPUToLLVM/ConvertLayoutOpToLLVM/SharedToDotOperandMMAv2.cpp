@@ -554,10 +554,9 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
-  // Note: warps are currently column major in MMA layout
-  Value warpRowIndex = urem(warp, i32_val(warpsPerCTA[0]));
-  Value warpColIndex =
-      urem(udiv(warp, i32_val(warpsPerCTA[0])), i32_val(warpsPerCTA[1]));
+  Value warpRowIndex =
+      urem(udiv(warp, i32_val(warpsPerCTA[1])), i32_val(warpsPerCTA[0]));
+  Value warpColIndex = urem(warp, i32_val(warpsPerCTA[1]));
   Value warpM = urem(warpRowIndex, i32_val(shape[0] / 16));
   Value warpN = urem(warpColIndex, i32_val(shape[1] / 8));
 
