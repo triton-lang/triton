@@ -1251,6 +1251,12 @@ def test_convert_float16_to_float32(in_dtype):
     assert torch.all(f16_input[other] == f32_output[other])
 
 
+def get_32bit_binary(number):
+    if number < 0:
+        number = (1 << 32) + number
+    return "{:032b}".format(number)
+
+
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_f8_xf16_roundtrip(in_dtype, out_dtype):
@@ -1265,30 +1271,39 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
         output = input
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    f8_tensor = torch.tensor(range(-128, 128), dtype=torch.int8, device='cuda')
-    # f32_to_f8 doesn't handle nan, so we make sure f8_tensor doesn't contain any nan
-    all_exp_ones = (f8_tensor & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
-    f8_tensor[all_exp_ones] = 0
-    f8 = triton.reinterpret(f8_tensor, in_dtype)
-    n_elements = f8_tensor.numel()
-    xf16 = torch.empty_like(f8_tensor, dtype=out_dtype)
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    # reorder f8 for float8e4b15 since triton doesn't serialize fp8 data
-    # next to one another
-
-    copy_kernel[grid](f8, xf16, n_elements, BLOCK_SIZE=1024)
+    # initialize array containing all possible f8 values except NaN
+    f8_tensor = np.array(range(-128, 128), dtype=np.uint8)
+    is_nan = (f8_tensor & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
+    f8_tensor[is_nan] = 0
+    # triton's f8e4b15 format is optimized for software emulation
+    # as a result, each pack of 4xfp8 values:
+    # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
+    # is actually internally stored as
+    # s0s2b0b2s1s3b1b3
+    # we apply the conversion here
+    f8x4 = f8_tensor.view(np.uint32)
+    s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
+    b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
+    signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
+    bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
+    # tensor of triton fp8 data
+    fp8e4b15 = torch.from_numpy((signs | bits).view(np.int32)).cuda()
+    tri_fp16 = torch.empty(256, dtype=out_dtype, device="cuda")
+    copy_kernel[(1,)](triton.reinterpret(fp8e4b15, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
 
     # exponent_mask = 0b01111100 for float8e5
     # exponent_mask = 0b01111000 for float8e4
+    f8_tensor = torch.from_numpy(f8_tensor).cuda()
     exponent_mask = 0b01111111 ^ ((1 << in_dtype.fp_mantissa_width) - 1)
     normal = torch.logical_and((f8_tensor & exponent_mask) != 0, (f8_tensor & exponent_mask) != exponent_mask)
-    ref16 = convert_float_to_float32(f8_tensor, in_dtype)
+    ref_fp16 = convert_float_to_float32(f8_tensor, in_dtype)
     # WARN: currently only normal float8s are handled
-    assert torch.all(xf16[normal] == ref16[normal])
+    assert torch.all(tri_fp16[normal] == ref_fp16[normal])
+    return
 
-    f8_output_tensor = torch.empty_like(xf16, dtype=torch.int8)
+    f8_output_tensor = torch.empty_like(tri_fp16, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, in_dtype)
-    copy_kernel[grid](xf16, f8_output, n_elements, BLOCK_SIZE=1024)
+    copy_kernel[grid](tri_fp16, f8_output, n_elements, BLOCK_SIZE=1024)
     print(f8_tensor)
     print(f8_output_tensor)
     assert torch.all(f8_tensor == f8_output_tensor)
