@@ -58,7 +58,7 @@ struct MoveSplatAfterElementwisePattern
         return mlir::failure();
       }
     }
-    return mlir::success();
+    return mlir::success(op->getNumOperands() > 0);
   }
 
   void rewrite(Operation *op, mlir::PatternRewriter &rewriter) const override {
