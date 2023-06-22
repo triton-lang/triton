@@ -25,7 +25,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "V100"], ["self-hosted", "H100"], ["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
+            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "H100"], ["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix::["ubuntu-latest"]'
           fi
