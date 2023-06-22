@@ -117,7 +117,11 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.static_assert">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">static_assert</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cond</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">msg</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.static_assert" title="Permalink to this definition">¶</a></dt>
-<dd><p>Assert the condition at compile time. The parameters are the same as the builtin <code class="code docutils literal notranslate"><span class="pre">assert</span></code>.</p>
+<dd><p>Assert the condition at compile time.  Does not require that the <code class="code docutils literal notranslate"><span class="pre">TRITON_DEBUG</span></code> environment variable
+is set.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">tl</span><span class="o">.</span><span class="n">static_assert</span><span class="p">(</span><span class="n">BLOCK_SIZE</span> <span class="o">==</span> <span class="mi">1024</span><span class="p">)</span>
+</pre></div>
+</div>
 </dd></dl>
 
 </section>

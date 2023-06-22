@@ -117,7 +117,15 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.device_assert">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">device_assert</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cond</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">msg</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.device_assert" title="Permalink to this definition">¶</a></dt>
-<dd><p>Assert the condition at runtime from the device.</p>
+<dd><p>Assert the condition at runtime from the device.  Requires that the environment variable <code class="code docutils literal notranslate"><span class="pre">TRITON_DEBUG</span></code>
+is set to a value besides <code class="code docutils literal notranslate"><span class="pre">0</span></code> in order for this to have any effect.</p>
+<p>Using the Python <code class="code docutils literal notranslate"><span class="pre">assert</span></code> statement is the same as calling this function, except that the second argument
+must be provided and must be a string, e.g. <code class="code docutils literal notranslate"><span class="pre">assert</span> <span class="pre">pid</span> <span class="pre">==</span> <span class="pre">0,</span> <span class="pre">&quot;pid</span> <span class="pre">!=</span> <span class="pre">0&quot;</span></code>.  The environment variable must
+be set for this <code class="code docutils literal notranslate"><span class="pre">assert</span></code> statement to have any effect.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">tl</span><span class="o">.</span><span class="n">device_assert</span><span class="p">(</span><span class="n">pid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">pid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;pid != 0&quot;</span>
+</pre></div>
+</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
