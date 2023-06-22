@@ -97,7 +97,7 @@ class dtype:
             self.int_bitwidth = int(name.split('int')[-1])
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
-            if name == 'fp8e4':
+            if name == 'fp8e4b15':
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
