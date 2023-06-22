@@ -140,7 +140,7 @@ jobs:
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         uses: actions/upload-artifact@v2
         with:
-          name: artifacts
+          name: artifacts ${{ matrix.runner[1] }}
           path: ~/.triton/artifacts.tar.gz
 
       - name: Run CXX unittests
