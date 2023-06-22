@@ -1211,7 +1211,7 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
 
     fp = fp.view(getattr(torch, f"int{dtype.primitive_bitwidth}"))
     exp_width = dtype.primitive_bitwidth - dtype.fp_mantissa_width - 1
-    exp_bias = 2 ** (exp_width - 1) - 1
+    exp_bias = dtype.exponent_bias
     sign = ((fp >> (dtype.primitive_bitwidth - 1)) & 0x01).int()
     exp = ((fp >> dtype.fp_mantissa_width) & ((1 << exp_width) - 1)).int()
     frac = (fp & ((1 << dtype.fp_mantissa_width) - 1)).int()
@@ -1286,7 +1286,6 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     f8_output_tensor = torch.empty_like(xf16, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, in_dtype)
     copy_kernel[grid](xf16, f8_output, n_elements, BLOCK_SIZE=1024)
-
     assert torch.all(f8_tensor == f8_output_tensor)
 
 

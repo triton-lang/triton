@@ -189,9 +189,6 @@ struct FpToFpOpConversion
         "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
         "shr.b32  b0, b0, 1;                    \n" // b0 >>= 1
         "shr.b32  b1, b1, 1;                    \n" // shift into fp16 position
-        "add.u32  b0, b0, 0x20002000;           \n" // b0.exp += 2**4-2**3
-                                                    // exponent compensate = 8
-        "add.u32  b1, b1, 0x20002000;           \n" // b1 += 8<<10 | 8<<10<<16
         "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
         "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
         "}";
@@ -260,9 +257,9 @@ struct FpToFpOpConversion
         "and.b32 b1, a1, 0x7fff7fff;            \n" // (strip sign)
         "shr.b32 b0, b0, 4;                     \n" // b0 >>= 4
         "shr.b32 b1, b1, 4;                     \n" // shift into fp16 position
-        "add.u32 b0, b0, 0x3c003c00;            \n" // b0.exp += 2**7-2**3
-                                                    // exponent compensate = 120
-        "add.u32 b1, b1, 0x3c003c00;            \n" // b1 += 120<<7 | 120<<7<<16
+        "add.u32 b0, b0, 0x38003800;            \n" // b0.exp += 2**7-2**4
+                                                    // exponent compensate = 112
+        "add.u32 b1, b1, 0x38003800;            \n" // b1 += 120<<7 | 120<<7<<16
         "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
         "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
         "}";
@@ -332,12 +329,8 @@ struct FpToFpOpConversion
     auto *ptxAsm = // WARN: subnormal Fp8s are not handled
         "{                                      \n"
         ".reg .b32 a<2>, b<2>;                  \n" // see Fp8E4M3x4ToFp16x4
-        "sub.u32 a0, $1, 0x20002000;            \n" // a0 = input0 - 0x20002000
-                                                    // (compensate offset)
-        "sub.u32 a1, $2, 0x20002000;            \n" // a1 = input1 - 0x20002000
-                                                    // (8 << 10 | 8 << 10 << 16)
-        "shl.b32 a0, a0, 1;                     \n" // a0 <<= 1
-        "shl.b32 a1, a1, 1;                     \n" // shift into fp8e4 position
+        "shl.b32 a0, $1, 1;                     \n" // a0 <<= 1
+        "shl.b32 a1, $2, 1;                     \n" // shift into fp8e4 position
         "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n" // a0 &= 0x7fff7fff
         "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
         "add.u32 a0, a0, 0x00800080;            \n" // a0 += 0x00800080
@@ -447,24 +440,24 @@ struct FpToFpOpConversion
         // nosign = clamp(nosign, min, max)
         ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
         "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
-        "max.u32 nosign_0_0, nosign_0_0, 0x3c000000; \n"
+        "max.u32 nosign_0_0, nosign_0_0, 0x38000000; \n"
         "min.u32 nosign_0_0, nosign_0_0, 0x43f00000; \n"
         "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
-        "max.u32 nosign_0_1, nosign_0_1, 0x3c00;     \n"
+        "max.u32 nosign_0_1, nosign_0_1, 0x3800;     \n"
         "min.u32 nosign_0_1, nosign_0_1, 0x43f0;     \n"
         "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
         "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
-        "max.u32 nosign_1_0, nosign_1_0, 0x3c000000; \n"
+        "max.u32 nosign_1_0, nosign_1_0, 0x38000000; \n"
         "min.u32 nosign_1_0, nosign_1_0, 0x43f00000; \n"
         "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
-        "max.u32 nosign_1_1, nosign_1_1, 0x3c00;     \n"
+        "max.u32 nosign_1_1, nosign_1_1, 0x3800;     \n"
         "min.u32 nosign_1_1, nosign_1_1, 0x43f0;     \n"
         "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
 
         "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
         "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
-        "sub.u32 nosign0, nosign0, 0x3c003c00;       \n" // nosign0-=0x3c003c00
-        "sub.u32 nosign1, nosign1, 0x3c003c00;       \n" // (compensate offset)
+        "sub.u32 nosign0, nosign0, 0x38003800;       \n" // nosign0-=0x38003800
+        "sub.u32 nosign1, nosign1, 0x38003800;       \n" // (compensate offset)
         "shr.u32 nosign0, nosign0, 4;                \n" // nosign0 >>= 4
         "shr.u32 nosign1, nosign1, 4;                \n" // shift into to fp8e4
         "prmt.b32 nosign, nosign0, nosign1, 0x6420;  \n" // nosign0 = 0x00f100f2
