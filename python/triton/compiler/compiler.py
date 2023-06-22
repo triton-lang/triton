@@ -65,6 +65,7 @@ def optimize_ttir(mod, arch):
 
 def ttir_to_ttgir(mod, num_warps):
     pm = ir.pass_manager(mod.context)
+    pm.enable_debug()
     pm.add_convert_triton_to_tritongpu_pass(num_warps)
     pm.run(mod)
     return mod
@@ -384,7 +385,6 @@ def compile(fn, **kwargs):
     is_cuda = device_type == "cuda" and _is_cuda(arch)
     is_hip = device_type in ["cuda", "hip"] and not is_cuda
     context = ir.context()
-    asm = dict()
     constants = kwargs.get("constants", dict())
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else 2)

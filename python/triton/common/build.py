@@ -37,21 +37,20 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
+@functools.lru_cache()
+def cuda_include_dir():
+    base_dir = os.path.join(os.path.dirname(__file__), os.path.pardir)
+    cuda_path = os.path.join(base_dir, "third_party", "cuda")
+    return os.path.join(cuda_path, "include")
+
+
 def _build(name, src, srcdir):
     if is_hip():
         hip_lib_dir = os.path.join(rocm_path_dir(), "lib")
         hip_include_dir = os.path.join(rocm_path_dir(), "include")
     else:
         cuda_lib_dirs = libcuda_dirs()
-        base_dir = os.path.join(os.path.dirname(__file__), os.path.pardir)
-        cuda_path = os.path.join(base_dir, "third_party", "cuda")
-
-        cu_include_dir = os.path.join(cuda_path, "include")
-        triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
-        cuda_header = os.path.join(cu_include_dir, "cuda.h")
-        triton_cuda_header = os.path.join(triton_include_dir, "cuda.h")
-        if not os.path.exists(cuda_header) and os.path.exists(triton_cuda_header):
-            cu_include_dir = triton_include_dir
+        cu_include_dir = cuda_include_dir()
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
