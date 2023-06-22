@@ -22,12 +22,19 @@ tt.func @test_splat_elementwise_pattern(%arg0: f32) -> (tensor<128x128xf32>, ten
 }
 
 // CHECK-LABEL: @test_broadcast_elementwise_pattern
-tt.func @test_broadcast_elementwise_pattern(%arg0: tensor<128x1xf32>) -> tensor<128x128xf32> {
+tt.func @test_broadcast_elementwise_pattern(%arg0: tensor<128x1xf32>) -> (tensor<128x128xf32>, tensor<128x32xf32>) {
+    // CHECK: %[[one:.*]] = arith.constant dense<1.000000e+00> : tensor<128x1xf32>
 
     // CHECK-NEXT: %[[abs:.*]] = math.absf %arg0 : tensor<128x1xf32>
     // CHECK-NEXT: %{{.*}} = tt.broadcast %[[abs]] : (tensor<128x1xf32>) -> tensor<128x128xf32>
     %broadcast = tt.broadcast %arg0 : (tensor<128x1xf32>) -> tensor<128x128xf32>
     %abs = math.absf %broadcast : tensor<128x128xf32>
 
-    tt.return %abs : tensor<128x128xf32>
+    // CHECK-NEXT: %[[add:.*]] = arith.addf %arg0, %[[one]] : tensor<128x1xf32>
+    // CHECK-NEXT: %{{.*}} = tt.broadcast %[[add]] : (tensor<128x1xf32>) -> tensor<128x32xf32>
+    %broadcast2 = tt.broadcast %arg0 : (tensor<128x1xf32>) -> tensor<128x32xf32>
+    %one = arith.constant dense<1.0> : tensor<128x32xf32>
+    %add = arith.addf %one, %broadcast2 : tensor<128x32xf32>
+
+    tt.return %abs, %add : tensor<128x128xf32>, tensor<128x32xf32>
 }

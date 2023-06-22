@@ -173,9 +173,10 @@ struct MoveBroadcastAfterElementwisePattern
       DenseElementsAttr constAttr;
       if (matchPattern(definingOp, m_Constant(&constAttr)) &&
           constAttr.isSplat()) {
-        auto value = constAttr.getSplatValue<Attribute>();
+        auto scalarValue = constAttr.getSplatValue<Attribute>();
+        auto splatValue = SplatElementsAttr::get(newTy, scalarValue);
         auto newConstant =
-            arith::ConstantOp::materialize(rewriter, value, newTy, loc);
+            rewriter.create<arith::ConstantOp>(loc, newTy, splatValue);
         newOperands.push_back(newConstant);
         continue;
       }
