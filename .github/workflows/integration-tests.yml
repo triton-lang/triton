@@ -235,7 +235,7 @@ jobs:
           script: |
             const run_id = ${{ env.RUN_ID }};
             const issue_number = context.payload.pull_request.number;
-            const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}/artifacts).`;
+            const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}).`;
             await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
