@@ -539,7 +539,7 @@ public:
     for (auto &&en : llvm::enumerate(shape)) {
       unsigned dimSize = en.value();
       multiDim[en.index()] = i32_val(remained % dimSize);
-      remained = remained % dimSize;
+      remained = remained / dimSize;
     }
     return multiDim;
   }
