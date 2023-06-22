@@ -181,6 +181,10 @@ struct FpToFpOpConversion
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
     // fast conversion code provided by Scott Gray @ OpenAI
+    // ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
+    //       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
+    //       ((e4.y >> 0) & (0x80008000u >> 0)) |
+    //       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
     auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
         "{                                      \n"
         ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
@@ -335,15 +339,18 @@ struct FpToFpOpConversion
     auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
         "{                                       \n"
         ".reg .b32 a<2>;                         \n"
-        "shr.b32  a0, $1, 1;                     \n" // a0 = $0 >> 1
-        "shr.b32  a1, $1, 7;                     \n" // a1 = $0 >> 7
-        "and.b32  $0,     a0, 0x40004000;        \n" // ret = a0 & 0x40004000
-        "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n" // ret = ret | (a1 &
-                                                     // 0x007f007f)
-        "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n" // ret = ret | ($1 &
-                                                     // 0x80008000)
-        "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n" // ret = ret | ($1 &
-                                                     // 0x3f803f80)
+        // a0 = $0 >> 1
+        "shr.b32  a0, $1, 1;                     \n"
+        // a1 = $0 >> 7
+        "shr.b32  a1, $1, 7;                     \n"
+        // ret = a0 & 0x40004000
+        "and.b32  $0,     a0, 0x40004000;        \n"
+        // ret = ret | (a1 & 0x007f007f)
+        "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
+        // ret = ret | ($1 & 0x80008000)
+        "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n"
+        // ret = ret | ($1 & 0x3f803f80)
+        "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n"
         "}";
     return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   }
