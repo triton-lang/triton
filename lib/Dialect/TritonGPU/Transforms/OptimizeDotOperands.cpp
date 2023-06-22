@@ -78,16 +78,15 @@ class MoveOpAfterLayoutConversion : public mlir::RewritePattern {
 
 public:
   MoveOpAfterLayoutConversion(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-                             1, context) {}
+      : mlir::RewritePattern(triton::DotOp::getOperationName(), 1, context) {}
 
   static mlir::LogicalResult
   isBlockedToDotOperand(mlir::Operation *op,
                         triton::gpu::DotOperandEncodingAttr &retEncoding,
                         triton::gpu::BlockedEncodingAttr &srcEncoding) {
-    if (!op)
+    auto cvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op);
+    if (!cvt)
       return failure();
-    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
     auto srcTy = cvt.getOperand().getType().cast<RankedTensorType>();
     auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
     retEncoding =
@@ -135,58 +134,67 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
-    triton::gpu::DotOperandEncodingAttr retEncoding;
-    triton::gpu::BlockedEncodingAttr srcEncoding;
-    if (isBlockedToDotOperand(op, retEncoding, srcEncoding).failed())
-      return mlir::failure();
-
+    auto dotOp = cast<triton::DotOp>(op);
     // only supports dot NT
-    auto users = cvt->getUsers();
-    auto dotOp = dyn_cast_or_null<DotOp>(*users.begin());
-    if (!dotOp)
-      return failure();
     if (!isDotNT(dotOp))
       return failure();
+    bool changed = false;
+    for (Value operand : {dotOp.getOperand(0), dotOp.getOperand(1)}) {
+      auto cvt = operand.getDefiningOp<triton::gpu::ConvertLayoutOp>();
+      triton::gpu::DotOperandEncodingAttr retEncoding;
+      triton::gpu::BlockedEncodingAttr srcEncoding;
+      bool failed =
+          isBlockedToDotOperand(cvt, retEncoding, srcEncoding).failed();
+      assert(!failed);
 
-    // don't move things around when cvt operand is a block arg
-    Operation *argOp = cvt.getOperand().getDefiningOp();
-    if (!argOp)
-      return failure();
-    //
-    SetVector<Operation *> processed;
-    SetVector<Attribute> layout;
-    llvm::MapVector<Value, Attribute> toConvert;
-    int numCvts = simulateBackwardRematerialization(cvt, processed, layout,
-                                                    toConvert, retEncoding);
-    if (numCvts > 1 || toConvert.size() == 1)
-      return failure();
-    for (Operation *op : processed) {
-      if (op->getNumOperands() != 1)
+      // don't move things around when cvt operand is a block arg
+      Operation *argOp = cvt.getOperand().getDefiningOp();
+      if (!argOp)
         continue;
-      auto srcTy = op->getOperand(0).getType().cast<RankedTensorType>();
-      auto dstTy = op->getResult(0).getType().cast<RankedTensorType>();
-      // we don't want to push conversions backward if there is a downcast
-      // since it would result in more shared memory traffic
-      if (srcTy.getElementType().getIntOrFloatBitWidth() >
-          dstTy.getElementType().getIntOrFloatBitWidth())
-        return failure();
-      // we only push back when the first op in the chain has a load operand
-      if ((op == processed.back()) &&
-          !isa<triton::LoadOp>(op->getOperand(0).getDefiningOp()))
-        return failure();
-      // we don't want to use ldmatrix for 8-bit data that requires trans
-      // since Nvidia GPUs can't do it efficiently
-      int kOrder = retEncoding.getOpIdx() ^ 1;
-      bool isTrans = kOrder != srcEncoding.getOrder()[0];
-      bool isInt8 = srcTy.getElementType().getIntOrFloatBitWidth() == 8;
-      if (isTrans && isInt8)
-        return failure();
+      SetVector<Operation *> processed;
+      SetVector<Attribute> layout;
+      llvm::MapVector<Value, Attribute> toConvert;
+      int numCvts = simulateBackwardRematerialization(cvt, processed, layout,
+                                                      toConvert, retEncoding);
+      if (numCvts > 1 || toConvert.size() == 1)
+        continue;
+      bool replaceOperand = true;
+      for (Operation *op : processed) {
+        if (op->getNumOperands() != 1)
+          continue;
+        auto srcTy = op->getOperand(0).getType().cast<RankedTensorType>();
+        auto dstTy = op->getResult(0).getType().cast<RankedTensorType>();
+        // we don't want to push conversions backward if there is a downcast
+        // since it would result in more shared memory traffic
+        if (srcTy.getElementType().getIntOrFloatBitWidth() >
+            dstTy.getElementType().getIntOrFloatBitWidth()) {
+          replaceOperand = false;
+          break;
+        }
+        // we only push back when the first op in the chain has a load operand
+        if ((op == processed.back()) &&
+            !isa<triton::LoadOp>(op->getOperand(0).getDefiningOp())) {
+          replaceOperand = false;
+          break;
+        }
+        // we don't want to use ldmatrix for 8-bit data that requires trans
+        // since Nvidia GPUs can't do it efficiently
+        int kOrder = retEncoding.getOpIdx() ^ 1;
+        bool isTrans = kOrder != srcEncoding.getOrder()[0];
+        bool isInt8 = srcTy.getElementType().getIntOrFloatBitWidth() == 8;
+        if (isTrans && isInt8) {
+          replaceOperand = false;
+          break;
+        }
+      }
+      if (!replaceOperand)
+        continue;
+      IRMapping mapping;
+      rematerializeConversionChain(toConvert, rewriter, processed, mapping);
+      rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
+      changed = true;
     }
-    IRMapping mapping;
-    rematerializeConversionChain(toConvert, rewriter, processed, mapping);
-    rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
-    return mlir::success();
+    return mlir::success(changed);
   }
 };
 
