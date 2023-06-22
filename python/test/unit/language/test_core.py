@@ -1286,6 +1286,8 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     f8_output_tensor = torch.empty_like(xf16, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, in_dtype)
     copy_kernel[grid](xf16, f8_output, n_elements, BLOCK_SIZE=1024)
+    print(f8_tensor)
+    print(f8_output_tensor)
     assert torch.all(f8_tensor == f8_output_tensor)
 
 

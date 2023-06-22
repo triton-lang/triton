@@ -181,22 +181,17 @@ struct FpToFpOpConversion
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
     // fast conversion code provided by Scott Gray @ OpenAI
-    // ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
-    //       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
-    //       ((e4.y >> 0) & (0x80008000u >> 0)) |
-    //       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
     auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
-        "{                                       \n"
-        ".reg .b32 a<2>;                         \n"
-        "shr.b32  a0, $2, 1;                     \n" // a0 = $0 >> 1
-        "shr.b32  a1, $2, 7;                     \n" // b0 = $0 >> 7
-        "and.b32  $0, a0, 0x40004000;            \n" // ret = a0 & 0x40004000
-        "lop3.b32 $0, $0, 0x007f007f, a1, 0xf8;  \n" // ret = ret | (a1 &
-                                                     // 0x007f007f)
-        "and.b32  $1, $2, 0x80008000;            \n" // ret = ret | ($1 &
-                                                     // 0x80008000)
-        "lop3.b32 $1, $1, 0x3f803f80, $2, 0xf8;  \n" // ret = ret | ($1 &
-                                                     // 0x3f803f80)
+        "{                                      \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+        "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
+        "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
+        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
+        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "shr.b32  b0, b0, 1;                    \n" // b0 >>= 1
+        "shr.b32  b1, b1, 1;                    \n" // shift into fp16 position
+        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
         "}";
     return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   }
@@ -332,18 +327,23 @@ struct FpToFpOpConversion
   convertFp16x4ToFp8E4M3x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm = // WARN: subnormal Fp8s are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // see Fp8E4M3x4ToFp16x4
-        "shl.b32 a0, $1, 1;                     \n" // a0 <<= 1
-        "shl.b32 a1, $2, 1;                     \n" // shift into fp8e4 position
-        "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n" // a0 &= 0x7fff7fff
-        "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-        "add.u32 a0, a0, 0x00800080;            \n" // a0 += 0x00800080
-        "add.u32 a1, a1, 0x00800080;            \n" // (round to nearest)
-        "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n" // b0 = a0|(0x80008000&in0)
-        "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
-        "prmt.b32 $0, b0, b1, 0x7531;           \n" // output = b1b0
+    // fast conversion code provided by Scott Gray @ OpenAI
+    // ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
+    //       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
+    //       ((e4.y >> 0) & (0x80008000u >> 0)) |
+    //       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
+    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
+        "{                                       \n"
+        ".reg .b32 a<2>;                         \n"
+        "shr.b32  a0, $1, 1;                     \n" // a0 = $0 >> 1
+        "shr.b32  a1, $1, 7;                     \n" // a1 = $0 >> 7
+        "and.b32  $0,     a0, 0x40004000;        \n" // ret = a0 & 0x40004000
+        "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n" // ret = ret | (a1 &
+                                                     // 0x007f007f)
+        "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n" // ret = ret | ($1 &
+                                                     // 0x80008000)
+        "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n" // ret = ret | ($1 &
+                                                     // 0x3f803f80)
         "}";
     return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   }
