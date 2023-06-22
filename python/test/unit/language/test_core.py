@@ -700,7 +700,7 @@ def test_abs(dtype_x, device='cuda'):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e5])
 def test_abs_f8(in_dtype):
 
     @triton.jit
@@ -1224,7 +1224,7 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
 
     extended_exp = ((1 << (tl.float32.primitive_bitwidth - tl.float32.fp_mantissa_width - 1)) - 1) << tl.float32.fp_mantissa_width
     # special cases, exp is 0b11..1
-    if dtype == tl.float8e4:
+    if dtype == tl.float8e4b15:
         # float8e4m3 does not have infinities
         output[fp == 0b01111111] = torch.nan
         output[fp == 0b11111111] = torch.nan
@@ -1251,7 +1251,7 @@ def test_convert_float16_to_float32(in_dtype):
     assert torch.all(f16_input[other] == f32_output[other])
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     """Tests that converting an f8 to f16 and back to f8 doesn't change its value"""
@@ -1289,7 +1289,7 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     assert torch.all(f8_tensor == f8_output_tensor)
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16])
 def test_f16_to_f8_rounding(in_dtype, out_dtype):
     """Takes all float16s, converts them to float8 and back to float16. Checks that the absolute
@@ -1336,7 +1336,7 @@ def test_f16_to_f8_rounding(in_dtype, out_dtype):
 
     # WARN: only normalized numbers are handled
     f8_normal_min = 1 << in_dtype.fp_mantissa_width  # 0b00001000 for float8e4
-    f8_normal_max = 0b01111110 if in_dtype == tl.float8e4 else 0b01111011
+    f8_normal_max = 0b01111110 if in_dtype == tl.float8e4b15 else 0b01111011
     f16_min, f16_max, f16_max_minus_1 = convert_float_to_float32(torch.tensor([f8_normal_min, f8_normal_max, f8_normal_max - 1], dtype=torch.int8), in_dtype)
     assert torch.all(torch.isfinite(f16_min))
     assert torch.all(torch.isfinite(f16_max))

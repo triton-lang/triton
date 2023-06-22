@@ -180,17 +180,23 @@ struct FpToFpOpConversion
   convertFp8E4M3x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
+    // fast conversion code provided by Scott Gray @ OpenAI
+    // ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
+    //       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
+    //       ((e4.y >> 0) & (0x80008000u >> 0)) |
+    //       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
     auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-        "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
-        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-        "shr.b32  b0, b0, 1;                    \n" // b0 >>= 1
-        "shr.b32  b1, b1, 1;                    \n" // shift into fp16 position
-        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+        "{                                       \n"
+        ".reg .b32 a<2>;                         \n"
+        "shr.b32  a0, $2, 1;                     \n" // a0 = $0 >> 1
+        "shr.b32  a1, $2, 7;                     \n" // b0 = $0 >> 7
+        "and.b32  $0, a0, 0x40004000;            \n" // ret = a0 & 0x40004000
+        "lop3.b32 $0, $0, 0x007f007f, a1, 0xf8;  \n" // ret = ret | (a1 &
+                                                     // 0x007f007f)
+        "and.b32  $1, $2, 0x80008000;            \n" // ret = ret | ($1 &
+                                                     // 0x80008000)
+        "lop3.b32 $1, $1, 0x3f803f80, $2, 0xf8;  \n" // ret = ret | ($1 &
+                                                     // 0x3f803f80)
         "}";
     return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
   }

@@ -228,7 +228,7 @@ class dtype:
             return builder.get_int64_ty()
         elif self.name == 'fp8e5':
             return builder.get_fp8e5_ty()
-        elif self.name == 'fp8e4':
+        elif self.name == 'fp8e4b15':
             return builder.get_fp8e4_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
