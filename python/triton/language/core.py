@@ -1255,15 +1255,21 @@ def abs(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name: str) -> Callable[[T], T]:
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
-    :param axis: the dimension along which the reduction should be done
-    """
+    :param axis: the dimension along which the reduction should be done"""
+        if return_indices_arg is not None:
+            docstr += f"""
+    :param {return_indices_arg}: if true, return index corresponding to the {name} value"""
+        if tie_break_arg is not None:
+            docstr += f"""
+    :param {tie_break_arg}: if true, return the left-most indices in case of ties for values that aren't NaN"""
+
         func.__doc__ = docstr.format(name=name)
         return func
 
@@ -1396,7 +1402,9 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
-@_add_reduction_docstr("maximum")
+@_add_reduction_docstr("maximum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = _promote_reduction_input(input)
     if return_indices:
@@ -1409,7 +1417,7 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
 
 
 @jit
-@_add_reduction_docstr("maximum index")
+@_add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
 def argmax(input, axis, tie_break_left=True):
     (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
@@ -1440,7 +1448,9 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
-@_add_reduction_docstr("minimum")
+@_add_reduction_docstr("minimum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = _promote_reduction_input(input)
     if return_indices:
@@ -1453,7 +1463,8 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
 
 
 @jit
-@_add_reduction_docstr("minimum index")
+@_add_reduction_docstr("minimum index",
+                       tie_break_arg="tie_break_left")
 def argmin(input, axis, tie_break_left=True):
     _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret

@@ -1396,7 +1396,7 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     # input
     rs = RandomState(17)
     # limit the range of integers so that the sum does not overflow
-    x = numpy_random((shape,), dtype_str=dtype_str, rs=rs) * 20
+    x = numpy_random((shape,), dtype_str=dtype_str, rs=rs)
     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
                 'max-with-indices': np.max,
                 'min-with-indices': np.min,
