@@ -4,6 +4,7 @@
 using namespace mlir;
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -552,13 +553,19 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   int kWidth = encoding.getMMAv2kWidth();
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
+  auto order = triton::gpu::getOrder(mmaLayout);
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
-  Value warpRowIndex =
-      urem(udiv(warp, i32_val(warpsPerCTA[1])), i32_val(warpsPerCTA[0]));
-  Value warpColIndex = urem(warp, i32_val(warpsPerCTA[1]));
-  Value warpM = urem(warpRowIndex, i32_val(shape[0] / 16));
-  Value warpN = urem(warpColIndex, i32_val(shape[1] / 8));
+
+  SmallVector<Value> multiDimWarpId =
+      delinearize(rewriter, loc, warp, warpsPerCTA, order);
+  if (order[0] == 1) {
+    multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(warpsPerCTA[0]));
+  } else {
+    multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(warpsPerCTA[1]));
+  }
+  Value warpM = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
+  Value warpN = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
 
   int warpsPerTile;
   if (isA)
