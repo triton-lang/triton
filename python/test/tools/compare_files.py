@@ -42,7 +42,9 @@ def getFileWithExtension(path: str, ext: str) -> Optional[str]:
         return None
     # filter out files with grp in their name
     files = [f for f in files if "__grp__" not in f]
-    assert len(files) == 1, f"Found {len(files)} files in {path} with extension {ext}!"
+    if len(files) != 1:
+        print(f"Found {len(files)} files in {path} with extension {ext}!")
+        sys.exit(2)
     return files[0]
 
 
@@ -99,7 +101,9 @@ def getNameToHashesDict(path: str) -> Dict[str, List[str]]:
     nameToHashes = {}
     for hash in os.listdir(path):
         fullPath = os.path.join(path, hash)
-        assert os.path.isdir(fullPath), f"Path {fullPath} is not a directory!"
+        if not os.path.isdir(fullPath):
+            print(f"Path {fullPath} is not a directory!")
+            sys.exit(2)
         fileVec = getFileVec(fullPath)
         if len(fileVec) < 2 or fileVec[0][0] != "json":
             continue
@@ -192,13 +196,17 @@ def main(args) -> bool:
         Iterates over all kernels in the given yaml file and compares them
         in the given paths
     """
-    assert args.path1 != args.path2, "Cannot compare files in the same directory!"
+    if args.path1 == args.path2:
+        print("Cannot compare files in the same directory!")
+        sys.exit(2)
     # Get kernel name to hashes dict, these hashes would have the same kernel name
     nameToHashes1 = getNameToHashesDict(args.path1)
     nameToHashes2 = getNameToHashesDict(args.path2)
 
     yamlFilePath = args.kernels
-    assert os.path.exists(yamlFilePath), f"Path {yamlFilePath} does not exist!"
+    if not os.path.exists(yamlFilePath):
+        print(f"Path {yamlFilePath} does not exist!")
+        sys.exit(2)
     nameAndExtension = loadYamlFile(yamlFilePath)["name_and_extension"]
 
     results = []
