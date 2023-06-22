@@ -529,7 +529,7 @@ public:
     assert(rank > 0);
     SmallVector<Value> multiDim(rank);
     if (rank == 1) {
-      multiDim[0] = linear;
+      multiDim[0] = urem(linear, i32_val(shape[0]));
     } else {
       Value remained = linear;
       for (auto &&en : llvm::enumerate(shape.drop_back())) {

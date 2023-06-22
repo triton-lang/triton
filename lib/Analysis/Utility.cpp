@@ -5,11 +5,15 @@
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include <deque>
 
 namespace mlir {
 
 bool ReduceOpHelper::isFastReduction() {
+  // Disable fast reduction only for debugging purpose
+  if (::triton::tools::getBoolEnv("DISABLE_FAST_REDUCTION"))
+    return false;
   return axis == triton::gpu::getOrder(getSrcLayout())[0];
 }
 

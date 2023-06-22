@@ -1701,7 +1701,18 @@ layouts = [
 
 @pytest.mark.parametrize("M, N", [[128, 128], [256, 128], [256, 256], [128, 256]])
 @pytest.mark.parametrize("src_layout", layouts)
-def test_chain_reduce(M, N, src_layout, device='cuda'):
+@pytest.mark.parametrize("op", ["sum", "max"])
+def test_chain_reduce(M, N, src_layout, op, device='cuda'):
+    op_str = ""
+    if op == "sum":
+        op_str = f"""
+        %13 = arith.addi %arg2, %arg3 : i32
+        tt.reduce.return %13 : i32"""
+    elif op == "max":
+        op_str = f"""
+        %13 = "triton_gpu.cmpi"(%arg2, %arg3) <{{predicate = 4 : i64}}> : (i32, i32) -> i1
+        %14 = arith.select %13, %arg2, %arg3 : i32
+        tt.reduce.return %14 : i32"""
     ir = f"""
     #src = {src_layout}
     module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
@@ -1720,13 +1731,11 @@ def test_chain_reduce(M, N, src_layout, device='cuda'):
         %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #src>
         %11 = "tt.reduce"(%10) ({{
         ^bb0(%arg2: i32, %arg3: i32):
-        %13 = arith.addi %arg2, %arg3 : i32
-        tt.reduce.return %13 : i32
+        {op_str}
         }}) {{axis = 1 : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
         %12 = "tt.reduce"(%11) ({{
         ^bb0(%arg2: i32, %arg3: i32):
-        %13 = arith.addi %arg2, %arg3 : i32
-        tt.reduce.return %13 : i32
+        {op_str}
         }}) {{axis = 0 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> i32
         tt.store %arg1, %12 {{cache = 1 : i32, evict = 1 : i32}} : i32
         tt.return
@@ -1748,7 +1757,10 @@ def test_chain_reduce(M, N, src_layout, device='cuda'):
     z_tri = torch.tensor(z, device=device)
 
     pgm = kernel[(1, 1, 1)](x_tri, z_tri)
-    z_ref = np.sum(x)
+    if op == "sum":
+        z_ref = np.sum(x)
+    elif op == "max":
+        z_ref = np.max(x)
 
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
