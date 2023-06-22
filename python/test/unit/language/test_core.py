@@ -1273,6 +1273,9 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     n_elements = f8_tensor.numel()
     xf16 = torch.empty_like(f8_tensor, dtype=out_dtype)
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    # reorder f8 for float8e4b15 since triton doesn't serialize fp8 data
+    # next to one another
+
     copy_kernel[grid](f8, xf16, n_elements, BLOCK_SIZE=1024)
 
     # exponent_mask = 0b01111100 for float8e5
