@@ -522,7 +522,6 @@ public:
     } else {
       reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
     }
-    auto reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
     SmallVector<Value> multiDim(rank);
     for (unsigned i = 0; i < rank; ++i) {
       multiDim[order[i]] = reorderedMultiDim[i];
