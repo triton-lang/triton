@@ -249,7 +249,7 @@ updateDotEncodingLayout(SmallVector<ConvertLayoutOp> &convertsToDotEncoding,
     };
     mlir::getForwardSlice(cvt.getResult(), &slices, {filter});
   }
-  // Apply the type change by walking ops in toological order.
+  // Apply the type change by walking ops in topological order.
   slices = mlir::topologicalSort(slices);
   for (Operation *op : slices) {
     builder.setInsertionPoint(op);
