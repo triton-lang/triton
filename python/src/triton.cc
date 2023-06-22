@@ -651,17 +651,21 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getI1Type();
            }) // or ret::copy?
       .def("get_int8_ty",
-           [](TritonOpBuilder &self) -> mlir::Type { return self.getBuilder().getI8Type(); })
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getI8Type();
+           })
       .def("get_int16_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getType<mlir::IntegerType>(16);
            })
-      .def(
-          "get_int32_ty",
-          [](TritonOpBuilder &self) -> mlir::Type { return self.getBuilder().getI32Type(); })
-      .def(
-          "get_int64_ty",
-          [](TritonOpBuilder &self) -> mlir::Type { return self.getBuilder().getI64Type(); })
+      .def("get_int32_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getI32Type();
+           })
+      .def("get_int64_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getI64Type();
+           })
       .def("get_fp8e4_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getType<mlir::Float8E4M3FNType>();
@@ -707,7 +711,9 @@ void init_triton_ir(py::module &&m) {
              return loc;
            })
       .def("get_unknown_loc",
-           [](TritonOpBuilder &self) { return self.getBuilder().getUnknownLoc(); })
+           [](TritonOpBuilder &self) {
+             return self.getBuilder().getUnknownLoc();
+           })
 
       // Ops
       .def("get_or_insert_function",
@@ -778,8 +784,7 @@ void init_triton_ir(py::module &&m) {
                                                  withElse);
            })
       .def("create_yield_op",
-           [](TritonOpBuilder &self,
-              mlir::Location &loc,
+           [](TritonOpBuilder &self, mlir::Location &loc,
               std::vector<mlir::Value> &yields) -> mlir::scf::YieldOp {
              return self.getBuilder().create<mlir::scf::YieldOp>(loc, yields);
            })
@@ -1496,17 +1501,17 @@ void init_triton_ir(py::module &&m) {
               std::vector<mlir::Value> &offsets,
               std::vector<int32_t> &tensorShape,
               std::vector<int32_t> &order) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::MakeTensorPtrOp>(
+             auto loc = self.getLastLoc();
+             return self.getBuilder().create<mlir::triton::MakeTensorPtrOp>(
                  loc, base, shape, strides, offsets, tensorShape, order);
            })
       // Advance a block pointer
       .def("create_advance",
            [](TritonOpBuilder &self, mlir::Value &ptr,
               std::vector<mlir::Value> &offsets) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::AdvanceOp>(loc, ptr.getType(),
-                                                         ptr, offsets);
+             auto loc = self.getLastLoc();
+             return self.getBuilder().create<mlir::triton::AdvanceOp>(
+                 loc, ptr.getType(), ptr, offsets);
            });
 
   py::class_<mlir::PassManager>(m, "pass_manager")
