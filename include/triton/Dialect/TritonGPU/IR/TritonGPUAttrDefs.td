@@ -77,7 +77,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "Type":$eltTy), [{
+                     "unsigned":$typeWidthInBit), [{
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
 
         if(!mmaEnc)
@@ -87,7 +87,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
         int opIdx = dotOpEnc.getOpIdx();
 
         // number of rows per phase
-        int perPhase = 128 / (shape[order[0]] * (eltTy.getIntOrFloatBitWidth() / 8));
+        int perPhase = 128 / (shape[order[0]] * (typeWidthInBit / 8));
         perPhase = std::max<int>(perPhase, 1);
 
         // index of the inner dimension in `order`
@@ -109,9 +109,9 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
         // ---- begin Ampere ----
         if (mmaEnc.isAmpere()) {
           std::vector<size_t> matShape = {8, 8,
-                                          2 * 64 / eltTy.getIntOrFloatBitWidth()};
+                                          2 * 64 / typeWidthInBit};
           // for now, disable swizzle when using transposed int8 tensor cores
-          if (eltTy.isInteger(8) && order[0] == inner)
+          if (typeWidthInBit == 8 && order[0] == inner)
             return $_get(context, 1, 1, 1, order);
 
           // --- handle A operand ---
@@ -135,6 +135,14 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
+    }]>,
+
+    AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
+                     "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
+                     "Type":$eltTy), [{
+      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      return get(context, dotOpEnc, shape, order, bitwidth);
     }]>
   ];
 
