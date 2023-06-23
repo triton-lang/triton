@@ -69,7 +69,7 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs = self.visit(node.value)
         while isinstance(lhs, ast.Attribute):
             lhs = self.visit(lhs.value)
-        if lhs is None or getattr(lhs, "__name__", "") == "triton":
+        if lhs is None or (getattr(lhs, "__name__", "") == "triton" or getattr(lhs, "__name__", "").endswith(".triton")):
             return None
         return getattr(lhs, node.attr)
 
@@ -79,7 +79,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if inspect.isbuiltin(func):
             return
-        if func.__module__ and 'triton.' in func.__module__:
+        if func.__module__ and (func.__module__.startswith('triton.') or '.triton.' in func.__module__):
             return
         assert isinstance(func, JITFunction), f"Function \"{func.__name__}\" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this"
         if func.hash is None:
