@@ -397,6 +397,7 @@ def TT_DotOp : TT_Op<"dot", [Pure,
     let results = (outs TT_FpIntTensor:$d);
 
     let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
+    let hasVerifier = 1;
 }
 
 //
