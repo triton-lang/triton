@@ -217,10 +217,9 @@ public:
   }
 
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
-    auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
-        loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x);
-    return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
+        loc, ::mlir::gpu::Dimension::x);
+    return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
   }
 
   // -----------------------------------------------------------------------
