@@ -125,6 +125,27 @@ tt.func @push_elementwise5(
   tt.return %newc : tensor<16x16xf32, #Cv1>
 }
 
+// CHECK: tt.func @succeeds_if_arg_is_not_convert_layout
+// CHECK: %[[ALOAD:.*]] = tt.load %arg0
+// CHECK: %[[ACVT:.*]] = triton_gpu.convert_layout %[[ALOAD]]
+// CHECK: %[[AF8E5:.*]] = tt.bitcast %[[ACVT]]
+// CHECK: %[[AF16:.*]] = tt.fp_to_fp %[[AF8E5]]
+// CHECK: %[[C:.*]] = tt.dot %[[AF16]]
+// CHECK: tt.return %[[C]] : tensor<16x16xf32, #mma>
+tt.func @succeeds_if_arg_is_not_convert_layout(
+                   %pa: tensor<16x16x!tt.ptr<i8>, #ALR> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %pb: tensor<16x16x!tt.ptr<f16>, #BLC> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                   %c: tensor<16x16xf32, #Cv2>) -> tensor<16x16xf32, #Cv2>{
+  %ai8 = tt.load %pa {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xi8, #ALR>
+  %dotai8 = triton_gpu.convert_layout %ai8 : (tensor<16x16xi8, #ALR>) -> tensor<16x16xi8, #Av2>
+  %b = tt.load %pb {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #BLC>
+  %dotaf8 = tt.bitcast %dotai8 : tensor<16x16xi8, #Av2> -> tensor<16x16xf8E5M2, #Av2>
+  %dota = tt.fp_to_fp %dotaf8 : tensor<16x16xf8E5M2, #Av2> -> tensor<16x16xf16, #Av2>
+  %dotb = triton_gpu.convert_layout %b : (tensor<16x16xf16, #BLC>) -> tensor<16x16xf16, #Bv2>
+  %newc = tt.dot %dota, %dotb, %c {allowTF32 = true, transA = false, transB = false} : tensor<16x16xf16, #Av2> * tensor<16x16xf16, #Bv2> -> tensor<16x16xf32, #Cv2>
+  tt.return %newc : tensor<16x16xf32, #Cv2>
+}
+
 }
 
 // -----
