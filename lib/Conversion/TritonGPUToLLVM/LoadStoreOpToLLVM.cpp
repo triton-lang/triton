@@ -357,7 +357,6 @@ struct StoreOpConversion
               .o("wb", op.getCache() == triton::CacheModifier::WB)
               .o("cg", op.getCache() == triton::CacheModifier::CG)
               .o("cs", op.getCache() == triton::CacheModifier::CS)
-              .o("wt", op.getCache() == triton::CacheModifier::WT)
               .o("L1::evict_first",
                  op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
               .o("L1::evict_last",

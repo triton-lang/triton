@@ -2267,7 +2267,7 @@ def test_vectorization_hints(has_hints):
 # ---------------
 
 
-@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs", ".wt"])
+@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs"])
 def test_store_cache_modifier(cache):
     src = torch.empty(128, device='cuda')
     dst = torch.empty(128, device='cuda')
@@ -2284,27 +2284,18 @@ def test_store_cache_modifier(cache):
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
     if cache == '.wb':
         assert 'st.global.wb' in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
     if cache == '.cg':
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' in ptx
         assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' not in ptx
     if cache == '.cs':
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' in ptx
-        assert 'st.global.wt' not in ptx
-    if cache == '.wt':
-        assert 'st.global.wb' not in ptx
-        assert 'st.global.cg' not in ptx
-        assert 'st.global.cs' not in ptx
-        assert 'st.global.wt' in ptx
 
 # ---------------
 # test if
