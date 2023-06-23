@@ -192,6 +192,7 @@ class CodeGenerator(ast.NodeVisitor):
     def __init__(self, context, prototype, gscope, attributes, constants, function_name,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None,
                  debug=False, noinline=False, file_name: Optional[str] = None, begin_line=0):
+        self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
         self.loc = self.builder.get_loc(file_name, begin_line)
@@ -873,7 +874,7 @@ class CodeGenerator(ast.NodeVisitor):
             debug = self.debug if fn.debug is None else fn.debug
             file_name = fn.fn.__code__.co_filename
             begin_line = fn.fn.__code__.co_firstlineno
-            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=debug, noinline=fn.noinline, file_name=file_name, begin_line=begin_line)
+            generator = CodeGenerator(self.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=debug, noinline=fn.noinline, file_name=file_name, begin_line=begin_line)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type

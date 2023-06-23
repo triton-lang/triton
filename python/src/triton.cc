@@ -74,15 +74,17 @@ void init_triton_runtime(py::module &&m) {
 
 class TritonOpBuilder {
 public:
-  TritonOpBuilder(mlir::OpBuilder &builder) : builder(builder) {
-    lastLoc = std::make_unique<mlir::Location>(builder.getUnknownLoc());
+  TritonOpBuilder(mlir::MLIRContext *context) {
+    builder = std::make_unique<mlir::OpBuilder>(context);
+    lastLoc = std::make_unique<mlir::Location>(builder->getUnknownLoc());
   }
 
-  mlir::OpBuilder &getBuilder() { return builder; }
+  mlir::OpBuilder &getBuilder() { return *builder; }
 
+  // Make a copy of the location
   void setLastLoc(mlir::Location &loc) {
-    // Make a copy of the location
-    lastLoc.reset(nullptr);
+    // The original mlir::Location object held by lastLoc will be automatically
+    // destroyed when lastLoc is assigned a new unique pointer
     lastLoc = std::make_unique<mlir::Location>(loc);
   }
 
@@ -93,7 +95,7 @@ public:
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     auto loc = getLastLoc();
-    return builder.create<OpTy>(loc, std::forward<Args>(args)...);
+    return builder->create<OpTy>(loc, std::forward<Args>(args)...);
   }
 
   /// Overload to create or fold a single result operation.
@@ -102,7 +104,7 @@ public:
                    mlir::Value>
   createOrFold(Args &&...args) {
     auto loc = getLastLoc();
-    return builder.createOrFold<OpTy>(loc, std::forward<Args>(args)...);
+    return builder->createOrFold<OpTy>(loc, std::forward<Args>(args)...);
   }
 
   /// Overload to create or fold a zero result operation.
@@ -110,11 +112,11 @@ public:
   std::enable_if_t<OpTy::template hasTrait<mlir::OpTrait::ZeroResults>(), OpTy>
   createOrFold(Args &&...args) {
     auto loc = getLastLoc();
-    return builder.createOrFold<OpTy>(loc, std::forward<Args>(args)...);
+    return builder->createOrFold<OpTy>(loc, std::forward<Args>(args)...);
   }
 
 private:
-  mlir::OpBuilder &builder;
+  std::unique_ptr<mlir::OpBuilder> builder;
   std::unique_ptr<mlir::Location> lastLoc;
 };
 
@@ -527,8 +529,6 @@ void init_triton_ir(py::module &&m) {
   py::class_<TritonOpBuilder>(m, "builder", py::dynamic_attr())
       .def(py::init<mlir::MLIRContext *>())
       // getters
-      .def_property_readonly("context", &mlir::OpBuilder::getContext,
-                             ret::reference)
       .def("create_module",
            [](TritonOpBuilder &self) -> mlir::ModuleOp {
              return self.create<mlir::ModuleOp>();
@@ -1012,9 +1012,8 @@ void init_triton_ir(py::module &&m) {
       .def("create_icmpULT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::ult, lhs, rhs);
+                 mlir::arith::CmpIPredicate::ult, lhs, rhs);
            })
       .def("create_icmpUGE",
            [](TritonOpBuilder &self, mlir::Value &lhs,

@@ -82,7 +82,7 @@ protected:
     auto compileUnitAttr = LLVM::DICompileUnitAttr::get(
         context, llvm::dwarf::DW_LANG_C17, fileAttr,
         builder.getStringAttr("triton"), /*isOptimized=*/true,
-        LLVM::DIEmissionKind::Full);
+        LLVM::DIEmissionKind::LineTablesOnly);
 
     auto funcNameAttr = builder.getStringAttr(funcName);
     return LLVM::DISubprogramAttr::get(context, compileUnitAttr, fileAttr,
