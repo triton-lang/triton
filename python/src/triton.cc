@@ -72,16 +72,15 @@ void init_triton_runtime(py::module &&m) {
       .export_values();
 }
 
-
 class TritonOpBuilder {
- public:
+public:
   TritonOpBuilder(mlir::OpBuilder &builder) : builder(builder) {
     lastLoc = std::make_unique<mlir::Location>(builder.getUnknownLoc());
   }
 
   mlir::OpBuilder &getBuilder() { return builder; }
 
-  void updateLastLoc(mlir::Location &loc) {
+  void setLastLoc(mlir::Location &loc) {
     // Make a copy of the location
     lastLoc.reset(nullptr);
     lastLoc = std::make_unique<mlir::Location>(loc);
@@ -92,7 +91,29 @@ class TritonOpBuilder {
     return *lastLoc;
   }
 
- private:
+  template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
+    auto loc = getLastLoc();
+    return builder.create<OpTy>(loc, std::forward<Args>(args)...);
+  }
+
+  /// Overload to create or fold a single result operation.
+  template <typename OpTy, typename... Args>
+  std::enable_if_t<OpTy::template hasTrait<mlir::OpTrait::OneResult>(),
+                   mlir::Value>
+  createOrFold(Args &&...args) {
+    auto loc = getLastLoc();
+    return builder.createOrFold<OpTy>(loc, std::forward<Args>(args)...);
+  }
+
+  /// Overload to create or fold a zero result operation.
+  template <typename OpTy, typename... Args>
+  std::enable_if_t<OpTy::template hasTrait<mlir::OpTrait::ZeroResults>(), OpTy>
+  createOrFold(Args &&...args) {
+    auto loc = getLastLoc();
+    return builder.createOrFold<OpTy>(loc, std::forward<Args>(args)...);
+  }
+
+private:
   mlir::OpBuilder &builder;
   std::unique_ptr<mlir::Location> lastLoc;
 };
@@ -509,20 +530,8 @@ void init_triton_ir(py::module &&m) {
       .def_property_readonly("context", &mlir::OpBuilder::getContext,
                              ret::reference)
       .def("create_module",
-           [](TritonOpBuilder &self, mlir::Location loc) -> mlir::ModuleOp {
-             return self.getBuilder().create<mlir::ModuleOp>(loc);
-           })
-      .def("ret",
-           [](TritonOpBuilder &self, mlir::Location loc,
-              std::vector<mlir::Value> &vals) -> void {
-             self.getBuilder().create<mlir::triton::ReturnOp>(loc, vals);
-           })
-      .def("call",
-           [](TritonOpBuilder &self, mlir::Location loc,
-              mlir::triton::FuncOp &func,
-              std::vector<mlir::Value> &args) -> mlir::OpState {
-             auto callOp = self.getBuilder().create<mlir::triton::CallOp>(loc, func, args);
-             return callOp;
+           [](TritonOpBuilder &self) -> mlir::ModuleOp {
+             return self.create<mlir::ModuleOp>();
            })
       // insertion block/point
       .def("set_insertion_point_to_start",
@@ -564,79 +573,66 @@ void init_triton_ir(py::module &&m) {
       // Constants
       .def("get_int1",
            [](TritonOpBuilder &self, bool v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
-             return mlir::Value(
-                 self.getBuilder().create<mlir::arith::ConstantIntOp>(
-                     loc, v, self.getBuilder().getI1Type()));
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 v, self.getBuilder().getI1Type()));
            })
       .def("get_int8",
            [](TritonOpBuilder &self, int64_t v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
-             return mlir::Value(self.getBuilder().create<mlir::arith::ConstantIntOp>(
-                 loc, v, self.getBuilder().getI8Type()));
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 v, self.getBuilder().getI8Type()));
            })
       .def("get_int16",
            [](TritonOpBuilder &self, int64_t v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
-             return mlir::Value(self.getBuilder().create<mlir::arith::ConstantIntOp>(
-                 loc, v, self.getBuilder().getI16Type()));
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 v, self.getBuilder().getI16Type()));
            })
       .def("get_int32",
            [](TritonOpBuilder &self, int64_t v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
-             return mlir::Value(self.getBuilder().create<mlir::arith::ConstantIntOp>(
-                 loc, v, self.getBuilder().getI32Type()));
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 v, self.getBuilder().getI32Type()));
            })
       .def("get_int64",
            [](TritonOpBuilder &self, int64_t v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
-             return mlir::Value(self.getBuilder().create<mlir::arith::ConstantIntOp>(
-                 loc, v, self.getBuilder().getI64Type()));
+             return mlir::Value(self.create<mlir::arith::ConstantIntOp>(
+                 v, self.getBuilder().getI64Type()));
            })
       .def("get_bf16",
            [](TritonOpBuilder &self, float v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
              auto type = self.getBuilder().getBF16Type();
-             return self.getBuilder().create<mlir::arith::ConstantFloatOp>(
-                 loc,
+             return self.create<mlir::arith::ConstantFloatOp>(
                  mlir::APFloat(type.getFloatSemantics(), std::to_string(v)),
                  type);
            })
       .def("get_fp16",
            [](TritonOpBuilder &self, float v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
-             return self.getBuilder().create<mlir::arith::ConstantOp>(
-                 loc, self.getBuilder().getF16FloatAttr(v));
+             return self.create<mlir::arith::ConstantOp>(
+                 self.getBuilder().getF16FloatAttr(v));
            })
       .def("get_fp32",
            [](TritonOpBuilder &self, float v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
-             return self.getBuilder().create<mlir::arith::ConstantOp>(
-                 loc, self.getBuilder().getF32FloatAttr(v));
+             return self.create<mlir::arith::ConstantOp>(
+                 self.getBuilder().getF32FloatAttr(v));
            })
       .def("get_fp64",
            [](TritonOpBuilder &self, double v) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
-             return self.getBuilder().create<mlir::arith::ConstantOp>(
-                 loc, self.getBuilder().getF64FloatAttr(v));
+             return self.create<mlir::arith::ConstantOp>(
+                 self.getBuilder().getF64FloatAttr(v));
            })
       .def("get_null_value",
            [](TritonOpBuilder &self, mlir::Type type) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
              if (auto floatTy = type.dyn_cast<mlir::FloatType>())
-               return self.getBuilder().create<mlir::arith::ConstantFloatOp>(
-                   loc, mlir::APFloat(floatTy.getFloatSemantics(), 0), floatTy);
+               return self.create<mlir::arith::ConstantFloatOp>(
+                   mlir::APFloat(floatTy.getFloatSemantics(), 0), floatTy);
              else if (auto intTy = type.dyn_cast<mlir::IntegerType>())
-               return self.getBuilder().create<mlir::arith::ConstantIntOp>(loc, 0, intTy);
+               return self.create<mlir::arith::ConstantIntOp>(0, intTy);
              else
                throw std::runtime_error("Not implemented");
            })
       .def("get_all_ones_value",
            [](TritonOpBuilder &self, mlir::Type type) -> mlir::Value {
-             auto loc = self.getBuilder().getUnknownLoc();
              uint64_t val = 0xFFFFFFFFFFFFFFFF;
              if (auto intTy = type.dyn_cast<mlir::IntegerType>())
-               return self.getBuilder().create<mlir::arith::ConstantIntOp>(loc, val, intTy);
+               return self.create<mlir::arith::ConstantIntOp>(val, intTy);
              else
                throw std::runtime_error("Not implemented");
            })
@@ -674,19 +670,22 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getType<mlir::Float8E5M2Type>();
            })
-      .def(
-          "get_half_ty",
-          [](TritonOpBuilder &self) -> mlir::Type { return self.getF16Type(); })
+      .def("get_half_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getF16Type();
+           })
       .def("get_bf16_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getBF16Type();
            })
-      .def(
-          "get_float_ty",
-          [](TritonOpBuilder &self) -> mlir::Type { return self.getF32Type(); })
-      .def(
-          "get_double_ty",
-          [](TritonOpBuilder &self) -> mlir::Type { return self.getF64Type(); })
+      .def("get_float_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getF32Type();
+           })
+      .def("get_double_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             return self.getBuilder().getF64Type();
+           })
       .def("get_ptr_ty",
            [](TritonOpBuilder &self, mlir::Type &type,
               int addrSpace) -> mlir::Type {
@@ -702,6 +701,9 @@ void init_triton_ir(py::module &&m) {
               std::vector<mlir::Type> outTypes) -> mlir::Type {
              return self.getBuilder().getFunctionType(inTypes, outTypes);
            })
+      // locs
+      .def("set_loc", [](TritonOpBuilder &self,
+                         mlir::Location &loc) { self.setLastLoc(loc); })
       .def("get_loc",
            [](TritonOpBuilder &self, const std::string &fileName, int line,
               int column = 0) {
@@ -722,14 +724,15 @@ void init_triton_ir(py::module &&m) {
               std::string &visibility, bool noinline) -> mlir::triton::FuncOp {
              if (mlir::Operation *funcOperation = module.lookupSymbol(funcName))
                return llvm::dyn_cast<mlir::triton::FuncOp>(funcOperation);
-             auto loc = self.getBuilder().getUnknownLoc();
              if (auto funcTy = funcType.dyn_cast<mlir::FunctionType>()) {
                llvm::SmallVector<mlir::NamedAttribute> attrs = {
-                   mlir::NamedAttribute(self.getStringAttr("sym_visibility"),
-                                        self.getStringAttr(visibility)),
-                   mlir::NamedAttribute(self.getStringAttr("noinline"),
-                                        self.getBoolAttr(noinline))};
-               return self.getBuilder().create<mlir::triton::FuncOp>(loc, funcName, funcTy,
+                   mlir::NamedAttribute(
+                       self.getBuilder().getStringAttr("sym_visibility"),
+                       self.getBuilder().getStringAttr(visibility)),
+                   mlir::NamedAttribute(
+                       self.getBuilder().getStringAttr("noinline"),
+                       self.getBuilder().getBoolAttr(noinline))};
+               return self.create<mlir::triton::FuncOp>(funcName, funcTy,
                                                         attrs);
              }
              throw std::runtime_error("invalid function type");
@@ -743,10 +746,13 @@ void init_triton_ir(py::module &&m) {
           ret::reference)
       .def(
           "create_block_with_parent",
-          [](TritonOpBuilder &self, mlir::Location &loc, mlir::Region &parent,
+          [](TritonOpBuilder &self, mlir::Region &parent,
              std::vector<mlir::Type> &argTypes) -> mlir::Block * {
+            // TODO: update arg loc
+            auto loc = self.getBuilder().getUnknownLoc();
             llvm::SmallVector<mlir::Location, 8> argLocs(argTypes.size(), loc);
-            return self.getBuilder().createBlock(&parent, {}, argTypes, argLocs);
+            return self.getBuilder().createBlock(&parent, {}, argTypes,
+                                                 argLocs);
           },
           ret::reference)
       .def(
@@ -755,60 +761,62 @@ void init_triton_ir(py::module &&m) {
             return new mlir::Block();
           },
           ret::reference)
+      // Function
+      .def("ret",
+           [](TritonOpBuilder &self, std::vector<mlir::Value> &vals) {
+             return self.create<mlir::triton::ReturnOp>(vals);
+           })
+      .def("call",
+           [](TritonOpBuilder &self, mlir::triton::FuncOp &func,
+              std::vector<mlir::Value> &args) {
+             return self.create<mlir::triton::CallOp>(func, args);
+           })
       // Unstructured control flow
       .def("create_cond_branch",
-           [](TritonOpBuilder &self, mlir::Location &loc, mlir::Value condition,
+           [](TritonOpBuilder &self, mlir::Value condition,
               mlir::Block *trueDest, mlir::Block *falseDest) {
-             self.getBuilder().create<mlir::cf::CondBranchOp>(loc, condition, trueDest,
-                                                 falseDest);
-             return;
+             return self.create<mlir::cf::CondBranchOp>(condition, trueDest,
+                                                        falseDest);
            })
       .def("create_branch",
-           [](TritonOpBuilder &self, mlir::Location &loc, mlir::Block *dest,
+           [](TritonOpBuilder &self, mlir::Block *dest,
               std::vector<mlir::Value> &args) {
-             self.getBuilder().create<mlir::cf::BranchOp>(loc, dest, args);
-             return;
+             return self.create<mlir::cf::BranchOp>(dest, args);
            })
       // Structured control flow
       .def("create_for_op",
-           [](TritonOpBuilder &self, mlir::Location &loc, mlir::Value &lb,
-              mlir::Value &ub, mlir::Value &step,
+           [](TritonOpBuilder &self, mlir::Value &lb, mlir::Value &ub,
+              mlir::Value &step,
               std::vector<mlir::Value> &initArgs) -> mlir::scf::ForOp {
-             return self.getBuilder().create<mlir::scf::ForOp>(loc, lb, ub, step, initArgs);
+             return self.create<mlir::scf::ForOp>(lb, ub, step, initArgs);
            })
       .def("create_if_op",
-           [](TritonOpBuilder &self, mlir::Location &loc,
-              std::vector<mlir::Type> &retTypes, mlir::Value &condition,
-              bool withElse) -> mlir::scf::IfOp {
-             return self.getBuilder().create<mlir::scf::IfOp>(loc, retTypes, condition,
-                                                 withElse);
+           [](TritonOpBuilder &self, std::vector<mlir::Type> &retTypes,
+              mlir::Value &condition, bool withElse) -> mlir::scf::IfOp {
+             return self.create<mlir::scf::IfOp>(retTypes, condition, withElse);
            })
       .def("create_yield_op",
-           [](TritonOpBuilder &self, mlir::Location &loc,
+           [](TritonOpBuilder &self,
               std::vector<mlir::Value> &yields) -> mlir::scf::YieldOp {
-             return self.getBuilder().create<mlir::scf::YieldOp>(loc, yields);
+             return self.create<mlir::scf::YieldOp>(yields);
            })
       .def("create_while_op",
            [](TritonOpBuilder &self, std::vector<mlir::Type> &retTypes,
               std::vector<mlir::Value> &initArgs) -> mlir::scf::WhileOp {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::scf::WhileOp>(loc, retTypes, initArgs);
+             return self.create<mlir::scf::WhileOp>(retTypes, initArgs);
            })
       .def("create_condition_op",
            [](TritonOpBuilder &self, mlir::Value &cond,
               std::vector<mlir::Value> &args) -> mlir::scf::ConditionOp {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::scf::ConditionOp>(loc, cond, args);
+             return self.create<mlir::scf::ConditionOp>(cond, args);
            })
 
       // miscellaneous
       .def("create_make_range",
            [](TritonOpBuilder &self, int start, int end) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             auto retType =
-                 mlir::RankedTensorType::get({end - start}, self.getI32Type());
-             return self.create<mlir::triton::MakeRangeOp>(loc, retType, start,
-                                                           end);
+             auto retType = mlir::RankedTensorType::get(
+                 {end - start}, self.getBuilder().getI32Type());
+             return self.create<mlir::triton::MakeRangeOp>(retType, start, end);
            })
 
       // Cast instructions
@@ -816,56 +824,47 @@ void init_triton_ir(py::module &&m) {
       .def("create_fp_to_fp",
            [](TritonOpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::FpToFpOp>(loc, dstType, src);
+             return self.create<mlir::triton::FpToFpOp>(dstType, src);
            })
       // Conversions for standard LLVM builtin types
       .def("create_bitcast",
            [](TritonOpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::BitcastOp>(loc, dstType, src);
+             return self.create<mlir::triton::BitcastOp>(dstType, src);
            })
       .def("create_si_to_fp",
            [](TritonOpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::SIToFPOp>(loc, dstType, src);
+             return self.create<mlir::arith::SIToFPOp>(dstType, src);
            })
       .def("create_ui_to_fp",
            [](TritonOpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::UIToFPOp>(loc, dstType, src);
+             return self.create<mlir::arith::UIToFPOp>(dstType, src);
            })
       .def("create_fp_to_si",
            [](TritonOpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::FPToSIOp>(loc, dstType, src);
+             return self.create<mlir::arith::FPToSIOp>(dstType, src);
            })
       .def("create_fp_to_ui",
            [](TritonOpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::FPToUIOp>(loc, dstType, src);
+             return self.create<mlir::arith::FPToUIOp>(dstType, src);
            })
       .def("create_fp_ext",
            [](TritonOpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::ExtFOp>(loc, dstType, src);
+             return self.create<mlir::arith::ExtFOp>(dstType, src);
            })
       .def("create_fp_trunc",
            [](TritonOpBuilder &self, mlir::Value &src,
               mlir::Type &dstType) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::TruncFOp>(loc, dstType, src);
+             return self.create<mlir::arith::TruncFOp>(dstType, src);
            })
       .def("create_int_cast",
            [](TritonOpBuilder &self, mlir::Value &src, mlir::Type &dstType,
               bool isSigned) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              // get element type if necessary
              mlir::Type srcType = src.getType();
              auto srcTensorType = srcType.dyn_cast<mlir::RankedTensorType>();
@@ -879,302 +878,256 @@ void init_triton_ir(py::module &&m) {
              unsigned srcWidth = srcEltType.getIntOrFloatBitWidth();
              unsigned dstWidth = dstEltType.getIntOrFloatBitWidth();
              if (srcWidth == dstWidth)
-               return self.create<mlir::arith::BitcastOp>(loc, dstType, src);
+               return self.create<mlir::arith::BitcastOp>(dstType, src);
              else if (srcWidth > dstWidth)
-               return self.create<mlir::arith::TruncIOp>(loc, dstType, src);
+               return self.create<mlir::arith::TruncIOp>(dstType, src);
              else if (isSigned)
-               return self.create<mlir::arith::ExtSIOp>(loc, dstType, src);
+               return self.create<mlir::arith::ExtSIOp>(dstType, src);
              else
-               return self.create<mlir::arith::ExtUIOp>(loc, dstType, src);
+               return self.create<mlir::arith::ExtUIOp>(dstType, src);
            })
       .def("create_to_index",
            [](TritonOpBuilder &self, mlir::Value &input) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::IndexCastOp>(
-                 loc, self.getIndexType(), input);
+                 self.getBuilder().getIndexType(), input);
            })
       .def("create_index_to_si",
            [](TritonOpBuilder &self, mlir::Value &input) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::IndexCastOp>(
-                 loc, self.getI64Type(), input);
+                 self.getBuilder().getI64Type(), input);
            })
       .def("create_fmul",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::MulFOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::MulFOp>(lhs, rhs);
            })
       .def("create_fdiv",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::DivFOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::DivFOp>(lhs, rhs);
            })
       .def("create_frem",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::RemFOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::RemFOp>(lhs, rhs);
            })
       .def("create_fadd",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::AddFOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::AddFOp>(lhs, rhs);
            })
       .def("create_fsub",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::SubFOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::SubFOp>(lhs, rhs);
            })
       .def("create_mul",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::MulIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::MulIOp>(lhs, rhs);
            })
       .def("create_sdiv",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::DivSIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::DivSIOp>(lhs, rhs);
            })
       .def("create_udiv",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::DivUIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::DivUIOp>(lhs, rhs);
            })
       .def("create_srem",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::RemSIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::RemSIOp>(lhs, rhs);
            })
       .def("create_urem",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::RemUIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::RemUIOp>(lhs, rhs);
            })
       .def("create_add",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::AddIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::AddIOp>(lhs, rhs);
            })
       .def("create_sub",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return mlir::Value(
-                 self.create<mlir::arith::SubIOp>(loc, lhs, rhs));
+             return mlir::Value(self.create<mlir::arith::SubIOp>(lhs, rhs));
            })
       .def("create_shl",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return mlir::Value(
-                 self.create<mlir::arith::ShLIOp>(loc, lhs, rhs));
+             return mlir::Value(self.create<mlir::arith::ShLIOp>(lhs, rhs));
            })
       .def("create_lshr",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return mlir::Value(
-                 self.create<mlir::arith::ShRUIOp>(loc, lhs, rhs));
+             return mlir::Value(self.create<mlir::arith::ShRUIOp>(lhs, rhs));
            })
       .def("create_ashr",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return mlir::Value(
-                 self.create<mlir::arith::ShRSIOp>(loc, lhs, rhs));
+             return mlir::Value(self.create<mlir::arith::ShRSIOp>(lhs, rhs));
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",
            [](TritonOpBuilder &self, mlir::Value &ptr,
               mlir::Value &offset) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::AddPtrOp>(loc, ptr.getType(), ptr,
+             return self.create<mlir::triton::AddPtrOp>(ptr.getType(), ptr,
                                                         offset);
            })
       // Comparison (int)
       .def("create_icmpSLE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::sle, lhs, rhs);
+                 mlir::arith::CmpIPredicate::sle, lhs, rhs);
            })
       .def("create_icmpSLT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::slt, lhs, rhs);
+                 mlir::arith::CmpIPredicate::slt, lhs, rhs);
            })
       .def("create_icmpSGE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::sge, lhs, rhs);
+                 mlir::arith::CmpIPredicate::sge, lhs, rhs);
            })
       .def("create_icmpSGT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::sgt, lhs, rhs);
+                 mlir::arith::CmpIPredicate::sgt, lhs, rhs);
            })
       .def("create_icmpULE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::ule, lhs, rhs);
+                 mlir::arith::CmpIPredicate::ule, lhs, rhs);
            })
       .def("create_icmpULT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
+             auto loc = self.getBuilder().getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
                  loc, mlir::arith::CmpIPredicate::ult, lhs, rhs);
            })
       .def("create_icmpUGE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::uge, lhs, rhs);
+                 mlir::arith::CmpIPredicate::uge, lhs, rhs);
            })
       .def("create_icmpUGT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::ugt, lhs, rhs);
+                 mlir::arith::CmpIPredicate::ugt, lhs, rhs);
            })
       .def("create_icmpEQ",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::eq, lhs, rhs);
+                 mlir::arith::CmpIPredicate::eq, lhs, rhs);
            })
       .def("create_icmpNE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpIOp>(
-                 loc, mlir::arith::CmpIPredicate::ne, lhs, rhs);
+                 mlir::arith::CmpIPredicate::ne, lhs, rhs);
            })
       // Comparison (float)
       .def("create_fcmpOLT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::OLT, lhs, rhs);
+                 mlir::arith::CmpFPredicate::OLT, lhs, rhs);
            })
       .def("create_fcmpOGT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::OGT, lhs, rhs);
+                 mlir::arith::CmpFPredicate::OGT, lhs, rhs);
            })
       .def("create_fcmpOLE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::OLE, lhs, rhs);
+                 mlir::arith::CmpFPredicate::OLE, lhs, rhs);
            })
       .def("create_fcmpOGE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::OGE, lhs, rhs);
+                 mlir::arith::CmpFPredicate::OGE, lhs, rhs);
            })
       .def("create_fcmpOEQ",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::OEQ, lhs, rhs);
+                 mlir::arith::CmpFPredicate::OEQ, lhs, rhs);
            })
       .def("create_fcmpONE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::ONE, lhs, rhs);
+                 mlir::arith::CmpFPredicate::ONE, lhs, rhs);
            })
       .def("create_fcmpULT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::ULT, lhs, rhs);
+                 mlir::arith::CmpFPredicate::ULT, lhs, rhs);
            })
       .def("create_fcmpUGT",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::UGT, lhs, rhs);
+                 mlir::arith::CmpFPredicate::UGT, lhs, rhs);
            })
       .def("create_fcmpULE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::ULE, lhs, rhs);
+                 mlir::arith::CmpFPredicate::ULE, lhs, rhs);
            })
       .def("create_fcmpUGE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::UGE, lhs, rhs);
+                 mlir::arith::CmpFPredicate::UGE, lhs, rhs);
            })
       .def("create_fcmpUEQ",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::UEQ, lhs, rhs);
+                 mlir::arith::CmpFPredicate::UEQ, lhs, rhs);
            })
       .def("create_fcmpUNE",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::arith::CmpFOp>(
-                 loc, mlir::arith::CmpFPredicate::UNE, lhs, rhs);
+                 mlir::arith::CmpFPredicate::UNE, lhs, rhs);
            })
       // // Logical
       .def("create_and",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::AndIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::AndIOp>(lhs, rhs);
            })
       .def("create_xor",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::XOrIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::XOrIOp>(lhs, rhs);
            })
       .def("create_or",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::OrIOp>(loc, lhs, rhs);
+             return self.create<mlir::arith::OrIOp>(lhs, rhs);
            })
       // Input/Output
       .def("create_load",
@@ -1182,16 +1135,14 @@ void init_triton_ir(py::module &&m) {
               mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy,
               bool isVolatile) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::LoadOp>(
-                 loc, ptrs, cacheModifier, evictionPolicy, isVolatile);
+                 ptrs, cacheModifier, evictionPolicy, isVolatile);
            })
       .def("create_store",
            [](TritonOpBuilder &self, mlir::Value &ptrs, mlir::Value &value,
               mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy) -> void {
-             auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptrs, value, cacheModifier,
+             self.create<mlir::triton::StoreOp>(ptrs, value, cacheModifier,
                                                 evictionPolicy);
            })
       .def("create_tensor_pointer_load",
@@ -1201,9 +1152,8 @@ void init_triton_ir(py::module &&m) {
               mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy,
               bool isVolatile) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::LoadOp>(
-                 loc, ptr, boundaryCheck, paddingOption, cacheModifier,
+                 ptr, boundaryCheck, paddingOption, cacheModifier,
                  evictionPolicy, isVolatile);
            })
       .def("create_tensor_pointer_store",
@@ -1211,8 +1161,7 @@ void init_triton_ir(py::module &&m) {
               std::vector<int32_t> &boundaryCheck,
               mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy) -> void {
-             auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptr, val, boundaryCheck,
+             self.create<mlir::triton::StoreOp>(ptr, val, boundaryCheck,
                                                 cacheModifier, evictionPolicy);
            })
       .def("create_masked_load",
@@ -1221,45 +1170,39 @@ void init_triton_ir(py::module &&m) {
               mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy,
               bool isVolatile) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::LoadOp>(
-                 loc, ptrs, mask, other.value_or(mlir::Value()), cacheModifier,
+                 ptrs, mask, other.value_or(mlir::Value()), cacheModifier,
                  evictionPolicy, isVolatile);
            })
       .def("create_masked_store",
            [](TritonOpBuilder &self, mlir::Value &ptrs, mlir::Value &val,
               mlir::Value &mask, mlir::triton::CacheModifier cacheModifier,
               mlir::triton::EvictionPolicy evictionPolicy) -> void {
-             auto loc = self.getUnknownLoc();
-             self.create<mlir::triton::StoreOp>(loc, ptrs, val, mask,
-                                                cacheModifier, evictionPolicy);
+             self.create<mlir::triton::StoreOp>(ptrs, val, mask, cacheModifier,
+                                                evictionPolicy);
            })
       .def("create_view",
            [](TritonOpBuilder &self, mlir::Value &arg,
               std::vector<int64_t> &shape) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              auto argType = arg.getType()
                                 .dyn_cast<mlir::RankedTensorType>()
                                 .getElementType();
              return self.create<mlir::triton::ViewOp>(
-                 loc, mlir::RankedTensorType::get(shape, argType), arg);
+                 mlir::RankedTensorType::get(shape, argType), arg);
            })
       .def(
           "create_expand_dims",
           [](TritonOpBuilder &self, mlir::Value &arg, int axis) -> mlir::Value {
-            auto loc = self.getUnknownLoc();
             auto argType = arg.getType().dyn_cast<mlir::RankedTensorType>();
             auto argEltType = argType.getElementType();
             std::vector<int64_t> retShape = argType.getShape();
             retShape.insert(retShape.begin() + axis, 1);
             return self.create<mlir::triton::ExpandDimsOp>(
-                loc, mlir::RankedTensorType::get(retShape, argEltType), arg,
-                axis);
+                mlir::RankedTensorType::get(retShape, argEltType), arg, axis);
           })
       .def("create_cat",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              auto lhsType = lhs.getType().dyn_cast<mlir::RankedTensorType>();
              auto rhsType = rhs.getType().dyn_cast<mlir::RankedTensorType>();
              if (!(lhsType.getShape().size() == 1 &&
@@ -1269,28 +1212,24 @@ void init_triton_ir(py::module &&m) {
              std::vector<int64_t> shape{lhsType.getShape()[0] +
                                         rhsType.getShape()[0]};
              return self.create<mlir::triton::CatOp>(
-                 loc,
                  mlir::RankedTensorType::get(shape, lhsType.getElementType()),
                  lhs, rhs);
            })
       .def("create_trans",
            [](TritonOpBuilder &self, mlir::Value &arg) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              auto argType = arg.getType().dyn_cast<mlir::RankedTensorType>();
              auto argEltType = argType.getElementType();
              std::vector<int64_t> retShape = argType.getShape();
              std::reverse(retShape.begin(), retShape.end());
              return self.create<mlir::triton::TransOp>(
-                 loc, mlir::RankedTensorType::get(retShape, argEltType), arg);
+                 mlir::RankedTensorType::get(retShape, argEltType), arg);
            })
       .def("create_broadcast",
            [](TritonOpBuilder &self, mlir::Value &arg,
               std::vector<int64_t> &shape) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              if (auto argType =
                      arg.getType().dyn_cast<mlir::RankedTensorType>())
                return self.createOrFold<mlir::triton::BroadcastOp>(
-                   loc,
                    mlir::RankedTensorType::get(shape, argType.getElementType()),
                    arg);
              throw std::runtime_error(
@@ -1299,17 +1238,15 @@ void init_triton_ir(py::module &&m) {
       .def("create_splat",
            [](TritonOpBuilder &self, mlir::Value &arg,
               std::vector<int64_t> &shape) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              auto argType = arg.getType();
              auto ret = self.createOrFold<mlir::triton::SplatOp>(
-                 loc, mlir::RankedTensorType::get(shape, argType), arg);
+                 mlir::RankedTensorType::get(shape, argType), arg);
              return ret;
            })
       // // atomic
       .def("create_atomic_cas",
            [](TritonOpBuilder &self, mlir::Value &ptr, mlir::Value &cmp,
               mlir::Value &val, mlir::triton::MemSemantic sem) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              mlir::Type dstType;
              if (auto srcTensorType =
                      ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
@@ -1323,14 +1260,13 @@ void init_triton_ir(py::module &&m) {
                                   .cast<mlir::triton::PointerType>();
                dstType = ptrType.getPointeeType();
              }
-             return self.create<mlir::triton::AtomicCASOp>(loc, dstType, ptr,
-                                                           cmp, val, sem);
+             return self.create<mlir::triton::AtomicCASOp>(dstType, ptr, cmp,
+                                                           val, sem);
            })
       .def("create_atomic_rmw",
            [](TritonOpBuilder &self, mlir::triton::RMWOp rmwOp,
               mlir::Value &ptr, mlir::Value &val, mlir::Value &mask,
               mlir::triton::MemSemantic sem) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              mlir::Type dstType;
              if (auto srcTensorType =
                      ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
@@ -1344,8 +1280,8 @@ void init_triton_ir(py::module &&m) {
                                   .cast<mlir::triton::PointerType>();
                dstType = ptrType.getPointeeType();
              }
-             return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
-                                                           ptr, val, mask, sem);
+             return self.create<mlir::triton::AtomicRMWOp>(dstType, rmwOp, ptr,
+                                                           val, mask, sem);
            })
       // External
       .def("create_extern_elementwise",
@@ -1353,115 +1289,98 @@ void init_triton_ir(py::module &&m) {
               const std::string &libPath, const std::string &symbol,
               std::vector<mlir::Value> &argList, mlir::Type retType,
               bool isPure) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              if (isPure)
                return self.create<mlir::triton::PureExternElementwiseOp>(
-                   loc, retType, argList, libName, libPath, symbol);
+                   retType, argList, libName, libPath, symbol);
              else
                return self.create<mlir::triton::ImpureExternElementwiseOp>(
-                   loc, retType, argList, libName, libPath, symbol);
+                   retType, argList, libName, libPath, symbol);
            })
       // Built-in instruction
       .def("create_get_program_id",
            [](TritonOpBuilder &self, int axis) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              if (axis < 0 || axis > 3)
                throw std::runtime_error("program_id must be in [0,3]");
              return self.create<mlir::triton::GetProgramIdOp>(
-                 loc, self.getI32Type(),
+                 self.getBuilder().getI32Type(),
                  mlir::triton::ProgramIDDimAttr::get(
-                     loc.getContext(), mlir::triton::ProgramIDDim(axis)));
+                     self.getBuilder().getContext(),
+                     mlir::triton::ProgramIDDim(axis)));
            })
       .def("create_get_num_programs",
            [](TritonOpBuilder &self, int axis) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
              return self.create<mlir::triton::GetNumProgramsOp>(
-                 loc, self.getI32Type(), self.getI32IntegerAttr(axis));
+                 self.getBuilder().getI32Type(),
+                 self.getBuilder().getI32IntegerAttr(axis));
            })
       .def("create_dot",
            [](TritonOpBuilder &self, mlir::Value &a, mlir::Value &b,
               mlir::Value &c, bool allowTF32) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::DotOp>(loc, c.getType(), a, b, c,
+             return self.create<mlir::triton::DotOp>(c.getType(), a, b, c,
                                                      allowTF32);
            })
       .def("create_exp",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::math::ExpOp>(loc, val);
+             return self.create<mlir::math::ExpOp>(val);
            })
       .def("create_cos",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::math::CosOp>(loc, val);
+             return self.create<mlir::math::CosOp>(val);
            })
       .def("create_sin",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::math::SinOp>(loc, val);
+             return self.create<mlir::math::SinOp>(val);
            })
       .def("create_log",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::math::LogOp>(loc, val);
+             return self.create<mlir::math::LogOp>(val);
            })
       .def("create_sqrt",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::math::SqrtOp>(loc, val);
+             return self.create<mlir::math::SqrtOp>(val);
            })
       .def("create_fabs",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::math::AbsFOp>(loc, val);
+             return self.create<mlir::math::AbsFOp>(val);
            })
       .def("create_iabs",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::math::AbsIOp>(loc, val);
+             return self.create<mlir::math::AbsIOp>(val);
            })
       .def("create_reduce",
            [](TritonOpBuilder &self, std::vector<mlir::Value> operands,
               int axis) -> mlir::OpState {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::ReduceOp>(loc, operands, axis);
+             return self.create<mlir::triton::ReduceOp>(operands, axis);
            })
       .def("create_reduce_ret",
            [](TritonOpBuilder &self, py::args args) -> mlir::OpState {
-             auto loc = self.getUnknownLoc();
              llvm::SmallVector<mlir::Value> return_values;
              for (const auto &arg : args) {
                return_values.push_back(py::cast<mlir::Value>(arg));
              }
-             return self.create<mlir::triton::ReduceReturnOp>(loc,
-                                                              return_values);
+             return self.create<mlir::triton::ReduceReturnOp>(return_values);
            })
       .def("create_ptr_to_int",
            [](TritonOpBuilder &self, mlir::Value &val,
               mlir::Type &type) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::PtrToIntOp>(loc, type, val);
+             return self.create<mlir::triton::PtrToIntOp>(type, val);
            })
       .def("create_int_to_ptr",
            [](TritonOpBuilder &self, mlir::Value &val,
               mlir::Type &type) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::IntToPtrOp>(loc, type, val);
+             return self.create<mlir::triton::IntToPtrOp>(type, val);
            })
       .def("create_select",
            [](TritonOpBuilder &self, mlir::Value &condition,
               mlir::Value &trueValue, mlir::Value &falseValue) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::arith::SelectOp>(loc, condition,
-                                                       trueValue, falseValue);
+             return self.create<mlir::arith::SelectOp>(condition, trueValue,
+                                                       falseValue);
            })
       .def("create_print",
            [](TritonOpBuilder &self, const std::string &prefix,
               const std::vector<mlir::Value> &values) -> void {
-             auto loc = self.getUnknownLoc();
              self.create<mlir::triton::PrintOp>(
-                 loc,
-                 mlir::StringAttr::get(self.getContext(),
+                 mlir::StringAttr::get(self.getBuilder().getContext(),
                                        llvm::StringRef(prefix)),
                  values);
            })
@@ -1469,30 +1388,25 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, mlir::Value &condition,
               const std::string &message, const std::string &fileName,
               const std::string &funcName, unsigned lineNo) -> void {
-             auto loc = self.getUnknownLoc();
-             auto messageAttr = mlir::StringAttr::get(self.getContext(),
-                                                      llvm::StringRef(message));
+             auto messageAttr = mlir::StringAttr::get(
+                 self.getBuilder().getContext(), llvm::StringRef(message));
              auto fileNameAttr = mlir::StringAttr::get(
-                 self.getContext(), llvm::StringRef(fileName));
+                 self.getBuilder().getContext(), llvm::StringRef(fileName));
              auto funcNameAttr = mlir::StringAttr::get(
-                 self.getContext(), llvm::StringRef(funcName));
-             auto lineNoAttr = self.getI32IntegerAttr(lineNo);
-             self.create<mlir::triton::AssertOp>(loc, condition, messageAttr,
+                 self.getBuilder().getContext(), llvm::StringRef(funcName));
+             auto lineNoAttr = self.getBuilder().getI32IntegerAttr(lineNo);
+             self.create<mlir::triton::AssertOp>(condition, messageAttr,
                                                  fileNameAttr, funcNameAttr,
                                                  lineNoAttr);
            })
       // Undef
       .def("create_undef",
            [](TritonOpBuilder &self, mlir::Type &type) -> mlir::Value {
-             auto loc = self.getUnknownLoc();
-             return self.create<::mlir::LLVM::UndefOp>(loc, type);
+             return self.create<::mlir::LLVM::UndefOp>(type);
            })
       // Force GPU barrier
       .def("create_barrier",
-           [](TritonOpBuilder &self) {
-             auto loc = self.getUnknownLoc();
-             self.create<mlir::gpu::BarrierOp>(loc);
-           })
+           [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
       // Make a block pointer (tensor pointer in Triton IR)
       .def("create_make_block_ptr",
            [](TritonOpBuilder &self, mlir::Value &base,
@@ -1501,17 +1415,15 @@ void init_triton_ir(py::module &&m) {
               std::vector<mlir::Value> &offsets,
               std::vector<int32_t> &tensorShape,
               std::vector<int32_t> &order) -> mlir::Value {
-             auto loc = self.getLastLoc();
-             return self.getBuilder().create<mlir::triton::MakeTensorPtrOp>(
-                 loc, base, shape, strides, offsets, tensorShape, order);
+             return self.create<mlir::triton::MakeTensorPtrOp>(
+                 base, shape, strides, offsets, tensorShape, order);
            })
       // Advance a block pointer
       .def("create_advance",
            [](TritonOpBuilder &self, mlir::Value &ptr,
               std::vector<mlir::Value> &offsets) -> mlir::Value {
-             auto loc = self.getLastLoc();
-             return self.getBuilder().create<mlir::triton::AdvanceOp>(
-                 loc, ptr.getType(), ptr, offsets);
+             return self.create<mlir::triton::AdvanceOp>(ptr.getType(), ptr,
+                                                         offsets);
            });
 
   py::class_<mlir::PassManager>(m, "pass_manager")

@@ -195,6 +195,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder = ir.builder(context)
         self.file_name = file_name
         self.loc = self.builder.get_loc(file_name, begin_line)
+        self.builder.set_loc(self.loc)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
