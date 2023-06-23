@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-# import triton
 from ..language import core as lcore
 from . import torch_wrapper
 from .core import ExecutionContext
