@@ -1272,33 +1272,32 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
         tl.store(output_ptr + offsets, output, mask=mask)
 
     # initialize array containing all possible f8 values except NaN
-    f8_tensor = np.array(range(-128, 128), dtype=np.uint8)
-    is_nan = (f8_tensor & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
-    f8_tensor[is_nan] = 0
+    ref_fp8 = np.array(range(-128, 128), dtype=np.uint8)
+    is_nan = (ref_fp8 & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
+    exp_mask = 0b01111111 ^ ((1 << in_dtype.fp_mantissa_width) - 1)
+    is_subnormal = np.logical_or((ref_fp8 & exp_mask) == 0, (ref_fp8 & exp_mask) == exp_mask)
+    ref_fp8[is_nan] = 0
+    ref_fp8[is_subnormal] = 0
     # triton's f8e4b15 format is optimized for software emulation
     # as a result, each pack of 4xfp8 values:
     # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
     # is actually internally stored as
     # s0s2b0b2s1s3b1b3
     # we apply the conversion here
-    f8x4 = f8_tensor.view(np.uint32)
+    f8x4 = ref_fp8.view(np.uint32)
     s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
     b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
     signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
     bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
     # tensor of triton fp8 data
     fp8e4b15 = torch.from_numpy((signs | bits).view(np.int8)).cuda()
+    tri_fp8 = triton.reinterpret(fp8e4b15, in_dtype)
     tri_fp16 = torch.empty(256, dtype=out_dtype, device="cuda")
-    copy_kernel[(1,)](triton.reinterpret(fp8e4b15, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
+    copy_kernel[(1,)](tri_fp8, tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
 
-    # exponent_mask = 0b01111100 for float8e5
-    # exponent_mask = 0b01111000 for float8e4
-    f8_tensor = torch.from_numpy(f8_tensor).cuda()
-    exponent_mask = 0b01111111 ^ ((1 << in_dtype.fp_mantissa_width) - 1)
-    normal = torch.logical_and((f8_tensor & exponent_mask) != 0, (f8_tensor & exponent_mask) != exponent_mask)
-    ref_fp16 = convert_float_to_float32(f8_tensor, in_dtype)
-    # WARN: currently only normal float8s are handled
-    assert torch.all(tri_fp16[normal] == ref_fp16[normal])
+    ref_fp8 = torch.from_numpy(ref_fp8).cuda()
+    ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
+    assert torch.all(tri_fp16 == ref_fp16)
 
     f8_output_tensor = torch.empty_like(tri_fp16, dtype=torch.int8)
     f8_output = triton.reinterpret(f8_output_tensor, in_dtype)
