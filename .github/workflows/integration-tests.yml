@@ -266,17 +266,17 @@ jobs:
           name: kernels-reference-check
           path: kernels_reference_check.txt
 
-      - name: Check output and comment on PR
-        if: ${{ env.COMPARISON_RESULT == 'false' }}
-        uses: actions/github-script@v5
-        with:
-          script: |
-            const run_id = ${{ env.RUN_ID }};
-            const issue_number = context.payload.pull_request.number;
-            const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}).`;
-            await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue_number,
-                body: message
-            });
+      # - name: Check output and comment on PR
+      #   if: ${{ env.COMPARISON_RESULT == 'false' }}
+      #   uses: actions/github-script@v5
+      #   with:
+      #     script: |
+      #       const run_id = ${{ env.RUN_ID }};
+      #       const issue_number = context.payload.pull_request.number;
+      #       const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}).`;
+      #       await github.rest.issues.createComment({
+      #           owner: context.repo.owner,
+      #           repo: context.repo.repo,
+      #           issue_number: issue_number,
+      #           body: message
+      #       });
