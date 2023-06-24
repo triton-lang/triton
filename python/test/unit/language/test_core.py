@@ -1257,6 +1257,25 @@ def get_32bit_binary(number):
     return "{:032b}".format(number)
 
 
+def serialize_fp8(np_data, in_dtype):
+    if in_dtype == tl.float8e4b15:
+        # triton's f8e4b15 format is optimized for software emulation
+        # as a result, each pack of 4xfp8 values:
+        # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
+        # is actually internally stored as
+        # s0s2b0b2s1s3b1b3
+        # we apply the conversion here
+        f8x4 = np_data.view(np.uint32)
+        s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
+        b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
+        signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
+        bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
+        # tensor of triton fp8 data
+        return (signs | bits).view(np.int8)
+    else:
+        return np_data
+
+
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_f8_xf16_roundtrip(in_dtype, out_dtype):
@@ -1278,22 +1297,7 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     is_subnormal = np.logical_or((ref_fp8 & exp_mask) == 0, (ref_fp8 & exp_mask) == exp_mask)
     ref_fp8[is_nan] = 0
     ref_fp8[is_subnormal] = 0
-    if in_dtype == tl.float8e4b15:
-        # triton's f8e4b15 format is optimized for software emulation
-        # as a result, each pack of 4xfp8 values:
-        # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
-        # is actually internally stored as
-        # s0s2b0b2s1s3b1b3
-        # we apply the conversion here
-        f8x4 = ref_fp8.view(np.uint32)
-        s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
-        b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
-        signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
-        bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
-        # tensor of triton fp8 data
-        tri_fp8 = torch.from_numpy((signs | bits).view(np.int8)).cuda()
-    else:
-        tri_fp8 = torch.from_numpy(ref_fp8).cuda()
+    tri_fp8 = torch.from_numpy(serialize_fp8(ref_fp8, in_dtype)).cuda()
     tri_fp16 = torch.empty(256, dtype=out_dtype, device="cuda")
     copy_kernel[(1,)](triton.reinterpret(tri_fp8, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
 
@@ -1334,7 +1338,8 @@ def test_f16_to_f8_rounding(in_dtype, out_dtype):
 
     abs_error = torch.abs(f16_input - f16_output)
 
-    all_f8_vals_tensor = torch.tensor(range(2 ** 8), dtype=torch.uint8, device='cuda')
+    all_f8_vals_tensor = np.array(range(-128, 128), dtype=np.int8)
+    all_f8_vals_tensor = torch.from_numpy(all_f8_vals_tensor).cuda()
     all_f8_vals = triton.reinterpret(all_f8_vals_tensor, in_dtype)
     all_f8_vals_in_f16 = torch.empty_like(all_f8_vals_tensor, dtype=out_dtype)
     copy_kernel[grid](all_f8_vals, all_f8_vals_in_f16, n_elements=256, BLOCK_SIZE=1024)
@@ -1350,6 +1355,7 @@ def test_f16_to_f8_rounding(in_dtype, out_dtype):
         ),
         dim=1,
     )[0]
+    print(min_error)
 
     # WARN: only normalized numbers are handled
     f8_normal_min = 1 << in_dtype.fp_mantissa_width  # 0b00001000 for float8e4
