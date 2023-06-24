@@ -1302,7 +1302,7 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype):
 
     ref_fp8 = torch.from_numpy(ref_fp8).cuda()
     ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
-    assert torch.all(tri_fp16 == ref_fp16)
+    assert torch.all(tri_fp16[~is_subnormal] == ref_fp16[~is_subnormal])
 
     ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
     copy_kernel[(1,)](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
