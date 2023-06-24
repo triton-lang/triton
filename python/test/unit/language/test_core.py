@@ -1251,12 +1251,6 @@ def test_convert_float16_to_float32(in_dtype):
     assert torch.all(f16_input[other] == f32_output[other])
 
 
-def get_32bit_binary(number):
-    if number < 0:
-        number = (1 << 32) + number
-    return "{:032b}".format(number)
-
-
 def serialize_fp8(np_data, in_dtype):
     if in_dtype == tl.float8e4b15:
         # triton's f8e4b15 format is optimized for software emulation
@@ -1278,8 +1272,13 @@ def serialize_fp8(np_data, in_dtype):
 
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
-def test_f8_xf16_roundtrip(in_dtype, out_dtype):
-    """Tests that converting an fp8 to fp16 and back to fp8 doesn't change its value"""
+def test_fp8_fpN_roundtrip(in_dtype, out_dtype):
+    """
+    For all possible float8 values (ref_fp8 = range(0, 256)), test that:
+        - conversion tri_fp16 = convert(input=ref_fp8, out=out_dtype) matches the reference
+        - conversion tri_fp8 = convert(input=tri_fp16, out=out_dtype) matches the original
+    this is only possible if both conversions are correct
+    """
     check_type_supported(out_dtype)
 
     @triton.jit
@@ -1308,68 +1307,6 @@ def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
     copy_kernel[(1,)](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
     assert torch.all(tri_fp8 == ref_fp8)
-
-
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e5])
-@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16])
-def test_f16_to_f8_rounding(in_dtype, out_dtype):
-    """Takes all float16s, converts them to float8 and back to float16. Checks that the absolute
-    error is the minimum over all float8.
-    Or the same explanation a bit mathier:
-    for all f16 |f16 - fromf8(tof8(f16))| == min over all f8 |f16 - fromf8(f8)|"""
-    @triton.jit
-    def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        input = tl.load(input_ptr + offsets, mask=mask)
-        output = input
-        tl.store(output_ptr + offsets, output, mask=mask)
-
-    i16_input = torch.tensor(range(-int(2 ** (16 - 1)), int(2 ** (16 - 1))), dtype=torch.int16, device='cuda')
-    f16_input = i16_input.view(out_dtype)
-    n_elements = f16_input.numel()
-    f8_output_tensor = torch.empty_like(f16_input, dtype=torch.int8)
-    f8_output = triton.reinterpret(f8_output_tensor, in_dtype)
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    copy_kernel[grid](f16_input, f8_output, n_elements, BLOCK_SIZE=1024)
-
-    f16_output = torch.empty_like(f16_input, dtype=out_dtype)
-    copy_kernel[grid](f8_output, f16_output, n_elements, BLOCK_SIZE=1024)
-
-    abs_error = torch.abs(f16_input - f16_output)
-
-    all_f8_vals_tensor = np.array(range(-128, 128), dtype=np.int8)
-    all_f8_vals_tensor = torch.from_numpy(all_f8_vals_tensor).cuda()
-    all_f8_vals = triton.reinterpret(all_f8_vals_tensor, in_dtype)
-    all_f8_vals_in_f16 = torch.empty_like(all_f8_vals_tensor, dtype=out_dtype)
-    copy_kernel[grid](all_f8_vals, all_f8_vals_in_f16, n_elements=256, BLOCK_SIZE=1024)
-
-    all_finite_f8_vals_in_f16 = all_f8_vals_in_f16[
-        torch.isfinite(all_f8_vals_in_f16)
-    ]
-
-    min_error = torch.min(
-        torch.abs(
-            f16_input.reshape((-1, 1))
-            - all_finite_f8_vals_in_f16.reshape((1, -1))
-        ),
-        dim=1,
-    )[0]
-    print(min_error)
-
-    # WARN: only normalized numbers are handled
-    f8_normal_min = 1 << in_dtype.fp_mantissa_width  # 0b00001000 for float8e4
-    f8_normal_max = 0b01111110 if in_dtype == tl.float8e4b15 else 0b01111011
-    f16_min, f16_max, f16_max_minus_1 = convert_float_to_float32(torch.tensor([f8_normal_min, f8_normal_max, f8_normal_max - 1], dtype=torch.int8), in_dtype)
-    assert torch.all(torch.isfinite(f16_min))
-    assert torch.all(torch.isfinite(f16_max))
-    thres_error = f16_max - f16_max_minus_1
-    mismatch = torch.logical_and(
-        torch.logical_or(abs_error != min_error, abs_error > thres_error), torch.logical_and(torch.isfinite(f16_input), torch.logical_and(torch.abs(f16_input) <= f16_max, torch.abs(f16_input) >= f16_min))
-    )
-    assert torch.all(
-        torch.logical_not(mismatch)
-    ), f"f16_input[mismatch]={f16_input[mismatch]} f16_output[mismatch]={f16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
 
 
 # ---------------
