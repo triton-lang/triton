@@ -311,6 +311,60 @@ struct FpToFpOpConversion
   // FP8 -> FP16
   /* ------------------ */
 
+  static ConvertorT makeConverterFromPtx(const char *ptxAsm, Type _inType,
+                                         Type _outType) {
+
+    ConvertorT converter =
+        [ptxAsm, _inType,
+         _outType](Location loc, ConversionPatternRewriter &rewriter,
+                   const Value &v0, const Value &v1, const Value &v2,
+                   const Value &v3) -> SmallVector<Value> {
+      auto ctx = rewriter.getContext();
+      int inBitwidth = _inType.getIntOrFloatBitWidth();
+      int outBitwidth = _outType.getIntOrFloatBitWidth();
+      Type inType = (inBitwidth == 8) ? i8_ty : _inType;
+      Type outType = (outBitwidth == 8) ? i8_ty : _outType;
+
+      SmallVector<Value> v = {v0, v1, v2, v3};
+      // first, we pack `v` into 32-bit ints
+      int inVecWidth = 32 / inBitwidth;
+      auto inVecTy = vec_ty(inType, inVecWidth);
+      SmallVector<Value> inPacked(4 / inVecWidth, undef(inVecTy));
+      for (size_t i = 0; i < 4; i++)
+        inPacked[i / inVecWidth] = insert_element(
+            inVecTy, inPacked[i / inVecWidth], v[i], i32_val(i % inVecWidth));
+      for (size_t i = 0; i < inPacked.size(); i++)
+        inPacked[i] = bitcast(inPacked[i], i32_ty);
+
+      // then, we run the provided inline PTX
+      int outVecWidth = 32 / outBitwidth;
+      int outNums = 4 / outVecWidth;
+      PTXBuilder builder;
+      SmallVector<PTXBuilder::Operand *> operands;
+      for (int i = 0; i < outNums; i++)
+        operands.push_back(builder.newOperand("=r"));
+      for (Value inVal : inPacked)
+        operands.push_back(builder.newOperand(inVal, "r"));
+      auto &ptxOp = *builder.create(ptxAsm);
+      ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
+      auto outVecTy = vec_ty(outType, outVecWidth);
+      auto outStructTy = struct_ty(SmallVector<Type>(outNums, outVecTy));
+      auto outStruct = builder.launch(rewriter, loc, outStructTy, false);
+
+      // extract the output
+      SmallVector<Value> outPacked;
+      for (int i = 0; i < outNums; i++)
+        outPacked.push_back(extract_val(outVecTy, outStruct, i));
+      // unpack the output
+      SmallVector<Value> ret;
+      for (size_t i = 0; i < 4; i++)
+        ret.push_back(extract_element(outType, outPacked[i / outVecWidth],
+                                      i32_val(i % outVecWidth)));
+      return ret;
+    };
+    return converter;
+  }
+
   static SmallVector<Value>
   convertFp8x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
                        const char *ptxAsm, const Value &v0, const Value &v1,
@@ -532,10 +586,7 @@ struct FpToFpOpConversion
   convertBf16x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm = // bf16 is clamped firstly to fp8 min/max
-
-        return convertBf16x4ToFp8x4(loc, rewriter, Bf16_to_Fp8E5M2, v0, v1, v2,
-                                    v3);
+    return convertBf16x4ToFp8x4(loc, rewriter, Bf16_to_Fp8E5M2, v0, v1, v2, v3);
   }
 
   /* ------------------ */
@@ -646,7 +697,8 @@ struct FpToFpOpConversion
     auto F64TyID = TypeID::get<mlir::Float64Type>();
     static DenseMap<std::pair<TypeID, TypeID>, ConvertorT> convertorMap = {
         // F8 -> F16
-        {{F8E4M3B15TyID, F16TyID}, convertFp8E4M3B15x4ToFp16x4},
+        {{F8E4M3B15TyID, F16TyID},
+         makeConverterFromPtx(Fp8E4M3B15_to_Fp16, srcTy, dstTy)},
         {{F8E5M2TyID, F16TyID}, convertFp8E5M2x4ToFp16x4},
         // F16 -> F8
         {{F16TyID, F8E4M3B15TyID}, convertFp16x4ToFp8E4M3B15x4},
