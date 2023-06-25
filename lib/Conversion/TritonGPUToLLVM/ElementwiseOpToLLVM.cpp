@@ -4,6 +4,175 @@ using namespace mlir;
 using namespace mlir::triton;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
+// Fp8E4M3B15 -> Fp16 (packed)
+// fast conversion code provided by Scott Gray @ OpenAI
+// $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
+// $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
+// WARN: subnormal (0bs0000xxx) are not handled
+const char *Fp8E4M3B15_to_Fp16 = "{                                      \n"
+                                 ".reg .b32 a<2>;                        \n"
+                                 "shl.b32 a0, $2, 1;                     \n"
+                                 "shl.b32 a1, $2, 7;                     \n"
+                                 "and.b32  $0, a0, 0x80008000;           \n"
+                                 "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
+                                 "and.b32  $1, $2, 0x80008000;           \n"
+                                 "lop3.b32 $1, $1, $2, 0x3f803f80, 0xf8; \n"
+                                 "}";
+
+// Fp16 -> Fp8E4M3B15 (packed)
+// fast conversion code provided by Scott Gray @ OpenAI
+// ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
+//       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
+//       ((e4.y >> 0) & (0x80008000u >> 0)) |
+//       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
+// WARN: subnormal (0bs0000xxx) are not handled
+const char *Fp16_to_Fp8E4M3B15 = "{                                       \n"
+                                 ".reg .b32 a<2>;                         \n"
+                                 "shr.b32  a0, $1, 1;                     \n"
+                                 "shr.b32  a1, $1, 7;                     \n"
+                                 "and.b32  $0,     a0, 0x40004000;        \n"
+                                 "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
+                                 "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n"
+                                 "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n"
+                                 "}";
+
+// Fp8E5M2 -> Fp16 (packed)
+const char *Fp8E5M2_to_Fp16 = "{                           \n"
+                              "prmt.b32 $0, 0, $2, 0x5140; \n\t"
+                              "prmt.b32 $1, 0, $2, 0x7362; \n\t"
+                              "}";
+
+// Fp16 -> Fp8E5M2 (packed)
+const char *Fp16_to_Fp8E5M2 =
+    "{                            \n"
+    ".reg .b32 a<2>;              \n"
+    "and.b32 a0, $1, 0x7fff7fff;  \n"           // a0 &= 0x7fff7fff
+    "and.b32 a1, $2, 0x7fff7fff;  \n"           // (strip sign)
+    "add.u32 a0, a0, 0x00800080;  \n"           // a0 += 0x00800080
+    "add.u32 a1, a1, 0x00800080;  \n"           // (round to nearest)
+    "lop3.b32 a0, $1, 0x80008000, a0, 0xea; \n" // a0 = a0|(0x80008000&in0)
+    "lop3.b32 a1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
+    "prmt.b32 $0, a0, a1, 0x7531; \n\t"         // output = a1a0
+    "}";
+
+// WARN: subnormal (0bs0000xxx) are not handled
+const char *Fp8E4M3_to_Bf16 =
+    "{                                      \n"
+    ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+    "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
+    "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
+    "and.b32 b0, a0, 0x7fff7fff;            \n" // b0 = a0 & 0x7fff7fff
+    "and.b32 b1, a1, 0x7fff7fff;            \n" // (strip sign)
+    "shr.b32 b0, b0, 4;                     \n" // b0 >>= 4
+    "shr.b32 b1, b1, 4;                     \n" // shift into fp16 position
+    "add.u32 b0, b0, 0x38003800;            \n" // b0.exp += 2**7-2**4
+                                                // exponent compensate = 112
+    "add.u32 b1, b1, 0x38003800;            \n" // b1 += 120<<7 | 120<<7<<16
+    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+    "}";
+
+// WARN: subnormal (0bs00000xx) are not handled
+const char *Fp8E5M2_to_Bf16 =
+    "{                                      \n"
+    ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+    "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
+    "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
+    "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
+    "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+    "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
+    "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
+    "add.u32  b0, b0, 0x38003800;           \n" // b0.exp += 2**7-2**4
+                                                // exponent compensate = 112
+    "add.u32  b1, b1, 0x38003800;           \n" // b1 += 112<<7 | 112<<7<<16
+    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+    "}";
+
+const char *Bf16_to_Fp8E4M3 =
+    "{                                           \n" // bf16=fp8>>4 + 120<<7
+    ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
+    ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
+    "mov.u32 fp8_min, 0x3c003c00;                \n" // so bf16_min = 0x3c00
+    "mov.u32 fp8_max, 0x43f043f0;                \n" // so bf16_max = 0x43f0
+    "mov.u32 rn_, 0x80008;                       \n" // round to nearest
+    "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
+    "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
+    "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
+    "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
+    "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
+
+    // nosign = clamp(nosign, min, max)
+    ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
+    "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
+    "max.u32 nosign_0_0, nosign_0_0, 0x38000000; \n"
+    "min.u32 nosign_0_0, nosign_0_0, 0x43f00000; \n"
+    "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
+    "max.u32 nosign_0_1, nosign_0_1, 0x3800;     \n"
+    "min.u32 nosign_0_1, nosign_0_1, 0x43f0;     \n"
+    "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
+    "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
+    "max.u32 nosign_1_0, nosign_1_0, 0x38000000; \n"
+    "min.u32 nosign_1_0, nosign_1_0, 0x43f00000; \n"
+    "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
+    "max.u32 nosign_1_1, nosign_1_1, 0x3800;     \n"
+    "min.u32 nosign_1_1, nosign_1_1, 0x43f0;     \n"
+    "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
+
+    "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
+    "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
+    "sub.u32 nosign0, nosign0, 0x38003800;       \n" // nosign0-=0x38003800
+    "sub.u32 nosign1, nosign1, 0x38003800;       \n" // (compensate offset)
+    "shr.u32 nosign0, nosign0, 4;                \n" // nosign0 >>= 4
+    "shr.u32 nosign1, nosign1, 4;                \n" // shift into to fp8e4
+    "prmt.b32 nosign, nosign0, nosign1, 0x6420;  \n" // nosign0 = 0x00f100f2
+                                                     // nosign1 = 0x00f300f4
+                                                     // nosign = 0xf3f4f1f2
+    "or.b32 $0, nosign, sign;                    \n" // restore sign
+    "}";
+
+const char *Bf16_to_Fp8E5M2 =
+    "{                                           \n" // bf16=fp8>>3 + 112<<7
+    ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
+    ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
+    "mov.u32 fp8_min, 0x38003800;                \n" // so bf16_min = 0x3800
+    "mov.u32 fp8_max, 0x57e057e0;                \n" // so bf16_max = 0x57e0
+    "mov.u32 rn_, 0x00100010;                    \n" // round to nearest
+    "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
+    "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
+    "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
+    "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
+    "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
+
+    // nosign = clamp(nosign, min, max)
+    ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
+    "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
+    "max.u32 nosign_0_0, nosign_0_0, 0x38000000; \n"
+    "min.u32 nosign_0_0, nosign_0_0, 0x57e00000; \n"
+    "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
+    "max.u32 nosign_0_1, nosign_0_1, 0x3800;     \n"
+    "min.u32 nosign_0_1, nosign_0_1, 0x57e0;     \n"
+    "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
+    "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
+    "max.u32 nosign_1_0, nosign_1_0, 0x38000000; \n"
+    "min.u32 nosign_1_0, nosign_1_0, 0x57e00000; \n"
+    "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
+    "max.u32 nosign_1_1, nosign_1_1, 0x3800;     \n"
+    "min.u32 nosign_1_1, nosign_1_1, 0x57e0;     \n"
+    "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
+
+    "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
+    "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
+    "sub.u32 nosign0, nosign0, 0x38003800;       \n" // nosign0-=0x38003800
+    "sub.u32 nosign1, nosign1, 0x38003800;       \n" // (compensate offset)
+    "shl.b32 nosign0, nosign0, 3;                \n" // nosign0 <<= 3
+    "shl.b32 nosign1, nosign1, 3;                \n" // shift into to fp8e4
+    "prmt.b32 nosign, nosign0, nosign1, 0x7531;  \n" // nosign0 = 0xf100f200
+                                                     // nosign1 = 0xf300f400
+                                                     // nosign = 0xf3f4f1f2
+    "or.b32 $0, nosign, sign;                    \n" // restore sign
+    "}";
+
 static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
                                         Type inType, Type ouType) {
   auto inTensorTy = inType.dyn_cast<RankedTensorType>();
@@ -177,35 +346,18 @@ struct FpToFpOpConversion
   }
 
   static SmallVector<Value>
-  convertFp8E4M3x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-    // fast conversion code provided by Scott Gray @ OpenAI
-    // $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
-    // $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
-    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>;                        \n"
-        "shl.b32 a0, $2, 1;                     \n"
-        "shl.b32 a1, $2, 7;                     \n"
-        "and.b32  $0, a0, 0x80008000;           \n"
-        "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
-        "and.b32  $1, $2, 0x80008000;           \n"
-        "lop3.b32 $1, $1, $2, 0x3f803f80, 0xf8; \n"
-        "}";
-    return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+  convertFp8E4M3B15x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
+                              const Value &v0, const Value &v1, const Value &v2,
+                              const Value &v3) {
+    return convertFp8x4ToFp16x4(loc, rewriter, Fp8E4M3B15_to_Fp16, v0, v1, v2,
+                                v3);
   }
 
   static SmallVector<Value>
   convertFp8E5M2x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    // exponent bias of Fp8E5M2 and Fp16 are the same
-    auto *ptxAsm = "{                           \n"
-                   "prmt.b32 $0, 0, $2, 0x5140; \n\t"
-                   "prmt.b32 $1, 0, $2, 0x7362; \n\t"
-                   "}";
-    return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+    return convertFp8x4ToFp16x4(loc, rewriter, Fp8E5M2_to_Fp16, v0, v1, v2, v3);
   }
 
   /* ------------------ */
@@ -249,44 +401,15 @@ struct FpToFpOpConversion
   convertFp8E4M3x4ToBf16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-        "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
-        "and.b32 b0, a0, 0x7fff7fff;            \n" // b0 = a0 & 0x7fff7fff
-        "and.b32 b1, a1, 0x7fff7fff;            \n" // (strip sign)
-        "shr.b32 b0, b0, 4;                     \n" // b0 >>= 4
-        "shr.b32 b1, b1, 4;                     \n" // shift into fp16 position
-        "add.u32 b0, b0, 0x38003800;            \n" // b0.exp += 2**7-2**4
-                                                    // exponent compensate = 112
-        "add.u32 b1, b1, 0x38003800;            \n" // b1 += 120<<7 | 120<<7<<16
-        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-        "}";
-    return convertFp8x4ToBf16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+    return convertFp8x4ToBf16x4(loc, rewriter, Fp8E4M3_to_Bf16, v0, v1, v2, v3);
   };
 
   static SmallVector<Value>
   convertFp8E5M2x4ToBf16x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm = // WARN: subnormal (0bs00000xx) are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-        "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
-        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-        "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
-        "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
-        "add.u32  b0, b0, 0x38003800;           \n" // b0.exp += 2**7-2**4
-                                                    // exponent compensate = 112
-        "add.u32  b1, b1, 0x38003800;           \n" // b1 += 112<<7 | 112<<7<<16
-        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-        "}";
-    return convertFp8x4ToBf16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+
+    return convertFp8x4ToBf16x4(loc, rewriter, Fp8E5M2_to_Bf16, v0, v1, v2, v3);
   };
 
   /* ------------------ */
@@ -324,49 +447,18 @@ struct FpToFpOpConversion
   }
 
   static SmallVector<Value>
-  convertFp16x4ToFp8E4M3x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-    // fast conversion code provided by Scott Gray @ OpenAI
-    // ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
-    //       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
-    //       ((e4.y >> 0) & (0x80008000u >> 0)) |
-    //       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
-    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
-        "{                                       \n"
-        ".reg .b32 a<2>;                         \n"
-        // a0 = $0 >> 1
-        "shr.b32  a0, $1, 1;                     \n"
-        // a1 = $0 >> 7
-        "shr.b32  a1, $1, 7;                     \n"
-        // ret = a0 & 0x40004000
-        "and.b32  $0,     a0, 0x40004000;        \n"
-        // ret = ret | (a1 & 0x007f007f)
-        "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
-        // ret = ret | ($1 & 0x80008000)
-        "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n"
-        // ret = ret | ($1 & 0x3f803f80)
-        "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n"
-        "}";
-    return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+  convertFp16x4ToFp8E4M3B15x4(Location loc, ConversionPatternRewriter &rewriter,
+                              const Value &v0, const Value &v1, const Value &v2,
+                              const Value &v3) {
+    return convertFp16x4ToFp8x4(loc, rewriter, Fp16_to_Fp8E4M3B15, v0, v1, v2,
+                                v3);
   }
 
   static SmallVector<Value>
   convertFp16x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm =
-        "{                            \n"
-        ".reg .b32 a<2>;              \n"
-        "and.b32 a0, $1, 0x7fff7fff;  \n"           // a0 &= 0x7fff7fff
-        "and.b32 a1, $2, 0x7fff7fff;  \n"           // (strip sign)
-        "add.u32 a0, a0, 0x00800080;  \n"           // a0 += 0x00800080
-        "add.u32 a1, a1, 0x00800080;  \n"           // (round to nearest)
-        "lop3.b32 a0, $1, 0x80008000, a0, 0xea; \n" // a0 = a0|(0x80008000&in0)
-        "lop3.b32 a1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
-        "prmt.b32 $0, a0, a1, 0x7531; \n\t"         // output = a1a0
-        "}";
-    return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+    return convertFp16x4ToFp8x4(loc, rewriter, Fp16_to_Fp8E5M2, v0, v1, v2, v3);
   }
 
   /* ------------------ */
@@ -381,7 +473,7 @@ struct FpToFpOpConversion
     auto c1 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v1);
     auto c2 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v2);
     auto c3 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v3);
-    return convertFp16x4ToFp8E4M3x4(loc, rewriter, c0, c1, c2, c3);
+    return convertFp16x4ToFp8E4M3B15x4(loc, rewriter, c0, c1, c2, c3);
   }
 
   static SmallVector<Value>
@@ -433,48 +525,7 @@ struct FpToFpOpConversion
   convertBf16x4ToFp8E4M3x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto *ptxAsm = // bf16 is clamped firstly to fp8 min/max
-        "{                                           \n" // bf16=fp8>>4 + 120<<7
-        ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
-        ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
-        "mov.u32 fp8_min, 0x3c003c00;                \n" // so bf16_min = 0x3c00
-        "mov.u32 fp8_max, 0x43f043f0;                \n" // so bf16_max = 0x43f0
-        "mov.u32 rn_, 0x80008;                       \n" // round to nearest
-        "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
-        "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
-        "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
-        "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
-        "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
-
-        // nosign = clamp(nosign, min, max)
-        ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
-        "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
-        "max.u32 nosign_0_0, nosign_0_0, 0x38000000; \n"
-        "min.u32 nosign_0_0, nosign_0_0, 0x43f00000; \n"
-        "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
-        "max.u32 nosign_0_1, nosign_0_1, 0x3800;     \n"
-        "min.u32 nosign_0_1, nosign_0_1, 0x43f0;     \n"
-        "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
-        "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
-        "max.u32 nosign_1_0, nosign_1_0, 0x38000000; \n"
-        "min.u32 nosign_1_0, nosign_1_0, 0x43f00000; \n"
-        "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
-        "max.u32 nosign_1_1, nosign_1_1, 0x3800;     \n"
-        "min.u32 nosign_1_1, nosign_1_1, 0x43f0;     \n"
-        "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
-
-        "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
-        "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
-        "sub.u32 nosign0, nosign0, 0x38003800;       \n" // nosign0-=0x38003800
-        "sub.u32 nosign1, nosign1, 0x38003800;       \n" // (compensate offset)
-        "shr.u32 nosign0, nosign0, 4;                \n" // nosign0 >>= 4
-        "shr.u32 nosign1, nosign1, 4;                \n" // shift into to fp8e4
-        "prmt.b32 nosign, nosign0, nosign1, 0x6420;  \n" // nosign0 = 0x00f100f2
-                                                         // nosign1 = 0x00f300f4
-                                                         // nosign = 0xf3f4f1f2
-        "or.b32 $0, nosign, sign;                    \n" // restore sign
-        "}";
-    return convertBf16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+    return convertBf16x4ToFp8x4(loc, rewriter, Bf16_to_Fp8E4M3, v0, v1, v2, v3);
   };
 
   static SmallVector<Value>
@@ -482,47 +533,9 @@ struct FpToFpOpConversion
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
     auto *ptxAsm = // bf16 is clamped firstly to fp8 min/max
-        "{                                           \n" // bf16=fp8>>3 + 112<<7
-        ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
-        ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
-        "mov.u32 fp8_min, 0x38003800;                \n" // so bf16_min = 0x3800
-        "mov.u32 fp8_max, 0x57e057e0;                \n" // so bf16_max = 0x57e0
-        "mov.u32 rn_, 0x00100010;                    \n" // round to nearest
-        "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
-        "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
-        "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
-        "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
-        "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
 
-        // nosign = clamp(nosign, min, max)
-        ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
-        "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
-        "max.u32 nosign_0_0, nosign_0_0, 0x38000000; \n"
-        "min.u32 nosign_0_0, nosign_0_0, 0x57e00000; \n"
-        "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
-        "max.u32 nosign_0_1, nosign_0_1, 0x3800;     \n"
-        "min.u32 nosign_0_1, nosign_0_1, 0x57e0;     \n"
-        "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
-        "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
-        "max.u32 nosign_1_0, nosign_1_0, 0x38000000; \n"
-        "min.u32 nosign_1_0, nosign_1_0, 0x57e00000; \n"
-        "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
-        "max.u32 nosign_1_1, nosign_1_1, 0x3800;     \n"
-        "min.u32 nosign_1_1, nosign_1_1, 0x57e0;     \n"
-        "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
-
-        "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
-        "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
-        "sub.u32 nosign0, nosign0, 0x38003800;       \n" // nosign0-=0x38003800
-        "sub.u32 nosign1, nosign1, 0x38003800;       \n" // (compensate offset)
-        "shl.b32 nosign0, nosign0, 3;                \n" // nosign0 <<= 3
-        "shl.b32 nosign1, nosign1, 3;                \n" // shift into to fp8e4
-        "prmt.b32 nosign, nosign0, nosign1, 0x7531;  \n" // nosign0 = 0xf100f200
-                                                         // nosign1 = 0xf300f400
-                                                         // nosign = 0xf3f4f1f2
-        "or.b32 $0, nosign, sign;                    \n" // restore sign
-        "}";
-    return convertBf16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
+        return convertBf16x4ToFp8x4(loc, rewriter, Bf16_to_Fp8E5M2, v0, v1, v2,
+                                    v3);
   }
 
   /* ------------------ */
@@ -533,7 +546,8 @@ struct FpToFpOpConversion
   convertFp8E4M3x4ToFp32x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto fp16Values = convertFp8E4M3x4ToFp16x4(loc, rewriter, v0, v1, v2, v3);
+    auto fp16Values =
+        convertFp8E4M3B15x4ToFp16x4(loc, rewriter, v0, v1, v2, v3);
     return {convertFp16ToFp32(loc, rewriter, fp16Values[0]),
             convertFp16ToFp32(loc, rewriter, fp16Values[1]),
             convertFp16ToFp32(loc, rewriter, fp16Values[2]),
@@ -557,7 +571,8 @@ struct FpToFpOpConversion
   convertFp8E4M3x4ToFp64x4(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v0, const Value &v1, const Value &v2,
                            const Value &v3) {
-    auto fp16Values = convertFp8E4M3x4ToFp16x4(loc, rewriter, v0, v1, v2, v3);
+    auto fp16Values =
+        convertFp8E4M3B15x4ToFp16x4(loc, rewriter, v0, v1, v2, v3);
     return {rewriter.create<LLVM::FPExtOp>(loc, f64_ty, fp16Values[0]),
             rewriter.create<LLVM::FPExtOp>(loc, f64_ty, fp16Values[1]),
             rewriter.create<LLVM::FPExtOp>(loc, f64_ty, fp16Values[2]),
@@ -572,7 +587,7 @@ struct FpToFpOpConversion
     auto c1 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v1);
     auto c2 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v2);
     auto c3 = rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v3);
-    return convertFp16x4ToFp8E4M3x4(loc, rewriter, c0, c1, c2, c3);
+    return convertFp16x4ToFp8E4M3B15x4(loc, rewriter, c0, c1, c2, c3);
   }
 
   static Value convertBf16ToFp32(Location loc,
@@ -622,7 +637,8 @@ struct FpToFpOpConversion
   }
 
   ConvertorT getConversionFunc(Type srcTy, Type dstTy) const {
-    auto F8E4M3TyID = TypeID::get<mlir::Float8E4M3FNType>();
+    auto F8E4M3B15TyID = TypeID::get<mlir::Float8E4M3B11FNUZType>();
+    auto F8E4M3TyID = TypeID::get<mlir::Float8E4M3FNUZType>();
     auto F8E5M2TyID = TypeID::get<mlir::Float8E5M2Type>();
     auto F16TyID = TypeID::get<mlir::Float16Type>();
     auto BF16TyID = TypeID::get<mlir::BFloat16Type>();
@@ -630,22 +646,22 @@ struct FpToFpOpConversion
     auto F64TyID = TypeID::get<mlir::Float64Type>();
     static DenseMap<std::pair<TypeID, TypeID>, ConvertorT> convertorMap = {
         // F8 -> F16
-        {{F8E4M3TyID, F16TyID}, convertFp8E4M3x4ToFp16x4},
+        {{F8E4M3B15TyID, F16TyID}, convertFp8E4M3B15x4ToFp16x4},
         {{F8E5M2TyID, F16TyID}, convertFp8E5M2x4ToFp16x4},
         // F16 -> F8
-        {{F16TyID, F8E4M3TyID}, convertFp16x4ToFp8E4M3x4},
+        {{F16TyID, F8E4M3B15TyID}, convertFp16x4ToFp8E4M3B15x4},
         {{F16TyID, F8E5M2TyID}, convertFp16x4ToFp8E5M2x4},
         // F8 -> BF16
-        {{F8E4M3TyID, BF16TyID}, convertFp8E4M3x4ToBf16x4},
+        {{F8E4M3B15TyID, BF16TyID}, convertFp8E4M3x4ToBf16x4},
         {{F8E5M2TyID, BF16TyID}, convertFp8E5M2x4ToBf16x4},
         // BF16 -> F8
-        {{BF16TyID, F8E4M3TyID}, convertBf16x4ToFp8E4M3x4},
+        {{BF16TyID, F8E4M3B15TyID}, convertBf16x4ToFp8E4M3x4},
         {{BF16TyID, F8E5M2TyID}, convertBf16x4ToFp8E5M2x4},
         // F8 -> F32
-        {{F8E4M3TyID, F32TyID}, convertFp8E4M3x4ToFp32x4},
+        {{F8E4M3B15TyID, F32TyID}, convertFp8E4M3x4ToFp32x4},
         {{F8E5M2TyID, F32TyID}, convertFp8E5M2x4ToFp32x4},
         // F32 -> F8
-        {{F32TyID, F8E4M3TyID}, convertFp32x4ToFp8E4M3x4},
+        {{F32TyID, F8E4M3B15TyID}, convertFp32x4ToFp8E4M3x4},
         {{F32TyID, F8E5M2TyID}, convertFp32x4ToFp8E5M2x4},
     };
 
