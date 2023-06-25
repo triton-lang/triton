@@ -3,6 +3,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 
+#include "mlir/Bytecode/BytecodeWriter.h"
+
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -87,6 +89,15 @@ void init_triton_ir(py::module &&m) {
       .value("NONE", mlir::triton::CacheModifier::NONE)
       .value("CA", mlir::triton::CacheModifier::CA)
       .value("CG", mlir::triton::CacheModifier::CG)
+      .value("WB", mlir::triton::CacheModifier::WB)
+      .value("CS", mlir::triton::CacheModifier::CS)
+      .export_values();
+
+  py::enum_<mlir::triton::MemSemantic>(m, "MEM_SEMANTIC")
+      .value("ACQUIRE_RELEASE", mlir::triton::MemSemantic::ACQUIRE_RELEASE)
+      .value("ACQUIRE", mlir::triton::MemSemantic::ACQUIRE)
+      .value("RELEASE", mlir::triton::MemSemantic::RELEASE)
+      .value("RELAXED", mlir::triton::MemSemantic::RELAXED)
       .export_values();
 
   py::enum_<mlir::triton::EvictionPolicy>(m, "EVICTION_POLICY")
@@ -347,6 +358,14 @@ void init_triton_ir(py::module &&m) {
              llvm::raw_string_ostream os(str);
              self.print(os);
              return str;
+           })
+      .def("bytecode",
+           [](mlir::ModuleOp &self) -> py::bytearray {
+             std::string bytecode;
+             llvm::raw_string_ostream os(bytecode);
+             if (failed(mlir::writeBytecodeToFile(self, os)))
+               throw std::runtime_error("Failed to write module bytecode");
+             return py::bytearray(bytecode);
            })
       .def("push_back",
            [](mlir::ModuleOp &self, mlir::triton::FuncOp &funcOp) -> void {
@@ -1258,7 +1277,7 @@ void init_triton_ir(py::module &&m) {
       // // atomic
       .def("create_atomic_cas",
            [](mlir::OpBuilder &self, mlir::Value &ptr, mlir::Value &cmp,
-              mlir::Value &val) -> mlir::Value {
+              mlir::Value &val, mlir::triton::MemSemantic sem) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              mlir::Type dstType;
              if (auto srcTensorType =
@@ -1274,12 +1293,12 @@ void init_triton_ir(py::module &&m) {
                dstType = ptrType.getPointeeType();
              }
              return self.create<mlir::triton::AtomicCASOp>(loc, dstType, ptr,
-                                                           cmp, val);
+                                                           cmp, val, sem);
            })
       .def("create_atomic_rmw",
            [](mlir::OpBuilder &self, mlir::triton::RMWOp rmwOp,
-              mlir::Value &ptr, mlir::Value &val,
-              mlir::Value &mask) -> mlir::Value {
+              mlir::Value &ptr, mlir::Value &val, mlir::Value &mask,
+              mlir::triton::MemSemantic sem) -> mlir::Value {
              auto loc = self.getUnknownLoc();
              mlir::Type dstType;
              if (auto srcTensorType =
@@ -1295,7 +1314,7 @@ void init_triton_ir(py::module &&m) {
                dstType = ptrType.getPointeeType();
              }
              return self.create<mlir::triton::AtomicRMWOp>(loc, dstType, rmwOp,
-                                                           ptr, val, mask);
+                                                           ptr, val, mask, sem);
            })
       // External
       .def("create_extern_elementwise",
@@ -1315,8 +1334,12 @@ void init_triton_ir(py::module &&m) {
       .def("create_get_program_id",
            [](mlir::OpBuilder &self, int axis) -> mlir::Value {
              auto loc = self.getUnknownLoc();
+             if (axis < 0 || axis > 3)
+               throw std::runtime_error("program_id must be in [0,3]");
              return self.create<mlir::triton::GetProgramIdOp>(
-                 loc, self.getI32Type(), self.getI32IntegerAttr(axis));
+                 loc, self.getI32Type(),
+                 mlir::triton::ProgramIDDimAttr::get(
+                     loc.getContext(), mlir::triton::ProgramIDDim(axis)));
            })
       .def("create_get_num_programs",
            [](mlir::OpBuilder &self, int axis) -> mlir::Value {
@@ -1518,11 +1541,13 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createRewriteTensorPointerPass(
                  computeCapability));
            })
-      .def("add_convert_triton_to_tritongpu_pass",
-           [](mlir::PassManager &self, int numWarps) {
-             self.addPass(
-                 mlir::triton::createConvertTritonToTritonGPUPass(numWarps));
-           })
+      .def(
+          "add_convert_triton_to_tritongpu_pass",
+          [](mlir::PassManager &self, int numWarps, int threadsPerWarp) {
+            self.addPass(mlir::triton::createConvertTritonToTritonGPUPass(
+                numWarps, threadsPerWarp));
+          },
+          py::arg("numWarps") = 4, py::arg("threadsPerWarp") = 32)
       .def("add_tritongpu_pipeline_pass",
            [](mlir::PassManager &self, int numStages) {
              self.addPass(mlir::createTritonGPUPipelinePass(numStages));

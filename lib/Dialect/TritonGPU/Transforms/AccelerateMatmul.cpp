@@ -47,7 +47,7 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
-  auto slices = mlir::getSlice(dotOp, filter);
+  auto slices = mlir::getSlice(dotOp, {filter});
   for (Operation *op : slices)
     if (isa<triton::DotOp>(op) && (op != dotOp))
       return {(unsigned)numWarps, 1};
@@ -55,10 +55,6 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {16, 8};
   bool changed = false;
-  // TODO (@daadaada): double-check.
-  // original logic in
-  // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
-  // seems buggy for shape = [32, 16] ?
   do {
     changed = false;
     if (ret[0] * ret[1] >= numWarps)
@@ -117,8 +113,8 @@ public:
     if (versionMajor == 1) {
       SetVector<Operation *> aBwdSlices, bBwdSlices;
       auto isCvt = [](Operation *op) { return isa<ConvertLayoutOp>(op); };
-      getBackwardSlice(a, &aBwdSlices, isCvt);
-      getBackwardSlice(b, &bBwdSlices, isCvt);
+      getBackwardSlice(a, &aBwdSlices, {isCvt});
+      getBackwardSlice(b, &bBwdSlices, {isCvt});
       // get the source of the first conversion found in slices
       auto getCvtArgOrder = [](Operation *op) {
         return cast<ConvertLayoutOp>(op)

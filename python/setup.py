@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
@@ -30,6 +31,17 @@ def get_build_type():
     else:
         # TODO: change to release when stable enough
         return "TritonRelBuildWithAsserts"
+
+
+def get_codegen_backends():
+    backends = []
+    env_prefix = "TRITON_CODEGEN_"
+    for name, _ in os.environ.items():
+        if name.startswith(env_prefix) and check_env_flag(name):
+            assert name.count(env_prefix) <= 1
+            backends.append(name.replace(env_prefix, '').lower())
+    return backends
+
 
 # --- third party packages -----
 
@@ -135,6 +147,11 @@ def download_and_copy_ptxas():
 
 # ---- cmake extension ----
 
+class CMakeBuildPy(build_py):
+    def run(self) -> None:
+        self.run_command('build_ext')
+        return super().run()
+
 
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
@@ -210,6 +227,11 @@ class CMakeBuild(build_ext):
         cfg = get_build_type()
         build_args = ["--config", cfg]
 
+        codegen_backends = get_codegen_backends()
+        if len(codegen_backends) > 0:
+            all_codegen_backends = ';'.join(codegen_backends)
+            cmake_args += ["-DTRITON_CODEGEN_BACKENDS=" + all_codegen_backends]
+
         if platform.system() == "Windows":
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
             if sys.maxsize > 2**32:
@@ -249,16 +271,14 @@ setup(
         "triton/_C",
         "triton/common",
         "triton/compiler",
-        "triton/debugger",
+        "triton/interpreter",
         "triton/language",
         "triton/language/extra",
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",
         "triton/runtime/backends",
-        "triton/third_party/cuda/bin",
-        "triton/third_party/cuda/include",
-        "triton/third_party/cuda/lib",
+        "triton/third_party",
         "triton/tools",
     ],
     install_requires=[
@@ -266,7 +286,7 @@ setup(
     ],
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
-    cmdclass={"build_ext": CMakeBuild},
+    cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy},
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],

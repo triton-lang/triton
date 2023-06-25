@@ -18,7 +18,6 @@ from .runtime import (
 )
 from .runtime.jit import jit
 from .compiler import compile, CompilationError
-from .debugger.debugger import program_ids_from_grid
 
 from . import language
 from . import testing
@@ -43,7 +42,7 @@ __all__ = [
     "runtime",
     "TensorWrapper",
     "testing",
-    "program_ids_from_grid",
+    "tools",
 ]
 
 
@@ -52,11 +51,11 @@ __all__ = [
 # into any specific module
 # -------------------------------------
 
-def cdiv(x, y):
+def cdiv(x: int, y: int):
     return (x + y - 1) // y
 
 
-def next_power_of_2(n):
+def next_power_of_2(n: int):
     """Return the smallest power of 2 greater than or equal to n"""
     n -= 1
     n |= n >> 1
@@ -64,5 +63,6 @@ def next_power_of_2(n):
     n |= n >> 4
     n |= n >> 8
     n |= n >> 16
+    n |= n >> 32
     n += 1
     return n

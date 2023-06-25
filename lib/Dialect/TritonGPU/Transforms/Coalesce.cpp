@@ -14,8 +14,8 @@ using namespace mlir::triton;
 template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);
-  std::sort(ret.begin(), ret.end(),
-            [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
+  std::stable_sort(ret.begin(), ret.end(),
+                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
   return ret;
 }
 
@@ -23,7 +23,7 @@ typedef DenseMap<Value, std::function<Type(Type)>> LayoutMap;
 
 struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   Attribute getCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 Value ptr, int numWarps) {
+                                 Value ptr, int numWarps, int threadsPerWarp) {
     auto origType = ptr.getType().cast<RankedTensorType>();
     // Get the shape of the tensor.
     size_t rank = origType.getRank();
@@ -46,7 +46,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
         }
       }
     int numElems = product(origType.getShape());
-    int numThreads = numWarps * 32;
+    int numThreads = numWarps * threadsPerWarp;
     int numElemsPerThread = std::max(numElems / numThreads, 1);
     // Thread tile size depends on memory alignment
     SmallVector<unsigned, 4> sizePerThread(rank, 1);
@@ -68,14 +68,16 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     std::iota(dims.begin(), dims.end(), 0);
     // create encoding
     Attribute encoding = triton::gpu::BlockedEncodingAttr::get(
-        &getContext(), origType.getShape(), sizePerThread, order, numWarps);
+        &getContext(), origType.getShape(), sizePerThread, order, numWarps,
+        threadsPerWarp);
     return encoding;
   }
 
   std::function<Type(Type)>
   getTypeConverter(ModuleAxisInfoAnalysis &axisInfoAnalysis, Value ptr,
-                   int numWarps) {
-    Attribute encoding = getCoalescedEncoding(axisInfoAnalysis, ptr, numWarps);
+                   int numWarps, int threadsPerWarp) {
+    Attribute encoding =
+        getCoalescedEncoding(axisInfoAnalysis, ptr, numWarps, threadsPerWarp);
     return [encoding](Type _type) {
       RankedTensorType type = _type.cast<RankedTensorType>();
       return RankedTensorType::get(type.getShape(), type.getElementType(),
@@ -148,7 +150,10 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
         return;
       auto mod = curr->getParentOfType<ModuleOp>();
       int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-      auto convertType = getTypeConverter(axisInfoAnalysis, ptr, numWarps);
+      int threadsPerWarp =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      auto convertType =
+          getTypeConverter(axisInfoAnalysis, ptr, numWarps, threadsPerWarp);
       layoutMap[ptr] = convertType;
     });
 

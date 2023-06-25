@@ -5,9 +5,10 @@ from enum import Enum
 from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
-import triton
+from .._C.libtriton.triton import ir
+# import triton
+from ..runtime.jit import jit
 from . import semantic
-from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
@@ -711,7 +712,7 @@ class tensor:
         for dim, sl in enumerate(slices):
             if isinstance(sl, constexpr) and sl.value is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif sl == slice(None, None, None):
+            elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
                 pass
             else:
                 assert False, f"unsupported tensor index: {sl}"
@@ -1092,59 +1093,67 @@ def _add_atomic_docstr(name: str) -> Callable[[T], T]:
 
 @builtin
 @_add_atomic_docstr("compare-and-swap")
-def atomic_cas(pointer, cmp, val, _builder=None):
+def atomic_cas(pointer, cmp, val, sem=None, _builder=None):
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
-    return semantic.atomic_cas(pointer, cmp, val, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_cas(pointer, cmp, val, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer, val, mask=None, _builder=None):
+def atomic_xchg(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_xchg(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_xchg(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer, val, mask=None, _builder=None):
+def atomic_add(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_add(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_add(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer, val, mask=None, _builder=None):
+def atomic_max(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_max(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_max(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer, val, mask=None, _builder=None):
+def atomic_min(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_min(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_min(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer, val, mask=None, _builder=None):
+def atomic_and(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_and(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_and(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer, val, mask=None, _builder=None):
+def atomic_or(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_or(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_or(pointer, val, mask, sem, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer, val, mask=None, _builder=None):
+def atomic_xor(pointer, val, mask=None, sem=None, _builder=None):
     val = _to_tensor(val, _builder)
-    return semantic.atomic_xor(pointer, val, mask, _builder)
+    sem = _constexpr_to_value(sem)
+    return semantic.atomic_xor(pointer, val, mask, sem, _builder)
 
 
 # -----------------------
@@ -1246,15 +1255,21 @@ def abs(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name: str) -> Callable[[T], T]:
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
-    :param axis: the dimension along which the reduction should be done
-    """
+    :param axis: the dimension along which the reduction should be done"""
+        if return_indices_arg is not None:
+            docstr += f"""
+    :param {return_indices_arg}: if true, return index corresponding to the {name} value"""
+        if tie_break_arg is not None:
+            docstr += f"""
+    :param {tie_break_arg}: if true, return the left-most indices in case of ties for values that aren't NaN"""
+
         func.__doc__ = docstr.format(name=name)
         return func
 
@@ -1297,8 +1312,8 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
             else:
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
-
-    axis = _constexpr_to_value(axis)
+    if axis is not None:
+        axis = _constexpr_to_value(axis)
     return semantic.reduction(input, axis, make_combine_region, _builder)
 
 
@@ -1319,7 +1334,7 @@ def _promote_reduction_input(t, _builder=None):
 
 
 @builtin
-def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
+def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None):
     axis = _constexpr_to_value(axis)
     n = input.shape[axis]
     index = arange(0, n, _builder=_builder)
@@ -1333,10 +1348,10 @@ def _argreduce(input, axis, combine_fn, _builder=None, _generator=None):
 
     rvalue, rindices = reduce((input, index), axis, combine_fn,
                               _builder=_builder, _generator=_generator)
-    return rindices
+    return rvalue, rindices
 
 
-@triton.jit
+@jit
 def minimum(x, y):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
@@ -1349,7 +1364,7 @@ def minimum(x, y):
     return where(x < y, x, y)
 
 
-@triton.jit
+@jit
 def maximum(x, y):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
@@ -1361,86 +1376,124 @@ def maximum(x, y):
     """
     return where(x > y, x, y)
 
-
-@triton.jit
-def _max_combine(a, b):
-    return maximum(a, b)
+# max and argmax
 
 
-@triton.jit
-@_add_reduction_docstr("maximum")
-def max(input, axis):
+@jit
+def _argmax_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    gt = value1 > value2 or tie
+    v_ret = where(gt, value1, value2)
+    i_ret = where(gt, index1, index2)
+    return v_ret, i_ret
+
+
+@jit
+def _argmax_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, True)
+
+
+@jit
+def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, False)
+
+
+@jit
+@_add_reduction_docstr("maximum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
+def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = _promote_reduction_input(input)
-    return reduce(input, axis, _max_combine)
+    if return_indices:
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
+    else:
+        return reduce(input, axis, maximum)
 
 
-@triton.jit
-def _argmax_combine(value1, index1, value2, index2):
-    gt = value1 > value2
-    lt = value1 < value2
-    index_min = minimum(index1, index2)
-    index_ret = where(gt, index1, where(lt, index2, index_min))
-    value_ret = maximum(value1, value2)
+@jit
+@_add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
+def argmax(input, axis, tie_break_left=True):
+    (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
+    return ret
+
+# min and argmin
+
+
+@jit
+def _argmin_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    lt = value1 < value2 or tie
+    value_ret = where(lt, value1, value2)
+    index_ret = where(lt, index1, index2)
     return value_ret, index_ret
 
 
-@triton.jit
-@_add_reduction_docstr("maximum index")
-def argmax(input, axis):
+@jit
+def _argmin_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, True)
+
+
+@jit
+def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, False)
+
+
+@jit
+@_add_reduction_docstr("minimum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
+def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = _promote_reduction_input(input)
-    return _argreduce(input, axis, _argmax_combine)
+    if return_indices:
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
+    else:
+        return reduce(input, axis, minimum)
 
 
-@triton.jit
-def _min_combine(a, b):
-    # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
-    return minimum(a, b)
+@jit
+@_add_reduction_docstr("minimum index",
+                       tie_break_arg="tie_break_left")
+def argmin(input, axis, tie_break_left=True):
+    _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
+    return ret
 
 
-@triton.jit
-@_add_reduction_docstr("minimum")
-def min(input, axis):
-    input = _promote_reduction_input(input)
-    return reduce(input, axis, _min_combine)
-
-
-@triton.jit
-def _argmin_combine(value1, index1, value2, index2):
-    lt = value1 < value2
-    gt = value1 > value2
-    index_min = minimum(index1, index2)
-    index_ret = where(lt, index1, where(gt, index2, index_min))
-    value_ret = minimum(value1, value2)
-    return value_ret, index_ret
-
-
-@triton.jit
-@_add_reduction_docstr("minimum index")
-def argmin(input, axis):
-    input = _promote_reduction_input(input)
-    return _argreduce(input, axis, _argmin_combine)
-
-
-@triton.jit
+@jit
 def _sum_combine(a, b):
     return a + b
 
+# sum
 
-@triton.jit
+
+@jit
 @_add_reduction_docstr("sum")
-def sum(input, axis):
+def sum(input, axis=None):
     input = _promote_reduction_input(input)
     return reduce(input, axis, _sum_combine)
 
 
-@triton.jit
+@jit
 def _xor_combine(a, b):
     return a ^ b
 
 
+# xor sum
+
 @builtin
 @_add_reduction_docstr("xor sum")
-def xor_sum(input, axis, _builder=None, _generator=None):
+def xor_sum(input, axis=None, _builder=None, _generator=None):
     scalar_ty = input.type.scalar
     if not scalar_ty.is_int():
         raise ValueError("xor_sum only supported for integers")
@@ -1502,7 +1555,15 @@ def max_contiguous(input, values, _builder=None):
 @builtin
 def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
     '''
-    Print the values at compile time. The parameters are the same as the builtin :code:`print`.
+    Print the values at compile time. The parameters are the same as the Python builtin :code:`print`.
+
+    Calling the Python builtin :code:`print` inside your kernel is the same as calling this.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.static_print(f"{BLOCK_SIZE=}")
+        print(f"{BLOCK_SIZE=}")
     '''
     pass
 
@@ -1510,7 +1571,13 @@ def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=Fals
 @builtin
 def static_assert(cond, msg="", _builder=None):
     '''
-    Assert the condition at compile time. The parameters are the same as the builtin :code:`assert`.
+    Assert the condition at compile time.  Does not require that the :code:`TRITON_DEBUG` environment variable
+    is set.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.static_assert(BLOCK_SIZE == 1024)
     '''
     pass
 
@@ -1518,7 +1585,13 @@ def static_assert(cond, msg="", _builder=None):
 @builtin
 def device_print(prefix, *args, _builder=None):
     '''
-    Print the values at runtime from the device.
+    Print the values at runtime from the device.  String formatting does not work, so you should
+    provide the values you want to print as arguments.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.device_print("pid", pid)
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
@@ -1541,7 +1614,18 @@ def device_print(prefix, *args, _builder=None):
 @builtin
 def device_assert(cond, msg="", _builder=None):
     '''
-    Assert the condition at runtime from the device.
+    Assert the condition at runtime from the device.  Requires that the environment variable :code:`TRITON_DEBUG`
+    is set to a value besides :code:`0` in order for this to have any effect.
+
+    Using the Python :code:`assert` statement is the same as calling this function, except that the second argument
+    must be provided and must be a string, e.g. :code:`assert pid == 0, "pid != 0"`.  The environment variable must
+    be set for this :code:`assert` statement to have any effect.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.device_assert(pid == 0)
+        assert pid == 0, f"pid != 0"
 
     :param cond: the condition to assert. This is required to be a boolean tensor.
     :param msg: the message to print if the assertion fails. This is required to be a string literal.

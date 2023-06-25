@@ -4,7 +4,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 
-import triton._C.libtriton.triton as _triton
+from ._C.libtriton.triton import runtime
 
 
 def nvsmi(attrs):
@@ -86,9 +86,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
         end_event[i].record()
     # Record clocks
     torch.cuda.synchronize()
-    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
+    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
     if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles)).tolist()
+        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
         if len(ret) == 1:
             ret = ret[0]
         return ret
@@ -281,7 +281,7 @@ def get_dram_gbps(backend=None, device=None):
 
     from .runtime import driver
     if not backend:
-        backend = _triton.runtime.backend.CUDA
+        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
     mem_clock_khz = driver.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
@@ -295,7 +295,7 @@ def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None)
 
     from .runtime import driver
     if not backend:
-        backend = _triton.runtime.backend.CUDA
+        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 
@@ -398,7 +398,7 @@ def get_max_simd_tflops(dtype, backend=None, device=None):
 
     from .runtime import driver
     if not backend:
-        backend = _triton.runtime.backend.CUDA
+        backend = runtime.backend.CUDA
     if not device:
         device = torch.cuda.current_device()
 

@@ -81,12 +81,27 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: store_with_cache_attr
+  tt.func @store_with_cache_attr(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
+    //      CHECK: llvm.inline_asm
+    // CHECK-SAME: st.global.L1::evict_last.b32
+    //      CHECK: llvm.inline_asm
+    // CHECK-SAME: st.global.L1::evict_last.b32
+    tt.store %a_ptr_init, %cst_0, %cst {cache = 1 : i32, evict = 3 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 2 : i32} {
   // CHECK-LABEL: global_load_store_no_vec
   tt.func @global_load_store_no_vec(%arg0: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 4 : i32}, %arg3: i32) {
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
@@ -138,7 +153,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
   // CHECK-LABEL: global_load_store_vec4
   tt.func @global_load_store_vec4(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32) {
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
@@ -175,7 +190,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 module attributes {"triton_gpu.num-warps" = 2 : i32} {
   tt.func @vecadd_masked_vec1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n_elements: i32) {
     %c64_i32 = arith.constant 64 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c64_i32 : i32
     %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
     %3 = tt.splat %1 : (i32) -> tensor<64xi32, #blocked>
@@ -205,7 +220,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: global_load_store_vec2
     tt.func @global_load_store_vec2(%arg0: !tt.ptr<f32> {tt.divisibility = 8 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 8 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 8 : i32}, %arg3: i32) {
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
@@ -250,7 +265,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: global_load_store_vec8
     tt.func @global_load_store_vec8(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32) {
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
     %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     %3 = tt.splat %1 : (i32) -> tensor<256xi32, #blocked0>
@@ -357,7 +372,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_program_id
   tt.func @basic_program_id() {
     // CHECK: nvvm.read.ptx.sreg.ctaid.x : i32
-    %0 = tt.get_program_id {axis = 0 : i32} : i32
+    %0 = tt.get_program_id x : i32
     tt.return
   }
 }
@@ -1010,10 +1025,10 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32
   tt.func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
     // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$3 atom.global.gpu.add.f32
+    // CHECK-SAME: @$3 atom.global.gpu.relaxed.add.f32
     // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$3 atom.global.gpu.add.f32
-    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
+    // CHECK-SAME: @$3 atom.global.gpu.relaxed.add.f32
+    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32, sem = 1 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.return
   }
 }
@@ -1025,9 +1040,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   tt.func @atomic_add_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
     // CHECK: llvm.icmp "eq"
     // CHECK: llvm.inline_asm
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: @$3 atom.global.gpu.add.f32
-    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (!tt.ptr<f32>, f32, i1) -> f32
+    // CHECK-SAME: @$3 atom.global.gpu.relaxed.add.f32
+    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32, sem = 1: i32} : (!tt.ptr<f32>, f32, i1) -> f32
     tt.return
   }
 }
@@ -1066,9 +1080,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-  %blockidx = tt.get_program_id {axis=0:i32} : i32
-  %blockidy = tt.get_program_id {axis=1:i32} : i32
-  %blockidz = tt.get_program_id {axis=2:i32} : i32
+  %blockidx = tt.get_program_id x : i32
+  %blockidy = tt.get_program_id y : i32
+  %blockidz = tt.get_program_id z : i32
   // CHECK: nvvm.read.ptx.sreg.ctaid.x
   // CHECK: nvvm.read.ptx.sreg.ctaid.y
   // CHECK: nvvm.read.ptx.sreg.ctaid.z

@@ -77,7 +77,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "Type":$eltTy), [{
+                     "unsigned":$typeWidthInBit), [{
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
 
         if(!mmaEnc)
@@ -87,7 +87,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
         int opIdx = dotOpEnc.getOpIdx();
 
         // number of rows per phase
-        int perPhase = 128 / (shape[order[0]] * (eltTy.getIntOrFloatBitWidth() / 8));
+        int perPhase = 128 / (shape[order[0]] * (typeWidthInBit / 8));
         perPhase = std::max<int>(perPhase, 1);
 
         // index of the inner dimension in `order`
@@ -109,9 +109,9 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
         // ---- begin Ampere ----
         if (mmaEnc.isAmpere()) {
           std::vector<size_t> matShape = {8, 8,
-                                          2 * 64 / eltTy.getIntOrFloatBitWidth()};
+                                          2 * 64 / typeWidthInBit};
           // for now, disable swizzle when using transposed int8 tensor cores
-          if (eltTy.isInteger(8) && order[0] == inner)
+          if (typeWidthInBit == 8 && order[0] == inner)
             return $_get(context, 1, 1, 1, order);
 
           // --- handle A operand ---
@@ -135,6 +135,14 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
+    }]>,
+
+    AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
+                     "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
+                     "Type":$eltTy), [{
+      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      return get(context, dotOpEnc, shape, order, bitwidth);
     }]>
   ];
 
@@ -229,31 +237,32 @@ for
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$sizePerThread,
                      "ArrayRef<unsigned>":$order,
-                     "unsigned":$numWarps), [{
+                     "unsigned":$numWarps,
+                     "unsigned":$threadsPerWarp), [{
       int rank = sizePerThread.size();
-      unsigned remainingLanes = 32;
-      unsigned remainingThreads = numWarps*32;
+      unsigned remainingLanes = threadsPerWarp;
+      unsigned remainingThreads = numWarps*threadsPerWarp;
       unsigned remainingWarps = numWarps;
       unsigned prevLanes = 1;
       unsigned prevWarps = 1;
-      SmallVector<unsigned, 4> threadsPerWarp(rank);
+      SmallVector<unsigned, 4> rankedThreadsPerWarp(rank);
       SmallVector<unsigned, 4> warpsPerCTA(rank);
       for (int _dim = 0; _dim < rank - 1; ++_dim) {
         int i = order[_dim];
         unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, shape[i] / sizePerThread[i]);
-        threadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
-        warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / threadsPerWarp[i], 1, remainingWarps);
+        rankedThreadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
+        warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / rankedThreadsPerWarp[i], 1, remainingWarps);
         remainingWarps /= warpsPerCTA[i];
-        remainingLanes /= threadsPerWarp[i];
+        remainingLanes /= rankedThreadsPerWarp[i];
         remainingThreads /= threadsPerCTA;
-        prevLanes *= threadsPerWarp[i];
+        prevLanes *= rankedThreadsPerWarp[i];
         prevWarps *= warpsPerCTA[i];
       }
       // Expand the last dimension to fill the remaining lanes and warps
-      threadsPerWarp[order[rank-1]] = 32 / prevLanes;
+      rankedThreadsPerWarp[order[rank-1]] = threadsPerWarp / prevLanes;
       warpsPerCTA[order[rank-1]] = numWarps / prevWarps;
 
-      return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order);
+      return $_get(context, sizePerThread, rankedThreadsPerWarp, warpsPerCTA, order);
 
     }]>
   ];

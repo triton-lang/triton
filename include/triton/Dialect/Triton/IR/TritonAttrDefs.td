@@ -3,13 +3,26 @@
 
 include "mlir/IR/EnumAttr.td"
 
-// Attributes for LoadOp
+// Attributes for LoadOp and StoreOp
 def TT_CacheModifierAttr : I32EnumAttr<
     "CacheModifier", "",
     [
         I32EnumAttrCase<"NONE", 1, "none">,
         I32EnumAttrCase<"CA", 2, "ca">,
         I32EnumAttrCase<"CG", 3, "cg">,
+        I32EnumAttrCase<"WB", 4, "wb">,
+        I32EnumAttrCase<"CS", 5, "cs">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+def TT_MemSemanticAttr : I32EnumAttr<
+    "MemSemantic", "",
+    [
+      I32EnumAttrCase<"RELAXED", 1, "relaxed">,
+      I32EnumAttrCase<"ACQUIRE", 2, "acquire">,
+      I32EnumAttrCase<"RELEASE", 3, "release">,
+      I32EnumAttrCase<"ACQUIRE_RELEASE", 4, "acq_rel">,
     ]> {
     let cppNamespace = "::mlir::triton";
 }
@@ -51,5 +64,17 @@ def TT_AtomicRMWAttr : I32EnumAttr<
     ]> {
     let cppNamespace = "::mlir::triton";
 }
+
+// Program ID dimensions.
+def TT_ProgramDim : I32EnumAttr<
+    "ProgramIDDim", "",
+    [
+        I32EnumAttrCase<"X", 0, "x">,
+        I32EnumAttrCase<"Y", 1, "y">,
+        I32EnumAttrCase<"Z", 2, "z">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 
 #endif

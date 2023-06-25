@@ -467,6 +467,21 @@ def test_broadcast(dtype):
     broadcast_kernel[(1,)](x_tri, y_tri, y_broadcasted_tri, M=M, N=N)
     assert (y_broadcasted_np == to_numpy(y_broadcasted_tri)).all()
 
+# ------------------
+# test invalid slice
+# ------------------
+
+
+def test_invalid_slice():
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst):
+        dst[10:]
+
+    with pytest.raises(triton.CompilationError, match='unsupported tensor index'):
+        _kernel[(1,)](dst=dst)
+
 
 # ----------------
 # test expand_dims
@@ -546,6 +561,20 @@ def test_expand_dims_error_cases():
 
     with pytest.raises(triton.CompilationError, match=r"duplicate axes, normalized axes = \[0, 0\]"):
         duplicate_dim2[(1,)](dummy_tensor, N)
+
+
+# ----------------------------
+# test invalid program id axis
+# ----------------------------
+def test_invalid_pid_axis():
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst):
+        pid = tl.program_id(20)
+
+    with pytest.raises(triton.CompilationError, match=r"program_id must be in \[0,3\]"):
+        _kernel[(1,)](dst)
 
 
 # ---------------
@@ -908,15 +937,16 @@ def test_noinline(mode):
 # ---------------
 # test atomics
 # ---------------
-@pytest.mark.parametrize("op, dtype_x_str, mode", itertools.chain.from_iterable([
+@pytest.mark.parametrize("op, dtype_x_str, mode, sem", itertools.chain.from_iterable([
     [
-        ('add', 'float16', mode),
-        ('add', 'uint32', mode), ('add', 'int32', mode), ('add', 'float32', mode),
-        ('max', 'uint32', mode), ('max', 'int32', mode), ('max', 'float32', mode),
-        ('min', 'uint32', mode), ('min', 'int32', mode), ('min', 'float32', mode),
+        ('add', 'float16', mode, sem),
+        ('add', 'uint32', mode, sem), ('add', 'int32', mode, sem), ('add', 'float32', mode, sem),
+        ('max', 'uint32', mode, sem), ('max', 'int32', mode, sem), ('max', 'float32', mode, sem),
+        ('min', 'uint32', mode, sem), ('min', 'int32', mode, sem), ('min', 'float32', mode, sem),
     ]
-    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
-def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
+    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
+    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
+def test_atomic_rmw(op, dtype_x_str, mode, sem, device='cuda'):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
         if dtype_x_str == 'float16':
@@ -930,7 +960,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
         x = tl.load(X + pid)
         old = GENERATE_TEST_HERE
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x)'})
+    sem_arg = sem if sem is None else f'"{sem}"'
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem={sem_arg})'})
     numpy_op = {'add': np.sum, 'max': np.max, 'min': np.min}[op]
     max_neutral = float('-inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).min
     min_neutral = float('inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).max
@@ -952,7 +983,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
     x_tri = to_triton(x, device=device)
 
     z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device)
-    kernel[(n_programs, )](x_tri, z_tri)
+    h = kernel[(n_programs, )](x_tri, z_tri)
     # torch result
     z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
     # compare
@@ -961,6 +992,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
         assert z_ref.item() == to_numpy(z_tri).item()
     else:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+    sem_str = "acq_rel" if sem is None else sem
+    assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
 
 
 def test_atomic_rmw_predicate(device="cuda"):
@@ -1018,7 +1051,8 @@ def test_tensor_atomic_rmw_block(device="cuda"):
     assert torch.min(x).item() == 0.0
 
 
-def test_atomic_cas():
+@pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
+def test_atomic_cas(sem):
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock):
@@ -1031,9 +1065,9 @@ def test_atomic_cas():
 
     # 2. only one block enters the critical section
     @triton.jit
-    def serialized_add(data, Lock):
+    def serialized_add(data, Lock, SEM: tl.constexpr):
         ptrs = data + tl.arange(0, 128)
-        while tl.atomic_cas(Lock, 0, 1) == 1:
+        while tl.atomic_cas(Lock, 0, 1, SEM) == 1:
             pass
 
         tl.store(ptrs, tl.load(ptrs) + 1.0)
@@ -1044,8 +1078,10 @@ def test_atomic_cas():
     Lock = torch.zeros((1,), device='cuda', dtype=torch.int32)
     data = torch.zeros((128,), device='cuda', dtype=torch.float32)
     ref = torch.full((128,), 64.0)
-    serialized_add[(64,)](data, Lock)
+    h = serialized_add[(64,)](data, Lock, SEM=sem)
+    sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
+    assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
 
 # ---------------
@@ -1111,6 +1147,28 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
         assert to_numpy(z_tri) == z_ref
 
 
+@pytest.mark.parametrize("dtype_str, num_warps", [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
+def test_cat(dtype_str, num_warps):
+    check_type_supported(dtype_str)
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        z = tl.cat(x, y, can_reorder=True)
+        tl.store(Z + tl.arange(0, 2 * N), z)
+
+    x = torch.arange(0, 128, device='cuda').to(getattr(torch, dtype_str))
+    y = torch.arange(-128, 0, device='cuda').to(getattr(torch, dtype_str))
+    z_ref = torch.cat([x, y], dim=0).sum()
+    z = torch.zeros((256,), dtype=getattr(torch, dtype_str), device='cuda')
+    kernel[(1, )](x, y, z, N=128, num_warps=num_warps)
+    assert z.sum() == z_ref
+    # check if there's no duplicate value in z
+    assert z.unique().size(0) == z.size(0)
+
+
 @pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 def test_store_constant(dtype_str):
     check_type_supported(dtype_str)
@@ -1168,8 +1226,8 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
     # special cases, exp is 0b11..1
     if dtype == tl.float8e4:
         # float8e4m3 does not have infinities
-        output[fp == torch.tensor(0b01111111, dtype=torch.int8)] = torch.nan
-        output[fp == torch.tensor(0b11111111, dtype=torch.int8)] = torch.nan
+        output[fp == 0b01111111] = torch.nan
+        output[fp == 0b11111111] = torch.nan
     else:
         output = torch.where(exp == (1 << exp_width) - 1,
                              ((sign << (tl.float32.primitive_bitwidth - 1)) | extended_exp | (frac << (tl.float32.fp_mantissa_width - dtype.fp_mantissa_width))).view(torch.float32),
@@ -1309,7 +1367,12 @@ def get_reduced_dtype(dtype_str, op):
 
 @pytest.mark.parametrize("op, dtype_str, shape",
                          [(op, dtype, shape)
-                          for op in ['min', 'max', 'sum', 'argmin', 'argmax']
+                          for op in ['min', 'max',
+                                     'min-with-indices',
+                                     'max-with-indices',
+                                     'argmin-tie-break-left',
+                                     'argmax-tie-break-left',
+                                     'sum']
                           for dtype in dtypes_with_bfloat16
                           for shape in [32, 64, 128, 512]])
 def test_reduce1d(op, dtype_str, shape, device='cuda'):
@@ -1319,16 +1382,31 @@ def test_reduce1d(op, dtype_str, shape, device='cuda'):
     @triton.jit
     def kernel(X, Z, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
-        tl.store(Z, GENERATE_TEST_HERE)
+        GENERATE_TEST_HERE
+        tl.store(Z, z)
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=0)'})
+    if 'with-indices' in op:
+        patch = f'z, _ = tl.{op.split("-")[0]}(x, axis=0, return_indices=True)'
+    elif 'arg' in op:
+        tie_break_left = 'tie-break-left' in op
+        patch = f'z = tl.{op.split("-")[0]}(x, axis=0, tie_break_left={tie_break_left})'
+    else:
+        patch = f'z = tl.{op}(x, axis=0)'
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': patch})
     # input
     rs = RandomState(17)
     # limit the range of integers so that the sum does not overflow
     x = numpy_random((shape,), dtype_str=dtype_str, rs=rs)
-    x_tri = to_triton(x, device=device)
     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
-                'argmin': np.argmin, 'argmax': np.argmax}[op]
+                'max-with-indices': np.max,
+                'min-with-indices': np.min,
+                'argmin-tie-break-fast': np.argmin,
+                'argmin-tie-break-left': np.argmin,
+                'argmax-tie-break-fast': np.argmax,
+                'argmax-tie-break-left': np.argmax}[op]
+    if 'tie-break-left' in op:
+        x[3:10] = numpy_op(x)
+    x_tri = to_triton(x, device=device)
     # numpy result
     z_dtype_str = 'int32' if op in ('argmin', 'argmax') else dtype_str
     z_tri_dtype_str = z_dtype_str
@@ -1379,6 +1457,9 @@ reduce_configs2 = [
     for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for shape in reduce2d_shapes
     for axis in [0, 1]
+] + [
+    (op, 'float32', [16, 32], None)
+    for op in ['min', 'max', 'sum']
 ]
 
 
@@ -1393,7 +1474,9 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
         range_n = tl.arange(0, BLOCK_N)
         x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
         z = GENERATE_TEST_HERE
-        if AXIS == 1:
+        if AXIS is None:
+            tl.store(Z, z)
+        elif AXIS == 1:
             tl.store(Z + range_m, z)
         else:
             tl.store(Z + range_n, z)
@@ -1418,7 +1501,8 @@ def test_reduce2d(op, dtype_str, shape, axis, device='cuda'):
     else:
         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
-    z_tri = to_triton(numpy_random((shape[1 - axis],), dtype_str=z_dtype_str, rs=rs),
+    ret_numel = 1 if axis is None else shape[1 - axis]
+    z_tri = to_triton(numpy_random((ret_numel,), dtype_str=z_dtype_str, rs=rs),
                       device=device, dst_type=z_tri_dtype_str)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
     z_tri = to_numpy(z_tri)
@@ -2182,6 +2266,37 @@ def test_vectorization_hints(has_hints):
 # test store
 # ---------------
 
+
+@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs"])
+def test_store_cache_modifier(cache):
+    src = torch.empty(128, device='cuda')
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst, src, CACHE: tl.constexpr):
+        offsets = tl.arange(0, 128)
+        x = tl.load(src + offsets)
+        tl.store(dst + offsets, x, cache_modifier=CACHE)
+
+    pgm = _kernel[(1,)](dst, src, CACHE=cache)
+    ptx = pgm.asm['ptx']
+    if cache == '':
+        assert 'st.global.wb' not in ptx
+        assert 'st.global.cg' not in ptx
+        assert 'st.global.cs' not in ptx
+    if cache == '.wb':
+        assert 'st.global.wb' in ptx
+        assert 'st.global.cg' not in ptx
+        assert 'st.global.cs' not in ptx
+    if cache == '.cg':
+        assert 'st.global.wb' not in ptx
+        assert 'st.global.cg' in ptx
+        assert 'st.global.cs' not in ptx
+    if cache == '.cs':
+        assert 'st.global.wb' not in ptx
+        assert 'st.global.cg' not in ptx
+        assert 'st.global.cs' in ptx
+
 # ---------------
 # test if
 # ---------------
@@ -2409,11 +2524,11 @@ def test_call(type):
 # -------------
 
 
-@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and"])
+@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and_dynamic", "if_and_static"])
 def test_if(if_type):
 
     @triton.jit
-    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr):
+    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr, StaticVaue: tl.constexpr):
         pid = tl.program_id(0)
         cond = tl.load(Cond)
         if IfType == "if":
@@ -2423,8 +2538,13 @@ def test_if(if_type):
                 tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_exp":
             tl.store(Ret, tl.load(XTrue)) if pid % 2 else tl.store(Ret, tl.load(XFalse))
-        elif IfType == "if_and":
+        elif IfType == "if_and_dynamic":
             if BoolVar and pid % 2 == 0:
+                tl.store(Ret, tl.load(XTrue))
+            else:
+                tl.store(Ret, tl.load(XFalse))
+        elif IfType == "if_and_static":
+            if StaticVaue != 0 and StaticVaue != 0:
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))
@@ -2433,7 +2553,7 @@ def test_if(if_type):
     x_true = torch.tensor([3.14], dtype=torch.float32, device='cuda')
     x_false = torch.tensor([1.51], dtype=torch.float32, device='cuda')
     ret = torch.empty(1, dtype=torch.float32, device='cuda')
-    kernel[(1,)](cond, x_true, x_false, ret, if_type, True)
+    kernel[(1,)](cond, x_true, x_false, ret, if_type, True, 1)
     assert torch.equal(ret, x_true)
 
 
@@ -2817,7 +2937,7 @@ def test_globaltimer():
     def kernel(Out1, Out2):
         start = tl.extra.cuda.globaltimer()
         off = tl.arange(0, 128)
-        for i in range(100):
+        for i in range(10000):
             tl.store(Out1 + off, tl.load(Out1 + off) + 1)
         end = tl.extra.cuda.globaltimer()
         tl.store(Out2, end - start)

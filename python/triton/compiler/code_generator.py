@@ -6,12 +6,12 @@ import warnings
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 from .. import language
+from .._C.libtriton.triton import ir
 from ..language import constexpr, tensor
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure,
                      UnsupportedLanguageConstruct)
-from triton._C.libtriton.triton import ir
 
 
 def mangle_ty(ty):
@@ -388,7 +388,8 @@ class CodeGenerator(ast.NodeVisitor):
         for name, value in zip(names, values):
             # by default, constexpr are assigned into python variable
             value = _unwrap_if_constexpr(value)
-            if not _is_triton_tensor(value) and \
+            if value is not None and \
+               not _is_triton_tensor(value) and \
                not isinstance(value, native_nontensor_types):
                 value = language.core._to_tensor(value, self.builder)
             self.set_value(name, value)
@@ -594,12 +595,14 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Compare(self, node):
         if not (len(node.comparators) == 1 and len(node.ops) == 1):
             raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple comparison is not supported")
-        lhs = _unwrap_if_constexpr(self.visit(node.left))
-        rhs = _unwrap_if_constexpr(self.visit(node.comparators[0]))
+        lhs = self.visit(node.left)
+        rhs = self.visit(node.comparators[0])
+        lhs_value = _unwrap_if_constexpr(lhs)
+        rhs_value = _unwrap_if_constexpr(rhs)
         if type(node.ops[0]) == ast.Is:
-            return constexpr(lhs is rhs)
+            return constexpr(lhs_value is rhs_value)
         if type(node.ops[0]) == ast.IsNot:
-            return constexpr(lhs is not rhs)
+            return constexpr(lhs_value is not rhs_value)
         method_name = self._method_name_for_comp_op.get(type(node.ops[0]))
         if method_name is None:
             raise UnsupportedLanguageConstruct(None, node, "AST comparison operator '{}' is not (currently) implemented.".format(node.ops[0].__name__))
@@ -987,7 +990,7 @@ class CodeGenerator(ast.NodeVisitor):
         if not (0 < arg_count <= 2) or len(node.keywords):
             raise TypeError("`static_assert` requires one or two positional arguments only")
 
-        passed = self.visit(node.args[0])
+        passed = _unwrap_if_constexpr(self.visit(node.args[0]))
         if not isinstance(passed, bool):
             raise NotImplementedError("Assertion condition could not be determined at compile-time. Make sure that it depends only on `constexpr` values")
         if not passed:

@@ -303,12 +303,12 @@ public:
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMConversionTarget target(*context, isROCM);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Preprocess
-    decomposeMmaToDotOperand(mod, numWarps);
+    decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
     decomposeBlockedToDotOperand(mod);
-    if (failed(decomposeInsertSliceAsyncOp(mod)))
-      return signalPassFailure();
+    decomposeInsertSliceAsyncOp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -433,7 +433,8 @@ private:
                                         allocation.getSharedMemorySize()));
   }
 
-  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps) const {
+  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps,
+                                int threadsPerWarp) const {
     // Replace `mma -> dot_op` with `mma -> blocked -> dot_op`
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -449,7 +450,7 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
-                getOrder(srcMma), numWarps));
+                getOrder(srcMma), numWarps, threadsPerWarp));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
@@ -487,7 +488,7 @@ private:
     });
   }
 
-  LogicalResult decomposeInsertSliceAsyncOp(ModuleOp mod) const {
+  void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
@@ -515,6 +516,7 @@ private:
       // Get the vectorized load size
       auto src = insertSliceAsyncOp.getSrc();
       auto dst = insertSliceAsyncOp.getDst();
+      auto mask = insertSliceAsyncOp.getMask();
       auto srcTy = src.getType().cast<RankedTensorType>();
       auto dstTy = dst.getType().cast<RankedTensorType>();
       auto srcBlocked =
@@ -523,6 +525,9 @@ private:
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
       unsigned inVec = axisInfoAnalysis.getPtrContiguity(src);
+      if (mask)
+        inVec =
+            std::min<unsigned>(axisInfoAnalysis.getMaskAlignment(mask), inVec);
       unsigned outVec = resSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       auto maxBitWidth =
@@ -586,7 +591,6 @@ private:
         asyncWaitOp.erase();
       }
     });
-    return success();
   }
 };
 

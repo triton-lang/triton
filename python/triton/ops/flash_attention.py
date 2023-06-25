@@ -7,11 +7,14 @@ This is a Triton implementation of the Flash Attention algorithm
 
 import torch
 
-import triton
-import triton.language as tl
+from .. import cdiv, jit
+from .. import language as tl
+
+# import triton
+# import language as tl
 
 
-@triton.jit
+@jit
 def _fwd_kernel(
     Q, K, V, sm_scale,
     L, M,
@@ -87,7 +90,7 @@ def _fwd_kernel(
     tl.store(out_ptrs, acc)
 
 
-@triton.jit
+@jit
 def _bwd_preprocess(
     Out, DO, L,
     NewDO, Delta,
@@ -107,7 +110,7 @@ def _bwd_preprocess(
     tl.store(Delta + off_m, delta)
 
 
-@triton.jit
+@jit
 def _bwd_kernel(
     Q, K, V, sm_scale, Out, DO,
     DQ, DK, DV,
@@ -203,10 +206,9 @@ class _attention(torch.autograd.Function):
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
-        # assert Lk in {16, 32, 64, 128}
-        assert Lk in {64}  # TODO: fix other cases
+        assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
+        grid = (cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
