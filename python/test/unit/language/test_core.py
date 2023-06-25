@@ -1374,7 +1374,8 @@ def get_reduced_dtype(dtype_str, op):
                           for op in ['min', 'max',
                                      'min-with-indices',
                                      'max-with-indices',
-                                     'argmin', 'argmax',
+                                     'argmin-tie-break-left',
+                                     'argmax-tie-break-left',
                                      'sum']
                           for dtype in dtypes_with_bfloat16
                           for shape in [32, 64, 128, 512]])
@@ -1390,6 +1391,9 @@ def test_reduce1d(op, dtype_str, shape, device):
 
     if 'with-indices' in op:
         patch = f'z, _ = tl.{op.split("-")[0]}(x, axis=0, return_indices=True)'
+    elif 'arg' in op:
+        tie_break_left = 'tie-break-left' in op
+        patch = f'z = tl.{op.split("-")[0]}(x, axis=0, tie_break_left={tie_break_left})'
     else:
         patch = f'z = tl.{op}(x, axis=0)'
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': patch})
@@ -1397,11 +1401,16 @@ def test_reduce1d(op, dtype_str, shape, device):
     rs = RandomState(17)
     # limit the range of integers so that the sum does not overflow
     x = numpy_random((shape,), dtype_str=dtype_str, rs=rs)
-    x_tri = to_triton(x, device=device)
     numpy_op = {'sum': np.sum, 'max': np.max, 'min': np.min,
                 'max-with-indices': np.max,
                 'min-with-indices': np.min,
-                'argmin': np.argmin, 'argmax': np.argmax}[op]
+                'argmin-tie-break-fast': np.argmin,
+                'argmin-tie-break-left': np.argmin,
+                'argmax-tie-break-fast': np.argmax,
+                'argmax-tie-break-left': np.argmax}[op]
+    if 'tie-break-left' in op:
+        x[3:10] = numpy_op(x)
+    x_tri = to_triton(x, device=device)
     # numpy result
     z_dtype_str = 'int32' if op in ('argmin', 'argmax') else dtype_str
     z_tri_dtype_str = z_dtype_str
@@ -2262,6 +2271,37 @@ def test_vectorization_hints(has_hints, device):
 # ---------------
 # test store
 # ---------------
+
+
+@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs"])
+def test_store_cache_modifier(cache):
+    src = torch.empty(128, device='cuda')
+    dst = torch.empty(128, device='cuda')
+
+    @triton.jit
+    def _kernel(dst, src, CACHE: tl.constexpr):
+        offsets = tl.arange(0, 128)
+        x = tl.load(src + offsets)
+        tl.store(dst + offsets, x, cache_modifier=CACHE)
+
+    pgm = _kernel[(1,)](dst, src, CACHE=cache)
+    ptx = pgm.asm['ptx']
+    if cache == '':
+        assert 'st.global.wb' not in ptx
+        assert 'st.global.cg' not in ptx
+        assert 'st.global.cs' not in ptx
+    if cache == '.wb':
+        assert 'st.global.wb' in ptx
+        assert 'st.global.cg' not in ptx
+        assert 'st.global.cs' not in ptx
+    if cache == '.cg':
+        assert 'st.global.wb' not in ptx
+        assert 'st.global.cg' in ptx
+        assert 'st.global.cs' not in ptx
+    if cache == '.cs':
+        assert 'st.global.wb' not in ptx
+        assert 'st.global.cg' not in ptx
+        assert 'st.global.cs' in ptx
 
 # ---------------
 # test if

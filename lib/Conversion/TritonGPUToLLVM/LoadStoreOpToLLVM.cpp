@@ -354,6 +354,9 @@ struct StoreOpConversion
       auto &ptxStoreInstr =
           ptxBuilder.create<>("st")
               ->global()
+              .o("wb", op.getCache() == triton::CacheModifier::WB)
+              .o("cg", op.getCache() == triton::CacheModifier::CG)
+              .o("cs", op.getCache() == triton::CacheModifier::CS)
               .o("L1::evict_first",
                  op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
               .o("L1::evict_last",
