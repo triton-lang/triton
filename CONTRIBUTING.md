@@ -12,7 +12,6 @@ First of all, thank you for considering contributing to the Triton programming l
 
 4. **Respectful Communication:** In all discussions related to PRs or other contributions, please maintain a courteous and civil tone. We strive to foster a collaborative environment that is inclusive and respectful to all contributors.
 
-
 ## Request for Comments (RFCs)
 
 RFCs are a crucial aspect of the collaborative development process, as they provide a structured way to propose and discuss significant changes or additions to the project. RFCs may encompass modifications to the language itself, extensive changes in the compiler backend, or other substantial updates that impact the Triton ecosystem.
@@ -46,7 +45,6 @@ A well-structured RFC should include:
 5. **Performance Impact:** Discuss the expected performance impact of the proposed changes, including any potential bottlenecks or performance improvements.
 
 6. **Timeline and Milestones:** Outline a proposed timeline for implementing the changes, including any milestones or intermediate steps.
-
 
 ## New backends
 
