@@ -4,44 +4,8 @@ using namespace mlir;
 using namespace mlir::triton;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
-/* ----- FP8E4M3B15 ------ */
-
-// Fp8E4M3B15 -> Fp16 (packed)
-// fast conversion code provided by Scott Gray @ OpenAI
-// $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
-// $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
-// WARN: subnormal (0bs0000xxx) are not handled
-const std::string Fp8E4M3B15_to_Fp16 =
-    "{                                      \n"
-    ".reg .b32 a<2>;                        \n"
-    "shl.b32 a0, $2, 1;                     \n"
-    "shl.b32 a1, $2, 7;                     \n"
-    "and.b32  $0, a0, 0x80008000;           \n"
-    "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
-    "and.b32  $1, $2, 0x80008000;           \n"
-    "lop3.b32 $1, $1, $2, 0x3f803f80, 0xf8; \n"
-    "}";
-
-// Fp16 -> Fp8E4M3B15 (packed)
-// fast conversion code provided by Scott Gray @ OpenAI
-// ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
-//       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
-//       ((e4.y >> 0) & (0x80008000u >> 0)) |
-//       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
-// WARN: subnormal (0bs0000xxx) are not handled
-const std::string Fp16_to_Fp8E4M3B15 =
-    "{                                       \n"
-    ".reg .b32 a<2>;                         \n"
-    "shr.b32  a0, $1, 1;                     \n"
-    "shr.b32  a1, $1, 7;                     \n"
-    "and.b32  $0,     a0, 0x40004000;        \n"
-    "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n"
-    "}";
-
-/* FP8E5M2 */
-// It is to be deprecated on hardware that does not support it natively
+/* ----- FP8E5M2 ------ */
+// This data-type is the standard FP8E5M2 format
 
 const std::string Fp16_to_Fp8E5M2 =
     "{                            \n"
@@ -116,6 +80,49 @@ const std::string Bf16_to_Fp8E5M2 =
                                                      // nosign1 = 0xf300f400
                                                      // nosign = 0xf3f4f1f2
     "or.b32 $0, nosign, sign;                    \n" // restore sign
+    "}";
+
+/* ----- FP8E4M3B15 ------ */
+// This data-type is a variant of the standard FP8E4M3 format.
+// It was designed for fast software conversion to FP16 on
+// nvidia GPUs that do not support it natively.
+// Specifically, this data-type:
+//    - has infinities
+//    - has multiple nans (when all exponent bits are 1)
+//    - has an exponent bias of 15 (vs. 7 for fp8e4m3)
+
+// Fp8E4M3B15 -> Fp16 (packed)
+// fast conversion code provided by Scott Gray @ OpenAI
+// $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
+// $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
+// WARN: subnormal (0bs0000xxx) are not handled
+const std::string Fp8E4M3B15_to_Fp16 =
+    "{                                      \n"
+    ".reg .b32 a<2>;                        \n"
+    "shl.b32 a0, $2, 1;                     \n"
+    "shl.b32 a1, $2, 7;                     \n"
+    "and.b32  $0, a0, 0x80008000;           \n"
+    "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
+    "and.b32  $1, $2, 0x80008000;           \n"
+    "lop3.b32 $1, $1, $2, 0x3f803f80, 0xf8; \n"
+    "}";
+
+// Fp16 -> Fp8E4M3B15 (packed)
+// fast conversion code provided by Scott Gray @ OpenAI
+// ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
+//       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
+//       ((e4.y >> 0) & (0x80008000u >> 0)) |
+//       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
+// WARN: subnormal (0bs0000xxx) are not handled
+const std::string Fp16_to_Fp8E4M3B15 =
+    "{                                       \n"
+    ".reg .b32 a<2>;                         \n"
+    "shr.b32  a0, $1, 1;                     \n"
+    "shr.b32  a1, $1, 7;                     \n"
+    "and.b32  $0,     a0, 0x40004000;        \n"
+    "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
+    "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n"
+    "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n"
     "}";
 
 /* ----- FP8E4M3 ------ */

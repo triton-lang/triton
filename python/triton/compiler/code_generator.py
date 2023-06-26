@@ -189,10 +189,11 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name,
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name, arch,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None,
                  debug=False, noinline=False):
         self.builder = ir.builder(context)
+        self.builder.arch = arch
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
@@ -1050,7 +1051,7 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, signature, specialization, constants, debug):
+def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
     # canonicalize signature
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -1072,7 +1073,8 @@ def ast_to_ttir(fn, signature, specialization, constants, debug):
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,
                               function_name=function_name, attributes=new_attrs,
-                              is_kernel=True, debug=debug)
+                              is_kernel=True, debug=debug,
+                              arch=arch)
     try:
         generator.visit(fn.parse())
     except CompilationError as e:
