@@ -3,9 +3,6 @@ import torch
 from ... import cdiv, heuristics, jit
 from ... import language as tl
 
-# import triton
-# import language as tl
-
 # ********************************************************
 # --------------------------------------------------------
 # Sparse = Dense x Dense (SDD)
