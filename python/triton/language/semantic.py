@@ -786,13 +786,27 @@ def cast(input: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
-def _str_to_cache_modifier(cache_modifier):
+def _str_to_load_cache_modifier(cache_modifier):
     cache = ir.CACHE_MODIFIER.NONE  # default
     if cache_modifier:
         if cache_modifier == ".ca":
             cache = ir.CACHE_MODIFIER.CA
         elif cache_modifier == ".cg":
             cache = ir.CACHE_MODIFIER.CG
+        else:
+            raise ValueError(f"Cache modifier {cache_modifier} not supported")
+    return cache
+
+
+def _str_to_store_cache_modifier(cache_modifier):
+    cache = ir.CACHE_MODIFIER.NONE  # default
+    if cache_modifier:
+        if cache_modifier == ".wb":
+            cache = ir.CACHE_MODIFIER.WB
+        elif cache_modifier == ".cg":
+            cache = ir.CACHE_MODIFIER.CG
+        elif cache_modifier == ".cs":
+            cache = ir.CACHE_MODIFIER.CS
         else:
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
@@ -940,7 +954,7 @@ def load(ptr: tl.tensor,
          is_volatile: bool,
          builder: ir.builder) -> tl.tensor:
     # Cache, eviction and padding options
-    cache = _str_to_cache_modifier(cache_modifier)
+    cache = _str_to_load_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
     padding = _str_to_padding_option(padding_option)
 
@@ -1029,7 +1043,7 @@ def store(ptr: tl.tensor,
           eviction_policy: str,
           builder: ir.builder) -> tl.tensor:
     # Cache and eviction options
-    cache = _str_to_cache_modifier(cache_modifier)
+    cache = _str_to_store_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():

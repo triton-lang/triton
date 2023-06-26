@@ -71,7 +71,7 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs = self.visit(node.value)
         while isinstance(lhs, ast.Attribute):
             lhs = self.visit(lhs.value)
-        if lhs is None or lhs.__name__ == "triton":
+        if lhs is None or getattr(lhs, "__name__", "") == "triton":
             return None
         return getattr(lhs, node.attr)
 
