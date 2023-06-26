@@ -195,8 +195,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
-        self.loc = self.builder.get_loc(file_name, begin_line)
-        self.builder.set_loc(self.loc)
+        self.builder.set_loc(file_name, begin_line, 0)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
@@ -974,8 +973,8 @@ class CodeGenerator(ast.NodeVisitor):
     def visit(self, node):
         if node is not None:
             self.last_node = node
-            loc = self.builder.get_loc(self.file_name, node.lineno, node.col_offset)
-            self.builder.set_loc(loc)
+            if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
+                self.builder.set_loc(self.file_name, node.lineno, node.col_offset)
         with warnings.catch_warnings():
             # The ast library added visit_Constant and deprecated some other
             # methods but we can't move to that without breaking Python 3.6 and 3.7.
@@ -1075,8 +1074,8 @@ def ast_to_ttir(fn, signature, specialization, constants, debug):
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
-    file_name = fn.__code__.co_filename
-    begin_line = fn.__code__.co_firstlineno
+    file_name = fn.fn.__code__.co_filename
+    begin_line = fn.fn.__code__.co_firstlineno
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,

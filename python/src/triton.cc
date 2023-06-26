@@ -82,10 +82,12 @@ public:
   mlir::OpBuilder &getBuilder() { return *builder; }
 
   // Make a copy of the location
-  void setLastLoc(mlir::Location &loc) {
+  void setLastLoc(const std::string &fileName, int line, int column) {
     // The original mlir::Location object held by lastLoc will be automatically
     // destroyed when lastLoc is assigned a new unique pointer
-    lastLoc = std::make_unique<mlir::Location>(loc);
+    auto context = builder->getContext();
+    lastLoc = std::make_unique<mlir::Location>(
+        mlir::FileLineColLoc::get(context, fileName, line, column));
   }
 
   mlir::Location &getLastLoc() {
@@ -556,7 +558,7 @@ void init_triton_ir(py::module &&m) {
           ret::reference)
       .def("get_insertion_point",
            [](TritonOpBuilder &self) {
-             return self.getBuilder().getInsertionPoint();
+             return self.getBuilder().saveInsertionPoint();
            })
       .def("restore_insertion_point",
            [](TritonOpBuilder &self, mlir::OpBuilder::InsertPoint pt) {
@@ -704,20 +706,9 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getFunctionType(inTypes, outTypes);
            })
       // locs
-      .def("set_loc", [](TritonOpBuilder &self,
-                         mlir::Location &loc) { self.setLastLoc(loc); })
-      .def("get_loc",
+      .def("set_loc",
            [](TritonOpBuilder &self, const std::string &fileName, int line,
-              int column = 0) {
-             auto context = self.getBuilder().getContext();
-             mlir::Location loc =
-                 mlir::FileLineColLoc::get(context, fileName, line, column);
-             return loc;
-           })
-      .def("get_unknown_loc",
-           [](TritonOpBuilder &self) {
-             return self.getBuilder().getUnknownLoc();
-           })
+              int column) { self.setLastLoc(fileName, line, column); })
 
       // Ops
       .def("get_or_insert_function",
@@ -765,12 +756,13 @@ void init_triton_ir(py::module &&m) {
           ret::reference)
       // Function
       .def("ret",
-           [](TritonOpBuilder &self, std::vector<mlir::Value> &vals) {
+           [](TritonOpBuilder &self,
+              std::vector<mlir::Value> &vals) -> mlir::OpState {
              return self.create<mlir::triton::ReturnOp>(vals);
            })
       .def("call",
            [](TritonOpBuilder &self, mlir::triton::FuncOp &func,
-              std::vector<mlir::Value> &args) {
+              std::vector<mlir::Value> &args) -> mlir::OpState {
              return self.create<mlir::triton::CallOp>(func, args);
            })
       // Unstructured control flow
