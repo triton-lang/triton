@@ -2,7 +2,6 @@ import heapq
 
 import torch
 
-# import triton
 from .. import cdiv
 from .._C.libtriton.triton import runtime
 from ..runtime import driver
