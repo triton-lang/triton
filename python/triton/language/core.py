@@ -6,7 +6,6 @@ from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
 from .._C.libtriton.triton import ir
-# import triton
 from ..runtime.jit import jit
 from . import semantic
 
@@ -1255,15 +1254,21 @@ def abs(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name: str) -> Callable[[T], T]:
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
-    :param axis: the dimension along which the reduction should be done
-    """
+    :param axis: the dimension along which the reduction should be done"""
+        if return_indices_arg is not None:
+            docstr += f"""
+    :param {return_indices_arg}: if true, return index corresponding to the {name} value"""
+        if tie_break_arg is not None:
+            docstr += f"""
+    :param {tie_break_arg}: if true, return the left-most indices in case of ties for values that aren't NaN"""
+
         func.__doc__ = docstr.format(name=name)
         return func
 
@@ -1374,65 +1379,93 @@ def maximum(x, y):
 
 
 @jit
-def _max_combine(a, b):
-    return maximum(a, b)
+def _argmax_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    gt = value1 > value2 or tie
+    v_ret = where(gt, value1, value2)
+    i_ret = where(gt, index1, index2)
+    return v_ret, i_ret
 
 
 @jit
-def _argmax_combine(value1, index1, value2, index2):
-    gt = value1 > value2
-    value_ret = where(gt, value1, value2)
-    index_ret = where(gt, index1, index2)
-    return value_ret, index_ret
+def _argmax_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, True)
 
 
 @jit
-@_add_reduction_docstr("maximum")
-def max(input, axis=None, return_indices=False):
+def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, False)
+
+
+@jit
+@_add_reduction_docstr("maximum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
+def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = _promote_reduction_input(input)
     if return_indices:
-        return _reduce_with_indices(input, axis, _argmax_combine)
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
     else:
-        return reduce(input, axis, _max_combine)
+        return reduce(input, axis, maximum)
 
 
 @jit
-@_add_reduction_docstr("maximum index")
-def argmax(input, axis):
-    (_, ret) = max(input, axis, return_indices=True)
+@_add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
+def argmax(input, axis, tie_break_left=True):
+    (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
 
 # min and argmin
 
 
 @jit
-def _min_combine(a, b):
-    # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
-    return minimum(a, b)
-
-
-@jit
-def _argmin_combine(value1, index1, value2, index2):
-    lt = value1 < value2
+def _argmin_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    lt = value1 < value2 or tie
     value_ret = where(lt, value1, value2)
     index_ret = where(lt, index1, index2)
     return value_ret, index_ret
 
 
 @jit
-@_add_reduction_docstr("minimum")
-def min(input, axis=None, return_indices=False):
-    input = _promote_reduction_input(input)
-    if return_indices:
-        return _reduce_with_indices(input, axis, _argmin_combine)
-    else:
-        return reduce(input, axis, _min_combine)
+def _argmin_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, True)
 
 
 @jit
-@_add_reduction_docstr("minimum index")
-def argmin(input, axis):
-    _, ret = min(input, axis, return_indices=True)
+def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, False)
+
+
+@jit
+@_add_reduction_docstr("minimum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
+def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
+    input = _promote_reduction_input(input)
+    if return_indices:
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
+    else:
+        return reduce(input, axis, minimum)
+
+
+@jit
+@_add_reduction_docstr("minimum index",
+                       tie_break_arg="tie_break_left")
+def argmin(input, axis, tie_break_left=True):
+    _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
 
 
@@ -1521,7 +1554,15 @@ def max_contiguous(input, values, _builder=None):
 @builtin
 def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
     '''
-    Print the values at compile time. The parameters are the same as the builtin :code:`print`.
+    Print the values at compile time. The parameters are the same as the Python builtin :code:`print`.
+
+    Calling the Python builtin :code:`print` inside your kernel is the same as calling this.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.static_print(f"{BLOCK_SIZE=}")
+        print(f"{BLOCK_SIZE=}")
     '''
     pass
 
@@ -1529,7 +1570,13 @@ def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=Fals
 @builtin
 def static_assert(cond, msg="", _builder=None):
     '''
-    Assert the condition at compile time. The parameters are the same as the builtin :code:`assert`.
+    Assert the condition at compile time.  Does not require that the :code:`TRITON_DEBUG` environment variable
+    is set.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.static_assert(BLOCK_SIZE == 1024)
     '''
     pass
 
@@ -1537,7 +1584,13 @@ def static_assert(cond, msg="", _builder=None):
 @builtin
 def device_print(prefix, *args, _builder=None):
     '''
-    Print the values at runtime from the device.
+    Print the values at runtime from the device.  String formatting does not work, so you should
+    provide the values you want to print as arguments.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.device_print("pid", pid)
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
@@ -1560,7 +1613,18 @@ def device_print(prefix, *args, _builder=None):
 @builtin
 def device_assert(cond, msg="", _builder=None):
     '''
-    Assert the condition at runtime from the device.
+    Assert the condition at runtime from the device.  Requires that the environment variable :code:`TRITON_DEBUG`
+    is set to a value besides :code:`0` in order for this to have any effect.
+
+    Using the Python :code:`assert` statement is the same as calling this function, except that the second argument
+    must be provided and must be a string, e.g. :code:`assert pid == 0, "pid != 0"`.  The environment variable must
+    be set for this :code:`assert` statement to have any effect.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        tl.device_assert(pid == 0)
+        assert pid == 0, f"pid != 0"
 
     :param cond: the condition to assert. This is required to be a boolean tensor.
     :param msg: the message to print if the assertion fails. This is required to be a string literal.
