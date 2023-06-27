@@ -266,8 +266,8 @@ SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                ArrayRef<unsigned> order);
 
 SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                                Location loc, unsigned linear,
-                                ArrayRef<unsigned> shape);
+                               Location loc, unsigned linear,
+                               ArrayRef<unsigned> shape);
 
 SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                Location loc, Value linear,

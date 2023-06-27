@@ -95,8 +95,8 @@ SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
 }
 
 SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                                Location loc, unsigned linear,
-                                ArrayRef<unsigned> shape) {
+                               Location loc, unsigned linear,
+                               ArrayRef<unsigned> shape) {
   unsigned rank = shape.size();
   assert(rank > 0);
   SmallVector<Value> multiDim(rank);
