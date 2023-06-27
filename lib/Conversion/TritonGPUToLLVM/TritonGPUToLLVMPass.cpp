@@ -173,7 +173,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     auto scopeAttr =
         buildScopeAttr(moduleOp, funcOp.getName(), getTypeConverter());
     newFuncOp->setLoc(FusedLoc::get(newFuncOp.getContext(),
-                                    {newFuncOp->getLoc()}, scopeAttr));
+                                    {funcOp.getLoc()}, scopeAttr));
 
     rewriter.eraseOp(funcOp);
     return success();

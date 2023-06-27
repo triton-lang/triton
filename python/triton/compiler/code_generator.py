@@ -195,6 +195,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
+        self.begin_line = begin_line
         self.builder.set_loc(file_name, begin_line, 0)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
@@ -974,7 +975,7 @@ class CodeGenerator(ast.NodeVisitor):
         if node is not None:
             self.last_node = node
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-                self.builder.set_loc(self.file_name, node.lineno, node.col_offset)
+                self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
         with warnings.catch_warnings():
             # The ast library added visit_Constant and deprecated some other
             # methods but we can't move to that without breaking Python 3.6 and 3.7.

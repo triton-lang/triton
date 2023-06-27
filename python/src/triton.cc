@@ -1425,6 +1425,7 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              auto printingFlags = mlir::OpPrintingFlags();
              printingFlags.elideLargeElementsAttrs(16);
+             printingFlags.enableDebugInfo();
              self.enableIRPrinting(
                  /*shouldPrintBeforePass=*/nullptr,
                  /*shouldPrintAfterPass=*/

@@ -72,9 +72,8 @@ protected:
     auto *context = &typeConverter->getContext();
     Builder builder(context);
     std::string inputFilePath("-");
-    if (auto fileLoc = dyn_cast<FileLineColLoc>(moduleOp.getLoc())) {
+    if (auto fileLoc = dyn_cast<FileLineColLoc>(moduleOp.getLoc()))
       inputFilePath = fileLoc.getFilename().getValue();
-    }
 
     auto fileAttr =
         LLVM::DIFileAttr::get(context, llvm::sys::path::filename(inputFilePath),
@@ -84,6 +83,8 @@ protected:
         builder.getStringAttr("triton"), /*isOptimized=*/true,
         LLVM::DIEmissionKind::LineTablesOnly);
 
+    auto subroutineTypeAttr =
+        LLVM::DISubroutineTypeAttr::get(context, llvm::dwarf::DW_CC_normal, {});
     auto funcNameAttr = builder.getStringAttr(funcName);
     return LLVM::DISubprogramAttr::get(context, compileUnitAttr, fileAttr,
                                        funcNameAttr, funcNameAttr, fileAttr,
@@ -91,7 +92,7 @@ protected:
                                        /*scopeline=*/1,
                                        LLVM::DISubprogramFlags::Definition |
                                            LLVM::DISubprogramFlags::Optimized,
-                                       nullptr);
+                                       subroutineTypeAttr);
   }
 
 protected:

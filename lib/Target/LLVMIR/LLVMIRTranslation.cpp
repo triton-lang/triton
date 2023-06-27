@@ -329,6 +329,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   }
   auto printingFlags = mlir::OpPrintingFlags();
   printingFlags.elideLargeElementsAttrs(16);
+  printingFlags.enableDebugInfo();
   pm.enableIRPrinting(
       /*shouldPrintBeforePass=*/nullptr,
       /*shouldPrintAfterPass=*/
