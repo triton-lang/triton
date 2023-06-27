@@ -21,6 +21,10 @@ SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec);
 
+SmallVector<int64_t>
+getScratchConfigForCvtLayoutSwizzled(triton::gpu::ConvertLayoutOp op,
+                                     unsigned &inVec, unsigned &outVec);
+
 } // namespace triton
 
 /// Modified from llvm-15.0: llvm/ADT/AddressRanges.h
