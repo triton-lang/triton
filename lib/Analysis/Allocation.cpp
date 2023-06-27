@@ -49,6 +49,45 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   return {inOrd, outOrd};
 }
 
+SmallVector<int64_t>
+getScratchConfigForCvtLayoutSwizzled(triton::gpu::ConvertLayoutOp op,
+                                     unsigned &inVec, unsigned &outVec) {
+  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+  Attribute srcLayout = srcTy.getEncoding();
+  Attribute dstLayout = dstTy.getEncoding();
+
+  // MmaToDotShortcut doesn't use shared mem
+  if (srcLayout.isa<MmaEncodingAttr>() &&
+      dstLayout.isa<DotOperandEncodingAttr>())
+    if (isMmaToDotShortcut(srcTy, dstTy))
+      return {};
+
+  assert(srcLayout && dstLayout &&
+         "Unexpected layout in getScratchConfigForCvtLayout()");
+  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
+  unsigned srcContigPerThread = getContigPerThread(srcLayout)[inOrd[0]];
+  unsigned dstContigPerThread = getContigPerThread(dstLayout)[outOrd[0]];
+  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+  //       that we cannot do vectorization.
+  inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
+  outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
+
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  auto srcShapePerCTA = getShapePerCTA(srcLayout, srcShape);
+  auto dstShapePerCTA = getShapePerCTA(dstLayout, dstShape);
+
+  unsigned rank = dstTy.getRank();
+  SmallVector<int64_t> paddedRepShape(rank);
+  for (unsigned d = 0; d < rank; ++d) {
+    paddedRepShape[d] =
+        std::max(std::min<int64_t>(srcTy.getShape()[d], srcShapePerCTA[d]),
+                 std::min<int64_t>(dstTy.getShape()[d], dstShapePerCTA[d]));
+  }
+  return paddedRepShape;
+}
+
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
