@@ -1,8 +1,11 @@
 #include "ReduceOpToLLVM.h"
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getOrder;
