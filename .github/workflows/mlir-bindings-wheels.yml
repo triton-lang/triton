@@ -1,0 +1,78 @@
+name: Wheels
+on:
+  workflow_dispatch:
+    branches:
+      - mlir_bindings
+
+jobs:
+
+  Build-Wheels:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: Build wheels
+        run: |
+          pip install python/mlir_bindings/requirements.txt
+          export PLAT_NAME=linux_x86_64
+          pushd python && python3 setup.py bdist_wheel --plat-name=$PLAT_NAME --dist-dir wheelhouse && popd
+          mkdir -p ${{ github.sha }}
+          mv python/wheelhouse/triton-*.whl ${{ github.sha }}/
+
+      - name: Upload an artifact
+        uses: actions/upload-artifact@v3
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        with:
+          if-no-files-found: error
+          name: build_artifact
+          path: ${{ github.sha }}
+
+  upload-wheels:
+
+    runs-on: ubuntu-20.04
+    permissions:
+      contents: write
+
+    needs: [ build ]
+
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build_artifact
+          path: ${{ github.sha }}
+
+      - name: Set up a release page
+        id: setup_release
+        run: |
+          TRITON_VERSION="$(python python/setup.py --version)"
+          tag_name="$TRITON_VERSION"
+          release_title="PI $TRITON_VERSION"
+          echo "PI $TRITON_VERSION created at $(date)" > body.md
+          echo "tag_name=${tag_name}" | tee -a $GITHUB_OUTPUT
+          echo "release_title=${release_title}" | tee -a $GITHUB_OUTPUT
+
+      - name: Upload tarballs
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "${{ github.sha }}/*.whl"
+          bodyFile: body.md
+          token: "${{ secrets.GITHUB_TOKEN }}"
+          tag: "${{ steps.setup_release.outputs.tag_name }}"
+          name: "${{ steps.setup_release.outputs.release_title }}"
+          removeArtifacts: false
+          allowUpdates: true
+          replacesArtifacts: true
