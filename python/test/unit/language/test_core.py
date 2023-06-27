@@ -1497,7 +1497,8 @@ def test_reduce2d(op, dtype_str, shape, axis, device):
 layouts = [
     BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0]),
     BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1]),
-    MmaLayout(version=(2, 0), warps_per_cta=[4, 1])
+    MmaLayout(version=(2, 0), warps_per_cta=[4, 1]),
+    MmaLayout(version=(2, 0), warps_per_cta=[2, 2])
 ]
 
 
