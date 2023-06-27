@@ -816,18 +816,19 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
 
   // Prefetch load deps
-  // If a load-dependent instruction uses the value of a block argument, we
-  // shouldn't the new mapping of the block argument in the next iteration.
+  // If a load-dependent instruction that uses a block argument, we
+  // shouldn't update the new mapping of the block argument in the current
+  // iteration.
   // For example.
   // %a = add %arg0, %c
   // %b = add %arg0, %d
   //
-  // Update %arg0 will cause the value of b to be incorrect.
+  // Update %arg0 will cause the value of %b to be incorrect.
   // We do need to use the next iteration value of %arg0 because it could be a
   // immediate arg of a load op.
   // load %arg0
-  // %a = add %arg0,
-  // %c yield %a
+  // %a = add %arg0, %c
+  // yield %a
   //
   // We reroder instructions so %a and yield are actually before load. load
   // %arg0 should use the updated %arg0.
