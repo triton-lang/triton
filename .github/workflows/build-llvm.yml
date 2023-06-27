@@ -1,0 +1,251 @@
+name: Build LLVM
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        type: boolean
+        description: 'Run the build with tmate debugging enabled (https://github.com/marketplace/actions/debugging-with-tmate)'
+        required: false
+        default: false
+      llvm_commit:
+        description: 'llvm commit to build'
+        required: false
+        default: 'f733b4fb9b8bf6c759262424dd9534fd2e51a56d'
+        type: string
+
+jobs:
+
+  build:
+
+    name: Build distro of LLVM+MLIR
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-20.04, macos-latest ]
+        arch: [ AArch64, X86 ]
+        py_version: [ "3.11" ]
+        exclude:
+          - os: macos-latest
+            arch: X86
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@13ae5bb136fac2878aff31522b9efb785519f984 # v4.3.0
+        with:
+          python-version: ${{ matrix.py_version }}
+
+      - name: Checkout this repo
+        uses: actions/checkout@v3
+
+      # Enable tmate debugging of manually-triggered workflows if the input option was provided
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
+        with:
+          limit-access-to-actor: true
+          detached: true
+
+      - name: Checkout llvm-project
+        uses: actions/checkout@v3
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ inputs.llvm_commit }}
+          path: sandbox
+
+      - name: Compute llvm-project base path and output commit
+        run: |
+          echo "LLVM_PROJECT_MAIN_SRC_DIR=${GITHUB_WORKSPACE}/sandbox" | tee -a $GITHUB_ENV
+          echo "LLVM_PROJECT_MAIN_BINARY_DIR=${GITHUB_WORKSPACE}/sandbox/build" | tee -a $GITHUB_ENV
+          echo "LLVM_PROJECT_INSTALL_DIR=${GITHUB_WORKSPACE}/llvm_project_install" | tee -a $GITHUB_ENV
+          echo "LLVM_PROJECT_HOST_MAIN_BINARY_DIR=${GITHUB_WORKSPACE}/sandbox/build_host" | tee -a $GITHUB_ENV
+          echo "LLVM_PROJECT_COMMIT=${{ inputs.llvm_commit }}" | tee -a $GITHUB_ENV
+
+      - name: Install Python depends
+        run: |
+          python -m pip install -r ${LLVM_PROJECT_MAIN_SRC_DIR}/mlir/python/requirements.txt
+
+      - name: Install Ninja
+        uses: llvm/actions/install-ninja@6a57890d0e3f9f35dfc72e7e48bc5e1e527cdd6c # Jan 17
+
+      - name: Ccache for C++ compilation
+        uses: hendrikmuhs/ccache-action@621a41397ed83711c72862638d9ff6e63fca3041 # v1.2.3
+        with:
+          key: ${{ matrix.os }}-${{ matrix.arch }}-llvm-project
+          # LLVM needs serious cache size
+          max-size: 6G
+
+      - name: Install cross-compilation toolchain
+        if: contains(matrix.os, 'ubuntu') && contains(matrix.arch, 'AArch64')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu gcc-aarch64-linux-gnu
+
+      - name: Choose compiler and set env vars
+        run: |
+          if [ x"${{ matrix.os }}" == x"macos-latest" ]; then
+            echo "ARCH=AArch64" | tee -a $GITHUB_ENV
+            echo "CXX_COMPILER=clang++" | tee -a $GITHUB_ENV
+            echo "C_COMPILER=clang" | tee -a $GITHUB_ENV
+            echo "LLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-darwin21.6.0" | tee -a $GITHUB_ENV
+            echo "LLVM_HOST_TRIPLE=arm64-apple-darwin21.6.0" | tee -a $GITHUB_ENV
+            echo "STATIC_FLAGS=" | tee -a $GITHUB_ENV
+          elif [ x"${{ matrix.os }}" == x"ubuntu-20.04" ] && [ x"${{ matrix.arch }}" == x"AArch64" ]; then
+            echo "ARCH=AArch64" | tee -a $GITHUB_ENV
+            echo "CXX_COMPILER=aarch64-linux-gnu-g++" | tee -a $GITHUB_ENV
+            echo "C_COMPILER=aarch64-linux-gnu-gcc" | tee -a $GITHUB_ENV
+            echo "LLVM_DEFAULT_TARGET_TRIPLE=aarch64-linux-gnu" | tee -a $GITHUB_ENV
+            echo "LLVM_HOST_TRIPLE=aarch64-linux-gnu" | tee -a $GITHUB_ENV
+            echo "STATIC_FLAGS=-static-libgcc -static-libstdc++" | tee -a $GITHUB_ENV
+          else
+            echo "ARCH=X86" | tee -a $GITHUB_ENV
+            echo "CXX_COMPILER=g++" | tee -a $GITHUB_ENV
+            echo "C_COMPILER=gcc" | tee -a $GITHUB_ENV
+            echo "LLVM_DEFAULT_TARGET_TRIPLE=x86_64-unknown-linux-gnu" | tee -a $GITHUB_ENV
+            echo "LLVM_HOST_TRIPLE=x86_64-unknown-linux-gnu" | tee -a $GITHUB_ENV
+            echo "STATIC_FLAGS=-static-libgcc -static-libstdc++" | tee -a $GITHUB_ENV
+          fi
+
+      - name: Build host llvmtblgen/mlirtblgen
+        run: |
+          if [ x"${{ matrix.os }}" == x"macos-latest" ]; then
+            export CXX_COMPILER=clang++
+            export C_COMPILER=clang
+          else
+            export CXX_COMPILER=g++
+            export C_COMPILER=gcc
+          fi
+          cmake \
+            -G Ninja \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
+            -DCMAKE_CXX_FLAGS="-O2 ${STATIC_FLAGS}" \
+            -DCMAKE_C_COMPILER=$C_COMPILER \
+            -DLLVM_ENABLE_PROJECTS=mlir \
+            -DLLVM_ENABLE_TERMINFO=OFF \
+            -DLLVM_ENABLE_ZLIB=OFF \
+            -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_TARGETS_TO_BUILD=X86 \
+            -S${LLVM_PROJECT_MAIN_SRC_DIR}/llvm \
+            -B${LLVM_PROJECT_HOST_MAIN_BINARY_DIR}
+          
+          cmake --build ${LLVM_PROJECT_HOST_MAIN_BINARY_DIR} \
+            --target llvm-tblgen mlir-tblgen mlir-linalg-ods-yaml-gen mlir-pdll
+
+      - name: Configure CMake
+        run: |
+          CMAKE_CONFIGS="\
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
+            -DCMAKE_C_COMPILER=$C_COMPILER \
+            -DCMAKE_INSTALL_PREFIX=$LLVM_PROJECT_INSTALL_DIR \
+            -DLLVM_CCACHE_BUILD=ON \
+            -DLLVM_DEFAULT_TARGET_TRIPLE=$LLVM_DEFAULT_TARGET_TRIPLE \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_ENABLE_PROJECTS=mlir \
+            -DLLVM_ENABLE_TERMINFO=OFF \
+            -DLLVM_ENABLE_ZLIB=OFF \
+            -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_HOST_TRIPLE=$LLVM_HOST_TRIPLE \
+            -DLLVM_INCLUDE_UTILS=ON \
+            -DLLVM_INSTALL_UTILS=ON \
+            -DLLVM_TARGETS_TO_BUILD=$ARCH \
+            -DLLVM_TARGET_ARCH=$ARCH \
+            -DLLVM_USE_HOST_TOOLS=ON \
+            -DMLIR_BUILD_MLIR_C_DYLIB=1 \
+            -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
+            -DMLIR_ENABLE_EXECUTION_ENGINE=ON \
+            -DPython3_EXECUTABLE=$(which python)"
+          
+          if [ x"${{ matrix.os }}" == x"macos-latest" ]; then
+            CMAKE_CONFIGS="${CMAKE_CONFIGS} \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DMACOSX_DEPLOYMENT_TARGET=12.0"
+          elif [ x"${{ matrix.os }}" == x"ubuntu-20.04" ] && [ x"${{ matrix.arch }}" == x"AArch64" ]; then
+            CMAKE_CONFIGS="${CMAKE_CONFIGS} \
+              -DLLVM_TABLEGEN=$LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/llvm-tblgen \
+              -DMLIR_LINALG_ODS_YAML_GEN=$LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/mlir-linalg-ods-yaml-gen \
+              -DMLIR_LINALG_ODS_YAML_GEN_EXE=$LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/mlir-linalg-ods-yaml-gen \
+              -DMLIR_PDLL_TABLEGEN=$LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/mlir-pdll \
+              -DMLIR_TABLEGEN=$LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/mlir-tblgen"
+          fi
+          
+          echo $CMAKE_CONFIGS
+          if [ x"${{ matrix.os }}" == x"ubuntu-20.04" ] && [ x"${{ matrix.arch }}" == x"AArch64" ]; then
+            cmake $CMAKE_CONFIGS \
+                -DCMAKE_CXX_FLAGS="-O2 ${STATIC_FLAGS}" \
+                -S${LLVM_PROJECT_MAIN_SRC_DIR}/llvm \
+                -B${LLVM_PROJECT_MAIN_BINARY_DIR}
+          else
+            cmake $CMAKE_CONFIGS \
+                  -S${LLVM_PROJECT_MAIN_SRC_DIR}/llvm \
+                  -B${LLVM_PROJECT_MAIN_BINARY_DIR}
+          fi
+
+      - name: Build distro
+        run: |
+          cmake --build ${LLVM_PROJECT_MAIN_BINARY_DIR} --target install
+          ccache -s
+
+      - name: Make tarballs
+        run: |
+          mkdir -p $LLVM_PROJECT_INSTALL_DIR/llvm_native_tools
+          cp -L $LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/mlir-linalg-ods-yaml-gen $LLVM_PROJECT_INSTALL_DIR/llvm_native_tools/mlir-linalg-ods-yaml-gen
+          cp -L $LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/mlir-pdll $LLVM_PROJECT_INSTALL_DIR/llvm_native_tools/mlir-pdll
+          cp -L $LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/mlir-tblgen $LLVM_PROJECT_INSTALL_DIR/llvm_native_tools/mlir-tblgen
+          cp -L $LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/llvm-tblgen $LLVM_PROJECT_INSTALL_DIR/llvm_native_tools/llvm-tblgen
+          
+          OUTPUT="llvm-project-${LLVM_PROJECT_COMMIT}-${{ matrix.os }}-${{ matrix.arch }}"
+          XZ_OPT='-T0 -9' tar -cJf "${OUTPUT}.tar.xz" llvm_project_install
+
+          mkdir -p ${{ github.sha }}/
+          mv *.tar.xz ${{ github.sha }}/
+
+      - name: Upload an artifact
+        uses: actions/upload-artifact@v3
+        with:
+          if-no-files-found: error
+          name: build_artifact
+          path: ${{ github.sha }}
+
+  upload-tarballs:
+
+    runs-on: ubuntu-20.04
+
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build_artifact
+          path: ${{ github.sha }}
+
+      - name: Set up a release page
+        id: setup_release
+        run: |
+          LLVM_PROJECT_COMMIT="${{ inputs.llvm_commit }}"
+          echo "Created at $(date) build of [https://github.com/llvm/llvm-project/commit/${LLVM_PROJECT_COMMIT}](https://github.com/llvm/llvm-project/commit/${LLVM_PROJECT_COMMIT})" > body.md
+          echo "tag_name=llvm-project-${LLVM_PROJECT_COMMIT}" | tee -a $GITHUB_OUTPUT
+          echo "release_title=llvm-project-${LLVM_PROJECT_COMMIT}" | tee -a $GITHUB_OUTPUT
+
+      - name: Release current commit
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "${{ github.sha }}/*.tar.xz"
+          bodyFile: body.md
+          token: "${{ secrets.GITHUB_TOKEN }}"
+          tag: "${{ steps.setup_release.outputs.tag_name }}"
+          name: "${{ steps.setup_release.outputs.release_title }}"
+          removeArtifacts: false
+          prerelease: true
+          allowUpdates: true
+          replacesArtifacts: true

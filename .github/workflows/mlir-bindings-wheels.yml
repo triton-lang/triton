@@ -1,0 +1,137 @@
+name: mlir-bindings Wheels
+on:
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        type: boolean
+        description: 'Run the build with tmate debugging enabled (https://github.com/marketplace/actions/debugging-with-tmate)'
+        required: false
+        default: false
+
+jobs:
+
+  build:
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-20.04, macos-latest ]
+        arch: [ x86_64 ]
+        python_version: [ "3.11" ]
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          ref: 'mlir_bindings_2'
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python_version }}
+
+      # Enable tmate debugging of manually-triggered workflows if the input option was provided
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
+        with:
+          limit-access-to-actor: true
+          detached: true
+
+      - name: Install CUDA
+        if: contains(matrix.os, 'ubuntu')
+        run: |
+          sudo apt install -y build-essential kmod
+          
+          wget -q https://developer.download.nvidia.com/compute/cuda/11.7.1/local_installers/cuda_11.7.1_515.65.01_linux.run
+          sudo sh cuda_11.7.1_515.65.01_linux.run --silent
+          if [[ $? -ne 0 ]]; then
+              echo "CUDA Installation Error."
+              exit 1
+          fi
+          
+          CUDA_PATH=/usr/local/cuda
+          echo "CUDA_PATH=${CUDA_PATH}"
+          export CUDA_PATH=${CUDA_PATH}
+          export PATH="$CUDA_PATH/bin:$PATH"
+          export LD_LIBRARY_PATH="$CUDA_PATH/lib:$LD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="$CUDA_PATH/lib64:$LD_LIBRARY_PATH"
+          # Check nvcc is now available.
+          nvcc -V
+          # If executed on github actions, make the appropriate echo statements to update the environment
+          # Set paths for subsequent steps, using ${CUDA_PATH}
+          echo "Adding CUDA to CUDA_PATH, PATH and LD_LIBRARY_PATH"
+          echo "CUDA_PATH=${CUDA_PATH}" >> $GITHUB_ENV
+          echo "${CUDA_PATH}/bin" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=${CUDA_PATH}/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Build wheels
+        run: |
+          pushd python
+          if [ x"${{ matrix.os }}" == x"ubuntu-20.04" ]; then
+            python3 -m pip install -r mlir_bindings/requirements.txt
+            python3 -m pip wheel . -w wheelhouse -v
+          else
+            python3 -m pip install cibuildwheel
+            cibuildwheel --platform macos
+          fi
+          popd
+          
+          mkdir -p ${{ github.sha }}
+          mv python/wheelhouse/triton-*.whl ${{ github.sha }}/
+
+      - name: Upload an artifact
+        uses: actions/upload-artifact@v3
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        with:
+          if-no-files-found: error
+          name: build_artifact
+          path: ${{ github.sha }}
+
+  upload-wheels:
+
+    runs-on: ubuntu-20.04
+    permissions:
+      contents: write
+
+    needs: [ build ]
+
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build_artifact
+          path: ${{ github.sha }}
+
+      - name: Set up a release page
+        id: setup_release
+        run: |
+          TRITON_VERSION="$(python python/setup.py --version)"
+          tag_name="$TRITON_VERSION"
+          release_title="Triton $TRITON_VERSION"
+          echo "Triton $TRITON_VERSION with `triton-to-linalg` pass and mlir python bindings created at $(date)" > body.md
+          echo "tag_name=${tag_name}" | tee -a $GITHUB_OUTPUT
+          echo "release_title=${release_title}" | tee -a $GITHUB_OUTPUT
+
+      - name: Upload tarballs
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "${{ github.sha }}/*.whl"
+          bodyFile: body.md
+          token: "${{ secrets.GITHUB_TOKEN }}"
+          tag: "${{ steps.setup_release.outputs.tag_name }}"
+          name: "${{ steps.setup_release.outputs.release_title }}"
+          removeArtifacts: false
+          allowUpdates: true
+          replacesArtifacts: true
