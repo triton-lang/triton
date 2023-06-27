@@ -79,10 +79,32 @@ SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
   unsigned rank = shape.size();
   assert(rank == order.size());
   auto reordered = reorder(shape, order);
-  auto reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
+  SmallVector<Value> reorderedMultiDim(rank);
+  if (auto constantOp = linear.getDefiningOp<arith::ConstantOp>()) {
+    unsigned intVal =
+        constantOp.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+    reorderedMultiDim = delinearize(rewriter, loc, intVal, reordered);
+  } else {
+    reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
+  }
   SmallVector<Value> multiDim(rank);
   for (unsigned i = 0; i < rank; ++i) {
     multiDim[order[i]] = reorderedMultiDim[i];
+  }
+  return multiDim;
+}
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                                Location loc, unsigned linear,
+                                ArrayRef<unsigned> shape) {
+  unsigned rank = shape.size();
+  assert(rank > 0);
+  SmallVector<Value> multiDim(rank);
+  unsigned remained = linear;
+  for (auto &&en : llvm::enumerate(shape)) {
+    unsigned dimSize = en.value();
+    multiDim[en.index()] = i32_val(remained % dimSize);
+    remained = remained / dimSize;
   }
   return multiDim;
 }
@@ -93,16 +115,11 @@ SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
   unsigned rank = shape.size();
   assert(rank > 0);
   SmallVector<Value> multiDim(rank);
-  if (rank == 1) {
-    multiDim[0] = linear;
-  } else {
-    Value remained = linear;
-    for (auto &&en : llvm::enumerate(shape.drop_back())) {
-      Value dimSize = i32_val(en.value());
-      multiDim[en.index()] = urem(remained, dimSize);
-      remained = udiv(remained, dimSize);
-    }
-    multiDim[rank - 1] = remained;
+  Value remained = linear;
+  for (auto &&en : llvm::enumerate(shape)) {
+    Value dimSize = i32_val(en.value());
+    multiDim[en.index()] = urem(remained, dimSize);
+    remained = udiv(remained, dimSize);
   }
   return multiDim;
 }
