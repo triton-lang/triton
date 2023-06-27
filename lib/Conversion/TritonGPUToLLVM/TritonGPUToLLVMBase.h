@@ -294,6 +294,7 @@ public:
     // order
     auto inOrder = triton::gpu::getOrder(srcEncoding);
     auto outOrder = triton::gpu::getOrder(resSharedLayout);
+    auto rank = outOrder.size();
     // tensor indices held by the current thread, as LLVM values
     auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcTy);
     // return values
@@ -305,9 +306,10 @@ public:
       // extract multi dimensional index for current element
       auto idx = srcIndices[elemIdx];
       Value idxCol = idx[outOrder[0]]; // contiguous dimension
-      Value idxRow = idx[outOrder[1]]; // discontiguous dimension
+      Value idxRow =
+          rank == 2 ? idx[outOrder[1]] : i32_val(0); // discontiguous dimension
       Value strideCol = srcStrides[outOrder[0]];
-      Value strideRow = srcStrides[outOrder[1]];
+      Value strideRow = rank == 2 ? srcStrides[outOrder[1]] : i32_val(0);
       // extract dynamic/static offset for immediate offsetting
       unsigned immedateOffCol = 0;
       if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
@@ -351,8 +353,9 @@ public:
       Value currPtr = gep(dstPtrTy, dstPtrBase, offset);
       // compute immediate offset
       Value immedateOff =
-          add(mul(i32_val(immedateOffRow), srcStrides[outOrder[1]]),
-              i32_val(immedateOffCol));
+          rank == 2 ? add(mul(i32_val(immedateOffRow), srcStrides[outOrder[1]]),
+                          i32_val(immedateOffCol))
+                    : i32_val(immedateOffCol);
       ret[elemIdx] = gep(dstPtrTy, currPtr, immedateOff);
     }
     return ret;

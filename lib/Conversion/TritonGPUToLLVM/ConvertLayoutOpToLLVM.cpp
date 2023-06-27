@@ -233,14 +233,16 @@ private:
     for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
       auto smemStrides = getStridesFromShapeAndOrder(
           paddedRepShape, getOrder(sharedLayout), loc, rewriter);
-      SmallVector<Value> smemOffsetVals = {i32_val(0), i32_val(0)};
+      SmallVector<Value> smemOffsetVals;
+      for (unsigned i = 0; i < rank; ++i)
+        smemOffsetVals.push_back(i32_val(0));
 
       SharedMemoryObject smemObj(smemBase, smemStrides, smemOffsetVals);
       auto sharedVec = sharedLayout.getVec();
       unsigned minVec = std::min(vec, sharedVec);
       DenseMap<unsigned, Value> sharedPtrs =
-          getSwizzledSharedPtrs(loc, vec, type, sharedLayout, elemTy, smemObj,
-                                rewriter, smemOffsetVals, smemStrides);
+          getSwizzledSharedPtrs(loc, vec, type, sharedLayout, llvmElemTy,
+                                smemObj, rewriter, smemOffsetVals, smemStrides);
       auto wordTy = vec_ty(llvmElemTy, minVec);
 
       auto multiDimCTAInRepId =
@@ -600,10 +602,16 @@ private:
               unsigned inVec = 0;
               unsigned outVec = 0;
               auto paddedRepShape =
-                  getScratchConfigForCvtLayout(op, inVec, outVec);
-              processReplicaOriginal(loc, rewriter, /*stNotRd*/ true, srcTy,
-                                     inNumCTAsEachRep, multiDimRepId, inVec,
-                                     paddedRepShape, outOrd, vals, smemBase);
+                  getScratchConfigForCvtLayoutSwizzled(op, inVec, outVec);
+              auto maxVec = std::max(inVec, outVec);
+              auto sharedLayout = triton::gpu::SharedEncodingAttr::get(
+                  getContext(), maxVec, 1, paddedRepShape[0],
+                  getOrder(dstLayout));
+
+              processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
+                             inNumCTAsEachRep, multiDimRepId, inVec,
+                             paddedRepShape, outOrd, vals, smemBase,
+                             sharedLayout);
             }
           }
         }
@@ -660,10 +668,15 @@ private:
               unsigned inVec = 0;
               unsigned outVec = 0;
               auto paddedRepShape =
-                  getScratchConfigForCvtLayout(op, inVec, outVec);
-              processReplicaOriginal(loc, rewriter, /*stNotRd*/ false, dstTy,
-                                     outNumCTAsEachRep, multiDimRepId, outVec,
-                                     paddedRepShape, outOrd, outVals, smemBase);
+                  getScratchConfigForCvtLayoutSwizzled(op, inVec, outVec);
+              auto maxVec = std::max(inVec, outVec);
+              auto sharedLayout = triton::gpu::SharedEncodingAttr::get(
+                  getContext(), maxVec, 1, paddedRepShape[0],
+                  getOrder(dstLayout));
+              processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
+                             outNumCTAsEachRep, multiDimRepId, outVec,
+                             paddedRepShape, outOrd, outVals, smemBase,
+                             sharedLayout);
             }
           }
         }
