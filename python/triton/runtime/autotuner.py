@@ -25,7 +25,7 @@ class OutOfResources(Exception):
 
 
 class Autotuner(KernelInterface):
-    def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
+    def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None, warmup=25, rep=100):
         '''
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -58,6 +58,8 @@ class Autotuner(KernelInterface):
         self.perf_model, self.configs_top_k = perf_model, top_k
         self.early_config_prune = early_config_prune
         self.fn = fn
+        self.warmup = warmup
+        self.rep = rep
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -78,7 +80,7 @@ class Autotuner(KernelInterface):
             self.hook(args)
             self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         try:
-            return do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+            return do_bench(kernel_call, warmup=self.warmup, rep=self.rep, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
             return [float('inf'), float('inf'), float('inf')]
 
