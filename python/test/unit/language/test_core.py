@@ -728,7 +728,7 @@ def test_abs_fp8(in_dtype, device):
     f32_tensor = convert_float_to_float32(f8_tensor, in_dtype)
     expect = f32_tensor.abs()
     actual_f8 = convert_float_to_float32(out_f8, in_dtype)
-    torch.testing.assert_allclose(expect, actual_f8)
+    torch.testing.assert_allclose(actual_f8, expect)
 
 
 # ----------------
