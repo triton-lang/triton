@@ -220,6 +220,7 @@ jobs:
             mv cache reference
           else
             echo "No artifact found with the name: $ARTIFACT_NAME"
+            exit 1
           fi
       - name: Download current job artifacts
         uses: actions/download-artifact@v2
