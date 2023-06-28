@@ -710,7 +710,7 @@ def test_abs(dtype_x, device):
 def test_abs_fp8(in_dtype, device):
 
     @triton.jit
-    def abs_kernel(Z, X, SIZE: tl.constexpr):
+    def abs_kernel(X, Z, SIZE: tl.constexpr):
         off = tl.arange(0, SIZE)
         x = tl.load(X + off)
         z = tl.abs(x)
@@ -728,7 +728,7 @@ def test_abs_fp8(in_dtype, device):
     f32_tensor = convert_float_to_float32(f8_tensor, in_dtype)
     expect = f32_tensor.abs()
     actual_f8 = convert_float_to_float32(out_f8, in_dtype)
-    torch.testing.assert_allclose(expect, actual_f8)
+    torch.testing.assert_allclose(actual_f8, expect)
 
 
 # ----------------
@@ -2254,7 +2254,7 @@ def test_vectorization_hints(has_hints, device):
 # ---------------
 
 
-@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs"])
+@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs", ".wt"])
 def test_store_cache_modifier(cache):
     src = torch.empty(128, device='cuda')
     dst = torch.empty(128, device='cuda')
@@ -2271,18 +2271,27 @@ def test_store_cache_modifier(cache):
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' not in ptx
+        assert 'st.global.wt' not in ptx
     if cache == '.wb':
         assert 'st.global.wb' in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' not in ptx
+        assert 'st.global.wt' not in ptx
     if cache == '.cg':
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' in ptx
         assert 'st.global.cs' not in ptx
+        assert 'st.global.wt' not in ptx
     if cache == '.cs':
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' in ptx
+        assert 'st.global.wt' not in ptx
+    if cache == '.wt':
+        assert 'st.global.wb' not in ptx
+        assert 'st.global.cg' not in ptx
+        assert 'st.global.cs' not in ptx
+        assert 'st.global.wt' in ptx
 
 # ---------------
 # test if
