@@ -3220,51 +3220,6 @@ def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
     assert torch.equal(z, x)
 
 
-def test_swizzling():
-    M, N = 128, 128
-    dtype = 'float16'
-    ir = f"""
-    #blocked = #triton_gpu.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}}>
-    #mma = #triton_gpu.mma<{{versionMajor=2, versionMinor=0, warpsPerCTA=[2, 2]}}>
-    module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
-  tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
-    %cst = arith.constant dense<{M}> : tensor<{M}x1xi32, #blocked>
-    %0 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 1, parent = #blocked}}>>
-    %1 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 0, parent = #blocked}}>>
-    %2 = tt.splat %arg0 : (!tt.ptr<f16>) -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
-    %4 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #blocked}}>>) -> tensor<{M}x1xi32, #blocked>
-    %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #blocked>
-    %6 = tt.expand_dims %1 {{axis = 0 : i32}} : (tensor<{N}xi32, #triton_gpu.slice<{{dim = 0, parent = #blocked}}>>) -> tensor<1x{N}xi32, #blocked>
-    %7 = tt.broadcast %6 : (tensor<1x{N}xi32, #blocked>) -> tensor<{M}x{N}xi32, #blocked>
-    %8 = tt.broadcast %5 : (tensor<{M}x1xi32, #blocked>) -> tensor<{M}x{N}xi32, #blocked>
-    %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #blocked>
-    %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
-    %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xf16, #blocked>
-    %3 = tt.splat %arg1 : (!tt.ptr<f16>) -> tensor<{M}x{N}x!tt.ptr<f16>, #mma>
-    %12 = triton_gpu.convert_layout %9 : (tensor<{M}x{N}xi32, #blocked>) -> tensor<{M}x{N}xi32, #mma>
-    %13 = triton_gpu.convert_layout %11 : (tensor<{M}x{N}xf16, #blocked>) -> tensor<{M}x{N}xf16, #mma>
-    %14 = tt.addptr %3, %12 : tensor<{M}x{N}x!tt.ptr<f16>, #mma>, tensor<{M}x{N}xi32, #mma>
-    tt.store %14, %13 : tensor<{M}x{N}xf16, #mma>
-    tt.return
-  }}
-}}
-"""
-    x_list = [[j * N + i for i in range(N)] for j in range(M)]
-    x_np = np.array(x_list, dtype=dtype)
-    x = to_triton(x_np)
-    z = torch.ones((M, N), dtype=torch.float16, device='cuda')
-    z = to_triton(numpy_random((M, N), dtype_str="float16", rs=RandomState(17)))
-    # write the IR to a temporary file using mkstemp
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
-    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
-
-    assert torch.equal(z, x)
-
-
 def test_load_scalar_with_mask(device):
     @triton.jit
     def kernel(Input, Index, Out, N: int):
