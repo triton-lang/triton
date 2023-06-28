@@ -1,5 +1,6 @@
 #include "ConvertLayoutOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Analysis/Utility.h"
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
@@ -228,12 +229,8 @@ private:
       elemTy = IntegerType::get(elemTy.getContext(), 64);
 
     auto llvmElemTy = getTypeConverter()->convertType(elemTy);
-    SmallVector<int64_t> repShapeLong;
-    for (unsigned i = 0; i < repShape.size(); ++i) {
-      repShapeLong.push_back(repShape[i]);
-    }
     auto smemStrides = getStridesFromShapeAndOrder(
-        repShapeLong, getOrder(sharedLayout), loc, rewriter);
+        convertType<int64_t>(repShape), getOrder(sharedLayout), loc, rewriter);
     SmallVector<Value> smemOffsetVals(rank, i32_val(0));
 
     SharedMemoryObject smemObj(smemBase, smemStrides, smemOffsetVals);
@@ -485,15 +482,12 @@ private:
     if (srcLayout.isa<BlockedEncodingAttr>() &&
         dstLayout.isa<MmaEncodingAttr>() && !isDstMmaV1) {
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
-      SmallVector<int64_t> repShapeLong;
-      for (unsigned i = 0; i < repShape.size(); ++i) {
-        repShapeLong.push_back(repShape[i]);
-      }
       auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
           getContext(), 0, dstLayout, dstTy.getElementType());
       sharedLayout = triton::gpu::SharedEncodingAttr::get(
-          getContext(), dstDotOp, repShapeLong, getOrder(dstLayout),
-          srcTy.getElementType());
+          getContext(), dstDotOp,
+          convertType<int64_t>(ArrayRef<unsigned>(repShape)),
+          getOrder(dstLayout), srcTy.getElementType());
     } else if (isSrcMmaV1 || isDstMmaV1) {
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, true);
       auto maxVec = std::max(inVec, outVec);
