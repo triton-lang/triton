@@ -19,15 +19,18 @@ jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix-required: ${{ steps.set-matrix.outputs.matrix-required }}
+      matrix-optional: ${{ steps.set-matrix.outputs.matrix-optional }}
     steps:
       - name: Prepare runner matrix
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "H100"], ["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
+            echo '::set-output name=matrix-required::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
+            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
           else
-            echo '::set-output name=matrix::["ubuntu-latest"]'
+            echo '::set-output name=matrix-required::["ubuntu-latest"]'
+            echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
 
   Integration-Tests-Nvidia:
@@ -37,9 +40,7 @@ jobs:
 
     strategy:
       matrix:
-        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
-
-    if: contains(matrix.runner, 'A100') || contains(matrix.runner, 'H100')
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-required)}}
 
     steps:
       - name: Checkout
@@ -183,7 +184,7 @@ jobs:
 
     strategy:
       matrix:
-        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-optional)}}
 
     if: contains(matrix.runner, 'gfx908') || contains(matrix.runner, 'arc770')
 
