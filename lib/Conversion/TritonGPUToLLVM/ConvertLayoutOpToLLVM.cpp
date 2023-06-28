@@ -203,9 +203,8 @@ private:
                       bool stNotRd, RankedTensorType type,
                       ArrayRef<unsigned> numCTAsEachRep,
                       ArrayRef<unsigned> multiDimRepId, unsigned vec,
-                      ArrayRef<int64_t> paddedRepShape,
-                      ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
-                      Value smemBase,
+                      ArrayRef<unsigned> repShape, ArrayRef<unsigned> outOrd,
+                      SmallVector<Value> &vals, Value smemBase,
                       triton::gpu::SharedEncodingAttr sharedLayout) const {
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
     auto layout = type.getEncoding();
@@ -229,22 +228,21 @@ private:
       elemTy = IntegerType::get(elemTy.getContext(), 64);
 
     auto llvmElemTy = getTypeConverter()->convertType(elemTy);
+    SmallVector<int64_t> repShapeLong;
+    for (unsigned i = 0; i < repShape.size(); ++i) {
+      repShapeLong.push_back(repShape[i]);
+    }
+    auto smemStrides = getStridesFromShapeAndOrder(
+        repShapeLong, getOrder(sharedLayout), loc, rewriter);
+    SmallVector<Value> smemOffsetVals(rank, i32_val(0));
 
+    SharedMemoryObject smemObj(smemBase, smemStrides, smemOffsetVals);
+    auto sharedVec = sharedLayout.getVec();
+    unsigned minVec = std::min(vec, sharedVec);
+    DenseMap<unsigned, Value> sharedPtrs =
+        getSwizzledSharedPtrs(loc, vec, type, sharedLayout, llvmElemTy, smemObj,
+                              rewriter, smemOffsetVals, smemStrides);
     for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
-      auto smemStrides = getStridesFromShapeAndOrder(
-          paddedRepShape, getOrder(sharedLayout), loc, rewriter);
-      SmallVector<Value> smemOffsetVals;
-      for (unsigned i = 0; i < rank; ++i)
-        smemOffsetVals.push_back(i32_val(0));
-
-      SharedMemoryObject smemObj(smemBase, smemStrides, smemOffsetVals);
-      auto sharedVec = sharedLayout.getVec();
-      unsigned minVec = std::min(vec, sharedVec);
-      DenseMap<unsigned, Value> sharedPtrs =
-          getSwizzledSharedPtrs(loc, vec, type, sharedLayout, llvmElemTy,
-                                smemObj, rewriter, smemOffsetVals, smemStrides);
-      auto wordTy = vec_ty(llvmElemTy, minVec);
-
       auto multiDimCTAInRepId =
           getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
       SmallVector<unsigned> multiDimCTAId(rank);
@@ -258,15 +256,18 @@ private:
       auto linearCTAIdInRep =
           getLinearIndex<unsigned>(multiDimCTAInRepId, numCTAs, order);
 
-      auto elemPtrTy = ptr_ty(llvmElemTy, 3);
       Value word;
+      auto wordTy = vec_ty(llvmElemTy, minVec);
       if (stNotRd) {
         for (unsigned i = 0; i < accumSizePerThread; ++i) {
           if (i % minVec == 0)
             word = undef(wordTy);
-          word = insert_element(wordTy, word,
-                                vals[linearCTAId * accumSizePerThread + i],
-                                i32_val(i % minVec));
+          auto currVal = vals[linearCTAId * accumSizePerThread + i];
+          if (isInt1)
+            currVal = zext(llvmElemTy, currVal);
+          else if (isPtr)
+            currVal = ptrtoint(llvmElemTy, currVal);
+          word = insert_element(wordTy, word, currVal, i32_val(i % minVec));
 
           if (i % minVec == minVec - 1) {
 
@@ -289,89 +290,13 @@ private:
           Value valVec = load(smemAddr);
           for (unsigned v = 0; v < minVec; ++v) {
             Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
-            vals[linearCTAId * accumSizePerThread + i * minVec + v] = currVal;
-          }
-        }
-      }
-    }
-  }
-
-  void processReplicaOriginal(Location loc, ConversionPatternRewriter &rewriter,
-                              bool stNotRd, RankedTensorType type,
-                              ArrayRef<unsigned> numCTAsEachRep,
-                              ArrayRef<unsigned> multiDimRepId, unsigned vec,
-                              ArrayRef<unsigned> paddedRepShape,
-                              ArrayRef<unsigned> outOrd,
-                              SmallVector<Value> &vals, Value smemBase) const {
-    auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
-    auto layout = type.getEncoding();
-    auto rank = type.getRank();
-    auto sizePerThread = getSizePerThread(layout);
-    auto accumSizePerThread = product<unsigned>(sizePerThread);
-    SmallVector<unsigned> numCTAs(rank);
-    auto shapePerCTA = getShapePerCTA(layout, type.getShape());
-    auto order = getOrder(layout);
-    for (unsigned d = 0; d < rank; ++d) {
-      numCTAs[d] = ceil<unsigned>(type.getShape()[d], shapePerCTA[d]);
-    }
-    auto elemTy = type.getElementType();
-    bool isInt1 = elemTy.isInteger(1);
-    bool isPtr = elemTy.isa<triton::PointerType>();
-    auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
-    if (isInt1)
-      elemTy = IntegerType::get(elemTy.getContext(), 8);
-    else if (isPtr)
-      elemTy = IntegerType::get(elemTy.getContext(), 64);
-
-    auto llvmElemTy = getTypeConverter()->convertType(elemTy);
-
-    for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
-      auto multiDimCTAInRepId =
-          getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
-      SmallVector<unsigned> multiDimCTAId(rank);
-      for (const auto &it : llvm::enumerate(multiDimCTAInRepId)) {
-        auto d = it.index();
-        multiDimCTAId[d] = multiDimRepId[d] * numCTAsEachRep[d] + it.value();
-      }
-
-      auto linearCTAId =
-          getLinearIndex<unsigned>(multiDimCTAId, numCTAs, order);
-      // TODO: This is actually redundant index calculation, we should
-      //       consider of caching the index calculation result in case
-      //       of performance issue observed.
-      for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
-        SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
-                              multiDimCTAInRepId, shapePerCTA);
-        Value offset =
-            linearize(rewriter, loc, multiDimOffset, paddedRepShape, outOrd);
-
-        auto elemPtrTy = ptr_ty(llvmElemTy, 3);
-        Value ptr = gep(elemPtrTy, smemBase, offset);
-        auto vecTy = vec_ty(llvmElemTy, vec);
-        ptr = bitcast(ptr, ptr_ty(vecTy, 3));
-        if (stNotRd) {
-          Value valVec = undef(vecTy);
-          for (unsigned v = 0; v < vec; ++v) {
-            auto currVal = vals[elemId + linearCTAId * accumSizePerThread + v];
-            if (isInt1)
-              currVal = zext(llvmElemTy, currVal);
-            else if (isPtr)
-              currVal = ptrtoint(llvmElemTy, currVal);
-            valVec = insert_element(vecTy, valVec, currVal, i32_val(v));
-          }
-          store(valVec, ptr);
-        } else {
-          Value valVec = load(ptr);
-          for (unsigned v = 0; v < vec; ++v) {
-            Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
             if (isInt1)
               currVal = icmp_ne(currVal,
                                 rewriter.create<LLVM::ConstantOp>(
                                     loc, i8_ty, rewriter.getI8IntegerAttr(0)));
             else if (isPtr)
               currVal = inttoptr(llvmElemTyOrig, currVal);
-            vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
+            vals[linearCTAId * accumSizePerThread + i * minVec + v] = currVal;
           }
         }
       }
@@ -485,7 +410,6 @@ private:
   lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
-    bool enabled = true;
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
@@ -493,12 +417,13 @@ private:
     auto dstTy = dst.getType().cast<RankedTensorType>();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (!srcLayout.isa<BlockedEncodingAttr>() ||
-        !dstLayout.isa<MmaEncodingAttr>() //||
-        // triton::gpu::getWarpsPerCTA(dstLayout)[1] != 1 ||
-        // dstTy.getElementType().isF32()
-    ) {
-      enabled = false;
+    if (!isaDistributedLayout(srcLayout)) {
+      assert(0 && "ConvertLayout with input layout not implemented");
+      return failure();
+    }
+    if (!isaDistributedLayout(dstLayout)) {
+      assert(0 && "ConvertLayout with output layout not implemented");
+      return failure();
     }
 
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
@@ -553,137 +478,57 @@ private:
     auto outOrd = getOrder(dstLayout);
     SmallVector<Value> outVals(outElems);
 
+    unsigned inVec = 0;
+    unsigned outVec = 0;
+    SmallVector<unsigned> repShape;
+    triton::gpu::SharedEncodingAttr sharedLayout;
+    if (srcLayout.isa<BlockedEncodingAttr>() &&
+        dstLayout.isa<MmaEncodingAttr>() && !isDstMmaV1) {
+      repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
+      SmallVector<int64_t> repShapeLong;
+      for (unsigned i = 0; i < repShape.size(); ++i) {
+        repShapeLong.push_back(repShape[i]);
+      }
+      auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
+          getContext(), 0, dstLayout, dstTy.getElementType());
+      sharedLayout = triton::gpu::SharedEncodingAttr::get(
+          getContext(), dstDotOp, repShapeLong, getOrder(dstLayout),
+          srcTy.getElementType());
+    } else if (isSrcMmaV1 || isDstMmaV1) {
+      repShape = getScratchConfigForCvtLayout(op, inVec, outVec, true);
+    } else {
+      repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
+      auto maxVec = std::max(inVec, outVec);
+      sharedLayout = triton::gpu::SharedEncodingAttr::get(
+          getContext(), maxVec, 1, repShape[0], getOrder(dstLayout));
+    }
+
     for (unsigned repId = 0; repId < accumNumReplicates; ++repId) {
       auto multiDimRepId =
           getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
       if (repId != 0)
         barrier();
-      if (srcLayout.isa<BlockedEncodingAttr>() ||
-          srcLayout.isa<SliceEncodingAttr>() ||
-          srcLayout.isa<MmaEncodingAttr>()) {
-        if (isSrcMmaV1) {
-          unsigned inVec = 0;
-          unsigned outVec = 0;
-          auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
-          processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
-                                 multiDimRepId, inVec, paddedRepShape, outOrd,
-                                 vals, smemBase, shape);
-        } else {
-          if (enabled) {
-            unsigned inVec = 0;
-            unsigned outVec = 0;
-            auto paddedRepShape =
-                getScratchConfigForCvtLayoutSwizzled(op, inVec, outVec);
-            auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
-                getContext(), 0, dstLayout, dstTy.getElementType());
-            auto sharedLayout = triton::gpu::SharedEncodingAttr::get(
-                getContext(), dstDotOp, paddedRepShape, getOrder(dstLayout),
-                srcTy.getElementType());
-            processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
-                           inNumCTAsEachRep, multiDimRepId, inVec,
-                           paddedRepShape, outOrd, vals, smemBase,
-                           sharedLayout);
-          } else {
-            if (rank == 2) {
-              unsigned inVec = 0;
-              unsigned outVec = 0;
-              auto paddedRepShape =
-                  getScratchConfigForCvtLayoutSwizzled(op, inVec, outVec);
-              auto maxVec = std::max(inVec, outVec);
-              auto sharedLayout = triton::gpu::SharedEncodingAttr::get(
-                  getContext(), maxVec, 1, paddedRepShape[0],
-                  getOrder(dstLayout));
 
-              processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
-                             inNumCTAsEachRep, multiDimRepId, inVec,
-                             paddedRepShape, outOrd, vals, smemBase,
-                             sharedLayout);
-            } else {
-              unsigned inVec = 0;
-              unsigned outVec = 0;
-              auto paddedRepShape =
-                  getScratchConfigForCvtLayoutSwizzled(op, inVec, outVec);
-              auto maxVec = std::max(inVec, outVec);
-              auto sharedLayout = triton::gpu::SharedEncodingAttr::get(
-                  getContext(), maxVec, 1, paddedRepShape[0],
-                  getOrder(dstLayout));
-
-              processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
-                             inNumCTAsEachRep, multiDimRepId, inVec,
-                             paddedRepShape, outOrd, vals, smemBase,
-                             sharedLayout);
-            }
-          }
-        }
-
+      if (isSrcMmaV1) {
+        processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
+                               multiDimRepId, inVec, repShape, outOrd, vals,
+                               smemBase, shape);
       } else {
-        assert(0 && "ConvertLayout with input layout not implemented");
-        return failure();
+        processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
+                       multiDimRepId, inVec, repShape, outOrd, vals, smemBase,
+                       sharedLayout);
       }
 
       barrier();
-      if (dstLayout.isa<BlockedEncodingAttr>() ||
-          dstLayout.isa<SliceEncodingAttr>() ||
-          dstLayout.isa<MmaEncodingAttr>()) {
-        if (isDstMmaV1) {
-          unsigned inVec = 0;
-          unsigned outVec = 0;
-          auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
-          processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
-                                 multiDimRepId, outVec, paddedRepShape, outOrd,
-                                 outVals, smemBase, shape,
-                                 /*isDestMma=*/true);
-        }
-
-        else {
-          if (enabled) {
-            unsigned inVec = 0;
-            unsigned outVec = 0;
-            auto paddedRepShape =
-                getScratchConfigForCvtLayoutSwizzled(op, inVec, outVec);
-            auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
-                getContext(), 0, dstLayout, dstTy.getElementType());
-            auto sharedLayout = triton::gpu::SharedEncodingAttr::get(
-                getContext(), dstDotOp, paddedRepShape, getOrder(dstLayout),
-                srcTy.getElementType());
-            processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
-                           outNumCTAsEachRep, multiDimRepId, outVec,
-                           paddedRepShape, outOrd, outVals, smemBase,
-                           sharedLayout);
-          } else {
-            if (rank == 2) {
-              unsigned inVec = 0;
-              unsigned outVec = 0;
-              auto paddedRepShape =
-                  getScratchConfigForCvtLayoutSwizzled(op, inVec, outVec);
-              auto maxVec = std::max(inVec, outVec);
-              auto sharedLayout = triton::gpu::SharedEncodingAttr::get(
-                  getContext(), maxVec, 1, paddedRepShape[0],
-                  getOrder(dstLayout));
-              processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
-                             outNumCTAsEachRep, multiDimRepId, outVec,
-                             paddedRepShape, outOrd, outVals, smemBase,
-                             sharedLayout);
-            } else {
-              unsigned inVec = 0;
-              unsigned outVec = 0;
-              auto paddedRepShape =
-                  getScratchConfigForCvtLayoutSwizzled(op, inVec, outVec);
-              auto maxVec = std::max(inVec, outVec);
-              auto sharedLayout = triton::gpu::SharedEncodingAttr::get(
-                  getContext(), maxVec, 1, paddedRepShape[0],
-                  getOrder(dstLayout));
-              processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
-                             outNumCTAsEachRep, multiDimRepId, outVec,
-                             paddedRepShape, outOrd, outVals, smemBase,
-                             sharedLayout);
-            }
-          }
-        }
-
+      if (isDstMmaV1) {
+        processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
+                               multiDimRepId, outVec, repShape, outOrd, outVals,
+                               smemBase, shape,
+                               /*isDestMma=*/true);
       } else {
-        assert(0 && "ConvertLayout with output layout not implemented");
-        return failure();
+        processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
+                       outNumCTAsEachRep, multiDimRepId, outVec, repShape,
+                       outOrd, outVals, smemBase, sharedLayout);
       }
     }
 

@@ -49,48 +49,9 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   return {inOrd, outOrd};
 }
 
-SmallVector<int64_t>
-getScratchConfigForCvtLayoutSwizzled(triton::gpu::ConvertLayoutOp op,
-                                     unsigned &inVec, unsigned &outVec) {
-  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
-  Attribute srcLayout = srcTy.getEncoding();
-  Attribute dstLayout = dstTy.getEncoding();
-
-  // MmaToDotShortcut doesn't use shared mem
-  if (srcLayout.isa<MmaEncodingAttr>() &&
-      dstLayout.isa<DotOperandEncodingAttr>())
-    if (isMmaToDotShortcut(srcTy, dstTy))
-      return {};
-
-  assert(srcLayout && dstLayout &&
-         "Unexpected layout in getScratchConfigForCvtLayout()");
-  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  unsigned srcContigPerThread = getContigPerThread(srcLayout)[inOrd[0]];
-  unsigned dstContigPerThread = getContigPerThread(dstLayout)[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
-  outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
-
-  auto srcShape = srcTy.getShape();
-  auto dstShape = dstTy.getShape();
-  auto srcShapePerCTA = getShapePerCTA(srcLayout, srcShape);
-  auto dstShapePerCTA = getShapePerCTA(dstLayout, dstShape);
-
-  unsigned rank = dstTy.getRank();
-  SmallVector<int64_t> paddedRepShape(rank);
-  for (unsigned d = 0; d < rank; ++d) {
-    paddedRepShape[d] =
-        std::max(std::min<int64_t>(srcTy.getShape()[d], srcShapePerCTA[d]),
-                 std::min<int64_t>(dstTy.getShape()[d], dstShapePerCTA[d]));
-  }
-  return paddedRepShape;
-}
-
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
-                             unsigned &outVec) {
+                             unsigned &outVec, bool withPadding) {
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
@@ -118,21 +79,23 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto dstShapePerCTA = getShapePerCTA(dstLayout, dstShape);
 
   unsigned rank = dstTy.getRank();
-  SmallVector<unsigned> paddedRepShape(rank);
-  unsigned pad = std::max(inVec, outVec);
+  SmallVector<unsigned> repShape(rank);
   for (unsigned d = 0; d < rank; ++d) {
-    paddedRepShape[d] =
+    repShape[d] =
         std::max(std::min<unsigned>(srcTy.getShape()[d], srcShapePerCTA[d]),
                  std::min<unsigned>(dstTy.getShape()[d], dstShapePerCTA[d]));
   }
   if (rank == 1)
-    return paddedRepShape;
-  unsigned paddedDim = 1;
-  if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
-    paddedDim = dstBlockedLayout.getOrder()[0];
+    return repShape;
+  if (withPadding) {
+    unsigned paddedDim = 1;
+    if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
+      paddedDim = dstBlockedLayout.getOrder()[0];
+    }
+    unsigned pad = std::max(inVec, outVec);
+    repShape[paddedDim] += pad;
   }
-  paddedRepShape[paddedDim] += pad;
-  return paddedRepShape;
+  return repShape;
 }
 
 // TODO: extend beyond scalars
@@ -227,7 +190,8 @@ private:
       //       conditions, such as warp-shuffle
       unsigned inVec = 0;
       unsigned outVec = 0;
-      auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
+      auto smemShape =
+          getScratchConfigForCvtLayout(cvtLayout, inVec, outVec, true);
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                        std::multiplies{});
       auto bytes =

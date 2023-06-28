@@ -19,11 +19,7 @@ class AllocationAnalysis;
 
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
-                             unsigned &outVec);
-
-SmallVector<int64_t>
-getScratchConfigForCvtLayoutSwizzled(triton::gpu::ConvertLayoutOp op,
-                                     unsigned &inVec, unsigned &outVec);
+                             unsigned &outVec, bool withPadding);
 
 } // namespace triton
 
