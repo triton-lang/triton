@@ -1,8 +1,11 @@
 #include "ReduceOpToLLVM.h"
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getOrder;
@@ -367,8 +370,10 @@ private:
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
 
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcLayout);
+    auto threadsPerWarp =
+        triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
+    auto warpsPerCTA =
+        triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
     auto order = getOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
@@ -412,8 +417,11 @@ private:
     //
     // Each thread needs to process:
     //   elemsPerThread = sizeInterWarps * s1 * s2 .. Sn / numThreads
+
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     unsigned numThreads =
-        product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) * 32;
+        product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) *
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
     Value readOffset = threadId;
     for (unsigned round = 0; round < elemsPerThread; ++round) {

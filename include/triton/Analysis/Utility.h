@@ -12,19 +12,19 @@ namespace mlir {
 
 class ReduceOpHelper {
 public:
-  explicit ReduceOpHelper(triton::ReduceOp rop)
-      : op(rop.getOperation()), axis(rop.getAxis()) {
-    auto firstTy = rop.getOperands()[0].getType().cast<RankedTensorType>();
+  explicit ReduceOpHelper(triton::ReduceOp op)
+      : op(op.getOperation()), axis(op.getAxis()) {
+    auto firstTy = op.getOperands()[0].getType().cast<RankedTensorType>();
     srcShape = firstTy.getShape();
     srcEncoding = firstTy.getEncoding();
-    srcElementTypes = rop.getElementTypes();
+    srcElementTypes = op.getElementTypes();
 
-    for (const auto &t : rop.getInputTypes()) {
+    for (const auto &t : op.getInputTypes()) {
       if (t.getShape() != srcShape) {
-        rop.emitError() << "shape mismatch";
+        op.emitError() << "shape mismatch";
       }
       if (t.getEncoding() != srcEncoding) {
-        rop.emitError() << "encoding mismatch";
+        op.emitError() << "encoding mismatch";
       }
     }
   }
@@ -32,6 +32,8 @@ public:
   ArrayRef<int64_t> getSrcShape() { return srcShape; }
 
   Attribute getSrcLayout() { return srcEncoding; }
+
+  triton::ReduceOp getOperation() { return op; }
 
   bool isFastReduction();
 
@@ -54,7 +56,7 @@ public:
   bool isSupportedLayout();
 
 private:
-  Operation *op;
+  triton::ReduceOp op;
   ArrayRef<int64_t> srcShape;
   Attribute srcEncoding;
   SmallVector<Type> srcElementTypes;
