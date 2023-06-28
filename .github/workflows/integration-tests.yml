@@ -186,8 +186,6 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-optional)}}
 
-    if: contains(matrix.runner, 'gfx908') || contains(matrix.runner, 'arc770')
-
     steps:
       - name: Checkout
         uses: actions/checkout@v2
