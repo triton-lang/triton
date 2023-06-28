@@ -559,9 +559,6 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
 
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warp, warpsPerCTA, order);
-  unsigned lastAxis = order[order.size() - 1];
-  multiDimWarpId[lastAxis] =
-      urem(multiDimWarpId[lastAxis], i32_val(warpsPerCTA[lastAxis]));
   Value warpM = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
   Value warpN = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
 
