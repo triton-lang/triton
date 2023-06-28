@@ -85,6 +85,8 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
     auto parentThreadsPerWarp = getThreadsPerWarp(parent);
+    assert(parentThreadsPerWarp.size() == 2 &&
+           "getThreadsPerWarp only implemented for 2D slice layout");
     SmallVector<unsigned> threadsPerWarp = parentThreadsPerWarp;
     threadsPerWarp.erase(threadsPerWarp.begin() + sliceLayout.getDim());
     for (unsigned i = 0; i < threadsPerWarp.size(); i++)
@@ -129,6 +131,8 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
     auto parentWarpsPerCTA = getWarpsPerCTA(parent);
+    assert(parentWarpsPerCTA.size() == 2 &&
+           "getWarpsPerCTA only implemented for 2D slice layout");
     SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
     warpsPerCTA.erase(warpsPerCTA.begin() + sliceLayout.getDim());
     for (unsigned i = 0; i < warpsPerCTA.size(); i++)
