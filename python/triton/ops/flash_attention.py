@@ -31,8 +31,8 @@ def _fwd_kernel(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     off_q = off_hz * stride_qh + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qk
-    off_k = off_hz * stride_qh + offs_n[None, :] * stride_kn + offs_d[:, None] * stride_kk
-    off_v = off_hz * stride_qh + offs_n[:, None] * stride_qm + offs_d[None, :] * stride_qk
+    off_k = off_hz * stride_kh + offs_n[None, :] * stride_kn + offs_d[:, None] * stride_kk
+    off_v = off_hz * stride_vh + offs_n[:, None] * stride_vk + offs_d[None, :] * stride_vn
     # Initialize pointers to Q, K, V
     q_ptrs = Q + off_q
     k_ptrs = K + off_k
@@ -48,7 +48,7 @@ def _fwd_kernel(
         # -- compute qk ----
         k = tl.load(k_ptrs)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, k)
+        qk += tl.dot(q, k, allow_tf32=True)
         qk *= sm_scale
         qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
         # compute new m
@@ -65,7 +65,7 @@ def _fwd_kernel(
         # update acc
         p = p.to(Q.dtype.element_ty)
         v = tl.load(v_ptrs)
-        acc += tl.dot(p, v)
+        acc += tl.dot(p, v, allow_tf32=True)
         # update m_i and l_i
         l_prev = l_curr
         m_prev = m_curr
@@ -108,8 +108,9 @@ def _bwd_preprocess(
 
 
 @jit
-def _bwd_kernel(
-    Q, K, V, sm_scale, Out, DO,
+def _bwd_kernel_one_col_block(
+    Q, K, V, sm_scale,
+    Out, DO,
     DQ, DK, DV,
     L, M,
     D,
@@ -117,84 +118,143 @@ def _bwd_kernel(
     stride_kz, stride_kh, stride_kn, stride_kk,
     stride_vz, stride_vh, stride_vk, stride_vn,
     Z, H, N_CTX,
-    num_block,
+    off_hz, start_n, num_block,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    SEQUENCE_PARALLEL: tl.constexpr,
+):
+    lo = start_n * BLOCK_M
+    # initialize row/col offsets
+    offs_qm = lo + tl.arange(0, BLOCK_M)
+    offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_m = tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_DMODEL)
+    # initialize pointers to value-like data
+    q_ptrs = Q + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
+    k_ptrs = K + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
+    v_ptrs = V + (offs_n[:, None] * stride_vk + offs_k[None, :] * stride_vn)
+    do_ptrs = DO + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
+    dq_ptrs = DQ + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
+    # pointer to row-wise quantities in value-like data
+    D_ptrs = D + off_hz * N_CTX
+    m_ptrs = M + off_hz * N_CTX
+    # initialize dv amd dk
+    dv = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+    dk = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+    # k and v stay in SRAM throughout
+    k = tl.load(k_ptrs)
+    v = tl.load(v_ptrs)
+    # loop over rows
+    for start_m in range(lo, num_block * BLOCK_M, BLOCK_M):
+        offs_m_curr = start_m + offs_m
+        # load q, k, v, do on-chip
+        q = tl.load(q_ptrs)
+        # recompute p = softmax(qk, dim=-1).T
+        # NOTE: `do` is pre-divided by `l`; no normalization here
+        qk = tl.dot(q, tl.trans(k), allow_tf32=True)
+        qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
+        m = tl.load(m_ptrs + offs_m_curr)
+        p = tl.exp(qk * sm_scale - m[:, None])
+        # compute dv
+        do = tl.load(do_ptrs)
+        dv += tl.dot(tl.trans(p.to(Q.dtype.element_ty)), do, allow_tf32=True)
+        # compute dp = dot(v, do)
+        Di = tl.load(D_ptrs + offs_m_curr)
+        # dp = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32) - Di[:, None]
+        dp = tl.dot(do, tl.trans(v), allow_tf32=True)
+        # compute ds = p * (dp - delta[:, None])
+        ds = (p * (dp - Di[:, None]) * sm_scale).to(Q.dtype.element_ty)
+        # compute dk = dot(ds.T, q)
+        dk += tl.dot(tl.trans(ds), q, allow_tf32=True)
+        # compute dq
+        if not SEQUENCE_PARALLEL:
+            dq = tl.load(dq_ptrs)
+            dq += tl.dot(ds, k, allow_tf32=True)
+            tl.store(dq_ptrs, dq)
+        elif SEQUENCE_PARALLEL:
+            # dq = tl.dot(ds, k, allow_tf32=True)
+            dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds), allow_tf32=True))
+            tl.atomic_add(dq_ptrs, dq, sem='relaxed')
+
+        # increment pointers
+        dq_ptrs += BLOCK_M * stride_qm
+        q_ptrs += BLOCK_M * stride_qm
+        do_ptrs += BLOCK_M * stride_qm
+    # write-back
+    dv_ptrs = DV + (offs_n[:, None] * stride_vk + offs_k[None, :] * stride_vn)
+    dk_ptrs = DK + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
+    tl.store(dv_ptrs, dv)
+    tl.store(dk_ptrs, dk)
+
+
+@jit
+def _bwd_kernel(
+    # fmt: off
+    Q, K, V, sm_scale,
+    Out, DO,
+    DQ, DK, DV,
+    L, M,
+    D,
+    stride_qz, stride_qh, stride_qm, stride_qk,
+    stride_kz, stride_kh, stride_kn, stride_kk,
+    stride_vz, stride_vh, stride_vk, stride_vn,
+    Z, H, N_CTX,
+    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    SEQUENCE_PARALLEL: tl.constexpr,
+    # fmt: on
 ):
     off_hz = tl.program_id(0)
     off_z = off_hz // H
     off_h = off_hz % H
     # offset pointers for batch/head
     Q += off_z * stride_qz + off_h * stride_qh
-    K += off_z * stride_qz + off_h * stride_qh
-    V += off_z * stride_qz + off_h * stride_qh
+    K += off_z * stride_kz + off_h * stride_kh
+    V += off_z * stride_vz + off_h * stride_vh
     DO += off_z * stride_qz + off_h * stride_qh
     DQ += off_z * stride_qz + off_h * stride_qh
-    DK += off_z * stride_qz + off_h * stride_qh
-    DV += off_z * stride_qz + off_h * stride_qh
-    for start_n in range(0, num_block):
-        lo = start_n * BLOCK_M
-        # initialize row/col offsets
-        offs_qm = lo + tl.arange(0, BLOCK_M)
-        offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M)
-        offs_m = tl.arange(0, BLOCK_N)
-        offs_k = tl.arange(0, BLOCK_DMODEL)
-        # initialize pointers to value-like data
-        q_ptrs = Q + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
-        k_ptrs = K + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
-        v_ptrs = V + (offs_n[:, None] * stride_qm + offs_k[None, :] * stride_qk)
-        do_ptrs = DO + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
-        dq_ptrs = DQ + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
-        # pointer to row-wise quantities in value-like data
-        D_ptrs = D + off_hz * N_CTX
-        m_ptrs = M + off_hz * N_CTX
-        # initialize dv amd dk
-        dv = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
-        dk = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
-        # k and v stay in SRAM throughout
-        k = tl.load(k_ptrs)
-        v = tl.load(v_ptrs)
-        # loop over rows
-        for start_m in range(lo, num_block * BLOCK_M, BLOCK_M):
-            offs_m_curr = start_m + offs_m
-            # load q, k, v, do on-chip
-            q = tl.load(q_ptrs)
-            # recompute p = softmax(qk, dim=-1).T
-            # NOTE: `do` is pre-divided by `l`; no normalization here
-            qk = tl.dot(q, tl.trans(k))
-            qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
-            m = tl.load(m_ptrs + offs_m_curr)
-            p = tl.exp(qk * sm_scale - m[:, None])
-            # compute dv
-            do = tl.load(do_ptrs)
-            dv += tl.dot(tl.trans(p.to(Q.dtype.element_ty)), do)
-            # compute dp = dot(v, do)
-            Di = tl.load(D_ptrs + offs_m_curr)
-            dp = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32) - Di[:, None]
-            dp += tl.dot(do, tl.trans(v))
-            # compute ds = p * (dp - delta[:, None])
-            ds = p * dp * sm_scale
-            # compute dk = dot(ds.T, q)
-            dk += tl.dot(tl.trans(ds.to(Q.dtype.element_ty)), q)
-            # compute dq
-            dq = tl.load(dq_ptrs)
-            dq += tl.dot(ds.to(Q.dtype.element_ty), k)
-            tl.store(dq_ptrs, dq)
-            # increment pointers
-            dq_ptrs += BLOCK_M * stride_qm
-            q_ptrs += BLOCK_M * stride_qm
-            do_ptrs += BLOCK_M * stride_qm
-        # write-back
-        dv_ptrs = DV + (offs_n[:, None] * stride_qm + offs_k[None, :] * stride_qk)
-        dk_ptrs = DK + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
-        tl.store(dv_ptrs, dv)
-        tl.store(dk_ptrs, dk)
+    DK += off_z * stride_kz + off_h * stride_kh
+    DV += off_z * stride_vz + off_h * stride_vh
+
+    num_block_n = tl.cdiv(N_CTX, BLOCK_N)
+    if not SEQUENCE_PARALLEL:
+        for start_n in range(0, num_block_n):
+            _bwd_kernel_one_col_block(
+                Q, K, V, sm_scale, Out, DO,
+                DQ, DK, DV,
+                L, M,
+                D,
+                stride_qz, stride_qh, stride_qm, stride_qk,
+                stride_kz, stride_kh, stride_kn, stride_kk,
+                stride_vz, stride_vh, stride_vk, stride_vn,
+                Z, H, N_CTX,
+                off_hz, start_n, num_block_n,
+                BLOCK_M=BLOCK_M, BLOCK_DMODEL=BLOCK_DMODEL,
+                BLOCK_N=BLOCK_N,
+                SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,
+            )
+    else:
+        start_n = tl.program_id(1)
+        _bwd_kernel_one_col_block(
+            Q, K, V, sm_scale, Out, DO,
+            DQ, DK, DV,
+            L, M,
+            D,
+            stride_qz, stride_qh, stride_qm, stride_qk,
+            stride_kz, stride_kh, stride_kn, stride_kk,
+            stride_vz, stride_vh, stride_vk, stride_vn,
+            Z, H, N_CTX,
+            off_hz, start_n, num_block_n,
+            BLOCK_M=BLOCK_M, BLOCK_DMODEL=BLOCK_DMODEL,
+            BLOCK_N=BLOCK_N,
+            SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,
+        )
 
 
 class _attention(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, q, k, v, sm_scale):
+    def forward(ctx, q, k, v, sm_scale, sequence_parallel=False):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
@@ -228,12 +288,15 @@ class _attention(torch.autograd.Function):
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.BLOCK_DMODEL = Lk
+        ctx.sequence_parallel = sequence_parallel
         return o
 
     @staticmethod
     def backward(ctx, do):
         BLOCK = 128
         q, k, v, o, l, m = ctx.saved_tensors
+        sequence_parallel = ctx.sequence_parallel
+        seq_len_kv = k.shape[2]
         do = do.contiguous()
         dq = torch.zeros_like(q, dtype=torch.float32)
         dk = torch.empty_like(k)
@@ -245,7 +308,7 @@ class _attention(torch.autograd.Function):
             do_scaled, delta,
             BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
-        _bwd_kernel[(ctx.grid[1],)](
+        _bwd_kernel[(ctx.grid[1], cdiv(seq_len_kv, BLOCK) if sequence_parallel else 1)](
             q, k, v, ctx.sm_scale,
             o, do_scaled,
             dq, dk, dv,
@@ -255,12 +318,13 @@ class _attention(torch.autograd.Function):
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),
             q.shape[0], q.shape[1], q.shape[2],
-            ctx.grid[0],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
+            BLOCK_DMODEL=ctx.BLOCK_DMODEL,
+            SEQUENCE_PARALLEL=sequence_parallel,
+            num_warps=8,
             num_stages=1,
         )
-        return dq, dk, dv, None
+        return dq, dk, dv, None, None
 
 
 attention = _attention.apply
