@@ -114,7 +114,7 @@ def _bwd_kernel_one_col_block(
     DQ, DK, DV,
     L, M,
     D,
-    stride_qz, stride_qh, stride_qm, stride_qk,
+    stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
     stride_vz, stride_vh, stride_vk, stride_vn,
     Z, H, N_CTX,
@@ -123,6 +123,8 @@ def _bwd_kernel_one_col_block(
     BLOCK_N: tl.constexpr,
     SEQUENCE_PARALLEL: tl.constexpr,
 ):
+    if SEQUENCE_PARALLEL:
+        DQ += stride_dqa.to(tl.int64) * start_n
     lo = start_n * BLOCK_M
     # initialize row/col offsets
     offs_qm = lo + tl.arange(0, BLOCK_M)
@@ -174,7 +176,7 @@ def _bwd_kernel_one_col_block(
         elif SEQUENCE_PARALLEL:
             # dq = tl.dot(ds, k, allow_tf32=True)
             dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds), allow_tf32=True))
-            tl.atomic_add(dq_ptrs, dq, sem='relaxed')
+            tl.store(dq_ptrs, dq)
 
         # increment pointers
         dq_ptrs += BLOCK_M * stride_qm
@@ -195,7 +197,7 @@ def _bwd_kernel(
     DQ, DK, DV,
     L, M,
     D,
-    stride_qz, stride_qh, stride_qm, stride_qk,
+    stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
     stride_vz, stride_vh, stride_vk, stride_vn,
     Z, H, N_CTX,
@@ -224,7 +226,7 @@ def _bwd_kernel(
                 DQ, DK, DV,
                 L, M,
                 D,
-                stride_qz, stride_qh, stride_qm, stride_qk,
+                stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
                 stride_kz, stride_kh, stride_kn, stride_kk,
                 stride_vz, stride_vh, stride_vk, stride_vn,
                 Z, H, N_CTX,
@@ -240,7 +242,7 @@ def _bwd_kernel(
             DQ, DK, DV,
             L, M,
             D,
-            stride_qz, stride_qh, stride_qm, stride_qk,
+            stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
             stride_kz, stride_kh, stride_kn, stride_kk,
             stride_vz, stride_vh, stride_vk, stride_vn,
             Z, H, N_CTX,
@@ -298,7 +300,12 @@ class _attention(torch.autograd.Function):
         sequence_parallel = ctx.sequence_parallel
         seq_len_kv = k.shape[2]
         do = do.contiguous()
-        dq = torch.zeros_like(q, dtype=torch.float32)
+        if sequence_parallel:
+            replicas = cdiv(seq_len_kv, BLOCK)
+            new_dq_shape = (replicas,) + q.shape
+            dq = torch.zeros(new_dq_shape, device=q.device, dtype=q.dtype)
+        else:
+            dq = torch.zeros_like(q, dtype=torch.float32)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
         do_scaled = torch.empty_like(do)
@@ -314,7 +321,7 @@ class _attention(torch.autograd.Function):
             dq, dk, dv,
             l, m,
             delta,
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+            o.numel(), q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),
             q.shape[0], q.shape[1], q.shape[2],
@@ -324,6 +331,9 @@ class _attention(torch.autograd.Function):
             num_warps=8,
             num_stages=1,
         )
+
+        if len(dq.shape) == 5:
+            dq = dq.sum(dim=0)
         return dq, dk, dv, None, None
 
 
