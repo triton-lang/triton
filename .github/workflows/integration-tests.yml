@@ -268,7 +268,7 @@ jobs:
           path: kernels_reference_check.txt
 
       - name: Check output and comment on PR
-        if: ${{ env.COMPARISON_RESULT == 'true' }}
+        if: ${{ env.COMPARISON_RESULT == 'false' }}
         uses: actions/github-script@v5
         with:
           github-token: ${{ secrets.CI_ACCESS_TOKEN }}
