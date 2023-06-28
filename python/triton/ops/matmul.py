@@ -4,9 +4,6 @@ from .. import Config, autotune, cdiv, heuristics, jit
 from .. import language as tl
 from .matmul_perf_model import early_config_prune, estimate_matmul_time
 
-# import triton
-# import language as tl
-
 
 _ordered_datatypes = [torch.float16, torch.bfloat16, torch.float32]
 

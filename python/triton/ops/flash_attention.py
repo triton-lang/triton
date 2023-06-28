@@ -10,9 +10,6 @@ import torch
 from .. import cdiv, jit
 from .. import language as tl
 
-# import triton
-# import language as tl
-
 
 @jit
 def _fwd_kernel(
