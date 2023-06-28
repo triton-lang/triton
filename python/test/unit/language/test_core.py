@@ -710,7 +710,7 @@ def test_abs(dtype_x, device):
 def test_abs_fp8(in_dtype, device):
 
     @triton.jit
-    def abs_kernel(Z, X, SIZE: tl.constexpr):
+    def abs_kernel(X, Z, SIZE: tl.constexpr):
         off = tl.arange(0, SIZE)
         x = tl.load(X + off)
         z = tl.abs(x)
