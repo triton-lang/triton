@@ -496,6 +496,9 @@ private:
           srcTy.getElementType());
     } else if (isSrcMmaV1 || isDstMmaV1) {
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, true);
+      auto maxVec = std::max(inVec, outVec);
+      sharedLayout = triton::gpu::SharedEncodingAttr::get(
+          getContext(), maxVec, 1, repShape[0], getOrder(dstLayout));
     } else {
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
       auto maxVec = std::max(inVec, outVec);
