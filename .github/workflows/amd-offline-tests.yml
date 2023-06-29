@@ -39,6 +39,11 @@ jobs:
           pip3 install torch==2.0.1 --index-url https://download.pytorch.org/whl/rocm5.4.2
           # uninstall system triton to eliminate conflicts with testing version
           pip3 uninstall -y pytorch-triton-rocm
+          # remove unused packages to free some disk space
+          cp /opt/rocm/llvm/bin/ld.lld .
+          apt purge -y rocblas rocm-llvm
+          mkdir -p /opt/rocm/llvm/bin
+          mv ld.lld /opt/rocm/llvm/bin/ld.lld
 
       - name: Install Triton
         run: |
