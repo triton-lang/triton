@@ -1333,6 +1333,32 @@ def reduction(
 
 
 # ===----------------------------------------------------------------------===
+#                               Associative Scan
+# ===----------------------------------------------------------------------===
+
+
+def associative_scan(
+    inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
+) -> Tuple[tl.tensor, ...]:
+    if len(inputs) != 1:
+        raise ValueError("Current implementation only support single tensor input")
+    shape = inputs[0].type.shape
+
+    def wrap_tensor(x, scalar_ty):
+        res_ty = tl.block_type(scalar_ty, shape)
+        return tl.tensor(x, res_ty)
+
+    scan_op = builder.create_scan([t.handle for t in inputs], axis)
+    region_builder_fn(scan_op)
+    scan_op.verify()
+
+    return tuple(
+        wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar)
+        for i in range(len(inputs))
+    )
+
+
+# ===----------------------------------------------------------------------===
 #                               Math
 # ===----------------------------------------------------------------------===
 
