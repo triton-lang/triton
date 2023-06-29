@@ -16,7 +16,6 @@ using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Forward declarations
-
 namespace SharedToDotOperandMMAv1 {
 using CoordTy = SmallVector<Value>;
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
@@ -37,7 +36,7 @@ Value convertLayout(int opIdx, Value tensor, const SharedMemoryObject &smemObj,
 
 namespace SharedToDotOperandMMAv2 {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
-                    Location loc, Value tensor,
+                    Location loc, RankedTensorType tensorTy,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
@@ -48,6 +47,14 @@ Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
                     Value thread, Location loc,
                     TritonGPUToLLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter);
+}
+
+void castInt32To2xF16(SmallVector<Value> &vals, Value i32Val, unsigned index,
+                      Location loc, ConversionPatternRewriter &rewriter) {
+  auto floatVectorType = vec_ty(f16_ty, 2);
+  auto vec = rewriter.create<LLVM::BitcastOp>(loc, floatVectorType, i32Val);
+  vals[index] = extract_element(f16_ty, vec, i32_val(0));
+  vals[index + 1] = extract_element(f16_ty, vec, i32_val(1));
 }
 
 struct ConvertLayoutOpConversion
@@ -199,7 +206,6 @@ private:
     llvm_unreachable("unexpected layout in getMultiDimOffset");
   }
 
-  // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
                       ArrayRef<unsigned> numCTAsEachRep,
@@ -298,6 +304,86 @@ private:
         }
       }
     }
+  }
+
+  void
+  processReplicaLdMatrix(Location loc, ConversionPatternRewriter &rewriter,
+                         bool stNotRd, RankedTensorType type,
+                         ArrayRef<unsigned> numCTAsEachRep,
+                         ArrayRef<unsigned> multiDimRepId, unsigned vec,
+                         ArrayRef<unsigned> repShape, ArrayRef<unsigned> outOrd,
+                         SmallVector<Value> &vals, Value smemBase,
+                         triton::gpu::SharedEncodingAttr sharedLayout) const {
+    auto rank = type.getRank();
+    auto layout = type.getEncoding();
+    auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
+    auto sizePerThread = getSizePerThread(layout);
+    auto accumSizePerThread = product<unsigned>(sizePerThread);
+    SmallVector<unsigned> numCTAs(rank);
+    auto shapePerCTA = getShapePerCTA(layout, type.getShape());
+    shapePerCTA[1] = std::min<unsigned>(type.getShape()[1],
+                                        shapePerCTA[1] * 2); // TODO: hack
+    auto order = getOrder(layout);
+    for (unsigned d = 0; d < rank; ++d) {
+      numCTAs[d] = ceil<unsigned>(type.getShape()[d], shapePerCTA[d]);
+    }
+    auto elemTy = type.getElementType();
+    bool isInt1 = elemTy.isInteger(1);
+    bool isPtr = elemTy.isa<triton::PointerType>();
+    auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
+    if (isInt1)
+      elemTy = IntegerType::get(elemTy.getContext(), 8);
+    else if (isPtr)
+      elemTy = IntegerType::get(elemTy.getContext(), 64);
+
+    auto llvmElemTy = getTypeConverter()->convertType(elemTy);
+
+    auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
+        getContext(), 0, layout, type.getElementType());
+    auto sharedTy = RankedTensorType::get(convertType<int64_t>(repShape),
+                                          type.getElementType(), sharedLayout);
+    auto smemStrides = getStridesFromShapeAndOrder(
+        convertType<int64_t>(repShape), getOrder(sharedLayout), loc, rewriter);
+
+    SmallVector<Value> smemOffsetVals = {i32_val(0), i32_val(0)};
+
+    SharedMemoryObject smemObj(smemBase, smemStrides, smemOffsetVals);
+    Value res = SharedToDotOperandMMAv2::convertLayout(
+        dstDotOp.getOpIdx(), rewriter, loc, sharedTy, dstDotOp, smemObj,
+        getTypeConverter(), tid_val());
+
+    SmallVector<Value> valsInt32 =
+        getTypeConverter()->unpackLLElements(loc, res, rewriter, i32_ty);
+    for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ctaId++) {
+      auto multiDimCTAInRepId =
+          getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
+      SmallVector<unsigned> multiDimCTAId(rank);
+      for (const auto &it : llvm::enumerate(multiDimCTAInRepId)) {
+        auto d = it.index();
+        multiDimCTAId[d] = multiDimRepId[d] * numCTAsEachRep[d] + it.value();
+      }
+      auto linearCTAId =
+          getLinearIndex<unsigned>(multiDimCTAId, numCTAs, order);
+      auto linearCTAIdInRep =
+          getLinearIndex<unsigned>(multiDimCTAInRepId, numCTAs, order);
+      castInt32To2xF16(vals, valsInt32[ctaId * 4], linearCTAId * 8 + 0, loc,
+                       rewriter);
+      castInt32To2xF16(vals, valsInt32[ctaId * 4 + 2], linearCTAId * 8 + 2, loc,
+                       rewriter);
+      castInt32To2xF16(vals, valsInt32[ctaId * 4 + 1], linearCTAId * 8 + 4, loc,
+                       rewriter);
+      castInt32To2xF16(vals, valsInt32[ctaId * 4 + 3], linearCTAId * 8 + 6, loc,
+                       rewriter);
+    }
+    // Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
+    // if (isInt1)
+    //   currVal =
+    //       icmp_ne(currVal, rewriter.create<LLVM::ConstantOp>(
+    //                            loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+    // else if (isPtr)
+    //   currVal = inttoptr(llvmElemTyOrig, currVal);
+    // vals[linearCTAId * accumSizePerThread + i * minVec + v] = currVal;
+    // }
   }
 
   // The MMAV1's result is quite different from the existing "Replica"
@@ -407,6 +493,7 @@ private:
   lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
+    bool enabled = false;
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
@@ -453,10 +540,20 @@ private:
       isDstMmaV1 = sliceLayout.getParent().isa<MmaEncodingAttr>() &&
                    sliceLayout.getParent().cast<MmaEncodingAttr>().isVolta();
     }
-
+    if (srcLayout.isa<BlockedEncodingAttr>() &&
+        dstLayout.isa<MmaEncodingAttr>() && !isDstMmaV1 &&
+        triton::gpu::getWarpsPerCTA(dstLayout)[1] == 1 &&
+        srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
+      enabled = true;
+    }
+    std::string enabled_str = enabled ? "true" : "false";
+    std::cout << "Enabled = " << enabled_str << std::endl;
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA = std::min<unsigned>(shape[d], srcShapePerCTA[d]);
       unsigned outPerCTA = std::min<unsigned>(shape[d], dstShapePerCTA[d]);
+      if (enabled && d == 1) {
+        outPerCTA = 16; // TODO: fix hack
+      }
       unsigned maxPerCTA = std::max(inPerCTA, outPerCTA);
       numReplicates[d] = ceil<unsigned>(shape[d], maxPerCTA);
       inNumCTAsEachRep[d] = maxPerCTA / inPerCTA;
@@ -491,6 +588,8 @@ private:
       // We rely on shared layout constructor to calculate vec, perPhase, and
       // maxPhase
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
+      if (enabled)
+        repShape[1] = ceil<unsigned>(repShape[1], 16) * 16;
       auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
           getContext(), 0, dstLayout, dstTy.getElementType());
       sharedLayout = triton::gpu::SharedEncodingAttr::get(
@@ -529,9 +628,15 @@ private:
                                smemBase, shape,
                                /*isDestMma=*/true);
       } else {
-        processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
-                       outNumCTAsEachRep, multiDimRepId, outVec, repShape,
-                       outOrd, outVals, smemBase, sharedLayout);
+        if (enabled) {
+          processReplicaLdMatrix(loc, rewriter, /*stNotRd*/ false, dstTy,
+                                 outNumCTAsEachRep, multiDimRepId, outVec,
+                                 repShape, outOrd, outVals, smemBase,
+                                 sharedLayout);
+        } else
+          processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
+                         outNumCTAsEachRep, multiDimRepId, outVec, repShape,
+                         outOrd, outVals, smemBase, sharedLayout);
       }
     }
 
@@ -737,9 +842,9 @@ private:
     Value res;
 
     if (!isOuter && mmaLayout.isAmpere()) { // tensor core v2
-
+      auto srcTy = src.getType().cast<RankedTensorType>();
       res = SharedToDotOperandMMAv2::convertLayout(
-          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
+          dotOperandLayout.getOpIdx(), rewriter, loc, srcTy, dotOperandLayout,
           smemObj, getTypeConverter(), tid_val());
 
     } else if (!isOuter && mmaLayout.isVolta() &&

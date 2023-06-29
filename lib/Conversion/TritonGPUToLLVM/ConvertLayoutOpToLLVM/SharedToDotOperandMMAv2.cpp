@@ -475,13 +475,14 @@ Value composeValuesToDotOperandLayoutStruct(
   return result;
 }
 
-std::function<void(int, int)> getLoadMatrixFn(
-    Value tensor, const SharedMemoryObject &smemObj, MmaEncodingAttr mmaLayout,
-    int warpsPerTile, uint32_t kOrder, int kWidth, SmallVector<int> instrShape,
-    SmallVector<int> matShape, Value warpId, Value lane, ValueTable &vals,
-    bool isA, TritonGPUToLLVMTypeConverter *typeConverter,
-    ConversionPatternRewriter &rewriter, Location loc) {
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+std::function<void(int, int)>
+getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
+                MmaEncodingAttr mmaLayout, int warpsPerTile, uint32_t kOrder,
+                int kWidth, SmallVector<int> instrShape,
+                SmallVector<int> matShape, Value warpId, Value lane,
+                ValueTable &vals, bool isA,
+                TritonGPUToLLVMTypeConverter *typeConverter,
+                ConversionPatternRewriter &rewriter, Location loc) {
   Type eltTy = tensorTy.getElementType();
   // We assumes that the input operand of Dot should be from shared layout.
   // TODO(Superjomn) Consider other layouts if needed later.
@@ -533,12 +534,11 @@ std::function<void(int, int)> getLoadMatrixFn(
   return load;
 }
 
-Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
-              DotOperandEncodingAttr encoding,
+Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
+              RankedTensorType tensorTy, DotOperandEncodingAttr encoding,
               const SharedMemoryObject &smemObj,
               TritonGPUToLLVMTypeConverter *typeConverter, Value thread,
               bool isA) {
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
   int bitwidth = tensorTy.getElementTypeBitWidth();
   auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
 
@@ -574,15 +574,15 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   std::function<void(int, int)> loadFn;
   if (isA)
     loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/, 1 /*kOrder*/,
-        kWidth, {mmaInstrM, mmaInstrK} /*instrShape*/,
+        tensorTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/,
+        1 /*kOrder*/, kWidth, {mmaInstrM, mmaInstrK} /*instrShape*/,
         {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, lane /*laneId*/,
         vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
         rewriter /*rewriter*/, loc /*loc*/);
   else
     loadFn = getLoadMatrixFn(
-        tensor, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/, 0 /*kOrder*/,
-        kWidth, {mmaInstrK, mmaInstrN} /*instrShape*/,
+        tensorTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/,
+        0 /*kOrder*/, kWidth, {mmaInstrK, mmaInstrN} /*instrShape*/,
         {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, lane /*laneId*/,
         vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
         rewriter /*rewriter*/, loc /*loc*/);
@@ -601,15 +601,16 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
 
 namespace SharedToDotOperandMMAv2 {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
-                    Location loc, Value tensor, DotOperandEncodingAttr encoding,
+                    Location loc, RankedTensorType tensorTy,
+                    DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
   if (opIdx == 0)
-    return loadArg(rewriter, loc, tensor, encoding, smemObj, typeConverter,
+    return loadArg(rewriter, loc, tensorTy, encoding, smemObj, typeConverter,
                    thread, true);
   else {
     assert(opIdx == 1);
-    return loadArg(rewriter, loc, tensor, encoding, smemObj, typeConverter,
+    return loadArg(rewriter, loc, tensorTy, encoding, smemObj, typeConverter,
                    thread, false);
   }
 }
