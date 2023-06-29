@@ -1,4 +1,3 @@
-#include "Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -16,6 +15,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include <memory>
 
@@ -84,6 +84,7 @@ public:
            !dstParent.isa<triton::gpu::MfmaEncodingAttr>()))
         return mlir::failure();
 
+<<<<<<< HEAD
       if (dstParent.isa<triton::gpu::MmaEncodingAttr>()) {
         auto dstParentMma = dstParent.cast<triton::gpu::MmaEncodingAttr>();
         if (dstParentMma.isVolta() || dstParentMma.getWarpsPerCTA()[1] > 1)
@@ -97,6 +98,15 @@ public:
           return mlir::failure();
         return processEncoding(dstParentMfma, convert, dstType, rewriter);
       }
+=======
+      auto tmpType = RankedTensorType::get(
+          dstType.getShape(), dstType.getElementType(), dstParentMma);
+      auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          convert.getLoc(), tmpType, convert.getOperand());
+      rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(op, dstType,
+                                                                tmp);
+      return mlir::success();
+>>>>>>> oai/main
     }
     return mlir::failure();
   }
@@ -373,13 +383,13 @@ public:
              !(isa<triton::ReduceOp>(op) &&
                !op->getResult(0).getType().isa<RankedTensorType>());
     };
-    mlir::getForwardSlice(cvt.getResult(), &cvtSlices, filter);
+    mlir::getForwardSlice(cvt.getResult(), &cvtSlices, {filter});
     if (cvtSlices.empty())
       return failure();
 
     for (Operation *op : cvtSlices) {
       // don't rematerialize anything expensive
-      if (expensiveToRemat(op, dstEncoding))
+      if (isExpensiveToRemat(op, srcEncoding))
         return failure();
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
@@ -428,8 +438,8 @@ public:
     if (!op)
       return mlir::failure();
     // we don't want to rematerialize any conversion to/from shared
-    if (isSharedEncoding(cvt->getResults()[0]) ||
-        isSharedEncoding(cvt->getOperand(0)))
+    if (triton::gpu::isSharedEncoding(cvt->getResults()[0]) ||
+        triton::gpu::isSharedEncoding(cvt->getOperand(0)))
       return mlir::failure();
     // we don't handle conversions to DotOperandEncodingAttr
     // this is a heuristics to accommodate fused attention

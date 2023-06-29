@@ -125,7 +125,7 @@ public:
     }
   }
 
-  /// Returns the size of the given buffer is a virtual buffer.
+  /// Returns if the given buffer is a virtual buffer.
   bool isVirtualBuffer(BufferId bufferId) const {
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
   }

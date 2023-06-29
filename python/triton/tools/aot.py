@@ -1,8 +1,11 @@
 import argparse
 import sys
 
-import triton._C.libtriton.triton as libtriton
-import triton.compiler.compiler as tc
+from .._C.libtriton.triton import ir
+# import triton.compiler.compiler as tc
+from ..compiler.compiler import (get_amdgpu_arch_fulldetails, llir_to_amdgcn_and_hsaco,
+                                 llir_to_ptx, optimize_ttgir, optimize_ttir,
+                                 ttgir_to_llir, ttir_to_ttgir)
 
 if __name__ == '__main__':
 
@@ -32,12 +35,12 @@ if __name__ == '__main__':
         sys.exit(0)
 
     # parse source file to MLIR module
-    context = libtriton.ir.context()
-    module = libtriton.ir.parse_mlir_module(args.src, context)
+    context = ir.context()
+    module = ir.parse_mlir_module(args.src, context)
     module.context = context
 
     # optimizer triton-ir
-    module = tc.optimize_ttir(module, arch=args.sm)
+    module = optimize_ttir(module, arch=args.sm)
     if args.target == 'triton-ir':
         print(module.str())
         sys.exit(0)
@@ -49,7 +52,7 @@ if __name__ == '__main__':
     if args.target == 'amdgcn':
         # auto detect available architecture and features
         # if nothing detected, set with default values
-        arch_details = tc.get_amdgpu_arch_fulldetails()
+        arch_details = get_amdgpu_arch_fulldetails()
         if not arch_details:
             arch_name = ""
             arch_triple = "amdgcn-amd-amdhsa"
@@ -72,13 +75,21 @@ if __name__ == '__main__':
 
         # triton-ir -> triton-gpu-ir
         # use compute_capability == 80
+<<<<<<< HEAD
         module = tc.ttir_to_ttgir(module, num_warps=args.num_warps, warpsize=arch_warpsize)  # num_stages=3, compute_capability=80)
         module = tc.optimize_ttgir(module, num_stages=3, arch=args.gfx)
         # triton-gpu-ir -> llvm-ir
         # use compute_capability == 80
         module = tc.ttgir_to_llir(module, extern_libs=None, arch=args.gfx)
+=======
+        module = ttir_to_ttgir(module, num_warps=args.num_warps)  # num_stages=3, compute_capability=80)
+        module = optimize_ttgir(module, num_stages=3, arch=80)
+        # triton-gpu-ir -> llvm-ir
+        # use compute_capability == 80
+        module = ttgir_to_llir(module, extern_libs=None, arch=80)
+>>>>>>> oai/main
         # llvm-ir -> amdgcn asm, hsaco binary
-        module, hsaco_path = tc.llir_to_amdgcn_and_hsaco(module, arch_name, arch_triple, arch_features)
+        module, hsaco_path = llir_to_amdgcn_and_hsaco(module, arch_name, arch_triple, arch_features)
 
         print(hsaco_path)
         print(module)
@@ -93,14 +104,23 @@ if __name__ == '__main__':
         raise argparse.ArgumentError(None, "Must specify --sm or --gfx for ttgir compilation")
 
     # triton-ir -> triton-gpu-ir
+<<<<<<< HEAD
     module = tc.ttir_to_ttgir(module, num_warps=args.num_warps, warpsize=tc.CUDA_DEFAULT_WARP_SIZE)
     module = tc.optimize_ttgir(module, num_stages=3, arch=arch)
+=======
+    module = ttir_to_ttgir(module, num_warps=args.num_warps)
+    module = optimize_ttgir(module, num_stages=3, arch=args.sm)
+>>>>>>> oai/main
     if args.target == 'triton-gpu-ir':
         print(module.str())
         sys.exit(0)
 
     # triton-gpu-ir -> llvm-ir
+<<<<<<< HEAD
     module = tc.ttgir_to_llir(module, extern_libs=None, arch=arch)
+=======
+    module = ttgir_to_llir(module, extern_libs=None, arch=args.sm)
+>>>>>>> oai/main
     if args.target == 'llvm-ir':
         print(module)
         sys.exit(0)
@@ -111,12 +131,12 @@ if __name__ == '__main__':
             raise argparse.ArgumentError(None, "Must specify --sm for PTX compilation")
         if not args.ptx_version:
             raise argparse.ArgumentError(None, "Must specify --ptx-version for PTX compilation")
-        module = tc.llir_to_ptx(module, arch=args.sm, ptx_version=args.ptx_version)
+        module = llir_to_ptx(module, arch=args.sm, ptx_version=args.ptx_version)
 
     # llvm-ir -> amdgcn
     if args.target == 'amdgcn':
         if not args.gfx:
             raise argparse.ArgumentError(None, "Must specify --gfx for AMDGCN compilation")
-        module, hsaco_path = tc.llir_to_amdgcn_and_hsaco(module, args.gfx)
+        module, hsaco_path = llir_to_amdgcn_and_hsaco(module, args.gfx)
 
     print(module)

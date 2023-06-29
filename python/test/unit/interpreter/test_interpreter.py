@@ -4,7 +4,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.debugger.debugger import program_ids_from_grid
+from triton.interpreter.interpreter import program_ids_from_grid
 
 
 def test_addition():

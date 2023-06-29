@@ -34,7 +34,11 @@ def TritonGPU_Dialect : Dialect {
     static int getThreadsPerWarp(ModuleOp mod) {
       Attribute threadsPerWarp = mod->getDiscardableAttr("triton_gpu.threads-per-warp");
       if(!threadsPerWarp) {
+<<<<<<< HEAD
         return TRITONGPU_DEFAULT_WARPSIZE;
+=======
+        return 32;
+>>>>>>> oai/main
       }
       return threadsPerWarp.cast<IntegerAttr>().getInt();
     }

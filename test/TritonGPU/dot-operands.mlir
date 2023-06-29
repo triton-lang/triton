@@ -11,6 +11,8 @@
 #BLR = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BLC = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
 
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+
 // CHECK: tt.func @push_elementwise1
 // CHECK: %[[ALOAD:.*]] = tt.load %arg0
 // CHECK: %[[ACVT:.*]] = triton_gpu.convert_layout %[[ALOAD]]
@@ -121,4 +123,6 @@ tt.func @push_elementwise5(
   %dotb = triton_gpu.convert_layout %b : (tensor<16x16xf16, #BLC>) -> tensor<16x16xf16, #Bv1>
   %newc = tt.dot %dota, %dotb, %c {allowTF32 = true, transA = false, transB = false} : tensor<16x16xf16, #Av1> * tensor<16x16xf16, #Bv1> -> tensor<16x16xf32, #Cv1>
   tt.return %newc : tensor<16x16xf32, #Cv1>
+}
+
 }

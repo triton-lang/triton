@@ -47,7 +47,7 @@ SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
-  auto slices = mlir::getSlice(dotOp, filter);
+  auto slices = mlir::getSlice(dotOp, {filter});
   for (Operation *op : slices)
     if (isa<triton::DotOp>(op) && (op != dotOp))
       return {(unsigned)numWarps, 1};
@@ -234,8 +234,8 @@ public:
     if (versionMajor == 1) {
       SetVector<Operation *> aBwdSlices, bBwdSlices;
       auto isCvt = [](Operation *op) { return isa<ConvertLayoutOp>(op); };
-      getBackwardSlice(a, &aBwdSlices, isCvt);
-      getBackwardSlice(b, &bBwdSlices, isCvt);
+      getBackwardSlice(a, &aBwdSlices, {isCvt});
+      getBackwardSlice(b, &bBwdSlices, {isCvt});
       // get the source of the first conversion found in slices
       auto getCvtArgOrder = [](Operation *op) {
         return cast<ConvertLayoutOp>(op)

@@ -1,7 +1,10 @@
-import triton
+from __future__ import annotations
+
+# import triton
+from ..language import core as lcore
+from . import torch_wrapper
 from .core import ExecutionContext
 from .memory_map import MemoryMap
-from triton.debugger import torch_wrapper
 
 torch = torch_wrapper.torch
 
@@ -387,7 +390,7 @@ class TritonLangProxy:
             if not isinstance(d.value, int):
                 raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
         shape = [x.value for x in shape]
-        if isinstance(dtype, triton.language.core.dtype):
+        if isinstance(dtype, lcore.dtype):
             if dtype.is_fp32():
                 dtype = torch.float32
             elif dtype.is_fp16():
@@ -405,7 +408,9 @@ class TritonLangProxy:
         return torch.zeros(size=shape, dtype=dtype, device="cuda")
 
     @_tensor_operation
-    def dequantize(self, input, scale, shift, nbit, dst_ty=torch.float16):
+    def dequantize(self, input, scale, shift, nbit, dst_ty=None):
+        if dst_ty is None:
+            dst_ty = torch.float16
         raise NotImplementedError()
 
     @_tensor_operation
