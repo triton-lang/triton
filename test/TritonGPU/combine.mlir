@@ -1122,7 +1122,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
 // -----
 
-// Check if the SimplifyReduceCvt handles convert_layout lifted from the for loop.
+// Check if SimplifyReduceCvt handles convert_layout lifted from the for loop.
 // CHECK-LABEL: reduce_cvt2
 // Match the reduction
 // CHECK: tt.reduce
@@ -1204,7 +1204,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 }
 
 // -----
-// Check if cvt,reduce conversion is not handled by the general push forward conversion
+// Check if SimplifyReduceCvt handles the cvt,reduce->reduce,cvt conversion but not the general push forward conversion
 // CHECK-LABEL: reduce_cvt3
 // CHECK: tt.dot
 // CHECK-NEXT: tt.reduce
