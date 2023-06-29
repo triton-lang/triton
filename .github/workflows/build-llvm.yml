@@ -24,12 +24,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-20.04, macos-latest ]
+        os: [ ubuntu-20.04, macos-latest, windows-latest ]
         arch: [ AArch64, X86 ]
         py_version: [ "3.11" ]
         exclude:
           - os: macos-latest
             arch: X86
+          - os: windows-latest
+            arch: AArch64
 
     steps:
       - name: Set up Python
@@ -39,6 +41,8 @@ jobs:
 
       - name: Checkout this repo
         uses: actions/checkout@v3
+
+      - uses: ilammy/msvc-dev-cmd@v1.4.1
 
       # Enable tmate debugging of manually-triggered workflows if the input option was provided
       - name: Setup tmate session
@@ -56,6 +60,7 @@ jobs:
           path: sandbox
 
       - name: Compute llvm-project base path and output commit
+        shell: bash
         run: |
           echo "LLVM_PROJECT_MAIN_SRC_DIR=${GITHUB_WORKSPACE}/sandbox" | tee -a $GITHUB_ENV
           echo "LLVM_PROJECT_MAIN_BINARY_DIR=${GITHUB_WORKSPACE}/sandbox/build" | tee -a $GITHUB_ENV
@@ -64,6 +69,7 @@ jobs:
           echo "LLVM_PROJECT_COMMIT=${{ inputs.llvm_commit }}" | tee -a $GITHUB_ENV
 
       - name: Install Python depends
+        shell: bash
         run: |
           python -m pip install -r ${LLVM_PROJECT_MAIN_SRC_DIR}/mlir/python/requirements.txt
 
@@ -85,6 +91,7 @@ jobs:
             g++-aarch64-linux-gnu gcc-aarch64-linux-gnu
 
       - name: Choose compiler and set env vars
+        shell: bash
         run: |
           if [ x"${{ matrix.os }}" == x"macos-latest" ]; then
             echo "ARCH=AArch64" | tee -a $GITHUB_ENV
@@ -92,6 +99,11 @@ jobs:
             echo "C_COMPILER=clang" | tee -a $GITHUB_ENV
             echo "LLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-darwin21.6.0" | tee -a $GITHUB_ENV
             echo "LLVM_HOST_TRIPLE=arm64-apple-darwin21.6.0" | tee -a $GITHUB_ENV
+            echo "STATIC_FLAGS=" | tee -a $GITHUB_ENV
+          elif [ x"${{ matrix.os }}" == x"ubuntu-latest" ]; then
+            echo "ARCH=X86" | tee -a $GITHUB_ENV
+            echo "CXX_COMPILER=cl" | tee -a $GITHUB_ENV
+            echo "C_COMPILER=cl" | tee -a $GITHUB_ENV
             echo "STATIC_FLAGS=" | tee -a $GITHUB_ENV
           elif [ x"${{ matrix.os }}" == x"ubuntu-20.04" ] && [ x"${{ matrix.arch }}" == x"AArch64" ]; then
             echo "ARCH=AArch64" | tee -a $GITHUB_ENV
@@ -110,10 +122,14 @@ jobs:
           fi
 
       - name: Build host llvmtblgen/mlirtblgen
+        shell: bash
         run: |
           if [ x"${{ matrix.os }}" == x"macos-latest" ]; then
             export CXX_COMPILER=clang++
             export C_COMPILER=clang
+          elif [ x"${{ matrix.os }}" == x"windows-latest" ]; then
+            export CXX_COMPILER=cl
+            export C_COMPILER=cl
           else
             export CXX_COMPILER=g++
             export C_COMPILER=gcc
@@ -137,6 +153,7 @@ jobs:
             --target llvm-tblgen mlir-tblgen mlir-linalg-ods-yaml-gen mlir-pdll
 
       - name: Configure CMake
+        shell: bash
         run: |
           CMAKE_CONFIGS="\
             -G Ninja \
@@ -166,6 +183,9 @@ jobs:
             CMAKE_CONFIGS="${CMAKE_CONFIGS} \
               -DCMAKE_OSX_ARCHITECTURES=arm64 \
               -DMACOSX_DEPLOYMENT_TARGET=12.0"
+          if [ x"${{ matrix.os }}" == x"windows-latest" ]; then
+            CMAKE_CONFIGS="${CMAKE_CONFIGS} \
+              -DLLVM_USE_CRT_MINSIZEREL=MT
           elif [ x"${{ matrix.os }}" == x"ubuntu-20.04" ] && [ x"${{ matrix.arch }}" == x"AArch64" ]; then
             CMAKE_CONFIGS="${CMAKE_CONFIGS} \
               -DLLVM_TABLEGEN=$LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/llvm-tblgen \
@@ -181,6 +201,11 @@ jobs:
                 -DCMAKE_CXX_FLAGS="-O2 ${STATIC_FLAGS}" \
                 -S${LLVM_PROJECT_MAIN_SRC_DIR}/llvm \
                 -B${LLVM_PROJECT_MAIN_BINARY_DIR}
+          elif [ x"${{ matrix.os }}" == x"windows-latest" ]; then
+            cmake $CMAKE_CONFIGS \
+                -DCMAKE_CXX_FLAGS="/MP" \
+                -S${LLVM_PROJECT_MAIN_SRC_DIR}/llvm \
+                -B${LLVM_PROJECT_MAIN_BINARY_DIR}
           else
             cmake $CMAKE_CONFIGS \
                   -S${LLVM_PROJECT_MAIN_SRC_DIR}/llvm \
@@ -188,11 +213,13 @@ jobs:
           fi
 
       - name: Build distro
+        shell: bash
         run: |
           cmake --build ${LLVM_PROJECT_MAIN_BINARY_DIR} --target install
           ccache -s
 
       - name: Make tarballs
+        shell: bash
         run: |
           mkdir -p $LLVM_PROJECT_INSTALL_DIR/llvm_native_tools
           cp -L $LLVM_PROJECT_HOST_MAIN_BINARY_DIR/bin/mlir-linalg-ods-yaml-gen $LLVM_PROJECT_INSTALL_DIR/llvm_native_tools/mlir-linalg-ods-yaml-gen
