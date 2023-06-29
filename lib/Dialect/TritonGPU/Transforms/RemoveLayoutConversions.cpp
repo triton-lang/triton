@@ -345,10 +345,14 @@ public:
     // heuristics for flash attention
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
-    // Check if number of users is 1, if not, it's not worth rematerializing
-    // because it will introduce a new conversion
-    if (std::distance(cvt->user_begin(), cvt->user_end()) != 1)
+    // For cases like:
+    // %0 = convert_layout %arg0
+    // We should try to move %0 out of scf.for first, if it couldn't be moved
+    // out additional conversions will be added to the loop body.
+    if (!cvt.getOperand().getDefiningOp() &&
+        isa<scf::ForOp>(cvt->getParentOp()))
       return failure();
+
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
@@ -434,8 +438,8 @@ public:
 
     IRMapping mapping;
     rematerializeConversionChain(toConvert, rewriter, processed, mapping);
-
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
+
     return mlir::success();
   }
 };
