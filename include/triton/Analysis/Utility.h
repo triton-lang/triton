@@ -63,6 +63,43 @@ private:
   int axis;
 };
 
+class ScanLoweringHelper {
+public:
+  explicit ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
+    auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
+    srcEncoding = type.getEncoding();
+  }
+  // Return true if the lowering of the scan op is supported.
+  bool isSupported();
+  // Return the number of elements per thread along axis dim.
+  unsigned getAxisNumElementsPerThreads();
+  // Return the number of elements per thread along non-axis dims.
+  unsigned getNumParallelElementsPerThread();
+  // Return the number of threads per warp along non-axis dims.
+  unsigned getNumParrallelThreadsPerWarp();
+  // Return the flat numbers of threads computing independent scan results.
+  unsigned getNumParrallelThreadsPerCTA();
+  // Return the number of warps per CTA along axis dim.
+  unsigned getNumAxisWarps();
+  // Return the number of threads per warp along axis dim.
+  unsigned getAxisNumThreadsPerWarp();
+  // Return the number of blocks along axis dim.
+  unsigned getNumAxisBlocks();
+  // Return the number of blocks along non axis dim.
+  unsigned getNumParallelBlocks();
+  // Return the size of the scratch space needed for scan lowering.
+  unsigned getScratchSizeInBytes();
+
+  Location getLoc() { return scanOp.getLoc(); }
+  unsigned getAxis() { return scanOp.getAxis(); }
+  triton::gpu::BlockedEncodingAttr getEncoding();
+  Region &getCombineOp();
+
+private:
+  triton::ScanOp scanOp;
+  Attribute srcEncoding;
+};
+
 bool maybeSharedAllocationOp(Operation *op);
 
 bool maybeAliasOp(Operation *op);

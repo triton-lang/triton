@@ -1412,6 +1412,21 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::ReduceReturnOp>(loc,
                                                               return_values);
            })
+      .def("create_scan",
+           [](mlir::OpBuilder &self, std::vector<mlir::Value> operands,
+              int axis) -> mlir::OpState {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::ScanOp>(loc, operands, axis);
+           })
+      .def("create_scan_ret",
+           [](mlir::OpBuilder &self, py::args args) -> mlir::OpState {
+             auto loc = self.getUnknownLoc();
+             llvm::SmallVector<mlir::Value> return_values;
+             for (const auto &arg : args) {
+               return_values.push_back(py::cast<mlir::Value>(arg));
+             }
+             return self.create<mlir::triton::ScanReturnOp>(loc, return_values);
+           })
       .def("create_ptr_to_int",
            [](mlir::OpBuilder &self, mlir::Value &val,
               mlir::Type &type) -> mlir::Value {
