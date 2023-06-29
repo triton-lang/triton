@@ -333,13 +333,8 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
       if (cvt->getBlock() != forOp.getBody())
         return failure();
     }
-    auto srcEncoding = oldType.getEncoding();
     for (auto *other : others) {
-      SetVector<Operation *> processed;
-      SetVector<Attribute> layout;
-      llvm::MapVector<Value, Attribute> toConvert;
-      if (simulateBackwardRematerialization(other, processed, layout, toConvert,
-                                            srcEncoding) > 0)
+      if (other->getBlock() != forOp.getBody())
         return failure();
     }
     return success();

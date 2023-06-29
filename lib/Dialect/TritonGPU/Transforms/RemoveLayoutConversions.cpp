@@ -345,10 +345,6 @@ public:
     // heuristics for flash attention
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
-    // Check if number of users is 1, if not, it's not worth rematerializing
-    // because it will introduce a new conversion
-    if (std::distance(cvt->user_begin(), cvt->user_end()) != 1)
-      return failure();
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
@@ -367,8 +363,7 @@ public:
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp, triton::AssertOp, triton::PrintOp,
-               triton::ReduceOp>(op))
+          !isa<triton::StoreOp, triton::ReduceOp>(op))
         return failure();
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
