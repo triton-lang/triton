@@ -1223,3 +1223,33 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: test_s8_to_bf16_conversion
+  tt.func @test_s8_to_bf16_conversion(%in: tensor<32xi8, #blocked>) {
+    // We can't vectorize if we only process
+    // CHECK-NOT: llvm.inline_asm
+    // CHECK: llvm.sitofp
+    // CHECK-NOT: llvm.sitofp
+    %out = arith.sitofp %in : tensor<32xi8, #blocked> to tensor<32xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+#mma = #triton_gpu.mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1]}>
+#dot = #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
+module attributes {"triton_gpu.num-warps" = 1 : i32} {
+  // CHECK-LABEL: test_s8_to_bf16_vectorized_conversion
+  tt.func @test_s8_to_bf16_vectorized_conversion(%in: tensor<16x16xi8, #mma>) {
+    // CHECK-NOT: llvm.sitofp
+    // 8 elements per thread => we should process 2 vectors of 4
+    // CHECK: llvm.inline_asm
+    // CHECK: llvm.inline_asm
+    // CHECK-NOT: llvm.inline_asm
+    %out = arith.sitofp %in : tensor<16x16xi8, #mma> to tensor<16x16xbf16, #mma>
+    tt.return
+  }
+}
