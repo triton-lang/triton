@@ -1497,8 +1497,9 @@ def test_reduce2d(op, dtype_str, shape, axis, device):
 scan2d_shapes = [(16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
 
 scan_configs = [
-    (op, type, shape, 1)
+    (op, type, shape, axis)
     for type in ['int32', 'float32']
+    for axis in [1, 0]
     for shape in scan2d_shapes
     for op in ['cumsum']
 ]
@@ -1517,7 +1518,7 @@ def test_scan2d(op, dtype_str, shape, axis, device):
         z = GENERATE_TEST_HERE
         tl.store(Z + range_m[:, None] * BLOCK_N + range_n[None, :], z)
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=1)'})
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis={axis})'})
     # input
     rs = RandomState(17)
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
@@ -1538,6 +1539,12 @@ def test_scan2d(op, dtype_str, shape, axis, device):
 
 
 scan_layouts = [
+    BlockedLayout([1, 4], [4, 8], [4, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1]),
+    BlockedLayout([4, 1], [4, 8], [1, 4], [0, 1]),
+    BlockedLayout([2, 2], [4, 8], [2, 2], [0, 1]),
+    BlockedLayout([2, 2], [8, 4], [2, 2], [0, 1]),
+
     BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0]),
     BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0]),
     BlockedLayout([4, 1], [4, 8], [1, 4], [1, 0]),
@@ -1547,7 +1554,8 @@ scan_layouts = [
 
 
 @pytest.mark.parametrize("src_layout", scan_layouts)
-def test_scan_layouts(src_layout, device):
+@pytest.mark.parametrize("axis", [0, 1])
+def test_scan_layouts(src_layout, axis, device):
     ir = f"""
     #blocked = {src_layout}
     module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
@@ -1564,7 +1572,7 @@ def test_scan_layouts(src_layout, device):
       %8 = tt.broadcast %6 : (tensor<1x32xi32, #blocked>) -> tensor<32x32xi32, #blocked>
       %9 = tt.addptr %7, %8 : tensor<32x32x!tt.ptr<i32>, #blocked>, tensor<32x32xi32, #blocked>
       %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<32x32xi32, #blocked>
-      %11 = "tt.scan"(%10) <{{axis = 1 : i32}}> ({{
+      %11 = "tt.scan"(%10) <{{axis = {axis} : i32}}> ({{
       ^bb0(%arg2: i32, %arg3: i32):
         %16 = arith.addi %arg2, %arg3 : i32
         tt.scan.return %16 : i32
@@ -1595,7 +1603,7 @@ def test_scan_layouts(src_layout, device):
 
     kernel[(1, 1, 1)](x_tri, z_tri)
 
-    z_ref = np.cumsum(x, axis=1)
+    z_ref = np.cumsum(x, axis=axis)
 
     np.testing.assert_equal(z_ref, z_tri.cpu().numpy())
 
