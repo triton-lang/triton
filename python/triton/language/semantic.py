@@ -663,6 +663,11 @@ def bitcast(input: tl.tensor,
                      dst_ty)
 
 
+# TODO: architecture descriptor class
+def _is_cuda(arch):
+    return isinstance(arch, int)
+
+
 def cast(input: tl.tensor,
          dst_ty: tl.dtype,
          builder: ir.builder) -> tl.tensor:
@@ -677,7 +682,7 @@ def cast(input: tl.tensor,
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
 
-    if builder.arch < 89 and \
+    if _is_cuda(builder.arch) and builder.arch < 89 and \
        (src_sca_ty.is_fp8e4() or dst_sca_ty.is_fp8e4()):
         warnings.warn("Standard tl.float8e4 format will be deprecated on SM < 89. "
                       "Please use tl.float8e4b15.", DeprecationWarning)
