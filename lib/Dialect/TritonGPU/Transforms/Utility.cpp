@@ -335,6 +335,8 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
     }
     auto srcEncoding = oldType.getEncoding();
     for (auto *other : others) {
+      if (other->getBlock() != forOp.getBody())
+        return failure();
       SetVector<Operation *> processed;
       SetVector<Attribute> layout;
       llvm::MapVector<Value, Attribute> toConvert;
