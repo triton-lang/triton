@@ -74,19 +74,19 @@ public:
   // Return the number of elements per thread along axis dim.
   unsigned getAxisNumElementsPerThreads();
   // Return the number of elements per thread along non-axis dims.
-  unsigned getNumParallelElementsPerThread();
+  unsigned getNonAxisNumElementsPerThread();
   // Return the number of threads per warp along non-axis dims.
-  unsigned getNumParrallelThreadsPerWarp();
+  unsigned getNonAxisNumThreadsPerWarp();
   // Return the flat numbers of threads computing independent scan results.
-  unsigned getNumParrallelThreadsPerCTA();
+  unsigned getNonAxisNumThreadsPerCTA();
   // Return the number of warps per CTA along axis dim.
-  unsigned getNumAxisWarps();
+  unsigned getAxisNumWarps();
   // Return the number of threads per warp along axis dim.
   unsigned getAxisNumThreadsPerWarp();
   // Return the number of blocks along axis dim.
-  unsigned getNumAxisBlocks();
+  unsigned getAxisNumBlocks();
   // Return the number of blocks along non axis dim.
-  unsigned getNumParallelBlocks();
+  unsigned getNonAxisNumBlocks();
   // Return the size of the scratch space needed for scan lowering.
   unsigned getScratchSizeInBytes();
 

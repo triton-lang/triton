@@ -80,8 +80,8 @@ static void warpScan(SmallVector<Value> &srcValues,
 // reduction into shared memory. Each parallel scan and each warp will store its
 // own partial reductions. The shared memory is organized as follow:
 //          -----------------------------------------------------------------
-// chunk 0: | scan 0 warp 0 | scan 1 warp 0 | scan 0 warp 1 | scan 1 warp 1 |
-// chunk 1: | scan 0 warp 0 | scan 1 warp 0 | scan 0 warp 1 | scan 1 warp 1 |
+// chunk 0: | acc[0] warp 0 | acc[1] warp 0 | acc[0] warp 1 | acc[1] warp 1 |
+// chunk 1: | acc[0] warp 0 | acc[1] warp 0 | acc[0] warp 1 | acc[1] warp 1 |
 static void storeWarpAccumulator(SmallVector<Value> &srcValues,
                                  ConversionPatternRewriter &rewriter,
                                  ScanLoweringHelper &helper, Value laneId,
@@ -90,8 +90,8 @@ static void storeWarpAccumulator(SmallVector<Value> &srcValues,
   Location loc = helper.getLoc();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThreads();
   unsigned scanDim = helper.getAxisNumThreadsPerWarp();
-  unsigned numParallelLane = helper.getNumParrallelThreadsPerCTA();
-  unsigned numWarps = helper.getNumAxisWarps();
+  unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
+  unsigned numWarps = helper.getAxisNumWarps();
   unsigned chunkId = 0;
   for (unsigned j = scanElementsPerThreads - 1; j < srcValues.size();
        j += scanElementsPerThreads, ++chunkId) {
@@ -114,10 +114,10 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
                              ScanLoweringHelper &helper, Value sharedMemoryPtr,
                              Value warpId, Value laneId, Value parallelLaneId) {
   Location loc = helper.getLoc();
-  unsigned numParallelLane = helper.getNumParrallelThreadsPerCTA();
-  unsigned numWarps = helper.getNumAxisWarps();
+  unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
+  unsigned numWarps = helper.getAxisNumWarps();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThreads();
-  unsigned parallelElementsPerThread = helper.getNumParallelElementsPerThread();
+  unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
   Value maskFirstLane = icmp_eq(laneId, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
@@ -125,8 +125,8 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
     Value acc;
     Value maskedAcc;
   };
-  unsigned numScanBlocks = helper.getNumAxisBlocks();
-  unsigned numParallelBlocks = helper.getNumParallelBlocks();
+  unsigned numScanBlocks = helper.getAxisNumBlocks();
+  unsigned numParallelBlocks = helper.getNonAxisNumBlocks();
   assert(numScanBlocks * numParallelBlocks * parallelElementsPerThread *
              scanElementsPerThreads ==
          srcValues.size());
@@ -251,12 +251,11 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
       linearize(rewriter, loc, multiDimWarpId, warpsPerCTA, order);
   Value flatIdParallel =
       add(laneIdParallel,
-          mul(warpIdParallel, i32_val(helper.getNumParrallelThreadsPerWarp())));
+          mul(warpIdParallel, i32_val(helper.getNonAxisNumThreadsPerWarp())));
   return std::make_tuple(laneIdAxis, warpIdAxis, flatIdParallel);
 }
 
-// Naive lowering of the scan op as a fallback for cases that we don't know
-// how to generate with warp shuffle ops.
+// Lowering using warp shuffle operations to do warp level scan.
 LogicalResult
 ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter) const {

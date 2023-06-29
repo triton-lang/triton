@@ -431,7 +431,8 @@ def TT_ReduceReturnOp: TT_Op<"reduce.return",
 //
 def TT_ScanOp: TT_Op<"scan",
                        [Pure,
-                        SameOperandsEncoding,
+                        SameOperandsAndResultEncoding,
+                        SameOperandsAndResultElementType,
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Reduction using generic combination algorithm";
