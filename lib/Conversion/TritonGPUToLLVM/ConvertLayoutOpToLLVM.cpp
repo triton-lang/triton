@@ -492,7 +492,7 @@ private:
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, true);
       auto maxVec = std::max(inVec, outVec);
       sharedLayout = triton::gpu::SharedEncodingAttr::get(
-          getContext(), maxVec, 1, repShape[0], getOrder(dstLayout));
+          getContext(), maxVec, 1, 1, getOrder(dstLayout));
     } else {
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
       auto maxVec = std::max(inVec, outVec);
