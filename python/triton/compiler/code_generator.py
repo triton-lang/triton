@@ -1082,8 +1082,7 @@ def ast_to_ttir(fn, signature, specialization, constants, debug):
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
-    file_name = fn.fn.__code__.co_filename
-    begin_line = fn.fn.__code__.co_firstlineno
+    file_name, begin_line = _get_fn_file_line(fn)
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,
