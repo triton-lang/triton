@@ -4,6 +4,22 @@ from .. import Config, autotune, cdiv, heuristics, jit
 from .. import language as tl
 from .matmul_perf_model import early_config_prune, estimate_matmul_time
 
+_ordered_datatypes = [torch.float16, torch.bfloat16, torch.float32]
+
+
+def get_higher_dtype(a, b):
+    if a is b:
+        return a
+
+    assert a in _ordered_datatypes
+    assert b in _ordered_datatypes
+
+    for d in _ordered_datatypes:
+        if a is d:
+            return b
+        if b is d:
+            return a
+
 
 def init_to_zero(name):
     return lambda nargs: nargs[name].zero_()
@@ -97,6 +113,8 @@ def _kernel(A, B, C, M, N, K,
             k_remaining = K - k * (BLOCK_K * SPLIT_K)
             a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.)
             b = tl.load(B, mask=rk[:, None] < k_remaining, other=0.)
+        a = a.to(C.dtype.element_ty)
+        b = b.to(C.dtype.element_ty)
         acc += tl.dot(a, b, out_dtype=dot_out_dtype)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk
@@ -131,9 +149,10 @@ class _matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
         # allocates output
-        c = torch.empty((M, N), device=device, dtype=a.dtype)
+        c_dtype = get_higher_dtype(a.dtype, b.dtype)
+        c = torch.empty((M, N), device=device, dtype=c_dtype)
         if dot_out_dtype is None:
-            if a.dtype in [torch.float16, torch.float32, torch.bfloat16]:
+            if c_dtype in [torch.float16, torch.float32, torch.bfloat16]:
                 dot_out_dtype = tl.float32
             else:
                 dot_out_dtype = tl.int32
