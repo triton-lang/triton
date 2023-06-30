@@ -99,6 +99,8 @@ public:
       auto BOp = dotUser.getOperand(1).getDefiningOp();
       if (!BOp)
         return;
+      // TODO: An alternative would be to move cvt of OpIdx=0 down instead of
+      // movig cvt of OpIdx=1 up. This would allow re-ordering more cases.
       if (!dom.dominates(op.getOperand(), BOp))
         return;
       op->moveBefore(BOp);
