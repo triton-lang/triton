@@ -30,15 +30,15 @@ def kernel_call(X,
 
 
 @triton.jit(noinline=True)
-def device_noinline(x):
-    return x + x
+def device_noinline(X, Y, BLOCK: tl.constexpr):
+    x = tl.load(X + tl.arange(0, BLOCK))
+    y = x + x
+    tl.store(Y + tl.arange(0, BLOCK), y)
 
 
 @triton.jit
 def kernel_call_noinline(X, Y, BLOCK: tl.constexpr):
-    x = tl.load(X + tl.arange(0, BLOCK))
-    y = device_noinline(x)
-    tl.store(Y + tl.arange(0, BLOCK), y)
+    device_noinline(X, Y, BLOCK)
 
 
 func_types = ["single", "call", "call_noinline"]
@@ -66,7 +66,7 @@ def test_line_info(func: str):
         cubin.write(kernel_info.asm['cubin'])
     # Check if nvdisasm is available
     subprocess.check_output(["nvdisasm", "-h"])
-    asm = subprocess.check_output(["nvdisasm", "-d", path])
+    asm = subprocess.check_output(["nvdisasm", "-g", path])
     if func == "single":
         assert "kernel_single" in str(asm)
     elif func == "call":

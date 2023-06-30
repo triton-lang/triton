@@ -79,8 +79,8 @@ def _get_fn_file_line(fn):
     base_fn = fn
     while not isinstance(base_fn, JITFunction):
         base_fn = base_fn.fn
-    file_name = fn.__code__.co_filename
-    begin_line = fn.__code__.co_firstlineno
+    file_name = fn.fn.__code__.co_filename
+    begin_line = fn.fn.__code__.co_firstlineno
     return file_name, begin_line
 
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
@@ -204,7 +204,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder = ir.builder(context)
         self.file_name = file_name
         self.begin_line = begin_line
-        self.builder.set_loc(file_name, begin_line, column=0)
+        self.builder.set_loc(file_name, begin_line, 0)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
