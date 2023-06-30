@@ -2195,24 +2195,23 @@ def test_constexpr(literal, dtype_str, device):
     h = kernel_patched[(1,)](out)
     assert re.search(r"arith.constant .* : " + dtype_str, h.asm["ttir"]) is not None
 
-# TODO: uncomment once DotOperandEncoding::getElemsPerThread is implemented
-# @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
-# def test_dot_without_load(dtype_str, device=device):
-#     @triton.jit
-#     def _kernel(out):
-#         a = GENERATE_TEST_HERE
-#         b = GENERATE_TEST_HERE
-#         c = tl.dot(a, b)
-#         out_ptr = out + tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
-#         tl.store(out_ptr, c)
 
-#     kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.full((32, 32), 1.0, tl.{dtype_str})"})
-#     a = torch.ones((32, 32), dtype=getattr(torch, dtype_str), device=device)
-#     b = torch.ones((32, 32), dtype=getattr(torch, dtype_str), device=device)
-#     out_ref = torch.matmul(a, b)
-#     out = torch.zeros((32, 32), dtype=getattr(torch, dtype_str), device=device)
-#     kernel[(1,)](out)
-#     assert torch.all(out == out_ref)
+@pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
+def test_dot_without_load(dtype_str, device):
+    @triton.jit
+    def _kernel(out):
+        a = GENERATE_TEST_HERE
+        b = GENERATE_TEST_HERE
+        c = tl.dot(a, b)
+        out_ptr = out + tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
+        tl.store(out_ptr, c)
+    kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.full((32, 32), 1.0, tl.{dtype_str})"})
+    a = torch.ones((32, 32), dtype=getattr(torch, dtype_str), device=device)
+    b = torch.ones((32, 32), dtype=getattr(torch, dtype_str), device=device)
+    out_ref = torch.matmul(a, b)
+    out = torch.zeros((32, 32), dtype=getattr(torch, dtype_str), device=device)
+    kernel[(1,)](out)
+    assert torch.all(out == out_ref)
 
 # ---------------
 # test arange
