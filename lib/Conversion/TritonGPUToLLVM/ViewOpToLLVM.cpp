@@ -22,7 +22,11 @@ struct SplatOpConversion
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) {
     auto tensorTy = resType.cast<RankedTensorType>();
-    auto srcType = typeConverter->convertType(elemType);
+    // Check the converted type for the tensor as depending on the encoding the
+    // converter may pick different element types.
+    auto srcType = typeConverter->convertType(tensorTy);
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(srcType))
+      srcType = structTy.getBody()[0];
     auto llSrc = bitcast(constVal, srcType);
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
