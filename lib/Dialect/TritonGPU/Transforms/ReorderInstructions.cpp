@@ -1,6 +1,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -42,6 +43,7 @@ public:
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
+    mlir::DominanceInfo dom(m);
     // Sink conversions into loops when they will increase
     // register pressure
     DenseMap<Operation *, Operation *> opToMove;
@@ -96,6 +98,8 @@ public:
         return;
       auto BOp = dotUser.getOperand(1).getDefiningOp();
       if (!BOp)
+        return;
+      if (!dom.dominates(op.getOperand(), BOp))
         return;
       op->moveBefore(BOp);
     });
