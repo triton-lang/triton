@@ -27,6 +27,21 @@ struct SplatOpConversion
     auto srcType = typeConverter->convertType(tensorTy);
     if (auto structTy = dyn_cast<LLVM::LLVMStructType>(srcType))
       srcType = structTy.getBody()[0];
+    // If the type sizes don't match we need to pack constants.
+    if (srcType.isIntOrFloat() && constVal.getType().getIntOrFloatBitWidth() !=
+                                      srcType.getIntOrFloatBitWidth()) {
+      unsigned cstBitWidth = constVal.getType().getIntOrFloatBitWidth();
+      unsigned srcBitWidth = srcType.getIntOrFloatBitWidth();
+      assert(cstBitWidth <= srcBitWidth && srcBitWidth % cstBitWidth == 0);
+      unsigned ratio = srcBitWidth / cstBitWidth;
+      Type intTy = IntegerType::get(elemType.getContext(), cstBitWidth);
+      VectorType vecType = VectorType::get(ratio, intTy);
+      Value intCst = bitcast(constVal, intTy);
+      Value vec = undef(vecType);
+      for (unsigned i = 0; i < ratio; ++i)
+        vec = insert_element(vecType, vec, intCst, int_val(32, i));
+      constVal = vec;
+    }
     auto llSrc = bitcast(constVal, srcType);
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
