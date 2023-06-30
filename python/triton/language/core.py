@@ -1699,12 +1699,16 @@ def device_assert(cond, msg="", _builder=None):
     while hasattr(module, "__name__"):
         frame = frame.f_back
         module = inspect.getmodule(frame)
-    func_name = frame.f_code.co_name
-    file_name = frame.f_back.f_code.co_filename
-    # TODO: The line number currently indicates the line
-    # where the triton function is called but not where the
-    # device_assert is called. Need to enhance this.
-    lineno = frame.f_back.f_lineno
+    lineno = 0
+    func_name = 'unknown'
+    file_name = 'unknown'
+    if frame is not None:
+        func_name = frame.f_code.co_name
+        file_name = frame.f_back.f_code.co_filename
+        # TODO: The line number currently indicates the line
+        # where the triton function is called but not where the
+        # device_assert is called. Need to enhance this.
+        lineno = frame.f_back.f_lineno
     return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
 
 
