@@ -238,7 +238,9 @@ updateDotEncodingLayout(SmallVector<ConvertLayoutOp> &convertsToDotEncoding,
                                 convertsToDotEncoding.end());
   // Collect all the operations where the type needs to be propagated.
   for (auto cvt : convertsToDotEncoding) {
-    auto filter = [&](Operation *op) {
+    auto forwardFilter = [&](Operation *op) {
+      if (op == cvt.getOperation())
+        return true;
       for (Value operand : op->getOperands()) {
         auto tensorType = operand.getType().dyn_cast<RankedTensorType>();
         if (tensorType &&
@@ -247,7 +249,18 @@ updateDotEncodingLayout(SmallVector<ConvertLayoutOp> &convertsToDotEncoding,
       }
       return false;
     };
-    mlir::getForwardSlice(cvt.getResult(), &slices, {filter});
+    auto backwardFilter = [&](Operation *op) {
+      for (Value results : op->getResults()) {
+        auto tensorType = results.getType().dyn_cast<RankedTensorType>();
+        if (tensorType &&
+            tensorType.getEncoding().isa<DotOperandEncodingAttr>())
+          return true;
+      }
+      return false;
+    };
+    SetVector<Operation *> opSlice =
+        getSlice(cvt.getOperation(), {backwardFilter}, {forwardFilter});
+    slices.insert(opSlice.begin(), opSlice.end());
   }
   // Apply the type change by walking ops in topological order.
   slices = mlir::topologicalSort(slices);
