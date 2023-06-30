@@ -166,6 +166,7 @@ void init_triton_ir(py::module &&m) {
       .value("CG", mlir::triton::CacheModifier::CG)
       .value("WB", mlir::triton::CacheModifier::WB)
       .value("CS", mlir::triton::CacheModifier::CS)
+      .value("WT", mlir::triton::CacheModifier::WT)
       .export_values();
 
   py::enum_<mlir::triton::MemSemantic>(m, "MEM_SEMANTIC")
@@ -1377,6 +1378,21 @@ void init_triton_ir(py::module &&m) {
                return_values.push_back(py::cast<mlir::Value>(arg));
              }
              return self.create<mlir::triton::ReduceReturnOp>(return_values);
+           })
+      .def("create_scan",
+           [](mlir::OpBuilder &self, std::vector<mlir::Value> operands,
+              int axis) -> mlir::OpState {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::ScanOp>(loc, operands, axis);
+           })
+      .def("create_scan_ret",
+           [](mlir::OpBuilder &self, py::args args) -> mlir::OpState {
+             auto loc = self.getUnknownLoc();
+             llvm::SmallVector<mlir::Value> return_values;
+             for (const auto &arg : args) {
+               return_values.push_back(py::cast<mlir::Value>(arg));
+             }
+             return self.create<mlir::triton::ScanReturnOp>(loc, return_values);
            })
       .def("create_ptr_to_int",
            [](TritonOpBuilder &self, mlir::Value &val,

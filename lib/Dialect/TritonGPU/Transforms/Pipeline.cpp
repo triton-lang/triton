@@ -816,28 +816,49 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
 
   // Prefetch load deps
+  // If a load-dependent instruction that uses a block argument, we
+  // shouldn't update the new mapping of the block argument in the current
+  // iteration.
+  // For example.
+  // %a = add %arg0, %c
+  // %b = add %arg0, %d
+  //
+  // Update %arg0 will cause the value of %b to be incorrect.
+  // We do need to use the next iteration value of %arg0 because it could be a
+  // immediate arg of a load op.
+  // load %arg0
+  // %a = add %arg0, %c
+  // yield %a
+  //
+  // We reroder instructions so %a and yield are actually before load. load
+  // %arg0 should use the updated %arg0.
+  IRMapping curMapping = nextMapping;
   for (Operation *op : orderedDeps)
     if (!validLoads.contains(op->getResult(0))) {
       if (immediateOpStages[op].contains(numStages - 2))
         // A post load op that provides values for numStage - 2
-        nextMapping.map(forOp.getInductionVar(), curIV);
+        curMapping.map(forOp.getInductionVar(), curIV);
       else
-        nextMapping.map(forOp.getInductionVar(), nextIV);
+        curMapping.map(forOp.getInductionVar(), nextIV);
       Operation *nextOp;
       if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
         auto newMask =
-            getLoadMask(loadOp, nextMapping.lookupOrDefault(loadOp.getMask()),
+            getLoadMask(loadOp, curMapping.lookupOrDefault(loadOp.getMask()),
                         nextLoopCond, builder);
         nextOp = builder.create<triton::LoadOp>(
             loadOp.getLoc(), loadOp.getResult().getType(),
-            nextMapping.lookupOrDefault(loadOp.getPtr()), newMask,
-            nextMapping.lookupOrDefault(loadOp.getOther()),
+            curMapping.lookupOrDefault(loadOp.getPtr()), newMask,
+            curMapping.lookupOrDefault(loadOp.getOther()),
             loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
             loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
         addNamedAttrs(nextOp, op->getDiscardableAttrDictionary());
+        curMapping.map(loadOp.getResult(), nextOp->getResult(0));
         nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
-      } else
-        nextOp = builder.clone(*op, nextMapping);
+      } else {
+        nextOp = builder.clone(*op, curMapping);
+        for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults()))
+          nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
+      }
 
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults()))
         setValueMappingYield(newForOp, op->getResult(dstIdx),
