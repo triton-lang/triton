@@ -72,7 +72,7 @@ public:
   // Return true if the lowering of the scan op is supported.
   bool isSupported();
   // Return the number of elements per thread along axis dim.
-  unsigned getAxisNumElementsPerThreads();
+  unsigned getAxisNumElementsPerThread();
   // Return the number of elements per thread along non-axis dims.
   unsigned getNonAxisNumElementsPerThread();
   // Return the number of threads per warp along non-axis dims.
@@ -89,6 +89,13 @@ public:
   unsigned getNonAxisNumBlocks();
   // Return the size of the scratch space needed for scan lowering.
   unsigned getScratchSizeInBytes();
+
+  // Stride between contiguous element along axis dim.
+  unsigned getAxisElementStride();
+  // Stride between contiguous threads along axis dim.
+  unsigned getAxisThreadStride();
+  // Stride between contiguous blocks along axis dim.
+  unsigned getAxisBlockStride();
 
   Location getLoc() { return scanOp.getLoc(); }
   unsigned getAxis() { return scanOp.getAxis(); }
