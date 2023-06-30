@@ -90,10 +90,25 @@ public:
         mlir::FileLineColLoc::get(context, fileName, line, column));
   }
 
+  void setLastLoc(mlir::Location loc) {
+    lastLoc = std::make_unique<mlir::Location>(loc);
+  }
+
   mlir::Location &getLastLoc() {
     assert(lastLoc);
     return *lastLoc;
   }
+
+  void setInsertionPointToStart(mlir::Block &block) {
+    builder->setInsertionPointToStart(&block);
+    setLastLoc(block.begin()->getLoc());
+  }
+
+  void setInsertionPointToEnd(mlir::Block &block) {
+     builder->setInsertionPointToEnd(&block);
+  }
+
+  void setInsertionPointAfter(mlir::Operation &op);
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     auto loc = getLastLoc();
