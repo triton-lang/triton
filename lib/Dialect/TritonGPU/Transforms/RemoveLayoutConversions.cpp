@@ -472,31 +472,21 @@ public:
     for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
       mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
     mapping.map(origConversion.getResult(), newForOp.getRegionIterArgs()[i]);
-    // the iter arg of interest may have other uses than the conversion
-    // we're hoisting out of the loop. If that's the case we will
-    // need to add extra conversions for all uses... which is only useful
-    // if these extra conversions can be removed by another pattern
-    auto oldArg = forOp.getRegionIterArgs()[i];
-    auto newArg = newForOp.getRegionIterArgs()[i];
-    auto newArgFallback = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        newForOp.getLoc(), origType, newArg);
 
     mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
     for (Operation &op : forOp.getBody()->without_terminator()) {
       if (&op == (Operation *)(&origConversion))
         continue;
       Operation *newOp = rewriter.clone(op, mapping);
-      if (find(oldArg.getUsers(), &op) != oldArg.getUsers().end())
-        newOp->replaceUsesOfWith(newArg, newArgFallback);
     }
-
     // create yield, inserting conversions if necessary
     auto yieldOp = forOp.getBody()->getTerminator();
     SmallVector<Value, 4> newYieldArgs;
     for (Value arg : yieldOp->getOperands())
       newYieldArgs.push_back(mapping.lookup(arg));
-    newYieldArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        yieldOp->getLoc(), newType, newYieldArgs[i]);
+    if (newYieldArgs[i].getType() != newType)
+      newYieldArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          yieldOp->getLoc(), newType, newYieldArgs[i]);
     rewriter.create<scf::YieldOp>(forOp.getLoc(), newYieldArgs);
 
     // replace
