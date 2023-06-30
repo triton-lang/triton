@@ -380,6 +380,10 @@ public:
       }
     }
 
+    // Call SimplifyReduceCvt instead of the general push conversion forward
+    if (isa<triton::ReduceOp>(cvtSlices.front()))
+      return failure();
+
     pushConversionForward(cvt, cvtSlices, rewriter);
     return success();
   }
