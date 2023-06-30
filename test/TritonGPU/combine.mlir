@@ -1206,6 +1206,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 // -----
 
 // Check if MoveConvertOutOfLoop hangs because of adding additional conversions
+// CHECK-LABEL: loop_print
 // CHECK-NOT: triton_gpu.convert_layout
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
