@@ -706,11 +706,11 @@ def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4, tl.float8e5])
-def test_abs_fp8(in_dtype, device):
+@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5])
+def test_abs_f8(in_dtype, device):
 
     @triton.jit
-    def abs_kernel(Z, X, SIZE: tl.constexpr):
+    def abs_kernel(X, Z, SIZE: tl.constexpr):
         off = tl.arange(0, SIZE)
         x = tl.load(X + off)
         z = tl.abs(x)
@@ -723,12 +723,13 @@ def test_abs_fp8(in_dtype, device):
     f8 = triton.reinterpret(f8_tensor, in_dtype)
     n_elements = f8_tensor.numel()
     out_f8 = torch.empty_like(f8_tensor)
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
     abs_kernel[(1,)](f8, triton.reinterpret(out_f8, in_dtype), n_elements)
 
     f32_tensor = convert_float_to_float32(f8_tensor, in_dtype)
     expect = f32_tensor.abs()
     actual_f8 = convert_float_to_float32(out_f8, in_dtype)
-    torch.testing.assert_allclose(expect, actual_f8)
+    torch.testing.assert_allclose(actual_f8, expect)
 
 
 # ----------------
@@ -1214,7 +1215,7 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
 
     fp = fp.view(getattr(torch, f"int{dtype.primitive_bitwidth}"))
     exp_width = dtype.primitive_bitwidth - dtype.fp_mantissa_width - 1
-    exp_bias = dtype.exponent_bias
+    exp_bias = 2 ** (exp_width - 1) - 1
     sign = ((fp >> (dtype.primitive_bitwidth - 1)) & 0x01).int()
     exp = ((fp >> dtype.fp_mantissa_width) & ((1 << exp_width) - 1)).int()
     frac = (fp & ((1 << dtype.fp_mantissa_width) - 1)).int()
@@ -1227,7 +1228,7 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
 
     extended_exp = ((1 << (tl.float32.primitive_bitwidth - tl.float32.fp_mantissa_width - 1)) - 1) << tl.float32.fp_mantissa_width
     # special cases, exp is 0b11..1
-    if dtype in [tl.float8e4, tl.float8e4b15]:
+    if dtype == tl.float8e4:
         # float8e4m3 does not have infinities
         output[fp == 0b01111111] = torch.nan
         output[fp == 0b11111111] = torch.nan
@@ -1254,42 +1255,11 @@ def test_convert_float16_to_float32(in_dtype, device):
     assert torch.all(f16_input[other] == f32_output[other])
 
 
-def serialize_fp8(np_data, in_dtype):
-    if in_dtype == tl.float8e4b15:
-        # triton's f8e4b15 format is optimized for software emulation
-        # as a result, each pack of 4xfp8 values:
-        # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
-        # is actually internally stored as
-        # s0s2b0b2s1s3b1b3
-        # we apply the conversion here
-        f8x4 = np_data.view(np.uint32)
-        s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
-        b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
-        signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
-        bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
-        # tensor of triton fp8 data
-        return (signs | bits).view(np.int8)
-    else:
-        return np_data
-
-
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
-def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
-    """
-    For all possible float8 values (ref_fp8 = range(0, 256)), test that:
-        - conversion tri_fp16 = convert(input=ref_fp8, out=out_dtype) matches the reference
-        - conversion tri_fp8 = convert(input=tri_fp16, out=out_dtype) matches the original
-    this is only possible if both conversions are correct
-    """
+def test_f8_xf16_roundtrip(in_dtype, out_dtype, device):
+    """Tests that converting an f8 to f16 and back to f8 doesn't change its value"""
     check_type_supported(out_dtype, device)
-    from contextlib import nullcontext as does_not_raise
-    expectation = does_not_raise()
-    err_msg = None
-    if (in_dtype == tl.float8e4b15 and out_dtype != torch.float16) or\
-       (in_dtype != torch.float16 and out_dtype == tl.float8e4b15):
-        expectation = pytest.raises(triton.CompilationError)
-        err_msg = "fp8e4b15 can only be converted to/from fp16"
 
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -1299,28 +1269,90 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
         output = input
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    # initialize array containing all possible f8 values except NaN
-    ref_fp8 = np.array(range(-128, 128), dtype=np.int8)
-    is_nan = (ref_fp8 & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
-    exp_mask = 0b01111111 ^ ((1 << in_dtype.fp_mantissa_width) - 1)
-    is_subnormal = np.logical_or((ref_fp8 & exp_mask) == 0, (ref_fp8 & exp_mask) == exp_mask)
-    ref_fp8[is_nan] = 0
-    ref_fp8[is_subnormal] = 0
-    tri_fp8 = torch.from_numpy(serialize_fp8(ref_fp8, in_dtype)).cuda()
-    tri_fp16 = torch.empty(256, dtype=out_dtype, device="cuda")
-    with expectation as e:
-        copy_kernel[(1,)](triton.reinterpret(tri_fp8, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
+    f8_tensor = torch.tensor(range(-128, 128), dtype=torch.int8, device=device)
+    # f32_to_f8 doesn't handle nan, so we make sure f8_tensor doesn't contain any nan
+    all_exp_ones = (f8_tensor & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
+    f8_tensor[all_exp_ones] = 0
+    f8 = triton.reinterpret(f8_tensor, in_dtype)
+    n_elements = f8_tensor.numel()
+    xf16 = torch.empty_like(f8_tensor, dtype=out_dtype)
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    copy_kernel[grid](f8, xf16, n_elements, BLOCK_SIZE=1024)
 
-        ref_fp8 = torch.from_numpy(ref_fp8).cuda()
-        ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
-        assert torch.all(tri_fp16[~is_subnormal] == ref_fp16[~is_subnormal])
+    # exponent_mask = 0b01111100 for float8e5
+    # exponent_mask = 0b01111000 for float8e4
+    exponent_mask = 0b01111111 ^ ((1 << in_dtype.fp_mantissa_width) - 1)
+    normal = torch.logical_and((f8_tensor & exponent_mask) != 0, (f8_tensor & exponent_mask) != exponent_mask)
+    ref16 = convert_float_to_float32(f8_tensor, in_dtype)
+    # WARN: currently only normal float8s are handled
+    assert torch.all(xf16[normal] == ref16[normal])
 
-        ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
-        copy_kernel[(1,)](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
-        assert torch.all(tri_fp8 == ref_fp8)
+    f8_output_tensor = torch.empty_like(xf16, dtype=torch.int8)
+    f8_output = triton.reinterpret(f8_output_tensor, in_dtype)
+    copy_kernel[grid](xf16, f8_output, n_elements, BLOCK_SIZE=1024)
 
-    if err_msg is not None:
-        assert err_msg in str(e)
+    assert torch.all(f8_tensor == f8_output_tensor)
+
+
+@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16])
+def test_f16_to_f8_rounding(in_dtype, out_dtype, device):
+    """Takes all float16s, converts them to float8 and back to float16. Checks that the absolute
+    error is the minimum over all float8.
+    Or the same explanation a bit mathier:
+    for all f16 |f16 - fromf8(tof8(f16))| == min over all f8 |f16 - fromf8(f8)|"""
+    @triton.jit
+    def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(axis=0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        input = tl.load(input_ptr + offsets, mask=mask)
+        output = input
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    i16_input = torch.tensor(range(-int(2 ** (16 - 1)), int(2 ** (16 - 1))), dtype=torch.int16, device=device)
+    f16_input = i16_input.view(out_dtype)
+    n_elements = f16_input.numel()
+    f8_output_tensor = torch.empty_like(f16_input, dtype=torch.int8)
+    f8_output = triton.reinterpret(f8_output_tensor, in_dtype)
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    copy_kernel[grid](f16_input, f8_output, n_elements, BLOCK_SIZE=1024)
+
+    f16_output = torch.empty_like(f16_input, dtype=out_dtype)
+    copy_kernel[grid](f8_output, f16_output, n_elements, BLOCK_SIZE=1024)
+
+    abs_error = torch.abs(f16_input - f16_output)
+
+    all_f8_vals_tensor = torch.tensor(range(2 ** 8), dtype=torch.uint8, device=device)
+    all_f8_vals = triton.reinterpret(all_f8_vals_tensor, in_dtype)
+    all_f8_vals_in_f16 = torch.empty_like(all_f8_vals_tensor, dtype=out_dtype)
+    copy_kernel[grid](all_f8_vals, all_f8_vals_in_f16, n_elements=256, BLOCK_SIZE=1024)
+
+    all_finite_f8_vals_in_f16 = all_f8_vals_in_f16[
+        torch.isfinite(all_f8_vals_in_f16)
+    ]
+
+    min_error = torch.min(
+        torch.abs(
+            f16_input.reshape((-1, 1))
+            - all_finite_f8_vals_in_f16.reshape((1, -1))
+        ),
+        dim=1,
+    )[0]
+
+    # WARN: only normalized numbers are handled
+    f8_normal_min = 1 << in_dtype.fp_mantissa_width  # 0b00001000 for float8e4
+    f8_normal_max = 0b01111110 if in_dtype == tl.float8e4 else 0b01111011
+    f16_min, f16_max, f16_max_minus_1 = convert_float_to_float32(torch.tensor([f8_normal_min, f8_normal_max, f8_normal_max - 1], dtype=torch.int8), in_dtype)
+    assert torch.all(torch.isfinite(f16_min))
+    assert torch.all(torch.isfinite(f16_max))
+    thres_error = f16_max - f16_max_minus_1
+    mismatch = torch.logical_and(
+        torch.logical_or(abs_error != min_error, abs_error > thres_error), torch.logical_and(torch.isfinite(f16_input), torch.logical_and(torch.abs(f16_input) <= f16_max, torch.abs(f16_input) >= f16_min))
+    )
+    assert torch.all(
+        torch.logical_not(mismatch)
+    ), f"f16_input[mismatch]={f16_input[mismatch]} f16_output[mismatch]={f16_output[mismatch]} abs_error[mismatch]={abs_error[mismatch]} min_error[mismatch]={min_error[mismatch]}"
+
 
 # ---------------
 # test reduce
@@ -1492,6 +1524,112 @@ def test_reduce2d(op, dtype_str, shape, axis, device):
             np.testing.assert_equal(z_ref_value, z_tri_value)
         else:
             np.testing.assert_equal(z_ref, z_tri)
+
+
+scan2d_shapes = [(16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
+
+scan_configs = [
+    (op, type, shape, 1)
+    for type in ['int32', 'float32']
+    for shape in scan2d_shapes
+    for op in ['cumsum']
+]
+
+
+@pytest.mark.parametrize("op, dtype_str, shape, axis", scan_configs)
+def test_scan2d(op, dtype_str, shape, axis, device):
+    check_type_supported(dtype_str, device)
+
+    # triton kernel
+    @triton.jit
+    def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
+        range_m = tl.arange(0, BLOCK_M)
+        range_n = tl.arange(0, BLOCK_N)
+        x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
+        z = GENERATE_TEST_HERE
+        tl.store(Z + range_m[:, None] * BLOCK_N + range_n[None, :], z)
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis=1)'})
+    # input
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    z = np.empty_like(x)
+    x_tri = to_triton(x, device=device)
+    numpy_op = {'cumsum': np.cumsum}[op]
+    z_dtype_str = dtype_str
+    z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+    # triton result
+    z_tri = to_triton(z, device=device)
+    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+    z_tri = to_numpy(z_tri)
+    # compare
+    if dtype_str == 'float32':
+        np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
+    else:
+        np.testing.assert_equal(z_ref, z_tri)
+
+
+scan_layouts = [
+    BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0]),
+    BlockedLayout([4, 1], [4, 8], [1, 4], [1, 0]),
+    BlockedLayout([2, 2], [4, 8], [2, 2], [1, 0]),
+    BlockedLayout([2, 2], [8, 4], [2, 2], [1, 0]),
+]
+
+
+@pytest.mark.parametrize("src_layout", scan_layouts)
+def test_scan_layouts(src_layout, device):
+    ir = f"""
+    #blocked = {src_layout}
+    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
+    tt.func public @kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
+      %cst = arith.constant dense<32> : tensor<32x1xi32, #blocked>
+      %0 = tt.make_range {{end = 32 : i32, start = 0 : i32}} : tensor<32xi32, #triton_gpu.slice<{{dim = 1, parent = #blocked}}>>
+      %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<32xi32, #triton_gpu.slice<{{dim = 1, parent = #blocked}}>>) -> tensor<32x1xi32, #blocked>
+      %2 = arith.muli %1, %cst : tensor<32x1xi32, #blocked>
+      %3 = tt.splat %arg0 : (!tt.ptr<i32>) -> tensor<32x1x!tt.ptr<i32>, #blocked>
+      %4 = tt.addptr %3, %2 : tensor<32x1x!tt.ptr<i32>, #blocked>, tensor<32x1xi32, #blocked>
+      %5 = tt.make_range {{end = 32 : i32, start = 0 : i32}} : tensor<32xi32, #triton_gpu.slice<{{dim = 0, parent = #blocked}}>>
+      %6 = tt.expand_dims %5 {{axis = 0 : i32}} : (tensor<32xi32, #triton_gpu.slice<{{dim = 0, parent = #blocked}}>>) -> tensor<1x32xi32, #blocked>
+      %7 = tt.broadcast %4 : (tensor<32x1x!tt.ptr<i32>, #blocked>) -> tensor<32x32x!tt.ptr<i32>, #blocked>
+      %8 = tt.broadcast %6 : (tensor<1x32xi32, #blocked>) -> tensor<32x32xi32, #blocked>
+      %9 = tt.addptr %7, %8 : tensor<32x32x!tt.ptr<i32>, #blocked>, tensor<32x32xi32, #blocked>
+      %10 = tt.load %9 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<32x32xi32, #blocked>
+      %11 = "tt.scan"(%10) <{{axis = 1 : i32}}> ({{
+      ^bb0(%arg2: i32, %arg3: i32):
+        %16 = arith.addi %arg2, %arg3 : i32
+        tt.scan.return %16 : i32
+      }}) : (tensor<32x32xi32, #blocked>) -> tensor<32x32xi32, #blocked>
+      %12 = tt.splat %arg1 : (!tt.ptr<i32>) -> tensor<32x1x!tt.ptr<i32>, #blocked>
+      %13 = tt.addptr %12, %2 : tensor<32x1x!tt.ptr<i32>, #blocked>, tensor<32x1xi32, #blocked>
+      %14 = tt.broadcast %13 : (tensor<32x1x!tt.ptr<i32>, #blocked>) -> tensor<32x32x!tt.ptr<i32>, #blocked>
+      %15 = tt.addptr %14, %8 : tensor<32x32x!tt.ptr<i32>, #blocked>, tensor<32x32xi32, #blocked>
+      tt.store %15, %11 {{cache = 1 : i32, evict = 1 : i32}} : tensor<32x32xi32, #blocked>
+      tt.return
+    }}
+    }}
+    """
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        kernel = triton.compile(f.name)
+    M = 32
+    N = 32
+    rs = RandomState(17)
+    x = rs.randint(-100, 100, (M, N)).astype('int32')
+
+    z = np.zeros((M, N)).astype('int32')
+    x_tri = torch.tensor(x, device=device)
+    z_tri = torch.tensor(z, device=device)
+
+    kernel[(1, 1, 1)](x_tri, z_tri)
+
+    z_ref = np.cumsum(x, axis=1)
+
+    np.testing.assert_equal(z_ref, z_tri.cpu().numpy())
 
 
 layouts = [
@@ -2254,7 +2392,7 @@ def test_vectorization_hints(has_hints, device):
 # ---------------
 
 
-@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs"])
+@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs", ".wt"])
 def test_store_cache_modifier(cache):
     src = torch.empty(128, device='cuda')
     dst = torch.empty(128, device='cuda')
@@ -2271,18 +2409,27 @@ def test_store_cache_modifier(cache):
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' not in ptx
+        assert 'st.global.wt' not in ptx
     if cache == '.wb':
         assert 'st.global.wb' in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' not in ptx
+        assert 'st.global.wt' not in ptx
     if cache == '.cg':
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' in ptx
         assert 'st.global.cs' not in ptx
+        assert 'st.global.wt' not in ptx
     if cache == '.cs':
         assert 'st.global.wb' not in ptx
         assert 'st.global.cg' not in ptx
         assert 'st.global.cs' in ptx
+        assert 'st.global.wt' not in ptx
+    if cache == '.wt':
+        assert 'st.global.wb' not in ptx
+        assert 'st.global.cg' not in ptx
+        assert 'st.global.cs' not in ptx
+        assert 'st.global.wt' in ptx
 
 # ---------------
 # test if

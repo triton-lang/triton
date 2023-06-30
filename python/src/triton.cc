@@ -91,6 +91,7 @@ void init_triton_ir(py::module &&m) {
       .value("CG", mlir::triton::CacheModifier::CG)
       .value("WB", mlir::triton::CacheModifier::WB)
       .value("CS", mlir::triton::CacheModifier::CS)
+      .value("WT", mlir::triton::CacheModifier::WT)
       .export_values();
 
   py::enum_<mlir::triton::MemSemantic>(m, "MEM_SEMANTIC")
@@ -643,13 +644,7 @@ void init_triton_ir(py::module &&m) {
           [](mlir::OpBuilder &self) -> mlir::Type { return self.getI64Type(); })
       .def("get_fp8e4_ty",
            [](mlir::OpBuilder &self) -> mlir::Type {
-             return self.getType<mlir::Float8E4M3FNUZType>();
-           })
-      .def("get_fp8e4b15_ty",
-           [](mlir::OpBuilder &self) -> mlir::Type {
-             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
-             // have a float-like type compatible with float only native ops
-             return self.getType<mlir::Float8E4M3B11FNUZType>();
+             return self.getType<mlir::Float8E4M3FNType>();
            })
       .def("get_fp8e5_ty",
            [](mlir::OpBuilder &self) -> mlir::Type {
@@ -1410,6 +1405,21 @@ void init_triton_ir(py::module &&m) {
              }
              return self.create<mlir::triton::ReduceReturnOp>(loc,
                                                               return_values);
+           })
+      .def("create_scan",
+           [](mlir::OpBuilder &self, std::vector<mlir::Value> operands,
+              int axis) -> mlir::OpState {
+             auto loc = self.getUnknownLoc();
+             return self.create<mlir::triton::ScanOp>(loc, operands, axis);
+           })
+      .def("create_scan_ret",
+           [](mlir::OpBuilder &self, py::args args) -> mlir::OpState {
+             auto loc = self.getUnknownLoc();
+             llvm::SmallVector<mlir::Value> return_values;
+             for (const auto &arg : args) {
+               return_values.push_back(py::cast<mlir::Value>(arg));
+             }
+             return self.create<mlir::triton::ScanReturnOp>(loc, return_values);
            })
       .def("create_ptr_to_int",
            [](mlir::OpBuilder &self, mlir::Value &val,
