@@ -1494,10 +1494,11 @@ def test_reduce2d(op, dtype_str, shape, axis, device):
             np.testing.assert_equal(z_ref, z_tri)
 
 
-scan2d_shapes = [(16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
+scan2d_shapes = [(8, 32), (16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
 
 scan_configs = [
-    (op, type, shape, axis)
+    (op, type, shape, axis, num_warps)
+    for num_warps in [4, 16]
     for type in ['int32', 'float32']
     for axis in [1, 0]
     for shape in scan2d_shapes
@@ -1505,8 +1506,8 @@ scan_configs = [
 ]
 
 
-@pytest.mark.parametrize("op, dtype_str, shape, axis", scan_configs)
-def test_scan2d(op, dtype_str, shape, axis, device):
+@pytest.mark.parametrize("op, dtype_str, shape, axis, num_warps", scan_configs)
+def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
     check_type_supported(dtype_str, device)
 
     # triton kernel
@@ -1529,7 +1530,7 @@ def test_scan2d(op, dtype_str, shape, axis, device):
     z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
     z_tri = to_triton(z, device=device)
-    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
+    kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
     z_tri = to_numpy(z_tri)
     # compare
     if dtype_str == 'float32':

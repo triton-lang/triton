@@ -122,8 +122,7 @@ unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
-  SmallVector<unsigned> sizePerThreads(getEncoding().getSizePerThread().begin(),
-                                       getEncoding().getSizePerThread().end());
+  SmallVector<unsigned> sizePerThreads = getContigPerThread(getEncoding());
   sizePerThreads[getAxis()] = 1;
   return product<unsigned>(sizePerThreads);
 }
@@ -159,8 +158,9 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
   unsigned axis = getAxis();
-  return type.getShape()[axis] /
-         (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]);
+  return ceil<unsigned>(
+      type.getShape()[axis],
+      (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
@@ -173,8 +173,9 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
   for (unsigned i = 0; i < sizePerThreads.size(); i++) {
     if (i == axis)
       continue;
-    numBlocks *= type.getShape()[i] /
-                 (sizePerThreads[i] * threadsPerWarp[i] * warpsPerCTA[i]);
+    numBlocks *= ceil<unsigned>(
+        type.getShape()[i],
+        (sizePerThreads[i] * threadsPerWarp[i] * warpsPerCTA[i]));
   }
   return numBlocks;
 }
@@ -194,8 +195,8 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
   unsigned tensorSizeInBytes =
       type.getNumElements() * type.getElementTypeBitWidth() / 8;
-  return tensorSizeInBytes /
-         (getAxisNumElementsPerThread() * getAxisNumThreadsPerWarp());
+  return ceil<unsigned>(tensorSizeInBytes, (getAxisNumElementsPerThread() *
+                                            getAxisNumThreadsPerWarp()));
 }
 
 triton::gpu::BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
@@ -208,7 +209,7 @@ unsigned ScanLoweringHelper::getAxisElementStride() {
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= getEncoding().getSizePerThread()[dim];
+    stride *= getContigPerThread(getEncoding())[dim];
   }
   llvm_unreachable("Axis not found in order");
 }
