@@ -1205,7 +1205,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // -----
 
-// Check if RematerializeForward doesn't apply when a convert has multiple uses
+// Ensure that RematerializeForward doesn't apply when a convert has multiple uses
 // CHECK-LABEL: loop_convert_multi_uses
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
