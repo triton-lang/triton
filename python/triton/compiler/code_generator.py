@@ -83,6 +83,7 @@ def _get_fn_file_line(fn):
     begin_line = fn.fn.__code__.co_firstlineno
     return file_name, begin_line
 
+
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
 
 

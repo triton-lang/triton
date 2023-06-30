@@ -187,8 +187,8 @@ private:
         auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
         auto coords = SharedToDotOperandMMAv1::getMNCoords(
-            threadId, loc, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
-            isARow, isBRow, isAVec4, isBVec4);
+            threadId, loc, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout,
+            shape, isARow, isBRow, isAVec4, isBVec4);
         return coords[elemId];
       } else {
         llvm_unreachable("Unexpected MMALayout version");

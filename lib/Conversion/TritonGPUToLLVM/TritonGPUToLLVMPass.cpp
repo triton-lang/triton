@@ -170,11 +170,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
     newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
-    auto moduleOp = funcOp->getParentOfType<ModuleOp>();
-    auto scopeAttr =
-        buildScopeAttr(moduleOp, funcOp.getName(), getTypeConverter());
-    newFuncOp->setLoc(FusedLoc::get(newFuncOp.getContext(),
-                                    {funcOp.getLoc()}, scopeAttr));
 
     rewriter.eraseOp(funcOp);
     return success();
