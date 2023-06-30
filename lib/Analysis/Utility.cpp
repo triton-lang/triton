@@ -193,10 +193,14 @@ bool ScanLoweringHelper::isSupported() {
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
-  unsigned tensorSizeInBytes =
-      type.getNumElements() * type.getElementTypeBitWidth() / 8;
-  return ceil<unsigned>(tensorSizeInBytes, (getAxisNumElementsPerThread() *
-                                            getAxisNumThreadsPerWarp()));
+  unsigned elementSizeInBytes = type.getElementTypeBitWidth() / 8;
+  auto mod = scanOp->getParentOfType<ModuleOp>();
+  unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  unsigned numNonAxisElementsPerWapr =
+      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
+  unsigned numElements = numWarps * numNonAxisElementsPerWapr *
+                         getAxisNumBlocks() * getNonAxisNumBlocks();
+  return elementSizeInBytes * numElements;
 }
 
 triton::gpu::BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
