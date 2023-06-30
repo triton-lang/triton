@@ -319,12 +319,8 @@ class JITFunction(KernelInterface[T]):
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
 
         src = f"""
-<<<<<<< HEAD
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, warp_size=32, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None):
-=======
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
+def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, warp_size=32, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
     from ..compiler import compile, CompiledKernel
->>>>>>> oai/main
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
@@ -365,11 +361,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     bin = cache[device].get(key, None)
     if bin is not None:
       if not warmup:
-<<<<<<< HEAD
-          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.warp_size, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, {args})
-=======
-          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, {args})
->>>>>>> oai/main
+          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.warp_size, bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, {args})
       return bin
     # kernel not cached -- compile
     else:
@@ -386,17 +378,10 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
       for i, arg in constants.items():
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {{i}} is not supported")
-<<<<<<< HEAD
       if not self._call_hook(key, signature, device, constants, num_warps, warp_size, num_stages, extern_libs, configs):
-        bin = triton.compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, warp_size=warp_size, num_stages=num_stages, extern_libs=extern_libs, configs=configs, debug=self.debug)
+        bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, warp_size=warp_size, num_stages=num_stages, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
         if not warmup:
-            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.warp_size, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
-=======
-      if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
-        bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
-        if not warmup:
-            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
->>>>>>> oai/main
+            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.warp_size, bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
         self.cache[device][key] = bin
         return bin
       return None

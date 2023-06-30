@@ -23,11 +23,7 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
               "number of warps">,
 
        Option<"threadsPerWarp", "threads-per-warp",
-<<<<<<< HEAD
               "int32_t", /*default*/"TRITONGPU_DEFAULT_WARPSIZE",
-=======
-              "int32_t", /*default*/"32",
->>>>>>> oai/main
               "number of threads per warp">,
    ];
 }

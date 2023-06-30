@@ -60,9 +60,8 @@ public:
                                          dstType.getElementType(), encoding);
     auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
         convert.getLoc(), tmpType, convert.getOperand());
-    auto newConvert = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        convert.getLoc(), dstType, tmp);
-    rewriter.replaceOp(convert, {newConvert});
+    rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(convert, dstType,
+                                                                tmp);
     return mlir::success();
   }
 
@@ -84,7 +83,6 @@ public:
            !dstParent.isa<triton::gpu::MfmaEncodingAttr>()))
         return mlir::failure();
 
-<<<<<<< HEAD
       if (dstParent.isa<triton::gpu::MmaEncodingAttr>()) {
         auto dstParentMma = dstParent.cast<triton::gpu::MmaEncodingAttr>();
         if (dstParentMma.isVolta() || dstParentMma.getWarpsPerCTA()[1] > 1)
@@ -98,15 +96,6 @@ public:
           return mlir::failure();
         return processEncoding(dstParentMfma, convert, dstType, rewriter);
       }
-=======
-      auto tmpType = RankedTensorType::get(
-          dstType.getShape(), dstType.getElementType(), dstParentMma);
-      auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          convert.getLoc(), tmpType, convert.getOperand());
-      rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(op, dstType,
-                                                                tmp);
-      return mlir::success();
->>>>>>> oai/main
     }
     return mlir::failure();
   }

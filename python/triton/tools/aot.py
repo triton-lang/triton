@@ -5,7 +5,7 @@ from .._C.libtriton.triton import ir
 # import triton.compiler.compiler as tc
 from ..compiler.compiler import (get_amdgpu_arch_fulldetails, llir_to_amdgcn_and_hsaco,
                                  llir_to_ptx, optimize_ttgir, optimize_ttir,
-                                 ttgir_to_llir, ttir_to_ttgir)
+                                 ttgir_to_llir, ttir_to_ttgir, CUDA_DEFAULT_WARP_SIZE)
 
 if __name__ == '__main__':
 
@@ -75,19 +75,11 @@ if __name__ == '__main__':
 
         # triton-ir -> triton-gpu-ir
         # use compute_capability == 80
-<<<<<<< HEAD
-        module = tc.ttir_to_ttgir(module, num_warps=args.num_warps, warpsize=arch_warpsize)  # num_stages=3, compute_capability=80)
-        module = tc.optimize_ttgir(module, num_stages=3, arch=args.gfx)
+        module = ttir_to_ttgir(module, num_warps=args.num_warps, warpsize=arch_warpsize)  # num_stages=3, compute_capability=80)
+        module = optimize_ttgir(module, num_stages=3, arch=args.gfx)
         # triton-gpu-ir -> llvm-ir
         # use compute_capability == 80
-        module = tc.ttgir_to_llir(module, extern_libs=None, arch=args.gfx)
-=======
-        module = ttir_to_ttgir(module, num_warps=args.num_warps)  # num_stages=3, compute_capability=80)
-        module = optimize_ttgir(module, num_stages=3, arch=80)
-        # triton-gpu-ir -> llvm-ir
-        # use compute_capability == 80
-        module = ttgir_to_llir(module, extern_libs=None, arch=80)
->>>>>>> oai/main
+        module = ttgir_to_llir(module, extern_libs=None, arch=args.gfx)
         # llvm-ir -> amdgcn asm, hsaco binary
         module, hsaco_path = llir_to_amdgcn_and_hsaco(module, arch_name, arch_triple, arch_features)
 
@@ -104,23 +96,14 @@ if __name__ == '__main__':
         raise argparse.ArgumentError(None, "Must specify --sm or --gfx for ttgir compilation")
 
     # triton-ir -> triton-gpu-ir
-<<<<<<< HEAD
-    module = tc.ttir_to_ttgir(module, num_warps=args.num_warps, warpsize=tc.CUDA_DEFAULT_WARP_SIZE)
-    module = tc.optimize_ttgir(module, num_stages=3, arch=arch)
-=======
-    module = ttir_to_ttgir(module, num_warps=args.num_warps)
-    module = optimize_ttgir(module, num_stages=3, arch=args.sm)
->>>>>>> oai/main
+    module = ttir_to_ttgir(module, num_warps=args.num_warps, warpsize=CUDA_DEFAULT_WARP_SIZE)
+    module = optimize_ttgir(module, num_stages=3, arch=arch)
     if args.target == 'triton-gpu-ir':
         print(module.str())
         sys.exit(0)
 
     # triton-gpu-ir -> llvm-ir
-<<<<<<< HEAD
-    module = tc.ttgir_to_llir(module, extern_libs=None, arch=arch)
-=======
-    module = ttgir_to_llir(module, extern_libs=None, arch=args.sm)
->>>>>>> oai/main
+    module = ttgir_to_llir(module, extern_libs=None, arch=arch)
     if args.target == 'llvm-ir':
         print(module)
         sys.exit(0)

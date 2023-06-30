@@ -51,13 +51,8 @@ def test_assert(func: str):
         kernel_device_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
         kernel_device_assert_scalar[(1,)](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "no_debug":
-<<<<<<< HEAD
         # TRITON_DEBUG=True can override the debug flag
         kernel_device_assert_no_debug[(1,)](x, y, num_warps=2, BLOCK=shape[0])
-=======
-        # TRITON_DEBUG=1 can override the debug flag
-        kernel_device_assert_no_debug[(1,)](x, y, BLOCK=shape[0])
->>>>>>> oai/main
     elif func == "assert":
         kernel_assert[(1,)](x, y, num_warps=2, BLOCK=shape[0])
     elif func == "static_assert":

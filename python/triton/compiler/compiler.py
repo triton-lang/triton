@@ -15,7 +15,8 @@ from typing import Any, Tuple
 from .._C.libtriton.triton import (add_external_libs, compile_ptx_to_cubin,
                                    get_shared_memory_size, ir,
                                    translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
-                                   translate_triton_gpu_to_llvmir)
+                                   translate_triton_gpu_to_llvmir, get_arch_info,
+                                   get_warp_size)
 from ..common.backend import get_backend
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
@@ -64,16 +65,10 @@ def optimize_ttir(mod, arch):
     return mod
 
 
-<<<<<<< HEAD
 def ttir_to_ttgir(mod, num_warps, warpsize):
-    pm = _triton.ir.pass_manager(mod.context)
-    pm.add_convert_triton_to_tritongpu_pass(num_warps, warpsize)
-=======
-def ttir_to_ttgir(mod, num_warps):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_convert_triton_to_tritongpu_pass(num_warps)
->>>>>>> oai/main
+    pm.add_convert_triton_to_tritongpu_pass(num_warps, warpsize)
     pm.run(mod)
     return mod
 
@@ -219,8 +214,8 @@ def get_amdgpu_arch_fulldetails():
     """
     try:
         # TODO: package rocm.cc with Triton
-        arch_info = _triton.get_arch_info()
-        warpsize = _triton.get_warp_size()
+        arch_info = get_arch_info()
+        warp_size = get_warp_size()
         gfx_arch_details = re.search('amd.*', arch_info).group(0).strip().split('--')
         arch_triple = gfx_arch_details[0]
         arch_name_features = gfx_arch_details[1].split(':')
@@ -230,7 +225,7 @@ def get_amdgpu_arch_fulldetails():
         if (len(arch_name_features) == 3):
             arch_features = "+" + re.search('\\w+', arch_name_features[1]).group(0) + ","\
                             "-" + re.search('\\w+', arch_name_features[2]).group(0)
-        return [arch_triple, arch_name, arch_features, warpsize]
+        return [arch_triple, arch_name, arch_features, warp_size]
     except BaseException:
         return None
 
@@ -390,17 +385,6 @@ def add_cuda_stages(arch, extern_libs, stages):
 
 
 def compile(fn, **kwargs):
-<<<<<<< HEAD
-    if is_hip():
-        capability = None
-    else:
-        capability = kwargs.get("cc", None)
-    arch = get_architecture_descriptor(capability)
-    is_cuda = _is_cuda(arch)
-    warp_size = CUDA_DEFAULT_WARP_SIZE if _is_cuda(arch) else arch[3]
-    context = _triton.ir.context()
-    asm = dict()
-=======
     # Get device type to decide which backend should be used
     device_type = kwargs.get("device_type", "cuda")
     _device_backend = get_backend(device_type)
@@ -414,8 +398,8 @@ def compile(fn, **kwargs):
 
     is_cuda = device_type == "cuda" and _is_cuda(arch)
     is_hip = device_type in ["cuda", "hip"] and not is_cuda
+    warp_size = CUDA_DEFAULT_WARP_SIZE if _is_cuda(arch) else arch[3]
     context = ir.context()
->>>>>>> oai/main
     constants = kwargs.get("constants", dict())
     num_warps = kwargs.get("num_warps", 4)
     num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else 2)
@@ -525,7 +509,7 @@ def compile(fn, **kwargs):
             path = metadata_group.get(ir_filename)
             if path is None:
                 next_module = compile_kernel(module)
-                if ir == "amdgcn":
+                if ir_name == "amdgcn":
                     extra_file_name = f"{name}.hsaco_path"
                     metadata_group[ir_filename] = fn_cache_manager.put(next_module[0], ir_filename)
                     metadata_group[extra_file_name] = fn_cache_manager.put(next_module[1], extra_file_name)
@@ -636,16 +620,11 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             if stream is None:
-<<<<<<< HEAD
-                stream = triton.runtime.jit.get_cuda_stream()
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.warp_size, self.shared, stream, self.cu_function,
-=======
                 if self.device_type in ["cuda", "rocm"]:
                     stream = get_cuda_stream()
                 else:
                     stream = get_backend(self.device_type).get_stream(None)
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
->>>>>>> oai/main
+            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.warp_size, self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
 
