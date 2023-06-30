@@ -1289,6 +1289,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     }
     %26 = arith.truncf %25#0 : f32 to f16
     tt.store %arg2, %26 {cache = 1 : i32, evict = 1 : i32} : f16
+  }
+}
 
 // -----
 
