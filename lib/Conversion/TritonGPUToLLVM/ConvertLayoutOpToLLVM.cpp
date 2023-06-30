@@ -18,7 +18,7 @@ namespace SharedToDotOperandMMAv1 {
 using CoordTy = SmallVector<Value>;
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
-SmallVector<CoordTy> getMNCoords(Value thread,
+SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  ArrayRef<unsigned int> wpt,
                                  const MmaEncodingAttr &mmaLayout,
@@ -184,7 +184,7 @@ private:
         auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
         auto coords = SharedToDotOperandMMAv1::getMNCoords(
-            threadId, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
+            threadId, loc, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout, shape,
             isARow, isBRow, isAVec4, isBVec4);
         return coords[elemId];
       } else {

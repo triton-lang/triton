@@ -105,10 +105,20 @@ public:
   }
 
   void setInsertionPointToEnd(mlir::Block &block) {
-     builder->setInsertionPointToEnd(&block);
+    builder->setInsertionPointToEnd(&block);
+    if (!block.empty())
+      setLastLoc(block.back().getLoc());
   }
 
-  void setInsertionPointAfter(mlir::Operation &op);
+  void setInsertionPointAfter(mlir::Operation &op) {
+    builder->setInsertionPointAfter(&op);
+    setLastLoc(op.getLoc());
+  }
+
+  void restoreInsertionPoint(mlir::OpBuilder::InsertPoint pt) {
+    builder->restoreInsertionPoint(pt);
+    setLastLoc(pt.getPoint()->getLoc());
+  }
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     auto loc = getLastLoc();
@@ -555,15 +565,15 @@ void init_triton_ir(py::module &&m) {
       // insertion block/point
       .def("set_insertion_point_to_start",
            [](TritonOpBuilder &self, mlir::Block &block) -> void {
-             self.getBuilder().setInsertionPointToStart(&block);
+             self.setInsertionPointToStart(block);
            })
       .def("set_insertion_point_to_end",
            [](TritonOpBuilder &self, mlir::Block &block) {
-             self.getBuilder().setInsertionPointToEnd(&block);
+             self.setInsertionPointToEnd(block);
            })
       .def("set_insertion_point_after",
            [](TritonOpBuilder &self, mlir::Operation &op) {
-             self.getBuilder().setInsertionPointAfter(&op);
+             self.setInsertionPointAfter(op);
            })
       .def(
           "get_insertion_block",
@@ -577,7 +587,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("restore_insertion_point",
            [](TritonOpBuilder &self, mlir::OpBuilder::InsertPoint pt) {
-             self.getBuilder().restoreInsertionPoint(pt);
+             self.restoreInsertionPoint(pt);
            })
       // Attr
       .def("get_bool_attr",
