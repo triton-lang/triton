@@ -341,6 +341,12 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
       if (simulateBackwardRematerialization(other, processed, layout, toConvert,
                                             srcEncoding) > 0)
         return failure();
+      SetVector<Operation *> processed;
+      SetVector<Attribute> layout;
+      llvm::MapVector<Value, Attribute> toConvert;
+      if (simulateBackwardRematerialization(other, processed, layout, toConvert,
+                                            srcEncoding) > 0)
+        return failure();
     }
     return success();
   }

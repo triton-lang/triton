@@ -1,6 +1,5 @@
 from __future__ import annotations  # remove after python 3.11
 
-import warnings
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
@@ -677,16 +676,6 @@ def cast(input: tl.tensor,
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
 
-    if builder.arch < 89 and \
-       (src_sca_ty.is_fp8e4() or dst_sca_ty.is_fp8e4()):
-        warnings.warn("Standard tl.float8e4 format will be deprecated on SM < 89. "
-                      "Please use tl.float8e4b15.", DeprecationWarning)
-
-    # Unsupported conversion:
-    if (src_sca_ty.is_fp8e4b15() and not dst_sca_ty.is_fp16()) or \
-       (dst_sca_ty.is_fp8e4b15() and not src_sca_ty.is_fp16()):
-        raise ValueError('fp8e4b15 can only be converted to/from fp16')
-
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
        (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()):
@@ -807,6 +796,8 @@ def _str_to_store_cache_modifier(cache_modifier):
             cache = ir.CACHE_MODIFIER.CG
         elif cache_modifier == ".cs":
             cache = ir.CACHE_MODIFIER.CS
+        elif cache_modifier == ".wt":
+            cache = ir.CACHE_MODIFIER.WT
         else:
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
@@ -1326,6 +1317,32 @@ def reduction(
 
     return tuple(
         wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar)
+        for i in range(len(inputs))
+    )
+
+
+# ===----------------------------------------------------------------------===
+#                               Associative Scan
+# ===----------------------------------------------------------------------===
+
+
+def associative_scan(
+    inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
+) -> Tuple[tl.tensor, ...]:
+    if len(inputs) != 1:
+        raise ValueError("Current implementation only support single tensor input")
+    shape = inputs[0].type.shape
+
+    def wrap_tensor(x, scalar_ty):
+        res_ty = tl.block_type(scalar_ty, shape)
+        return tl.tensor(x, res_ty)
+
+    scan_op = builder.create_scan([t.handle for t in inputs], axis)
+    region_builder_fn(scan_op)
+    scan_op.verify()
+
+    return tuple(
+        wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar)
         for i in range(len(inputs))
     )
 

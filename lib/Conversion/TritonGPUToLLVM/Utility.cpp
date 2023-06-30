@@ -160,8 +160,9 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return builder.launch(rewriter, loc, void_ty(ctx));
 }
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
+static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
+                            Value val, int i, const std::string &shuffleType,
+                            const std::string &clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -169,8 +170,8 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = shflSync(loc, rewriter, val0, i);
-    val1 = shflSync(loc, rewriter, val1, i);
+    val0 = commonShflSync(loc, rewriter, val0, i, shuffleType, clamp);
+    val1 = commonShflSync(loc, rewriter, val1, i, shuffleType, clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -178,14 +179,24 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   }
 
   PTXBuilder builder;
-  auto &shfl = builder.create("shfl.sync")->o("bfly").o("b32");
+  auto &shfl = builder.create("shfl.sync")->o(shuffleType).o("b32");
   auto *dOpr = builder.newOperand("=r");
   auto *aOpr = builder.newOperand(val, "r");
   auto *bOpr = builder.newConstantOperand(i);
-  auto *cOpr = builder.newConstantOperand("0x1f");
+  auto *cOpr = builder.newConstantOperand(clamp);
   auto *maskOpr = builder.newConstantOperand("0xffffffff");
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
   return builder.launch(rewriter, loc, val.getType(), false);
+}
+
+Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+               int i) {
+  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
+}
+
+Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i) {
+  return commonShflSync(loc, rewriter, val, i, "up", "0x0");
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
