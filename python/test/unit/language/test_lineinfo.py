@@ -71,7 +71,7 @@ def check_file_lines(file_lines, file_name, lineno):
     return False
 
 
-func_types = ["single", "call", "call_noinline"]
+func_types = ["single", "call", "call_noinline", "multi_files"]
 
 
 @pytest.mark.parametrize("func", func_types)
@@ -96,8 +96,6 @@ def test_line_info(func: str):
         kernel_info = kernel_multi_files[(1,)](x, y, BLOCK=shape[0])
 
     file_lines = extract_file_lines(kernel_info.asm["cubin"])
-    for file, line in file_lines:
-        print(file, line)
     if func == "single":
         assert (check_file_lines(file_lines, "test_lineinfo.py", 16))
         assert (check_file_lines(file_lines, "test_lineinfo.py", 17))
@@ -112,6 +110,5 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "test_lineinfo.py", 38))
     elif func == "multi_files":
         assert (check_file_lines(file_lines, "test_lineinfo.py", 48))
-        assert (check_file_lines(file_lines, "test_lineinfo.py", 49))
         assert (check_file_lines(file_lines, "test_lineinfo.py", 50))
         assert (check_file_lines(file_lines, "standard.py", 27))
