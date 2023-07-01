@@ -79,8 +79,13 @@ def _get_fn_file_line(fn):
     base_fn = fn
     while not isinstance(base_fn, JITFunction):
         base_fn = base_fn.fn
-    file_name = fn.fn.__code__.co_filename
-    begin_line = fn.fn.__code__.co_firstlineno
+    file_name = base_fn.fn.__code__.co_filename
+    lines, begin_line = inspect.getsourcelines(base_fn.fn)
+    for line in lines:
+        if line.strip().startswith('@'):
+            begin_line += 1
+        else:
+            break
     return file_name, begin_line
 
 
@@ -204,7 +209,8 @@ class CodeGenerator(ast.NodeVisitor):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
-        self.begin_line = begin_line
+        # node.lineno starts from 1, so we need to subtract 1
+        self.begin_line = begin_line - 1
         self.builder.set_loc(file_name, begin_line, 0)
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
