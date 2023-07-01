@@ -43,6 +43,13 @@ def kernel_call_noinline(X, Y, BLOCK: tl.constexpr):
     device_noinline(X, Y, BLOCK)
 
 
+@triton.jit
+def kernel_multi_files(X, Y, BLOCK: tl.constexpr):
+    x = tl.load(X + tl.arange(0, BLOCK))
+    y = tl.sigmoid(x)
+    tl.store(Y + tl.arange(0, BLOCK), y)
+
+
 def extract_file_lines(asm):
     fd, path = tempfile.mkstemp()
     with open(fd, 'wb') as cubin:
@@ -57,9 +64,9 @@ def extract_file_lines(asm):
     return file_lines
 
 
-def check_file_lines(file_lines, lineno):
+def check_file_lines(file_lines, file_name, lineno):
     for file, line in file_lines:
-        if "## File" in file and str(lineno) in line:
+        if file_name in file and str(lineno) in line:
             return True
     return False
 
@@ -76,7 +83,7 @@ def test_line_info(func: str):
     os.environ["TRITON_LINEINFO"] = "1"
 
     shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda')
+    x = torch.arange(0, shape[0], dtype=torch.float32, device='cuda')
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     kernel_info = {}
     if func == "single":
@@ -85,17 +92,26 @@ def test_line_info(func: str):
         kernel_info = kernel_call[(1,)](x, y, BLOCK=shape[0])
     elif func == "call_noinline":
         kernel_info = kernel_call_noinline[(1,)](x, y, BLOCK=shape[0])
+    elif func == "multi_files":
+        kernel_info = kernel_multi_files[(1,)](x, y, BLOCK=shape[0])
 
     file_lines = extract_file_lines(kernel_info.asm["cubin"])
+    for file, line in file_lines:
+        print(file, line)
     if func == "single":
-        assert (check_file_lines(file_lines, 15))
-        assert (check_file_lines(file_lines, 16))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 16))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 17))
     elif func == "call":
-        assert (check_file_lines(file_lines, 28))
-        assert (check_file_lines(file_lines, 21))
-        assert (check_file_lines(file_lines, 30))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 29))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 22))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 31))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, 42))
-        assert (check_file_lines(file_lines, 35))
-        assert (check_file_lines(file_lines, 36))
-        assert (check_file_lines(file_lines, 37))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 43))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 36))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 37))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 38))
+    elif func == "multi_files":
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 48))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 49))
+        assert (check_file_lines(file_lines, "test_lineinfo.py", 50))
+        assert (check_file_lines(file_lines, "standard.py", 27))

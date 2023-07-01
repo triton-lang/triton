@@ -304,6 +304,12 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
+        # Note that we didn't set the correct column number here, instead we set the column number
+        # the same as the line number.
+        # Weirdly, this is the only way to make the line number correct.
+        # Because in this PR, scopeline is set to be the same as column number.
+        # https://github.com/llvm/llvm-project/commit/72429a42ac33564fa82449d99dc234da32a05498
+        self.builder.set_loc(self.file_name, self.begin_line + node.lineno, self.begin_line + node.lineno)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults):
             arg_node = node.args.args[-i - 1]
