@@ -189,11 +189,10 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 
 class CodeGenerator(ast.NodeVisitor):
-    def __init__(self, context, prototype, gscope, attributes, constants, function_name, arch,
+    def __init__(self, context, prototype, gscope, attributes, constants, function_name,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None,
                  debug=False, noinline=False):
         self.builder = ir.builder(context)
-        self.builder.arch = arch
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
         self.prototype = prototype
@@ -869,9 +868,7 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = sys.modules[fn.fn.__module__].__dict__
             # If the callee is not set, we use the same debug setting as the caller
             debug = self.debug if fn.debug is None else fn.debug
-            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module,
-                                      function_name=fn_name, function_types=self.function_ret_types, debug=debug, noinline=fn.noinline,
-                                      arch=self.builder.arch)
+            generator = CodeGenerator(self.builder.context, prototype, gscope, attributes, constants, module=self.module, function_name=fn_name, function_types=self.function_ret_types, debug=debug, noinline=fn.noinline)
             generator.visit(fn.parse())
             callee_ret_type = generator.last_ret_type
             self.function_ret_types[fn_name] = callee_ret_type
@@ -1019,9 +1016,8 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return language.pointer_type(ty)
     tys = {
-        "fp8e4": language.float8e4,
         "fp8e5": language.float8e5,
-        "fp8e4b15": language.float8e4b15,
+        "fp8e4": language.float8e4,
         "fp16": language.float16,
         "bf16": language.bfloat16,
         "fp32": language.float32,
@@ -1053,7 +1049,7 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
+def ast_to_ttir(fn, signature, specialization, constants, debug):
     # canonicalize signature
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -1075,8 +1071,7 @@ def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,
                               function_name=function_name, attributes=new_attrs,
-                              is_kernel=True, debug=debug,
-                              arch=arch)
+                              is_kernel=True, debug=debug)
     try:
         generator.visit(fn.parse())
     except CompilationError as e:

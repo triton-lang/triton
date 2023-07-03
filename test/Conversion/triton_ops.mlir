@@ -187,3 +187,19 @@ tt.func @print_no_arg(%arg0: !tt.ptr<f32>) {
   tt.store %arg0, %0 {cache = 1 : i32, evict = 1 : i32} : f32
   tt.return
 }
+
+// CHECK-LABEL: scan_op
+tt.func @scan_op(%ptr: tensor<1x2x4x!tt.ptr<f32>>, %v : tensor<1x2x4xf32>) {
+  // CHECK: tt.scan
+  // CHECK-SAME: axis = 1
+  // CHECK: tt.scan.return
+  // CHECK-NEXT: (tensor<1x2x4xf32>) -> tensor<1x2x4xf32>
+  %a = "tt.scan"(%v) <{axis = 1 : i32}>({
+  ^bb0(%arg0: f32, %arg1: f32):
+    %add = arith.addf %arg0, %arg1 : f32
+    tt.scan.return %add : f32
+  }) : (tensor<1x2x4xf32>) -> tensor<1x2x4xf32>
+  tt.store %ptr, %a : tensor<1x2x4xf32>
+  tt.return
+
+}
