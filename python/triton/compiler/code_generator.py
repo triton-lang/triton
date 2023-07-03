@@ -310,12 +310,6 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
-        # Note that we didn't set the correct column number here, instead we set the column number
-        # the same as the line number.
-        # Weirdly, this is the only way to make the line number correct.
-        # Because in this PR, scopeline is set to be the same as column number.
-        # https://github.com/llvm/llvm-project/commit/72429a42ac33564fa82449d99dc234da32a05498
-        self.builder.set_loc(self.file_name, self.begin_line + node.lineno, self.begin_line + node.lineno)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults):
             arg_node = node.args.args[-i - 1]
@@ -992,16 +986,23 @@ class CodeGenerator(ast.NodeVisitor):
         return ''.join(values)
 
     def visit(self, node):
-        if node is not None:
-            self.last_node = node
-            if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-                self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+        if node is None:
+            return
         with warnings.catch_warnings():
             # The ast library added visit_Constant and deprecated some other
             # methods but we can't move to that without breaking Python 3.6 and 3.7.
             warnings.simplefilter("ignore", DeprecationWarning)  # python 3.9
             warnings.simplefilter("ignore", PendingDeprecationWarning)  # python 3.8
-            return super().visit(node)
+            self.last_node = node
+            last_loc = self.builder.get_loc()
+            if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
+                self.builder.set_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+                last_loc = self.builder.get_loc()
+            ret = super().visit(node)
+            # Reset the location to the last one before the visit
+            if last_loc:
+                self.builder.set_loc(last_loc)
+            return ret
 
     def generic_visit(self, node):
         raise UnsupportedLanguageConstruct(None, node, "unsupported AST node type: {}".format(type(node).__name__))

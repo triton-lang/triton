@@ -80,7 +80,7 @@ def test_line_info(func: str):
         subprocess.check_output(["nvdisasm", "-h"])
     except BaseException:
         pytest.skip("nvdisasm is not available")
-    os.environ["TRITON_LINEINFO"] = "1"
+    os.environ["TRITON_LINE_INFO"] = "1"
 
     shape = (128, )
     x = torch.arange(0, shape[0], dtype=torch.float32, device='cuda')

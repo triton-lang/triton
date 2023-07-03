@@ -81,10 +81,7 @@ public:
 
   mlir::OpBuilder &getBuilder() { return *builder; }
 
-  // Make a copy of the location
   void setLastLoc(const std::string &fileName, int line, int column) {
-    // The original mlir::Location object held by lastLoc will be automatically
-    // destroyed when lastLoc is assigned a new unique pointer
     auto context = builder->getContext();
     lastLoc = std::make_unique<mlir::Location>(
         mlir::FileLineColLoc::get(context, fileName, line, column));
@@ -94,7 +91,7 @@ public:
     lastLoc = std::make_unique<mlir::Location>(loc);
   }
 
-  mlir::Location &getLastLoc() {
+  mlir::Location getLastLoc() {
     assert(lastLoc);
     return *lastLoc;
   }
@@ -264,6 +261,14 @@ void init_triton_ir(py::module &&m) {
       .def("param_types", [](mlir::FunctionType &self) {
         return std::vector<mlir::Type>(self.getInputs().begin(),
                                        self.getInputs().end());
+      });
+
+  py::class_<mlir::Location>(m, "location")
+      .def("__str__", [](mlir::Location &self) {
+        std::string str;
+        llvm::raw_string_ostream os(str);
+        self.print(os);
+        return os.str();
       });
 
   py::class_<mlir::Value>(m, "value")
@@ -732,9 +737,15 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getFunctionType(inTypes, outTypes);
            })
       // locs
+      .def("set_loc", [](TritonOpBuilder &self,
+                         mlir::Location loc) { self.setLastLoc(loc); })
       .def("set_loc",
            [](TritonOpBuilder &self, const std::string &fileName, int line,
               int column) { self.setLastLoc(fileName, line, column); })
+      .def("get_loc",
+           [](TritonOpBuilder &self) -> mlir::Location {
+             return self.getLastLoc();
+           })
 
       // Ops
       .def("get_or_insert_function",
@@ -1637,7 +1648,7 @@ void init_triton_translation(py::module &m) {
           ofs.close();
 
           auto lineInfoOption =
-              triton::tools::getBoolEnv("TRITON_LINEINFO") ? " -lineinfo" : "";
+              triton::tools::getBoolEnv("TRITON_LINE_INFO") ? " -lineinfo" : "";
           auto capabilitySuffix = (capability == 90) ? "a " : " ";
           auto outputFileName = std::string(_fsrc) + ".o";
           auto logRedirect = " 2> " + std::string(_flog);

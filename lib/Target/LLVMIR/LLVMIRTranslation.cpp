@@ -16,6 +16,7 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+#include "triton/Target/LLVMIR/Passes.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 #include "llvm/ADT/APInt.h"
@@ -344,13 +345,12 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::createConvertIndexToLLVMPass());
   pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability, isROCM));
-  pm.addNestedPass<mlir::LLVM::LLVMFuncOp>(
-      mlir::LLVM::createDIScopeForLLVMFuncOpPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createCanonicalizerPass());
   // Simplify the IR
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createSymbolDCEPass());
+  pm.addPass(mlir::createLLVMDIScopePass());
 
   if (failed(pm.run(module))) {
     llvm::errs() << "Pass execution failed";
