@@ -1460,7 +1460,7 @@ reduce_configs2 = [
     (op, 'float32', shape, axis)
     for op in ['min', 'max', 'sum', 'argmin', 'argmax']
     for shape in reduce2d_shapes
-    for axis in [0, 1]
+    for axis in [0, 1, -1]
 ] + [
     (op, 'float32', [16, 32], None)
     for op in ['min', 'max', 'sum']
@@ -1480,7 +1480,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device):
         z = GENERATE_TEST_HERE
         if AXIS is None:
             tl.store(Z, z)
-        elif AXIS == 1:
+        elif AXIS != 0:
             tl.store(Z + range_m, z)
         else:
             tl.store(Z + range_n, z)
@@ -1505,7 +1505,7 @@ def test_reduce2d(op, dtype_str, shape, axis, device):
     else:
         z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
-    ret_numel = 1 if axis is None else shape[1 - axis]
+    ret_numel = z_ref.size
     z_tri = to_triton(numpy_random((ret_numel,), dtype_str=z_dtype_str, rs=rs),
                       device=device, dst_type=z_tri_dtype_str)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)

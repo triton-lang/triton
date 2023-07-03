@@ -1290,6 +1290,8 @@ def where(condition: tl.tensor,
 def reduction(
     inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
 ) -> Tuple[tl.tensor, ...]:
+    if axis < 0:
+        axis = len(inputs[0].shape) + axis
     if axis is None:
         new_inputs = []
         for i in range(len(inputs)):
