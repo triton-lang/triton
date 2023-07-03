@@ -85,10 +85,10 @@ def register_backend(device_type: str, backend_cls: type):
 
 def get_backend(device_type: str):
     if device_type not in _backends:
-        device_backend_package_name = f"triton.third_party.{device_type}"
-        if importlib.util.find_spec(device_backend_package_name):
+        device_backend_package_name = f"...third_party.{device_type}"
+        if importlib.util.find_spec(device_backend_package_name, package=__spec__.name):
             try:
-                importlib.import_module(device_backend_package_name)
+                importlib.import_module(device_backend_package_name, package=__spec__.name)
             except Exception:
                 return None
         else:

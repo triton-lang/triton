@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-# import triton
 from ..language import core as lcore
 from . import torch_wrapper
 from .core import ExecutionContext
@@ -624,3 +623,9 @@ class TritonLangProxy:
     @_tensor_operation
     def xor_sum(self, input, axis):
         raise NotImplementedError()
+
+    @_tensor_operation
+    def cumsum(self, input, axis=None):
+        if axis is None:
+            return torch.cumsum(input)
+        return torch.cumsum(input, dim=axis)

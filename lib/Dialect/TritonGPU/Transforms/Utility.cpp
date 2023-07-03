@@ -297,7 +297,7 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
   // 2. There is only a single conversion
   // 3. Moving this conversion out of the loop will not generate any extra
   // non-removable conversion
-  DenseSet<Type> cvtTypes;
+  SetVector<RankedTensorType> cvtTypes;
   SetVector<Operation *> others;
   auto oldType = arg.getType().cast<RankedTensorType>();
   for (auto user : arg.getUsers()) {
@@ -326,16 +326,34 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
     // Second condition
     if (others.empty())
       return success();
-    // Third condition: not complete
+    // Third condition - part 1:
     // If the other or the cvt is in the different block, we cannot push the
     // conversion forward or backward
     for (auto *cvt : cvts) {
       if (cvt->getBlock() != forOp.getBody())
         return failure();
     }
+    auto targetEncoding = cvtTypes.front().getEncoding();
     for (auto *other : others) {
+      // Third condition - part 2:
+      // If the other non-cvt op is in the different block, we cannot push the
+      // conversion forward or backward
       if (other->getBlock() != forOp.getBody())
         return failure();
+      // Third condition - part 3:
+      // %0 (enc1) = cvt %arg (enc0)
+      // other %0 (enc1), %1 (enc0) => other %0 (enc1), %1 (enc1)
+      // Check if %2 (enc1) = cvt %1 (enc0) can be eliminated
+      SetVector<Operation *> processed;
+      SetVector<Attribute> layout;
+      llvm::MapVector<Value, Attribute> toConvert;
+      for (auto operand : other->getOperands()) {
+        auto argOp = operand.getDefiningOp();
+        if (argOp && !isa<triton::gpu::ConvertLayoutOp>(argOp) &&
+            simulateBackwardRematerialization(argOp, processed, layout,
+                                              toConvert, targetEncoding) > 0)
+          return failure();
+      }
     }
     return success();
   }

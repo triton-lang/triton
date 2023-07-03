@@ -431,6 +431,32 @@ def TT_ReduceReturnOp: TT_Op<"reduce.return",
     let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
+//
+// Scan Op
+//
+def TT_ScanOp: TT_Op<"scan",
+                       [Pure,
+                        SameOperandsAndResultEncoding,
+                        SameOperandsAndResultElementType,
+                        SingleBlock,
+                        DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+    let summary = "Reduction using generic combination algorithm";
+    let arguments = (ins Variadic<TT_Tensor>:$operands, I32Attr:$axis);
+    let results = (outs Variadic<TT_Tensor>:$result);
+    let regions = (region SizedRegion<1>:$combineOp);
+    let builders = [
+        OpBuilder<(ins "ValueRange":$operands, "int":$axis)>,
+    ];
+    let hasVerifier = 1;
+}
+
+def TT_ScanReturnOp: TT_Op<"scan.return",
+                             [HasParent<"ScanOp">, Pure, Terminator, ReturnLike]> {
+    let summary = "terminator for scan operator";
+    let arguments = (ins Variadic<AnyType>:$result);
+    let assemblyFormat = "$result attr-dict `:` type($result)";
+}
+
 
 //
 // External Elementwise op

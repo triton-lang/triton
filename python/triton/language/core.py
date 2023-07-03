@@ -6,7 +6,6 @@ from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
 from .._C.libtriton.triton import ir
-# import triton
 from ..runtime.jit import jit
 from . import semantic
 
@@ -1504,6 +1503,67 @@ def xor_sum(input, axis=None, _builder=None, _generator=None):
 
 
 # -----------------------
+# Scans
+# -----------------------
+
+def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        docstr = """
+    Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
+
+    :param input: the input values
+    :param axis: the dimension along which the scan should be done"""
+        func.__doc__ = docstr.format(name=name)
+        return func
+
+    return _decorator
+
+
+@builtin
+def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
+    """Applies the combine_fn to each elements with a carry in :code:`input` tensors along the provided :code:`axis` and update the carry
+
+    :param input: the input tensor, or tuple of tensors
+    :param axis: the dimension along which the reduction should be done
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+
+    """
+    if isinstance(input, tensor):
+        return associative_scan((input,), axis, combine_fn,
+                                _builder=_builder, _generator=_generator)[0]
+
+    def make_combine_region(scan_op):
+        in_scalar_tys = [t.type.scalar for t in input]
+        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
+
+        region = scan_op.get_region(0)
+        with _insertion_guard(_builder):
+            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
+            block = _builder.create_block_with_parent(region, param_types)
+            args = [tensor(block.arg(i), ty)
+                    for i, ty in enumerate(prototype.param_types)]
+            results = _generator.call_JitFunction(combine_fn, args, kwargs={})
+            if isinstance(results, tensor):
+                handles = [results.handle]
+            else:
+                handles = [r.handle for r in results]
+            _builder.create_scan_ret(*handles)
+    axis = _constexpr_to_value(axis)
+    return semantic.associative_scan(input, axis, make_combine_region, _builder)
+
+# cumsum
+
+
+@jit
+@_add_scan_docstr("cumsum")
+def cumsum(input, axis=0):
+    # todo rename this to a generic function name
+    input = _promote_reduction_input(input)
+    return associative_scan(input, axis, _sum_combine)
+
+
+# -----------------------
 # Compiler Hint Ops
 # -----------------------
 
@@ -1639,12 +1699,16 @@ def device_assert(cond, msg="", _builder=None):
     while hasattr(module, "__name__"):
         frame = frame.f_back
         module = inspect.getmodule(frame)
-    func_name = frame.f_code.co_name
-    file_name = frame.f_back.f_code.co_filename
-    # TODO: The line number currently indicates the line
-    # where the triton function is called but not where the
-    # device_assert is called. Need to enhance this.
-    lineno = frame.f_back.f_lineno
+    lineno = 0
+    func_name = 'unknown'
+    file_name = 'unknown'
+    if frame is not None:
+        func_name = frame.f_code.co_name
+        file_name = frame.f_back.f_code.co_filename
+        # TODO: The line number currently indicates the line
+        # where the triton function is called but not where the
+        # device_assert is called. Need to enhance this.
+        lineno = frame.f_back.f_lineno
     return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
 
 
