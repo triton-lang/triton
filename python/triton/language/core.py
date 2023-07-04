@@ -1649,7 +1649,7 @@ def device_print(prefix, *args, _builder=None):
     provide the values you want to print as arguments.  The first value must be a string, all following values must
     be scalars or tensors.
 
-    Calling the Python builtin :code:`print` will call this function, and the requirements for the arguments will match
+    Calling the Python builtin :code:`print` is the same as calling this function, and the requirements for the arguments will match
     this function (not the normal requirements for :code:`print`).
 
     .. highlight:: python
