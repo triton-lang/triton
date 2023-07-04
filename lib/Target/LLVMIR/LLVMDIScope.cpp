@@ -27,6 +27,10 @@ static FileLineColLoc extractFileLoc(Location loc) {
     return extractFileLoc(nameLoc.getChildLoc());
   if (auto opaqueLoc = loc.dyn_cast<OpaqueLoc>())
     return extractFileLoc(opaqueLoc.getFallbackLocation());
+  if (auto fusedLoc = loc.dyn_cast<FusedLoc>())
+    return extractFileLoc(fusedLoc.getLocations().front());
+  if (auto callerLoc = loc.dyn_cast<CallSiteLoc>())
+    return extractFileLoc(callerLoc.getCaller());
   return FileLineColLoc();
 }
 
@@ -92,29 +96,42 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 
-  void setLexicalBlockFileAttr(Operation *op) {
-    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-    if (!funcOp)
-      return;
+  Location setLexicalBlockFileAttr(Operation *op, Location callerLoc, Location calleeLoc) {
+    auto callerFileName = extractFileLoc(callerLoc).getFilename();
+    auto calleeFileName = extractFileLoc(calleeLoc).getFilename();
+    // Create a DILexicalBlockFile for the second file, using the
+    // DISubprogram as its scope
+    auto context = op->getContext();
+    LLVM::DIFileAttr calleeFileAttr = LLVM::DIFileAttr::get(
+        context, llvm::sys::path::filename(calleeFileName),
+        llvm::sys::path::parent_path(calleeFileName));
+    LLVM::DIScopeAttr scopeAttr;
+    if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(callerLoc)) {
+      auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+      auto funcOpLoc = funcOp.getLoc().cast<FusedLoc>();
+      scopeAttr = funcOpLoc.getMetadata().cast<LLVM::DISubprogramAttr>();
+    } else if (auto fusedLoc = dyn_cast<FusedLoc>(callerLoc)) {
+      scopeAttr = fusedLoc.getMetadata().cast<LLVM::DIScopeAttr>();
+    } else {
+      llvm_unreachable("unexpected location");
+    }
+    auto lexicalBlockFileAttr = LLVM::DILexicalBlockFileAttr::get(
+        context, scopeAttr, calleeFileAttr, /*discriminator=*/0);
+    Location loc = op->getLoc();
+    if (calleeLoc.isa<CallSiteLoc>()) {
+      auto nestedLoc = calleeLoc.cast<CallSiteLoc>().getCallee();
+      loc = setLexicalBlockFileAttr(op, calleeLoc, nestedLoc);
+    }
+    return FusedLoc::get(context, {loc}, lexicalBlockFileAttr);
+  }
 
-    auto funcOpLoc = funcOp.getLoc().cast<FusedLoc>();
-    auto funcFileName = extractFileLoc(funcOpLoc).getFilename();
-    auto subProgramAttr =
-        funcOpLoc.getMetadata().cast<LLVM::DISubprogramAttr>();
+  void setLexicalBlockFileAttr(Operation *op) {
     auto opLoc = op->getLoc();
     if (auto callSiteLoc = dyn_cast<CallSiteLoc>(opLoc)) {
+      auto callerLoc = callSiteLoc.getCaller();
       auto calleeLoc = callSiteLoc.getCallee();
-      auto calleeFileName = extractFileLoc(calleeLoc).getFilename();
-      if (calleeFileName != funcFileName) {
-        // Create a DILexicalBlockFile for the second file, using the
-        // DISubprogram as its scope
-        auto context = op->getContext();
-        LLVM::DIFileAttr calleeFileAttr =
-            LLVM::DIFileAttr::get(context, calleeFileName, "");
-        auto lexicalBlockFileAttr = LLVM::DILexicalBlockFileAttr::get(
-            context, subProgramAttr, calleeFileAttr, /*discriminator=*/0);
-        op->setLoc(FusedLoc::get(context, {opLoc}, lexicalBlockFileAttr));
-      }
+      auto loc = setLexicalBlockFileAttr(op, callerLoc, calleeLoc);
+      op->setLoc(loc);
     }
   }
 
