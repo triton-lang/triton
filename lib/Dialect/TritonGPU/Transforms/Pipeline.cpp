@@ -366,6 +366,7 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
       } else
         isCandidate = false;
 
+      // llvm::outs() << isCandidate << "\n";
       if (!isCandidate)
         invalidOps.insert(loadOp);
       else

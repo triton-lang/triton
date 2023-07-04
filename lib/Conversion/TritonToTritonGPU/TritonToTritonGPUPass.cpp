@@ -245,6 +245,27 @@ struct TritonExpandDimsPattern
   }
 };
 
+struct TritonSqueezeDimsPattern
+    : public OpConversionPattern<triton::SqueezeDimsOp> {
+
+  using OpConversionPattern<triton::SqueezeDimsOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::SqueezeDimsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    RankedTensorType argType =
+        adaptor.getSrc().getType().cast<RankedTensorType>();
+    Attribute _argEncoding = argType.getEncoding();
+    if (!_argEncoding)
+      return failure();
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::SqueezeDimsOp>(
+                      op, adaptor.getSrc(), adaptor.getAxis()),
+                  adaptor.getAttributes());
+    return success();
+  }
+};
+
 struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
   using OpConversionPattern<triton::DotOp>::OpConversionPattern;
 
@@ -657,8 +678,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
           TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
           TritonReducePattern, TritonReduceReturnPattern, TritonScanPattern,
           TritonScanReturnPattern, TritonTransPattern, TritonExpandDimsPattern,
-          TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
-          TritonStorePattern,
+          TritonSqueezeDimsPattern, TritonMakeRangePattern, TritonDotPattern,
+          TritonLoadPattern, TritonStorePattern,
           TritonExternElementwisePattern<triton::PureExternElementwiseOp>,
           TritonExternElementwisePattern<triton::ImpureExternElementwiseOp>,
           TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern,

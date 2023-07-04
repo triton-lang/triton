@@ -1087,6 +1087,15 @@ struct TritonGPUInferLayoutInterface
   }
 
   LogicalResult
+  inferSqueezeDimsOpEncoding(Attribute operandEncoding, unsigned axis,
+                             Attribute &resultEncoding,
+                             std::optional<Location> location) const override {
+    resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                                            operandEncoding);
+    return success();
+  }
+
+  LogicalResult
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      std::optional<Location> location) const override {

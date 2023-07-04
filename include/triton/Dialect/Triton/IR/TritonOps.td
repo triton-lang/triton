@@ -294,6 +294,20 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
     let hasFolder = 1;
 }
 
+def TT_SqueezeDimsOp : TT_Op<"squeeze_dims", [Pure,
+                                            DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                            SameOperandsAndResultElementType]> {
+    let summary = "squeeze_dims";
+
+    let arguments = (ins TT_Tensor:$src, I32Attr:$axis);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+    let hasCanonicalizeMethod = 1;
+}
+
+
 // view is not `pure` because it may reorder elements
 def TT_ViewOp : TT_Op<"view", [NoMemoryEffect,
                                SameOperandsAndResultElementType]> {

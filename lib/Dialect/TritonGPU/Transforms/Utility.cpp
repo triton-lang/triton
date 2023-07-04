@@ -73,6 +73,9 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
     ret = triton::gpu::SliceEncodingAttr::get(
         op->getContext(), expand_dims.getAxis(), targetEncoding);
   }
+  // if (auto squeeze_dims = dyn_cast<triton::SqueezeDimsOp>(op)) {
+  //   ret = targetEncoding.cast<triton::gpu::SliceEncodingAttr>().getParent();
+  // }
   if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
     auto sliceEncoding =
         targetEncoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
@@ -82,7 +85,7 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
       return failure();
     ret = sliceEncoding.getParent();
   }
-  if (isa<triton::ViewOp, triton::CatOp>(op)) {
+  if (isa<triton::ViewOp, triton::CatOp, triton::SqueezeDimsOp>(op)) {
     return failure();
   }
   return success();
