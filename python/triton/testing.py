@@ -80,6 +80,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
                 x.grad = None
         # we clear the L2 cache before each run
         cache.zero_()
+        # Necessary for accurate timings of quick kernels
+        torch.cuda._sleep(2000000)
         # record time of `fn`
         start_event[i].record()
         fn()
