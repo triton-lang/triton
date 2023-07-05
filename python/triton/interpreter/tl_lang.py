@@ -629,3 +629,9 @@ class TritonLangProxy:
         if axis is None:
             return torch.cumsum(input)
         return torch.cumsum(input, dim=axis)
+
+    @_tensor_operation
+    def cumprod(self, input, axis=None):
+        if axis is None:
+            return torch.cumprod(input)
+        return torch.cumprod(input, dim=axis)
