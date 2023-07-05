@@ -96,15 +96,15 @@ public:
       auto dotUser = dyn_cast<triton::DotOp>(*op->user_begin());
       if (!dotUser)
         return;
-      auto BOp =
+      auto AOp =
           dotUser.getOperand(0).getDefiningOp<triton::gpu::ConvertLayoutOp>();
-      if (!BOp)
+      if (!AOp)
         return;
       // Check that the conversion to OpIdx=1 happens before and can be moved
       // after the conversion to OpIdx=0.
-      if (!dom.dominates(op.getOperation(), BOp.getOperation()))
+      if (!dom.dominates(op.getOperation(), AOp.getOperation()))
         return;
-      op->moveAfter(BOp);
+      op->moveAfter(AOp);
     });
     return;
   }
