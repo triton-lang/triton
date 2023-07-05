@@ -1830,7 +1830,8 @@ layouts = [
 @pytest.mark.parametrize("M, N", [[128, 128], [256, 128], [256, 256], [128, 256]])
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("op", ["sum", "max"])
-def test_chain_reduce(M, N, src_layout, op, device):
+@pytest.mark.parametrize("first_axis", [0, 1])
+def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     op_str = ""
     if op == "sum":
         op_str = f"""
@@ -1860,11 +1861,11 @@ def test_chain_reduce(M, N, src_layout, op, device):
         %11 = "tt.reduce"(%10) ({{
         ^bb0(%arg2: i32, %arg3: i32):
         {op_str}
-        }}) {{axis = 1 : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+        }}) {{axis = {first_axis} : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M if first_axis == 1 else N}xi32, #triton_gpu.slice<{{dim = {first_axis}, parent = #src}}>>
         %12 = "tt.reduce"(%11) ({{
         ^bb0(%arg2: i32, %arg3: i32):
         {op_str}
-        }}) {{axis = 0 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> i32
+        }}) {{axis = 0 : i32}} : (tensor<{M if first_axis == 1 else N}xi32, #triton_gpu.slice<{{dim = {first_axis}, parent = #src}}>>) -> i32
         tt.store %arg1, %12 {{cache = 1 : i32, evict = 1 : i32}} : i32
         tt.return
     }}
