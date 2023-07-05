@@ -479,8 +479,17 @@ private:
     unsigned outVec = 0;
     SmallVector<unsigned> repShape;
     triton::gpu::SharedEncodingAttr sharedLayout;
-    if (srcLayout.isa<BlockedEncodingAttr>() &&
-        dstLayout.isa<MmaEncodingAttr>() && !isDstMmaV1) {
+    // If either src or dst is mmav1, we need to use padding to avoid bank
+    // conflict.
+    if (isSrcMmaV1 || isDstMmaV1) {
+      repShape = getScratchConfigForCvtLayout(op, inVec, outVec, true);
+      auto maxVec = std::max(inVec, outVec);
+      sharedLayout = triton::gpu::SharedEncodingAttr::get(
+          getContext(), maxVec, 1, 1, getOrder(dstLayout));
+    } else if (dstLayout.isa<MmaEncodingAttr>()) {
+      // If dest is mma v2, we use swizzling to avoid bank conflict.
+      // We rely on shared layout constructor to calculate vec, perPhase, and
+      // maxPhase
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
       auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
           getContext(), 0, dstLayout, dstTy.getElementType());
@@ -488,12 +497,9 @@ private:
           getContext(), dstDotOp,
           convertType<int64_t>(ArrayRef<unsigned>(repShape)),
           getOrder(dstLayout), srcTy.getElementType());
-    } else if (isSrcMmaV1 || isDstMmaV1) {
-      repShape = getScratchConfigForCvtLayout(op, inVec, outVec, true);
-      auto maxVec = std::max(inVec, outVec);
-      sharedLayout = triton::gpu::SharedEncodingAttr::get(
-          getContext(), maxVec, 1, 1, getOrder(dstLayout));
     } else {
+      // If dest is not mma v2, we use swizzling to avoid bank conflict.
+      // maxPhase is the repShape[0] in this case
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
       auto maxVec = std::max(inVec, outVec);
       sharedLayout = triton::gpu::SharedEncodingAttr::get(
