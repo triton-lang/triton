@@ -1534,7 +1534,7 @@ scan_configs = [
     for type in ['int32', 'float32']
     for axis in [1, 0]
     for shape in scan2d_shapes
-    for op in ['cumsum']
+    for op in ['cumsum', 'cumprod']
 ]
 
 
@@ -1557,7 +1557,7 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     z = np.empty_like(x)
     x_tri = to_triton(x, device=device)
-    numpy_op = {'cumsum': np.cumsum}[op]
+    numpy_op = {'cumsum': np.cumsum, 'cumprod': np.cumprod}[op]
     z_dtype_str = dtype_str
     z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
     # triton result
@@ -1566,7 +1566,10 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
     z_tri = to_numpy(z_tri)
     # compare
     if dtype_str == 'float32':
-        np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
+        if op == 'cumprod':
+            np.testing.assert_allclose(z_ref, z_tri, rtol=0.01, atol=1e-3)
+        else:
+            np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
         np.testing.assert_equal(z_ref, z_tri)
 
