@@ -93,10 +93,10 @@ private:
                           unsigned axis) const {
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
       // Recover the axis in the parent layout
-      axis = axis < sliceLayout.getDim() ? axis : axis + 1;
+      auto parentAxis = axis < sliceLayout.getDim() ? axis : axis + 1;
       auto parentLayout = sliceLayout.getParent();
       getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
-                         originalAxis, axis);
+                         originalAxis, parentAxis);
       return;
     }
 
