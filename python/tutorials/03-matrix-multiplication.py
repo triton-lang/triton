@@ -239,8 +239,8 @@ def matmul_kernel(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
-    if ACTIVATION == "leaky_relu":
-        accumulator = leaky_relu(accumulator)
+    if ACTIVATION:
+        accumulator = ACTIVATION(accumulator)
     c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
@@ -264,7 +264,7 @@ def leaky_relu(x):
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
 
-def matmul(a, b, activation=""):
+def matmul(a, b, activation=None):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -325,11 +325,11 @@ else:
         ],  # Different possible values for `x_name`
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
         # Possible values for `line_arg`
-        line_vals=['cublas', 'triton'],
+        line_vals=['cublas', 'triton', 'triton+relu'],
         # Label name for the lines
-        line_names=["cuBLAS", "Triton"],
+        line_names=["cuBLAS", "Triton", 'Triton+Relu'],
         # Line styles
-        styles=[('green', '-'), ('blue', '-')],
+        styles=[('green', '-'), ('blue', '-'), ('orange', '-')],
         ylabel="TFLOPS",  # Label name for the y-axis
         plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
         args={},
@@ -343,6 +343,9 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+    if provider == 'triton+relu':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, activation=leaky_relu), quantiles=quantiles)
+
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 

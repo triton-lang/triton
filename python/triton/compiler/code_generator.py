@@ -570,7 +570,9 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 self.visit_if_top_level(cond, node)
         else:
-            cond = _unwrap_if_constexpr(cond)
+            is_constexpr = _is_constexpr(cond)
+            cond = _unwrap_if_constexpr(cond) if not is_constexpr else bool(cond)
+
             if type(cond) not in _condition_types:  # not isinstance - we insist the real thing, no subclasses and no ducks
                 raise UnsupportedLanguageConstruct(
                     None, node, "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
