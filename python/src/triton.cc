@@ -97,24 +97,32 @@ public:
   }
 
   void setInsertionPointToStart(mlir::Block &block) {
+    if (!block.empty())
+      setLastLoc(block.begin()->getLoc());
+    else
+      setLastLoc(builder->getUnknownLoc());
     builder->setInsertionPointToStart(&block);
-    setLastLoc(block.begin()->getLoc());
   }
 
   void setInsertionPointToEnd(mlir::Block &block) {
-    builder->setInsertionPointToEnd(&block);
     if (!block.empty())
       setLastLoc(block.back().getLoc());
+    else
+      setLastLoc(builder->getUnknownLoc());
+    builder->setInsertionPointToEnd(&block);
   }
 
   void setInsertionPointAfter(mlir::Operation &op) {
-    builder->setInsertionPointAfter(&op);
     setLastLoc(op.getLoc());
+    builder->setInsertionPointAfter(&op);
   }
 
   void restoreInsertionPoint(mlir::OpBuilder::InsertPoint pt) {
+    if (pt.isSet() && pt.getPoint() != pt.getBlock()->end())
+      setLastLoc(pt.getPoint()->getLoc());
+    else
+      setLastLoc(builder->getUnknownLoc());
     builder->restoreInsertionPoint(pt);
-    setLastLoc(pt.getPoint()->getLoc());
   }
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
@@ -1391,19 +1399,17 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::triton::ReduceReturnOp>(return_values);
            })
       .def("create_scan",
-           [](mlir::OpBuilder &self, std::vector<mlir::Value> operands,
+           [](TritonOpBuilder &self, std::vector<mlir::Value> operands,
               int axis) -> mlir::OpState {
-             auto loc = self.getUnknownLoc();
-             return self.create<mlir::triton::ScanOp>(loc, operands, axis);
+             return self.create<mlir::triton::ScanOp>(operands, axis);
            })
       .def("create_scan_ret",
-           [](mlir::OpBuilder &self, py::args args) -> mlir::OpState {
-             auto loc = self.getUnknownLoc();
+           [](TritonOpBuilder &self, py::args args) -> mlir::OpState {
              llvm::SmallVector<mlir::Value> return_values;
              for (const auto &arg : args) {
                return_values.push_back(py::cast<mlir::Value>(arg));
              }
-             return self.create<mlir::triton::ScanReturnOp>(loc, return_values);
+             return self.create<mlir::triton::ScanReturnOp>(return_values);
            })
       .def("create_ptr_to_int",
            [](TritonOpBuilder &self, mlir::Value &val,
