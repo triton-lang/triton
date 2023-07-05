@@ -55,7 +55,6 @@ using FastMathFlags = arith::FastMathFlags;
 
 } // anonymous namespace
 
-// reduce()
 // select(cond, load(ptrs, broadcast(cond), ???), other)
 //   => load(ptrs, broadcast(cond), other)
 class CombineSelectMaskedLoadPattern : public mlir::RewritePattern {
