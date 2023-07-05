@@ -2973,7 +2973,11 @@ intermediate_layouts = [
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
+    def isLayoutMmaV2(layout):
+        return isinstance(layout, MmaLayout) and layout.version == (2, 0)
     M, N = shape[0], shape[1]
+    if torch.cuda.get_device_capability() < (8, 0) and (isLayoutMmaV2(src_layout) or isLayoutMmaV2(dst_layout)):
+        pytest.skip()
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
