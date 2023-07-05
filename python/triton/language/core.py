@@ -1562,6 +1562,20 @@ def cumsum(input, axis=0):
     input = _promote_reduction_input(input)
     return associative_scan(input, axis, _sum_combine)
 
+# cumprod
+
+
+@jit
+def _prod_combine(a, b):
+    return a * b
+
+
+@jit
+@_add_scan_docstr("cumprod")
+def cumprod(input, axis=0):
+    # todo rename this to a generic function name
+    input = _promote_reduction_input(input)
+    return associative_scan(input, axis, _prod_combine)
 
 # -----------------------
 # Compiler Hint Ops
