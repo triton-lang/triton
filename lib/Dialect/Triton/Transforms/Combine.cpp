@@ -104,37 +104,6 @@ public:
   }
 };
 
-// expand_dims(dot(x, y), shape) + other
-// -> expand_dim(dot(x, y) + squeeze_dims(other), shape)
-class CombineExpandAddPattern : public mlir::RewritePattern {
-private:
-public:
-  CombineExpandAddPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::arith::AddFOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::LogicalResult matchAndRewrite(mlir::Operation *op,
-                                      mlir::PatternRewriter &rewriter) const {
-    auto add = llvm::dyn_cast<mlir::arith::AddFOp>(op);
-    if (!add)
-      return mlir::failure();
-    auto expand = add.getOperand(0).getDefiningOp<mlir::triton::ExpandDimsOp>();
-    if (!expand)
-      return mlir::failure();
-    auto dot = expand.getOperand().getDefiningOp<mlir::triton::DotOp>();
-    if (!dot)
-      return mlir::failure();
-    auto other = add.getOperand(1);
-    auto newOther = rewriter.create<mlir::triton::SqueezeDimsOp>(
-        add.getLoc(), other, expand.getAxis());
-    auto newAdd = rewriter.create<mlir::arith::AddFOp>(
-        add.getLoc(), dot.getResult(), newOther);
-    rewriter.replaceOpWithNewOp<mlir::triton::ExpandDimsOp>(op, newAdd,
-                                                            expand.getAxis());
-    return mlir::success();
-  }
-};
-
 // sum(x[:, :, None] * y[None, :, :], 1)
 // -> dot(x, y)
 class CombineBroadcastMulReducePattern : public mlir::RewritePattern {
@@ -252,7 +221,6 @@ public:
     // patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastConstantPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
-    patterns.add<CombineExpandAddPattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();

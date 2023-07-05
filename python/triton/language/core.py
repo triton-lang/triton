@@ -919,13 +919,34 @@ def expand_dims(input, axis, _builder=None):
     axes = list(axis) if isinstance(axis, Sequence) else [axis]
     new_ndim = len(input.shape) + len(axes)
     axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
-
     if len(set(axes)) != len(axes):
         raise ValueError(f"expand_dims recieved duplicate axes, normalized axes = {axes}")
-
     ret = input
     for a in sorted(axes):
         ret = semantic.expand_dims(ret, a, _builder)
+    return ret
+
+
+@builtin
+def squeeze_dims(input, axis, _builder=None):
+    """
+    Squeeze the shape of a tensor, by removing length 1 dimension
+
+    :param input: The input tensor.
+    :type input: tl.tensor
+    :param axis: The indices to add new axes in the input tensor
+    :type axis: int | Sequence[int]
+
+    """
+    axis = _constexpr_to_value(axis)
+    axes = list(axis) if isinstance(axis, Sequence) else [axis]
+    new_ndim = len(input.shape) + len(axes)
+    axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
+    if len(set(axes)) != len(axes):
+        raise ValueError(f"squeeze_dims recieved duplicate axes, normalized axes = {axes}")
+    ret = input
+    for a in sorted(axes):
+        ret = semantic.squeeze_dims(ret, a, _builder)
     return ret
 
 # -----------------------

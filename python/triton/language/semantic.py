@@ -547,6 +547,13 @@ def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_expand_dims(input.handle, axis), ret_ty)
 
 
+def squeeze_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    dst_shape = list(input.type.shape)
+    del dst_shape[axis]
+    ret_ty = tl.block_type(input.type.scalar, dst_shape)
+    return tl.tensor(builder.create_squeeze_dims(input.handle, axis), ret_ty)
+
+
 def cat(lhs: tl.tensor, rhs: tl.tensor, can_reorder: bool, builder: ir.builder) -> tl.tensor:
     assert can_reorder, "current implementation of `cat` always may reorder elements"
     assert len(lhs.shape) == 1
