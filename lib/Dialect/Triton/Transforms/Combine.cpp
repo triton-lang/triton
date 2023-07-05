@@ -7,6 +7,7 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
+
 #include <memory>
 
 using namespace mlir;
