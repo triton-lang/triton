@@ -7,7 +7,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -368,9 +367,21 @@ bool isSharedEncoding(Value value) {
   return false;
 }
 
+bool isExpensiveCat(CatOp cat, Attribute &targetEncoding) {
+  // If the new elements per thread is less than the old one, we will need to do
+  // convert encoding that goes through shared memory anyway. So we consider it
+  // as expensive.
+  auto tensorTy = cat.getResult().getType().cast<RankedTensorType>();
+  auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
+  auto shape = tensorTy.getShape();
+  auto elemTy = tensorTy.getElementType();
+  auto newTotalElemsPerThread =
+      gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
+  return newTotalElemsPerThread < totalElemsPerThread;
+}
+
 } // namespace gpu
 } // namespace triton
-
 } // namespace mlir
 
 static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,

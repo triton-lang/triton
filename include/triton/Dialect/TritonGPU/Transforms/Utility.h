@@ -18,8 +18,6 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 
 bool isExpensiveLoadOrStore(Operation *op, Attribute &targetEncoding);
 
-bool isExpensiveCat(triton::CatOp cat, Attribute &targetEncoding);
-
 bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding);
 
 // skipInit is True when we only consider the operands of the initOp but
