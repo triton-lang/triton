@@ -37,19 +37,21 @@ static void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
 static void scanThreadContiguousElements(SmallVector<Value> &srcValues,
                                          ConversionPatternRewriter &rewriter,
                                          ScanLoweringHelper &helper) {
-  // TODO: this assumes that axis is the fastest moving dimension. We should
-  // relax that.
-  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThreads();
-  // Loop through the blocks of contiguous elements.
-  for (unsigned j = 0; j < srcValues.size(); j += scanElementsPerThreads) {
-    // Reset the accumulator at the beginning of each block of contiguous
-    // elements.
-    Value acc;
-    // Loop through the contiguous elements.
-    for (unsigned i = 0; i < scanElementsPerThreads; ++i) {
-      accumulate(rewriter, helper.getCombineOp(), acc, srcValues[i + j]);
-      srcValues[i + j] = acc;
-    }
+  // Depending on layout contiguous elements along axis dim may not be
+  // contiguous in srcValues. Keep track of what elements belong to the same
+  // chunk of contiguous elements.
+  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
+  unsigned parallelElementsPerThread = helper.getAxisNumElementsPerThread();
+  unsigned numChunks = srcValues.size() / scanElementsPerThreads;
+  unsigned stride = helper.getAxisElementStride();
+  SmallVector<Value> accs(numChunks);
+  for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
+    unsigned accIndex = (srcIndex % stride) +
+                        ((srcIndex / stride) / scanElementsPerThreads) * stride;
+
+    accumulate(rewriter, helper.getCombineOp(), accs[accIndex],
+               srcValues[srcIndex]);
+    srcValues[srcIndex] = accs[accIndex];
   }
 }
 
@@ -59,20 +61,25 @@ static void warpScan(SmallVector<Value> &srcValues,
                      ConversionPatternRewriter &rewriter,
                      ScanLoweringHelper &helper, Value laneId) {
   Location loc = helper.getLoc();
-  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThreads();
-  for (unsigned j = scanElementsPerThreads - 1; j < srcValues.size();
-       j += scanElementsPerThreads) {
-    Value acc = srcValues[j];
-    unsigned scanDim = helper.getAxisNumThreadsPerWarp();
+  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
+  unsigned elementStride = helper.getAxisElementStride();
+  unsigned threadStride = helper.getAxisThreadStride();
+  unsigned scanDim = helper.getAxisNumThreadsPerWarp();
+  for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
+    unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
+    // Only consider the last element of each contiguous chunk of elements.
+    if (elementIdx != scanElementsPerThreads - 1)
+      continue;
     // Reduce within warps.
-    for (unsigned i = 1; i <= scanDim / 2; i = i << 1) {
-      Value shfl = shflUpSync(loc, rewriter, acc, i);
+    Value acc = srcValues[srcIndex];
+    for (unsigned i = 1; i <= (scanDim) / 2; i = i << 1) {
+      Value shfl = shflUpSync(loc, rewriter, acc, i * threadStride);
       Value tempAcc = acc;
       accumulate(rewriter, helper.getCombineOp(), tempAcc, shfl);
       Value mask = icmp_slt(laneId, i32_val(i));
       acc = select(mask, acc, tempAcc);
     }
-    srcValues[j] = acc;
+    srcValues[srcIndex] = acc;
   }
 }
 
@@ -88,19 +95,24 @@ static void storeWarpAccumulator(SmallVector<Value> &srcValues,
                                  Value warpId, Value baseSharedMemPtr,
                                  Value parallelLaneId) {
   Location loc = helper.getLoc();
-  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThreads();
+  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned scanDim = helper.getAxisNumThreadsPerWarp();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
   unsigned numWarps = helper.getAxisNumWarps();
   unsigned chunkId = 0;
-  for (unsigned j = scanElementsPerThreads - 1; j < srcValues.size();
-       j += scanElementsPerThreads, ++chunkId) {
-    Value lastElement = srcValues[j];
+  unsigned elementStride = helper.getAxisElementStride();
+  for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
+    unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
+    // Only consider the last element of each contiguous chunk of elements.
+    if (elementIdx != scanElementsPerThreads - 1)
+      continue;
+    Value lastElement = srcValues[srcIndex];
     Value mask = icmp_eq(laneId, i32_val(scanDim - 1));
     Value index = add(parallelLaneId, mul(warpId, i32_val(numParallelLane)));
     index = add(index, i32_val(chunkId * numParallelLane * numWarps));
     Value writePtr = gep(baseSharedMemPtr.getType(), baseSharedMemPtr, index);
     storeShared(rewriter, loc, writePtr, lastElement, mask);
+    chunkId++;
   }
 }
 
@@ -116,8 +128,10 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
   Location loc = helper.getLoc();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
   unsigned numWarps = helper.getAxisNumWarps();
-  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThreads();
+  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
+  unsigned elementStride = helper.getAxisElementStride();
+  unsigned threadStride = helper.getAxisThreadStride();
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
   Value maskFirstLane = icmp_eq(laneId, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
@@ -133,63 +147,66 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
   SmallVector<Accumulator> accumulators(numParallelBlocks *
                                         parallelElementsPerThread);
   unsigned chunkId = 0;
-  for (unsigned parallelBlockId = 0; parallelBlockId < numParallelBlocks;
-       ++parallelBlockId) {
-    for (unsigned scanBlockId = 0; scanBlockId < numScanBlocks; ++scanBlockId) {
-      for (unsigned parallelElementId = 0;
-           parallelElementId < parallelElementsPerThread; ++parallelElementId) {
-        unsigned accumulatorIndex =
-            parallelElementId + parallelBlockId * parallelElementsPerThread;
-        Accumulator &accumulator = accumulators[accumulatorIndex];
-        for (unsigned i = 0; i < numWarps; ++i) {
-          Value index = add(parallelLaneId, i32_val(numParallelLane *
-                                                    (i + chunkId * numWarps)));
-          Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
-          Value partialReduce = load(ptr);
-          if (!accumulator.acc) {
-            accumulator.acc = partialReduce;
-            accumulator.maskedAcc = partialReduce;
-            continue;
-          }
-          accumulate(rewriter, helper.getCombineOp(), accumulator.acc,
-                     partialReduce);
-          Value mask = icmp_slt(warpId, i32_val(i + 1));
-          accumulator.maskedAcc =
-              select(mask, accumulator.maskedAcc, accumulator.acc);
-        }
-        unsigned lastElementIndex =
-            chunkId * scanElementsPerThreads + scanElementsPerThreads - 1;
-        Value temp = srcValues[lastElementIndex];
-        accumulate(rewriter, helper.getCombineOp(), temp,
-                   accumulator.maskedAcc);
-        if (scanBlockId == 0) {
-          // For the first warp and first chunk we don't have anything to
-          // accumulate.
-          temp = select(maskFirstWarp, srcValues[lastElementIndex], temp);
-        }
-        srcValues[lastElementIndex] = temp;
-
-        // Update the rest of the contiguous elements.
-        Value lastElement =
-            shflUpSync(loc, rewriter, srcValues[lastElementIndex], 1);
-        lastElement = select(maskFirstLane, accumulator.maskedAcc, lastElement);
-        for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
-          Value laneValue = srcValues[lastElementIndex - i];
-          accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
-          if (scanBlockId == 0) {
-            // For the first warp and first chunk we don't have anything to
-            // accumulate.
-            laneValue = select(maskFirstThread, srcValues[lastElementIndex - i],
-                               laneValue);
-          }
-          srcValues[lastElementIndex - i] = laneValue;
-        }
-        // For the next chunk start back from the value containing the
-        // accumulated value of all the warps.
-        accumulator.maskedAcc = accumulator.acc;
-        chunkId++;
+  unsigned blockStride = helper.getAxisBlockStride();
+  for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
+    unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
+    // Only consider the last element of each contiguous chunk of elements.
+    if (elementIdx != scanElementsPerThreads - 1)
+      continue;
+    // Accumulate the partial reduction from shared memory. Decide which
+    // accumulator to combine based on whether the elements belong to the same
+    // dimension along axis.
+    unsigned blockId = chunkId / parallelElementsPerThread;
+    unsigned parallelBlockId =
+        blockId % blockStride +
+        ((blockId / blockStride) / numScanBlocks) * blockStride;
+    unsigned accumulatorIndex = chunkId % parallelElementsPerThread +
+                                parallelBlockId * parallelElementsPerThread;
+    Accumulator &accumulator = accumulators[accumulatorIndex];
+    for (unsigned i = 0; i < numWarps; ++i) {
+      Value index = add(parallelLaneId,
+                        i32_val(numParallelLane * (i + chunkId * numWarps)));
+      Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
+      Value partialReduce = load(ptr);
+      if (!accumulator.acc) {
+        accumulator.acc = partialReduce;
+        accumulator.maskedAcc = partialReduce;
+        continue;
       }
+      accumulate(rewriter, helper.getCombineOp(), accumulator.acc,
+                 partialReduce);
+      Value mask = icmp_slt(warpId, i32_val(i + 1));
+      accumulator.maskedAcc =
+          select(mask, accumulator.maskedAcc, accumulator.acc);
     }
+    Value temp = srcValues[srcIndex];
+    accumulate(rewriter, helper.getCombineOp(), temp, accumulator.maskedAcc);
+    unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
+    if (axisBlockId == 0) {
+      // For the first warp and first chunk we don't have anything to
+      // accumulate.
+      temp = select(maskFirstWarp, srcValues[srcIndex], temp);
+    }
+    srcValues[srcIndex] = temp;
+    // Update the rest of the contiguous elements.
+    Value lastElement =
+        shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
+    lastElement = select(maskFirstLane, accumulator.maskedAcc, lastElement);
+    for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
+      Value laneValue = srcValues[srcIndex - i * elementStride];
+      accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
+      if (axisBlockId == 0) {
+        // For the first warp and first chunk we don't have anything to
+        // accumulate.
+        laneValue = select(maskFirstThread,
+                           srcValues[srcIndex - i * elementStride], laneValue);
+      }
+      srcValues[srcIndex - i * elementStride] = laneValue;
+    }
+    // For the next chunk start back from the value containing the
+    // accumulated value of all the warps.
+    accumulator.maskedAcc = accumulator.acc;
+    chunkId++;
   }
 }
 

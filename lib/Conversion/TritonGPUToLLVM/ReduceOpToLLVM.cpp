@@ -89,13 +89,14 @@ private:
   void getWriteIndexBasic(ConversionPatternRewriter &rewriter, Location loc,
                           Attribute layout, SmallVector<Value> &index,
                           SmallVector<Value> &writeIdx,
-                          std::map<int, Value> &ints, unsigned axis) const {
+                          std::map<int, Value> &ints, unsigned originalAxis,
+                          unsigned axis) const {
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      auto dim = sliceLayout.getDim();
-      assert(dim != axis && "Reduction axis cannot be sliced");
+      // Recover the axis in the parent layout
+      auto parentAxis = axis < sliceLayout.getDim() ? axis : axis + 1;
       auto parentLayout = sliceLayout.getParent();
       getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
-                         axis);
+                         originalAxis, parentAxis);
       return;
     }
 
@@ -110,21 +111,21 @@ private:
       // we would have a single accumulation every `axisSizePerThread`
       // contiguous values in the original tensor, so we would need
       // to map every `axisSizePerThread` to 1 value in smem as:
-      // writeIdx[axis] = index[axis] / axisSizePerThread
-      writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+      // writeIdx[originalAxis] = index[originalAxis] / axisSizePerThread
+      writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
     } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       if (!mmaLayout.isAmpere()) {
         llvm::report_fatal_error("Unsupported layout");
       }
-      if (axis == 0) {
+      if (originalAxis == 0) {
         // Because warpTileSize = [16, 8] and threadsPerWarp = [8, 4], each 8
         // rows in smem would correspond to a warp. The mapping
         // is: (warp_index) x 8 + (row index within warp)
-        writeIdx[axis] =
-            add(mul(udiv(index[axis], _16), _8), urem(index[axis], _8));
+        writeIdx[originalAxis] = add(mul(udiv(index[originalAxis], _16), _8),
+                                     urem(index[originalAxis], _8));
       } else {
         // Same as BlockedEncodingAttr case
-        writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+        writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
       }
     } else {
       llvm::report_fatal_error("Unsupported layout");
@@ -214,7 +215,7 @@ private:
       // get the writeIdx at which to write in smem
       SmallVector<Value> writeIdx;
       getWriteIndexBasic(rewriter, loc, srcLayout, indices[key], writeIdx, ints,
-                         axis);
+                         axis, axis);
 
       // calculate the offset in smem for that writeIdx
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
