@@ -2442,6 +2442,25 @@ def test_store_cache_modifier(cache):
 # test if
 # ---------------
 
+
+class _SomeObjAsTrue: ...
+
+
+@pytest.mark.parametrize("cond, golden",
+                         [(c, 1 if c else 0) for c in (True, 1, _SomeObjAsTrue, False, 0, None)])
+def test_if_constexpr_condition(cond, golden, device='cuda'):
+    @triton.jit
+    def _kernel(dst, cond: tl.constexpr):
+        if cond:
+            tl.store(dst, 1)
+        else:
+            tl.store(dst, 0)
+
+    out = torch.empty(size=[1], dtype=torch.int32, device='cuda')
+    _kernel[(1,)](out, cond)
+    assert out[0] == golden
+
+
 # ---------------
 # test for
 # ---------------
