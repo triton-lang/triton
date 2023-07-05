@@ -244,6 +244,7 @@ jobs:
             mv cache reference
           else
             echo "No artifact found with the name: $ARTIFACT_NAME"
+            exit 1
           fi
       - name: Download current job artifacts
         uses: actions/download-artifact@v2
@@ -294,6 +295,7 @@ jobs:
         if: ${{ env.COMPARISON_RESULT == 'false' }}
         uses: actions/github-script@v5
         with:
+          github-token: ${{ secrets.CI_ACCESS_TOKEN }}
           script: |
             const run_id = ${{ env.RUN_ID }};
             const issue_number = context.payload.pull_request.number;
