@@ -54,7 +54,7 @@ def extract_file_lines(asm):
     fd, path = tempfile.mkstemp()
     with open(fd, 'wb') as cubin:
         cubin.write(asm)
-    asm = subprocess.check_output(["nvdisasm", "-gi", path]).decode("utf-8")
+    asm = subprocess.check_output(["nvdisasm", "-g", path]).decode("utf-8")
     file_lines = []
     lines = asm.splitlines()
     for line in lines:
@@ -66,6 +66,10 @@ def extract_file_lines(asm):
 
 def check_file_lines(file_lines, file_name, lineno):
     for file, line in file_lines:
+        # -1 means do not check line number
+        if lineno == -1:
+            if file_name in file:
+                return True
         if file_name in file and str(lineno) in line:
             return True
     return False
@@ -96,8 +100,6 @@ def test_line_info(func: str):
         kernel_info = kernel_multi_files[(1,)](x, y, BLOCK=shape[0])
 
     file_lines = extract_file_lines(kernel_info.asm["cubin"])
-    for file, line in file_lines:
-        print(file, line)
     if func == "single":
         assert (check_file_lines(file_lines, "test_line_info.py", 16))
         assert (check_file_lines(file_lines, "test_line_info.py", 17))
@@ -116,3 +118,5 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "standard.py", 33))
         assert (check_file_lines(file_lines, "standard.py", 34))
         assert (check_file_lines(file_lines, "standard.py", 36))
+        # core.py is changed frequently, so we only check if it exists
+        assert (check_file_lines(file_lines, "core.py", -1))
