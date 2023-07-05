@@ -13,6 +13,7 @@ from .standard import (
     zeros_like,
 )
 from .core import (
+    TRITON_MAX_TENSOR_NUMEL,
     abs,
     advance,
     arange,
@@ -72,7 +73,6 @@ from .core import (
     reshape,
     sin,
     sqrt,
-    squeeze_dims,
     static_assert,
     static_print,
     store,
@@ -106,6 +106,7 @@ from .random import (
 
 
 __all__ = [
+    "TRITON_MAX_TENSOR_NUMEL",
     "abs",
     "advance",
     "arange",
@@ -182,7 +183,6 @@ __all__ = [
     "sin",
     "softmax",
     "sqrt",
-    "squeeze_dims",
     "static_range",
     "static_assert",
     "static_print",

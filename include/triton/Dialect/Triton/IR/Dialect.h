@@ -39,10 +39,6 @@ public:
                             Attribute &resultEncoding,
                             std::optional<Location> location) const = 0;
 
-  virtual LogicalResult
-  inferSqueezeDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                             Attribute &resultEncoding,
-                             std::optional<Location> location) const = 0;
   // Note: this function only verify operand encoding but doesn't infer result
   // encoding
   virtual LogicalResult

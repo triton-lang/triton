@@ -110,7 +110,7 @@ class CombineBroadcastMulReducePattern : public mlir::RewritePattern {
 private:
   static bool isAddF32(const Operation *op) {
     if (auto addf = dyn_cast_or_null<arith::AddFOp>(op))
-      return addf.getType().isa<mlir::Float32Type>();
+      return addf.getType().getIntOrFloatBitWidth() <= 32;
     return false;
   }
 
@@ -154,49 +154,39 @@ public:
         mulOp.getOperand(1).getDefiningOp());
     if (!broadcastRhsOp)
       return mlir::failure();
+    // broadcast operand is expand dims
+    auto expandLhsOp = llvm::dyn_cast_or_null<triton::ExpandDimsOp>(
+        broadcastLhsOp.getOperand().getDefiningOp());
+    if (!expandLhsOp)
+      return mlir::failure();
+    auto expandRhsOp = llvm::dyn_cast_or_null<triton::ExpandDimsOp>(
+        broadcastRhsOp.getOperand().getDefiningOp());
+    if (!expandRhsOp)
+      return mlir::failure();
     // get not-broadcast dimensions
-    auto lhsInShape =
-        broadcastLhsOp.getOperand().getType().cast<ShapedType>().getShape();
-    auto lhsOutShape = broadcastLhsOp.getType().cast<ShapedType>().getShape();
-    auto rhsInShape =
-        broadcastRhsOp.getOperand().getType().cast<ShapedType>().getShape();
-    auto rhsOutShape = broadcastRhsOp.getType().cast<ShapedType>().getShape();
-    SmallVector<int> keptDimLHS = getEqualIndices(lhsInShape, lhsOutShape);
-    SmallVector<int> keptDimRHS = getEqualIndices(rhsInShape, rhsOutShape);
-    if (keptDimLHS.size() != 2 || keptDimRHS.size() != 2)
+    int expandLhsAxis = expandLhsOp.getAxis();
+    int expandRhsAxis = expandRhsOp.getAxis();
+    if (expandLhsAxis != 2 || expandRhsAxis != 0)
       return mlir::failure();
-    if (keptDimLHS[1] != keptDimRHS[0] || reduceOp.getAxis() != keptDimLHS[1])
+    auto broadcastLhsShape =
+        broadcastLhsOp.getType().cast<ShapedType>().getShape();
+    auto broadcastRhsShape =
+        broadcastLhsOp.getType().cast<ShapedType>().getShape();
+    if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
       return mlir::failure();
-    // replace with dot
-    Type newLhsType = RankedTensorType::get(
-        {lhsInShape[keptDimLHS[0]], lhsOutShape[keptDimLHS[1]]},
-        broadcastLhsOp.getOperand()
-            .getType()
-            .cast<ShapedType>()
-            .getElementType());
-    Type newRhsType = RankedTensorType::get(
-        {rhsOutShape[keptDimRHS[0]], rhsInShape[keptDimRHS[1]]},
-        broadcastRhsOp.getOperand()
-            .getType()
-            .cast<ShapedType>()
-            .getElementType());
-    Type newAccType = RankedTensorType::get(
-        {lhsInShape[keptDimLHS[0]], rhsInShape[keptDimRHS[1]]},
-        broadcastLhsOp.getOperand()
-            .getType()
-            .cast<ShapedType>()
-            .getElementType());
+    Type newAccType =
+        RankedTensorType::get({broadcastLhsShape[0], broadcastRhsShape[2]},
+                              broadcastLhsOp.getOperand()
+                                  .getType()
+                                  .cast<ShapedType>()
+                                  .getElementType());
     rewriter.setInsertionPoint(op);
-    auto newLhs = rewriter.create<triton::SqueezeDimsOp>(
-        op->getLoc(), broadcastLhsOp.getOperand(), 2);
-    auto newRhs = rewriter.create<triton::SqueezeDimsOp>(
-        op->getLoc(), broadcastRhsOp.getOperand(), 0);
     auto newAcc = rewriter.create<triton::SplatOp>(
         op->getLoc(), newAccType,
         rewriter.create<arith::ConstantOp>(op->getLoc(),
                                            rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<triton::DotOp>(op, newLhs, newRhs, newAcc,
-                                               true);
+    rewriter.replaceOpWithNewOp<triton::DotOp>(
+        op, expandLhsOp.getOperand(), expandRhsOp.getOperand(), newAcc, true);
     return mlir::success();
   }
 };

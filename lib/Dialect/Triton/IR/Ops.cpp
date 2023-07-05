@@ -664,51 +664,6 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
   return foldViewLikeOp(*this, adaptor.getSrc());
 }
 
-//-- SqueezeDimsOp --
-mlir::LogicalResult mlir::triton::SqueezeDimsOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> loc, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
-  // infer shape
-  auto arg = operands[0];
-  auto argTy = arg.getType().cast<RankedTensorType>();
-  auto retShape = argTy.getShape().vec();
-  Properties *prop = properties.as<Properties *>();
-  int axis = prop->axis.getInt();
-  retShape.erase(retShape.begin() + axis);
-  // infer encoding
-  Attribute argEncoding = argTy.getEncoding();
-  Attribute retEncoding;
-  if (argEncoding) {
-    Dialect &dialect = argEncoding.getDialect();
-    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferSqueezeDimsOpEncoding(argEncoding, axis, retEncoding, loc)
-            .failed())
-      return emitOptionalError(loc, "failed to infer layout for SqueezeDimsOp");
-  }
-  // create type
-  auto argEltTy = argTy.getElementType();
-  inferredReturnTypes.push_back(
-      RankedTensorType::get(retShape, argEltTy, retEncoding));
-  return mlir::success();
-}
-
-LogicalResult SqueezeDimsOp::canonicalize(SqueezeDimsOp op,
-                                          PatternRewriter &rewriter) {
-  auto definingOp = op.getOperand().getDefiningOp();
-  if (!definingOp) {
-    return mlir::failure();
-  }
-  // squeeze_dims(expand_dims(x, dim), dim) -> x
-  if (auto expand = dyn_cast<triton::ExpandDimsOp>(definingOp))
-    if (expand.getAxis() == op.getAxis()) {
-      rewriter.replaceOp(op, expand.getOperand());
-      return mlir::success();
-    }
-  return mlir::failure();
-}
-
 //-- ViewOp --
 template <typename OpType>
 LogicalResult canonicalizeViewOrBroadcast(OpType op,
