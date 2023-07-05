@@ -13,6 +13,7 @@ from .standard import (
     zeros_like,
 )
 from .core import (
+    TRITON_MAX_TENSOR_NUMEL,
     abs,
     advance,
     arange,
@@ -105,6 +106,7 @@ from .random import (
 
 
 __all__ = [
+    "TRITON_MAX_TENSOR_NUMEL",
     "abs",
     "advance",
     "arange",

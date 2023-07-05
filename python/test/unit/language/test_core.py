@@ -2161,6 +2161,46 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         assert 'mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16' in ptx
 
 
+@pytest.mark.parametrize('in_dtype', ['float32'])
+def test_dot_mulbroadcastred(in_dtype, device):
+    @triton.jit
+    def kernel(Z, X, Y,
+               M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+               BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+        pidn = tl.program_id(1)
+        pidm = tl.program_id(0)
+        offm = tl.arange(0, BM)[:, None]
+        offn = tl.arange(0, BN)[None, :]
+        offak = tl.arange(0, BK)[None, :]
+        offbk = tl.arange(0, BK)[:, None]
+        acc = tl.full((BM, BN), 0.0, tl.float32)
+        for ridx5 in range(0, K // BK):
+            x = tl.load(X + ((pidm * K * BM) + (offm * K) + (ridx5 * BK) + offak))
+            y = tl.load(Y + ((pidn * BN) + (offbk * N) + (ridx5 * N * BK) + offn))
+            x = tl.expand_dims(x, axis=2)
+            y = tl.expand_dims(y, axis=0)
+            t = tl.sum(x * y, axis=1)
+            acc = t + acc
+        tl.store(Z + ((pidm * BM * N) + (pidn * BN) + (offm * N) + offn), acc)
+    M, N, K = 256, 192, 160
+    BM, BN, BK = 128, 32, 32
+    rs = RandomState(17)
+    x = numpy_random((M, K), dtype_str=in_dtype, rs=rs)
+    y = numpy_random((K, N), dtype_str=in_dtype, rs=rs)
+    x = x * 0.1
+    y = y * 0.1
+    z = numpy_random((M, N), dtype_str=in_dtype, rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(z, device=device)
+    grid = M // BM, N // BN
+    h = kernel[grid](z_tri, x_tri, y_tri, M, N, K, BM, BN, BK)
+    z_ref = np.matmul(x, y)
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri), atol=0.01)
+    assert "tt.dot" in h.asm['ttir']
+    assert "triton_gpu.async_wait {num = 2 : i32}" in h.asm['ttgir']
+
+
 @pytest.mark.parametrize("dtype_str", int_dtypes + float_dtypes + ['bfloat16'])
 def test_full(dtype_str, device):
     dtype = getattr(torch, dtype_str)
