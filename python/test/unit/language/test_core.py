@@ -3029,24 +3029,28 @@ def test_nested_if_else_return(_cond1, _cond2, _cond3, device):
 def test_while(device):
 
     @triton.jit
-    def kernel(InitI, Bound, CutOff, OutI, OutJ):
+    def kernel(InitI, Bound, CutOff, OutI, OutInitI, OutJ):
         init_i = tl.load(InitI)
         curr_i = init_i
         j = 0
-        while curr_i == init_i and j < tl.load(Bound):
+        # Check that init_i is not updated by the loop
+        while j < tl.load(Bound):
             curr_i = curr_i + (j == tl.load(CutOff))
             j += 1
+            tl.store(OutInitI, init_i)
         tl.store(OutI, curr_i)
         tl.store(OutJ, j)
 
     out_i = to_triton(np.zeros((1,), dtype=np.int32), device=device)
     out_j = to_triton(np.zeros((1,), dtype=np.int32), device=device)
     init_i = to_triton(np.full((1,), 1, dtype=np.int32), device=device)
+    out_init_i = to_triton(np.full((1,), 0, dtype=np.int32), device=device)
     bound = to_triton(np.full((1,), 10, dtype=np.int32), device=device)
     cut_off = to_triton(np.full((1,), 5, dtype=np.int32), device=device)
-    kernel[(1,)](init_i, bound, cut_off, out_i, out_j)
+    kernel[(1,)](init_i, bound, cut_off, out_i, out_init_i, out_j)
+    assert out_init_i[0] == init_i[0]
     assert out_i[0] == init_i[0] + 1
-    assert out_j[0] == cut_off[0] + 1
+    assert out_j[0] == bound[0]
 
 # def test_for_if(device):
 

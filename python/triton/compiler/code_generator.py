@@ -682,10 +682,6 @@ class CodeGenerator(ast.NodeVisitor):
                     yields.append(loop_defs[name])
             self.builder.create_yield_op([y.handle for y in yields])
 
-        # update global uses in while_op
-        for i, name in enumerate(names):
-            after_block.replace_use_in_block_with(init_args[i].handle, after_block.arg(i))
-
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
         for i, name in enumerate(names):
             new_def = language.core.tensor(while_op.get_result(i), ret_types[i])
