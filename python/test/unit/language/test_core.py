@@ -1830,7 +1830,8 @@ layouts = [
 @pytest.mark.parametrize("M, N", [[128, 128], [256, 128], [256, 256], [128, 256]])
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("op", ["sum", "max"])
-def test_chain_reduce(M, N, src_layout, op, device):
+@pytest.mark.parametrize("first_axis", [0, 1])
+def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     op_str = ""
     if op == "sum":
         op_str = f"""
@@ -1860,11 +1861,11 @@ def test_chain_reduce(M, N, src_layout, op, device):
         %11 = "tt.reduce"(%10) ({{
         ^bb0(%arg2: i32, %arg3: i32):
         {op_str}
-        }}) {{axis = 1 : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
+        }}) {{axis = {first_axis} : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M if first_axis == 1 else N}xi32, #triton_gpu.slice<{{dim = {first_axis}, parent = #src}}>>
         %12 = "tt.reduce"(%11) ({{
         ^bb0(%arg2: i32, %arg3: i32):
         {op_str}
-        }}) {{axis = 0 : i32}} : (tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>) -> i32
+        }}) {{axis = 0 : i32}} : (tensor<{M if first_axis == 1 else N}xi32, #triton_gpu.slice<{{dim = {first_axis}, parent = #src}}>>) -> i32
         tt.store %arg1, %12 {{cache = 1 : i32, evict = 1 : i32}} : i32
         tt.return
     }}
@@ -2158,6 +2159,46 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         assert 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
     elif out_dtype == tl.float16:
         assert 'mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16' in ptx
+
+
+@pytest.mark.parametrize('in_dtype', ['float32'])
+def test_dot_mulbroadcastred(in_dtype, device):
+    @triton.jit
+    def kernel(Z, X, Y,
+               M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+               BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+        pidn = tl.program_id(1)
+        pidm = tl.program_id(0)
+        offm = tl.arange(0, BM)[:, None]
+        offn = tl.arange(0, BN)[None, :]
+        offak = tl.arange(0, BK)[None, :]
+        offbk = tl.arange(0, BK)[:, None]
+        acc = tl.full((BM, BN), 0.0, tl.float32)
+        for ridx5 in range(0, K // BK):
+            x = tl.load(X + ((pidm * K * BM) + (offm * K) + (ridx5 * BK) + offak))
+            y = tl.load(Y + ((pidn * BN) + (offbk * N) + (ridx5 * N * BK) + offn))
+            x = tl.expand_dims(x, axis=2)
+            y = tl.expand_dims(y, axis=0)
+            t = tl.sum(x * y, axis=1)
+            acc = t + acc
+        tl.store(Z + ((pidm * BM * N) + (pidn * BN) + (offm * N) + offn), acc)
+    M, N, K = 256, 192, 160
+    BM, BN, BK = 128, 32, 32
+    rs = RandomState(17)
+    x = numpy_random((M, K), dtype_str=in_dtype, rs=rs)
+    y = numpy_random((K, N), dtype_str=in_dtype, rs=rs)
+    x = x * 0.1
+    y = y * 0.1
+    z = numpy_random((M, N), dtype_str=in_dtype, rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(z, device=device)
+    grid = M // BM, N // BN
+    h = kernel[grid](z_tri, x_tri, y_tri, M, N, K, BM, BN, BK)
+    z_ref = np.matmul(x, y)
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri), atol=0.01)
+    assert "tt.dot" in h.asm['ttir']
+    assert "triton_gpu.async_wait {num = 2 : i32}" in h.asm['ttgir']
 
 
 @pytest.mark.parametrize("dtype_str", int_dtypes + float_dtypes + ['bfloat16'])
@@ -3029,24 +3070,28 @@ def test_nested_if_else_return(_cond1, _cond2, _cond3, device):
 def test_while(device):
 
     @triton.jit
-    def kernel(InitI, Bound, CutOff, OutI, OutJ):
+    def kernel(InitI, Bound, CutOff, OutI, OutInitI, OutJ):
         init_i = tl.load(InitI)
         curr_i = init_i
         j = 0
-        while curr_i == init_i and j < tl.load(Bound):
+        # Check that init_i is not updated by the loop
+        while j < tl.load(Bound):
             curr_i = curr_i + (j == tl.load(CutOff))
             j += 1
+            tl.store(OutInitI, init_i)
         tl.store(OutI, curr_i)
         tl.store(OutJ, j)
 
     out_i = to_triton(np.zeros((1,), dtype=np.int32), device=device)
     out_j = to_triton(np.zeros((1,), dtype=np.int32), device=device)
     init_i = to_triton(np.full((1,), 1, dtype=np.int32), device=device)
+    out_init_i = to_triton(np.full((1,), 0, dtype=np.int32), device=device)
     bound = to_triton(np.full((1,), 10, dtype=np.int32), device=device)
     cut_off = to_triton(np.full((1,), 5, dtype=np.int32), device=device)
-    kernel[(1,)](init_i, bound, cut_off, out_i, out_j)
+    kernel[(1,)](init_i, bound, cut_off, out_i, out_init_i, out_j)
+    assert out_init_i[0] == init_i[0]
     assert out_i[0] == init_i[0] + 1
-    assert out_j[0] == cut_off[0] + 1
+    assert out_j[0] == bound[0]
 
 # def test_for_if(device):
 
