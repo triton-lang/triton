@@ -563,8 +563,11 @@ class CodeGenerator(ast.NodeVisitor):
             cond = cond.to(language.int1, _builder=self.builder)
             contains_return = ContainsReturnChecker(self.gscope).visit(node)
             if self.scf_stack and contains_return:
-                raise UnsupportedLanguageConstruct(None, node,
-                                                   "Cannot have `return` statements inside `while` or `for` statements in triton")
+                raise UnsupportedLanguageConstruct(
+                    None, node,
+                    "Cannot have `return` statements inside `while` or `for` statements in triton "
+                    "(note that this also applies to `return` statements that are inside functions "
+                    "transitively called from within `while`/`for` statements)")
             elif self.scf_stack or not contains_return:
                 self.visit_if_scf(cond, node)
             else:
@@ -681,10 +684,6 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     yields.append(loop_defs[name])
             self.builder.create_yield_op([y.handle for y in yields])
-
-        # update global uses in while_op
-        for i, name in enumerate(names):
-            after_block.replace_use_in_block_with(init_args[i].handle, after_block.arg(i))
 
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
         for i, name in enumerate(names):
