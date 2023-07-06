@@ -57,6 +57,17 @@ void castInt32To2xF16(SmallVector<Value> &vals, Value i32Val, unsigned index,
   vals[index + 1] = extract_element(f16_ty, vec, i32_val(1));
 }
 
+bool canUseLdMatrix(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto srcLayout = srcTy.getEncoding();
+  auto dstLayout = dstTy.getEncoding();
+  bool isDstMmaV1 = false;
+  if (auto mmaLayout = dstLayout.dyn_cast<MmaEncodingAttr>()) {
+    isDstMmaV1 = mmaLayout.isVolta();
+  }
+  return dstLayout.isa<MmaEncodingAttr>() && !isDstMmaV1 &&
+         triton::gpu::getWarpsPerCTA(dstLayout)[1] == 1 &&
+         srcTy.getElementType().getIntOrFloatBitWidth() != 32;
+}
 struct ConvertLayoutOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
@@ -321,8 +332,7 @@ private:
     auto accumSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<unsigned> numCTAs(rank);
     auto shapePerCTA = getShapePerCTA(layout, type.getShape());
-    shapePerCTA[1] = std::min<unsigned>(type.getShape()[1],
-                                        shapePerCTA[1] * 2); // TODO: hack
+    shapePerCTA[1] = 16; // todo: hack
     auto order = getOrder(layout);
     for (unsigned d = 0; d < rank; ++d) {
       numCTAs[d] = ceil<unsigned>(type.getShape()[d], shapePerCTA[d]);
@@ -493,12 +503,12 @@ private:
   lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
-    bool enabled = false;
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstTy = dst.getType().cast<RankedTensorType>();
+    bool useLdMatrix = canUseLdMatrix(srcTy, dstTy);
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (!isaDistributedLayout(srcLayout)) {
@@ -523,6 +533,9 @@ private:
     SmallVector<unsigned> outNumCTAs(rank);
     auto srcShapePerCTA = getShapePerCTA(srcLayout, srcTy.getShape());
     auto dstShapePerCTA = getShapePerCTA(dstLayout, shape);
+    if (useLdMatrix) {
+      dstShapePerCTA[1] = 16; // todo: hack
+    }
 
     // For Volta, all the coords for a CTA are calculated.
     bool isSrcMmaV1{}, isDstMmaV1{};
@@ -540,20 +553,9 @@ private:
       isDstMmaV1 = sliceLayout.getParent().isa<MmaEncodingAttr>() &&
                    sliceLayout.getParent().cast<MmaEncodingAttr>().isVolta();
     }
-    if (srcLayout.isa<BlockedEncodingAttr>() &&
-        dstLayout.isa<MmaEncodingAttr>() && !isDstMmaV1 &&
-        triton::gpu::getWarpsPerCTA(dstLayout)[1] == 1 &&
-        srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
-      enabled = true;
-    }
-    std::string enabled_str = enabled ? "true" : "false";
-    std::cout << "Enabled = " << enabled_str << std::endl;
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA = std::min<unsigned>(shape[d], srcShapePerCTA[d]);
       unsigned outPerCTA = std::min<unsigned>(shape[d], dstShapePerCTA[d]);
-      if (enabled && d == 1) {
-        outPerCTA = 16; // TODO: fix hack
-      }
       unsigned maxPerCTA = std::max(inPerCTA, outPerCTA);
       numReplicates[d] = ceil<unsigned>(shape[d], maxPerCTA);
       inNumCTAsEachRep[d] = maxPerCTA / inPerCTA;
@@ -588,8 +590,8 @@ private:
       // We rely on shared layout constructor to calculate vec, perPhase, and
       // maxPhase
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
-      if (enabled)
-        repShape[1] = ceil<unsigned>(repShape[1], 16) * 16;
+      if (useLdMatrix)
+        repShape[1] = ceil<unsigned>(repShape[1], 16) * 16; // todo: hack
       auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
           getContext(), 0, dstLayout, dstTy.getElementType());
       sharedLayout = triton::gpu::SharedEncodingAttr::get(
@@ -628,7 +630,7 @@ private:
                                smemBase, shape,
                                /*isDestMma=*/true);
       } else {
-        if (enabled) {
+        if (useLdMatrix) {
           processReplicaLdMatrix(loc, rewriter, /*stNotRd*/ false, dstTy,
                                  outNumCTAsEachRep, multiDimRepId, outVec,
                                  repShape, outOrd, outVals, smemBase,
