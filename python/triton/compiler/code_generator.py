@@ -269,7 +269,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def _get_insertion_point_and_loc(self):
         # XXX: this is a hack to get the location of the insertion point.
-        # Get insertion point's location could be invalid sometimes,
+        # The insertion point's location could be invalid sometimes,
         # so we need to explicitly set the location
         loc = self.builder.get_loc()
         ip = self.builder.get_insertion_point()
