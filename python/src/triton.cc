@@ -83,15 +83,14 @@ public:
 
   bool isLineInfoEnabled() { return lineInfoEnabled; }
 
-  void setLastLoc(const std::string &fileName, int line, int column) {
-    auto context = builder->getContext();
-    lastLoc = std::make_unique<mlir::Location>(
-        mlir::FileLineColLoc::get(context, fileName, line, column));
-  }
-
   void setLastLoc(mlir::Location loc) {
     if (lineInfoEnabled)
       lastLoc = std::make_unique<mlir::Location>(loc);
+  }
+
+  void setLastLoc(const std::string &fileName, int line, int column) {
+    auto context = builder->getContext();
+    setLastLoc(mlir::FileLineColLoc::get(context, fileName, line, column));
   }
 
   mlir::Location getLastLoc() {
