@@ -69,6 +69,10 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   int32_t n_regs = 0;
   int32_t n_spills = 0;
   printf("Loading binary %s\n", name);
+  printf("data %s\n", data);
+
+  cuInit(0);
+  printf("Init\n");
   // create driver handles
   CUDA_CHECK(cuModuleLoadData(&mod, data));
   printf("step 1\n");
