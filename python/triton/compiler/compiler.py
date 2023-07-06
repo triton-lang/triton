@@ -11,7 +11,6 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Tuple
 
-# import triton
 from .._C.libtriton.triton import (add_external_libs, compile_ptx_to_cubin,
                                    get_shared_memory_size, ir,
                                    translate_llvmir_to_hsaco, translate_llvmir_to_ptx,

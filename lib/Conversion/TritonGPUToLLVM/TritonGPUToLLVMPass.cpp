@@ -26,6 +26,7 @@
 #include "ElementwiseOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
 #include "ReduceOpToLLVM.h"
+#include "ScanOpToLLVM.h"
 #include "TritonGPUToLLVM.h"
 #include "TypeConverter.h"
 #include "ViewOpToLLVM.h"
@@ -372,6 +373,8 @@ public:
                                       /*benefit=*/1);
     populateReduceOpToLLVMPatterns(typeConverter, patterns, allocation,
                                    indexCacheInfo, /*benefit=*/1);
+    populateScanOpToLLVMPatterns(typeConverter, patterns, allocation,
+                                 indexCacheInfo, /*benefit=*/1);
     populateViewOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
 
     // Native lowering patterns

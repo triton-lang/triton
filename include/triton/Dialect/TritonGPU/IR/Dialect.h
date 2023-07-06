@@ -8,11 +8,9 @@
 
 // TritonGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
-
-#define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.h.inc"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
@@ -28,8 +26,13 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 
+// Returns the number of threads per warp that may have access to replicated
+// elements. If you want non-replicated threads, use
+// getThreadsPerWarpWithUniqueData.
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
 
+// Returns the number of warps per CTA that may have access to replicated
+// elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
 SmallVector<unsigned> getSizePerThread(Attribute layout);
@@ -77,9 +80,10 @@ bool isaDistributedLayout(Attribute layout);
 
 bool isSharedEncoding(Value value);
 
+bool isExpensiveCat(CatOp cat, Attribute &targetEncoding);
+
 } // namespace gpu
 } // namespace triton
-
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
