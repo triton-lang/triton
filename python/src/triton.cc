@@ -81,6 +81,8 @@ public:
 
   mlir::OpBuilder &getBuilder() { return *builder; }
 
+  bool isLineInfoEnabled() { return lineInfoEnabled; }
+
   void setLastLoc(const std::string &fileName, int line, int column) {
     auto context = builder->getContext();
     lastLoc = std::make_unique<mlir::Location>(
@@ -88,7 +90,8 @@ public:
   }
 
   void setLastLoc(mlir::Location loc) {
-    lastLoc = std::make_unique<mlir::Location>(loc);
+    if (lineInfoEnabled)
+      lastLoc = std::make_unique<mlir::Location>(loc);
   }
 
   mlir::Location getLastLoc() {
@@ -150,6 +153,7 @@ public:
 private:
   std::unique_ptr<mlir::OpBuilder> builder;
   std::unique_ptr<mlir::Location> lastLoc;
+  bool lineInfoEnabled = triton::tools::getBoolEnv("TRITON_LINE_INFO");
 };
 
 /*****************************************************************************/
@@ -813,13 +817,13 @@ void init_triton_ir(py::module &&m) {
       // Unstructured control flow
       .def("create_cond_branch",
            [](TritonOpBuilder &self, mlir::Value condition,
-              mlir::Block *trueDest, mlir::Block *falseDest) {
+              mlir::Block *trueDest, mlir::Block *falseDest) -> mlir::OpState {
              return self.create<mlir::cf::CondBranchOp>(condition, trueDest,
                                                         falseDest);
            })
       .def("create_branch",
            [](TritonOpBuilder &self, mlir::Block *dest,
-              std::vector<mlir::Value> &args) {
+              std::vector<mlir::Value> &args) -> mlir::OpState {
              return self.create<mlir::cf::BranchOp>(dest, args);
            })
       // Structured control flow

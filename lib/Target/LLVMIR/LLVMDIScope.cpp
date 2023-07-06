@@ -31,7 +31,8 @@ static FileLineColLoc extractFileLoc(Location loc) {
     return extractFileLoc(fusedLoc.getLocations().front());
   if (auto callerLoc = loc.dyn_cast<CallSiteLoc>())
     return extractFileLoc(callerLoc.getCaller());
-  return FileLineColLoc();
+  StringAttr unknownFile = mlir::StringAttr::get(loc.getContext(), "<unknown>");
+  return mlir::FileLineColLoc::get(unknownFile, 0, 0);
 }
 
 /// Add a debug info scope to LLVMFuncOp that are missing it.

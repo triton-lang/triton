@@ -267,6 +267,18 @@ class CodeGenerator(ast.NodeVisitor):
         self.lscope[name] = value
         self.local_defs[name] = value
 
+    def _get_insertion_point_and_loc(self):
+        # XXX: this is a hack to get the location of the insertion point.
+        # Get insertion point's location could be invalid sometimes,
+        # so we need to explicitly set the location
+        loc = self.builder.get_loc()
+        ip = self.builder.get_insertion_point()
+        return ip, loc
+
+    def _set_insertion_point_and_loc(self, ip, loc):
+        self.builder.restore_insertion_point(ip)
+        self.builder.set_loc(loc)
+
     #
     # AST visitor
     #
@@ -552,13 +564,13 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_if_scf(self, cond, node):
         with enter_sub_region(self) as sr:
             liveins, _ = sr
-            ip = self.builder.get_insertion_point()
+            ip, last_loc = self._get_insertion_point_and_loc()
             then_block = self.builder.create_block()
             else_block = self.builder.create_block() if node.orelse else None
             then_defs, else_defs, then_block, else_block, names, ret_types, _ = \
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # create if op
-            self.builder.restore_insertion_point(ip)
+            self._set_insertion_point_and_loc(ip, last_loc)
             if_op = self.builder.create_if_op([ty.to_ir(self.builder) for ty in ret_types], cond.handle, True)
             then_block.merge_block_before(if_op.get_then_block())
             self.builder.set_insertion_point_to_end(if_op.get_then_block())
@@ -779,7 +791,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
-            ip = self.builder.get_insertion_point()
+            ip, last_loc = self._get_insertion_point_and_loc()
 
             # create loop body block
             block = self.builder.create_block()
@@ -809,7 +821,7 @@ class CodeGenerator(ast.NodeVisitor):
                     yields.append(language.core._to_tensor(self.local_defs[name], self.builder))
 
             # create ForOp
-            self.builder.restore_insertion_point(ip)
+            self._set_insertion_point_and_loc(ip, last_loc)
             for_op = self.builder.create_for_op(lb, ub, step, [arg.handle for arg in init_args])
 
             self.scf_stack.append(node)

@@ -350,7 +350,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   // Simplify the IR
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createSymbolDCEPass());
-  pm.addPass(mlir::createLLVMDIScopePass());
+  if (::triton::tools::getBoolEnv("TRITON_LINE_INFO"))
+    pm.addPass(mlir::createLLVMDIScopePass());
 
   if (failed(pm.run(module))) {
     llvm::errs() << "Pass execution failed";
