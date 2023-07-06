@@ -1668,6 +1668,7 @@ void init_triton_translation(py::module &m) {
             const char *_fsrc = fsrc.c_str();
             const char *_flog = flog.c_str();
             const char *_fbin = fbin.c_str();
+            printf("ptx: %i \n%s\n", capability, ptxCode.c_str());
             std::ofstream ofs(_fsrc);
             ofs << ptxCode << std::endl;
             ofs.close();
