@@ -10,6 +10,7 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {
     char err[1024] = {0};
     strcat(err, prefix);
     strcat(err, str);
+    printf("code: %i\n", code);
     PyErr_SetString(PyExc_RuntimeError, err);
   }
 }
