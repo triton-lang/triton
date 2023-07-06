@@ -73,6 +73,10 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
   CUDA_CHECK(cuInit(0));
   printf("Init\n");
+
+  CUcontext context;
+  CUDA_CHECK(cuDevicePrimaryCtxRetain(&context, device));
+  printf("context\n");
   // create driver handles
   CUDA_CHECK(cuModuleLoadData(&mod, data));
   printf("step 1\n");
