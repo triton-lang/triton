@@ -1508,9 +1508,7 @@ void init_triton_ir(py::module &&m) {
              self.enableIRPrinting(
                  /*shouldPrintBeforePass=*/nullptr,
                  /*shouldPrintAfterPass=*/
-                 [](mlir::Pass *pass, mlir::Operation *) {
-                   return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
-                 },
+                 [](mlir::Pass *pass, mlir::Operation *) { return true; },
                  /*printModuleScope=*/false,
                  /*printAfterOnlyOnChange=*/true,
                  /*printAfterOnlyOnFailure*/ false, llvm::dbgs(),
