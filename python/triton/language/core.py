@@ -6,7 +6,6 @@ from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
 from .._C.libtriton.triton import ir
-# import triton
 from ..runtime.jit import jit
 from . import semantic
 
@@ -1255,15 +1254,21 @@ def abs(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name: str) -> Callable[[T], T]:
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
-    :param axis: the dimension along which the reduction should be done
-    """
+    :param axis: the dimension along which the reduction should be done"""
+        if return_indices_arg is not None:
+            docstr += f"""
+    :param {return_indices_arg}: if true, return index corresponding to the {name} value"""
+        if tie_break_arg is not None:
+            docstr += f"""
+    :param {tie_break_arg}: if true, return the left-most indices in case of ties for values that aren't NaN"""
+
         func.__doc__ = docstr.format(name=name)
         return func
 
@@ -1374,65 +1379,93 @@ def maximum(x, y):
 
 
 @jit
-def _max_combine(a, b):
-    return maximum(a, b)
+def _argmax_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    gt = value1 > value2 or tie
+    v_ret = where(gt, value1, value2)
+    i_ret = where(gt, index1, index2)
+    return v_ret, i_ret
 
 
 @jit
-def _argmax_combine(value1, index1, value2, index2):
-    gt = value1 > value2
-    value_ret = where(gt, value1, value2)
-    index_ret = where(gt, index1, index2)
-    return value_ret, index_ret
+def _argmax_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, True)
 
 
 @jit
-@_add_reduction_docstr("maximum")
-def max(input, axis=None, return_indices=False):
+def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, False)
+
+
+@jit
+@_add_reduction_docstr("maximum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
+def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = _promote_reduction_input(input)
     if return_indices:
-        return _reduce_with_indices(input, axis, _argmax_combine)
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
     else:
-        return reduce(input, axis, _max_combine)
+        return reduce(input, axis, maximum)
 
 
 @jit
-@_add_reduction_docstr("maximum index")
-def argmax(input, axis):
-    (_, ret) = max(input, axis, return_indices=True)
+@_add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
+def argmax(input, axis, tie_break_left=True):
+    (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
 
 # min and argmin
 
 
 @jit
-def _min_combine(a, b):
-    # TODO: minimum/maximum doesn't get lowered to fmin/fmax...
-    return minimum(a, b)
-
-
-@jit
-def _argmin_combine(value1, index1, value2, index2):
-    lt = value1 < value2
+def _argmin_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    lt = value1 < value2 or tie
     value_ret = where(lt, value1, value2)
     index_ret = where(lt, index1, index2)
     return value_ret, index_ret
 
 
 @jit
-@_add_reduction_docstr("minimum")
-def min(input, axis=None, return_indices=False):
-    input = _promote_reduction_input(input)
-    if return_indices:
-        return _reduce_with_indices(input, axis, _argmin_combine)
-    else:
-        return reduce(input, axis, _min_combine)
+def _argmin_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, True)
 
 
 @jit
-@_add_reduction_docstr("minimum index")
-def argmin(input, axis):
-    _, ret = min(input, axis, return_indices=True)
+def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, False)
+
+
+@jit
+@_add_reduction_docstr("minimum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
+def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
+    input = _promote_reduction_input(input)
+    if return_indices:
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
+    else:
+        return reduce(input, axis, minimum)
+
+
+@jit
+@_add_reduction_docstr("minimum index",
+                       tie_break_arg="tie_break_left")
+def argmin(input, axis, tie_break_left=True):
+    _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
 
 
@@ -1468,6 +1501,81 @@ def xor_sum(input, axis=None, _builder=None, _generator=None):
     return reduce(input, axis, _xor_combine,
                   _builder=_builder, _generator=_generator)
 
+
+# -----------------------
+# Scans
+# -----------------------
+
+def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        docstr = """
+    Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
+
+    :param input: the input values
+    :param axis: the dimension along which the scan should be done"""
+        func.__doc__ = docstr.format(name=name)
+        return func
+
+    return _decorator
+
+
+@builtin
+def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
+    """Applies the combine_fn to each elements with a carry in :code:`input` tensors along the provided :code:`axis` and update the carry
+
+    :param input: the input tensor, or tuple of tensors
+    :param axis: the dimension along which the reduction should be done
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+
+    """
+    if isinstance(input, tensor):
+        return associative_scan((input,), axis, combine_fn,
+                                _builder=_builder, _generator=_generator)[0]
+
+    def make_combine_region(scan_op):
+        in_scalar_tys = [t.type.scalar for t in input]
+        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
+
+        region = scan_op.get_region(0)
+        with _insertion_guard(_builder):
+            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
+            block = _builder.create_block_with_parent(region, param_types)
+            args = [tensor(block.arg(i), ty)
+                    for i, ty in enumerate(prototype.param_types)]
+            results = _generator.call_JitFunction(combine_fn, args, kwargs={})
+            if isinstance(results, tensor):
+                handles = [results.handle]
+            else:
+                handles = [r.handle for r in results]
+            _builder.create_scan_ret(*handles)
+    axis = _constexpr_to_value(axis)
+    return semantic.associative_scan(input, axis, make_combine_region, _builder)
+
+# cumsum
+
+
+@jit
+@_add_scan_docstr("cumsum")
+def cumsum(input, axis=0):
+    # todo rename this to a generic function name
+    input = _promote_reduction_input(input)
+    return associative_scan(input, axis, _sum_combine)
+
+# cumprod
+
+
+@jit
+def _prod_combine(a, b):
+    return a * b
+
+
+@jit
+@_add_scan_docstr("cumprod")
+def cumprod(input, axis=0):
+    # todo rename this to a generic function name
+    input = _promote_reduction_input(input)
+    return associative_scan(input, axis, _prod_combine)
 
 # -----------------------
 # Compiler Hint Ops
@@ -1521,15 +1629,15 @@ def max_contiguous(input, values, _builder=None):
 @builtin
 def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
     '''
-    Print the values at compile time. The parameters are the same as the Python builtin :code:`print`.
+    Print the values at compile time.  The parameters are the same as the builtin :code:`print`.
 
-    Calling the Python builtin :code:`print` inside your kernel is the same as calling this.
+    NOTE: Calling the Python builtin :code:`print` is not the same as calling this, it instead maps to :code:`device_print`,
+    which has special requirements for the arguments.
 
     .. highlight:: python
     .. code-block:: python
 
         tl.static_print(f"{BLOCK_SIZE=}")
-        print(f"{BLOCK_SIZE=}")
     '''
     pass
 
@@ -1551,13 +1659,18 @@ def static_assert(cond, msg="", _builder=None):
 @builtin
 def device_print(prefix, *args, _builder=None):
     '''
-    Print the values at runtime from the device.  String formatting does not work, so you should
-    provide the values you want to print as arguments.
+    Print the values at runtime from the device.  String formatting does not work for runtime values, so you should
+    provide the values you want to print as arguments.  The first value must be a string, all following values must
+    be scalars or tensors.
+
+    Calling the Python builtin :code:`print` is the same as calling this function, and the requirements for the arguments will match
+    this function (not the normal requirements for :code:`print`).
 
     .. highlight:: python
     .. code-block:: python
 
         tl.device_print("pid", pid)
+        print("pid", pid)
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
@@ -1605,12 +1718,16 @@ def device_assert(cond, msg="", _builder=None):
     while hasattr(module, "__name__"):
         frame = frame.f_back
         module = inspect.getmodule(frame)
-    func_name = frame.f_code.co_name
-    file_name = frame.f_back.f_code.co_filename
-    # TODO: The line number currently indicates the line
-    # where the triton function is called but not where the
-    # device_assert is called. Need to enhance this.
-    lineno = frame.f_back.f_lineno
+    lineno = 0
+    func_name = 'unknown'
+    file_name = 'unknown'
+    if frame is not None:
+        func_name = frame.f_code.co_name
+        file_name = frame.f_back.f_code.co_filename
+        # TODO: The line number currently indicates the line
+        # where the triton function is called but not where the
+        # device_assert is called. Need to enhance this.
+        lineno = frame.f_back.f_lineno
     return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
 
 

@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
@@ -146,6 +147,11 @@ def download_and_copy_ptxas():
 
 # ---- cmake extension ----
 
+class CMakeBuildPy(build_py):
+    def run(self) -> None:
+        self.run_command('build_ext')
+        return super().run()
+
 
 class CMakeExtension(Extension):
     def __init__(self, name, path, sourcedir=""):
@@ -205,6 +211,7 @@ class CMakeBuild(build_ext):
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DTRITON_BUILD_TUTORIALS=OFF",
@@ -280,7 +287,7 @@ setup(
     ],
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
-    cmdclass={"build_ext": CMakeBuild},
+    cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy},
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],

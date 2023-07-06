@@ -3,8 +3,8 @@ from __future__ import annotations  # remove after python 3.11
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
+from .._C.libtriton.triton import ir
 from . import core as tl
-from triton._C.libtriton.triton import ir
 
 T = TypeVar('T')
 
@@ -775,13 +775,29 @@ def cast(input: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
-def _str_to_cache_modifier(cache_modifier):
+def _str_to_load_cache_modifier(cache_modifier):
     cache = ir.CACHE_MODIFIER.NONE  # default
     if cache_modifier:
         if cache_modifier == ".ca":
             cache = ir.CACHE_MODIFIER.CA
         elif cache_modifier == ".cg":
             cache = ir.CACHE_MODIFIER.CG
+        else:
+            raise ValueError(f"Cache modifier {cache_modifier} not supported")
+    return cache
+
+
+def _str_to_store_cache_modifier(cache_modifier):
+    cache = ir.CACHE_MODIFIER.NONE  # default
+    if cache_modifier:
+        if cache_modifier == ".wb":
+            cache = ir.CACHE_MODIFIER.WB
+        elif cache_modifier == ".cg":
+            cache = ir.CACHE_MODIFIER.CG
+        elif cache_modifier == ".cs":
+            cache = ir.CACHE_MODIFIER.CS
+        elif cache_modifier == ".wt":
+            cache = ir.CACHE_MODIFIER.WT
         else:
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
@@ -929,7 +945,7 @@ def load(ptr: tl.tensor,
          is_volatile: bool,
          builder: ir.builder) -> tl.tensor:
     # Cache, eviction and padding options
-    cache = _str_to_cache_modifier(cache_modifier)
+    cache = _str_to_load_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
     padding = _str_to_padding_option(padding_option)
 
@@ -1018,7 +1034,7 @@ def store(ptr: tl.tensor,
           eviction_policy: str,
           builder: ir.builder) -> tl.tensor:
     # Cache and eviction options
-    cache = _str_to_cache_modifier(cache_modifier)
+    cache = _str_to_store_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
@@ -1301,6 +1317,32 @@ def reduction(
 
     return tuple(
         wrap_tensor(reduce_op.get_result(i), inputs[i].type.scalar)
+        for i in range(len(inputs))
+    )
+
+
+# ===----------------------------------------------------------------------===
+#                               Associative Scan
+# ===----------------------------------------------------------------------===
+
+
+def associative_scan(
+    inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
+) -> Tuple[tl.tensor, ...]:
+    if len(inputs) != 1:
+        raise ValueError("Current implementation only support single tensor input")
+    shape = inputs[0].type.shape
+
+    def wrap_tensor(x, scalar_ty):
+        res_ty = tl.block_type(scalar_ty, shape)
+        return tl.tensor(x, res_ty)
+
+    scan_op = builder.create_scan([t.handle for t in inputs], axis)
+    region_builder_fn(scan_op)
+    scan_op.verify()
+
+    return tuple(
+        wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar)
         for i in range(len(inputs))
     )
 

@@ -1,7 +1,5 @@
 import torch
 
-# import triton
-# import language as tl
 from ... import jit
 from ... import language as tl
 from ... import next_power_of_2

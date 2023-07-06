@@ -6,6 +6,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 namespace mlir {
 namespace triton {
@@ -398,6 +399,25 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
   return mlir::success();
 }
 
+LogicalResult mlir::triton::DotOp::verify() {
+  auto aTy = getOperand(0).getType().cast<RankedTensorType>();
+  auto bTy = getOperand(1).getType().cast<RankedTensorType>();
+  if (aTy.getElementType() != bTy.getElementType())
+    return emitError("element types of operands A and B must match");
+  auto aEncoding =
+      aTy.getEncoding().dyn_cast_or_null<triton::gpu::DotOperandEncodingAttr>();
+  auto bEncoding =
+      bTy.getEncoding().dyn_cast_or_null<triton::gpu::DotOperandEncodingAttr>();
+  if (!aEncoding && !bEncoding)
+    return mlir::success();
+  // Verify that the encodings are valid.
+  if (!aEncoding || !bEncoding)
+    return emitError("mismatching encoding between A and B operands");
+  if (aEncoding.getMMAv2kWidth() != bEncoding.getMMAv2kWidth())
+    return emitError("mismatching kWidth between A and B operands");
+  return mlir::success();
+}
+
 //-- ReduceOp --
 static mlir::LogicalResult
 inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
@@ -538,6 +558,36 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
 }
 
 unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
+
+//-- ScanOp --
+void ScanOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                   mlir::ValueRange operands, int axis) {
+  SmallVector<Type> inferredReturnTypes;
+  for (auto arg : operands)
+    inferredReturnTypes.push_back(arg.getType());
+  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+}
+
+mlir::LogicalResult mlir::triton::ScanOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  for (auto arg : operands)
+    inferredReturnTypes.push_back(arg.getType());
+  return success();
+}
+
+mlir::LogicalResult mlir::triton::ScanOp::verify() {
+  if (this->getOperands().size() < 1) {
+    return this->emitOpError() << "must have at least 1 operand";
+  }
+  for (const auto &operand : this->getOperands()) {
+    if (!dyn_cast<RankedTensorType>(operand.getType())) {
+      return this->emitOpError() << "operands must be RankedTensorType";
+    }
+  }
+  return success();
+}
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
