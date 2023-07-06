@@ -226,7 +226,19 @@ jobs:
 
           BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
           echo "BRANCH_NAME: $BRANCH_NAME"
-          WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs | jq --arg branch_name "$BRANCH_NAME" '.workflow_runs[] | select(.head_branch == $branch_name)' | jq '.id' | head -1)
+
+          page=1
+          while true; do
+            run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" '.workflow_runs[] | select(.head_branch == $branch_name)' | jq '.id' | head -1)
+            if [ "$run_id" != "" ]; then
+              echo "First run ID on branch $BRANCH_NAME is: $run_id"
+              WORKFLOW_RUN_ID=$run_id
+              break
+            fi
+
+            ((page++))
+          done
+
           echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
           ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq --arg artifact_name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $artifact_name).archive_download_url' --raw-output)
           echo "ARTIFACT_URL: $ARTIFACT_URL"
