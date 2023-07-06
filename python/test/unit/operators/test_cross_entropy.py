@@ -29,11 +29,12 @@ def test_op(M, N, dtype, mode):
     # backward pass
     elif mode == 'backward':
         dy = torch.randn_like(tt_y)
-        # triton backward
-        tt_y.backward(dy)
-        tt_dx = x.grad.clone()
         # torch backward
-        x.grad.zero_()
+        # x.grad.zero_()
         th_y.backward(dy)
         th_dx = x.grad.clone()
+        # triton backward
+        x.grad.zero_()
+        tt_y.backward(dy)
+        tt_dx = x.grad.clone()
         torch.testing.assert_allclose(th_dx, tt_dx)
