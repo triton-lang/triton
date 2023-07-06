@@ -68,32 +68,42 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   CUmodule mod;
   int32_t n_regs = 0;
   int32_t n_spills = 0;
+  printf("Loading binary %s\n", name);
   // create driver handles
   CUDA_CHECK(cuModuleLoadData(&mod, data));
+  printf("step 1\n");
   CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
+  printf("step 2\n");
   // get allocated registers and spilled registers from the function
   CUDA_CHECK(cuFuncGetAttribute(&n_regs, CU_FUNC_ATTRIBUTE_NUM_REGS, fun));
+  printf("step 3\n");
   CUDA_CHECK(
       cuFuncGetAttribute(&n_spills, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
+  printf("step 4\n");
   n_spills /= 4;
   // set dynamic shared memory if necessary
   int shared_optin;
   CUDA_CHECK(cuDeviceGetAttribute(
       &shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
+  printf("step 5\n");
   if (shared > 49152 && shared_optin > 49152) {
     CUDA_CHECK(cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
+    printf("step 6\n");
     int shared_total, shared_static;
     CUDA_CHECK(cuDeviceGetAttribute(
         &shared_total, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
         device));
+    printf("step 7\n");
     CUDA_CHECK(cuFuncGetAttribute(&shared_static,
                                   CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
+    printf("step 8\n");
     CUDA_CHECK(
         cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                            shared_optin - shared_static));
+    printf("step 9\n");
   }
-
+  printf("step end\n");
   if (PyErr_Occurred()) {
     return NULL;
   }
