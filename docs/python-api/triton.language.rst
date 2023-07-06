@@ -111,6 +111,16 @@ Reduction Ops
     sum
     xor_sum
 
+Scan Ops
+-------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    associative_scan
+    cumsum
+    cumprod
 
 Atomic Ops
 ----------
