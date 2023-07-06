@@ -396,7 +396,7 @@ def compile(fn, **kwargs):
     stages = dict()
     stages["ast"] = (lambda path: fn, None)
     stages["ttir"] = (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug), arch))
+                      lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, arch=arch), arch))
     stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
                        lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, arch))
     stages["llir"] = (lambda path: Path(path).read_text(),
