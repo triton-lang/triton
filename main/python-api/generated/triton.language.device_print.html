@@ -62,6 +62,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#math-ops">Math Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#reduction-ops">Reduction Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#scan-ops">Scan Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#atomic-ops">Atomic Ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#comparison-ops">Comparison ops</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#random-number-generation">Random Number Generation</a></li>
@@ -117,9 +118,13 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.device_print">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">device_print</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">prefix</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.device_print" title="Permalink to this definition">¶</a></dt>
-<dd><p>Print the values at runtime from the device.  String formatting does not work, so you should
-provide the values you want to print as arguments.</p>
+<dd><p>Print the values at runtime from the device.  String formatting does not work for runtime values, so you should
+provide the values you want to print as arguments.  The first value must be a string, all following values must
+be scalars or tensors.</p>
+<p>Calling the Python builtin <code class="code docutils literal notranslate"><span class="pre">print</span></code> is the same as calling this function, and the requirements for the arguments will match
+this function (not the normal requirements for <code class="code docutils literal notranslate"><span class="pre">print</span></code>).</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">tl</span><span class="o">.</span><span class="n">device_print</span><span class="p">(</span><span class="s2">&quot;pid&quot;</span><span class="p">,</span> <span class="n">pid</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;pid&quot;</span><span class="p">,</span> <span class="n">pid</span><span class="p">)</span>
 </pre></div>
 </div>
 <dl class="field-list simple">

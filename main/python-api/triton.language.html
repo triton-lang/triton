@@ -115,6 +115,12 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.xor_sum.html">triton.language.xor_sum</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="#scan-ops">Scan Ops</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.associative_scan.html">triton.language.associative_scan</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.cumsum.html">triton.language.cumsum</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.cumprod.html">triton.language.cumprod</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="#atomic-ops">Atomic Ops</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_cas.html">triton.language.atomic_cas</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_add.html">triton.language.atomic_add</a></li>
@@ -347,6 +353,22 @@
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.xor_sum.html#triton.language.xor_sum" title="triton.language.xor_sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">xor_sum</span></code></a></p></td>
 <td><p>Returns the xor sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="scan-ops">
+<h2>Scan Ops<a class="headerlink" href="#scan-ops" title="Permalink to this heading">¶</a></h2>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.associative_scan.html#triton.language.associative_scan" title="triton.language.associative_scan"><code class="xref py py-obj docutils literal notranslate"><span class="pre">associative_scan</span></code></a></p></td>
+<td><p>Applies the combine_fn to each elements with a carry in <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensors along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code> and update the carry</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.cumsum.html#triton.language.cumsum" title="triton.language.cumsum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cumsum</span></code></a></p></td>
+<td><p>Returns the cumsum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.cumprod.html#triton.language.cumprod" title="triton.language.cumprod"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cumprod</span></code></a></p></td>
+<td><p>Returns the cumprod of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 </tbody>
 </table>
