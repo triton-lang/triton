@@ -62,8 +62,9 @@ class DependenciesFinder(ast.NodeVisitor):
         self.ret = hashlib.md5(src.encode("utf-8")).hexdigest()
         self.globals = globals
 
-    def visit_Name(self, node):
-        return self.globals.get(node.id, None)
+    def visit_Name(self, node: ast.Name):
+        x = self.globals.get(node.id, None)
+        return x
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
@@ -82,13 +83,9 @@ class DependenciesFinder(ast.NodeVisitor):
         if func.__module__ and (func.__module__.startswith('triton.') or '.triton.' in func.__module__):
             return
         assert isinstance(func, JITFunction), f"Function \"{func.__name__}\" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this"
-        if func.hash is None:
-            tree = ast.parse(func.src)
-            finder = DependenciesFinder(func.__globals__, func.src)
-            finder.visit(tree)
-            func.hash = finder.ret
+
         noinline = str(getattr(func, 'noinline', False))
-        self.ret = (self.ret + func.hash + noinline).encode("utf-8")
+        self.ret = (self.ret + func.literal_hash + noinline).encode("utf-8")
         self.ret = hashlib.md5(self.ret).hexdigest()
 
 # -----------------------------------------------------------------------------
@@ -412,7 +409,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.src = self.src[self.src.find("def"):]
         # cache of just-in-time compiled kernels
         self.cache = defaultdict(dict)
-        self.hash = None
+        self._hash = None
+        self._literal_hash = None
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel_decorators = []
@@ -433,13 +431,19 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.__module__ = fn.__module__
 
     @property
-    def cache_key(self):
-        # TODO : hash should be attribute of `self`
-        if self.hash is None:
+    def literal_hash(self):
+        if self._literal_hash is None:
             dependencies_finder = DependenciesFinder(globals=self.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret + version_key()
-        return self.hash
+            self._literal_hash = dependencies_finder.ret
+        return self._literal_hash
+
+    @property
+    def cache_key(self):
+        # TODO : hash should be attribute of `self`
+        if self._hash is None:
+            self._hash = self.literal_hash + version_key()
+        return self._hash
 
     def warmup(self, *args, **kwargs):
         return self.run(*map(MockTensor.wrap_dtype, args), **kwargs, warmup=True)
@@ -466,7 +470,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         # - when `.src` attribute is set, cache path needs
         #   to be reinitialized
         if name == 'src':
-            self.hash = None
+            self._hash = None
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"

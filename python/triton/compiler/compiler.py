@@ -262,13 +262,14 @@ def make_hash(fn, arch, **kwargs):
         configs = kwargs["configs"]
         signature = kwargs["signature"]
         constants = kwargs.get("constants", dict())
+        constants_items = [(k, v if not isinstance(v, JITFunction) else v.literal_hash) for k, v in constants.items()]
         num_warps = kwargs.get("num_warps", 4)
         num_stages = kwargs.get("num_stages", 3)
         debug = kwargs.get("debug", False)
         # Get unique key for the compiled code
         get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1))
         configs_key = [get_conf_key(conf) for conf in configs]
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{debug}-{arch}"
+        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants_items}-{num_warps}-{num_stages}-{debug}-{arch}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     return hashlib.md5((Path(fn).read_text() + version_key()).encode("utf-8")).hexdigest()

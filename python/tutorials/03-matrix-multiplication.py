@@ -325,11 +325,11 @@ else:
         ],  # Different possible values for `x_name`
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
         # Possible values for `line_arg`
-        line_vals=['cublas', 'triton', 'triton+relu'],
+        line_vals=['cublas', 'triton', 'cublas+relu', 'triton+relu'],
         # Label name for the lines
-        line_names=["cuBLAS", "Triton", 'Triton+Relu'],
+        line_names=["cuBLAS", "Triton", "cuBLAS+Relu", "Triton+Relu"],
         # Line styles
-        styles=[('green', '-'), ('blue', '-'), ('orange', '-')],
+        styles=[('green', '-'), ('blue', '-'), ('orange', '-'), ('yellow', '-')],
         ylabel="TFLOPS",  # Label name for the y-axis
         plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
         args={},
@@ -343,6 +343,9 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+    if provider == 'cublas+relu':
+        torch_relu = torch.nn.ReLU(inplace=True)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_relu(torch.matmul(a, b)), quantiles=quantiles)
     if provider == 'triton+relu':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, activation=leaky_relu), quantiles=quantiles)
 
