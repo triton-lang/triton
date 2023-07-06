@@ -80,8 +80,8 @@ public:
         return;
       op->moveAfter(argOp);
     });
-    // Move `dot` operand so that conversions to opIdx=0 happens before
-    // conversions to opIdx=1
+    // Move `dot` operand so that conversions to opIdx=1 happens after
+    // conversions to opIdx=0
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto dstType = op.getResult().getType().cast<RankedTensorType>();
       auto dstEncoding =
@@ -89,21 +89,22 @@ public:
       if (!dstEncoding)
         return;
       int opIdx = dstEncoding.getOpIdx();
-      if (opIdx != 0)
+      if (opIdx != 1)
         return;
       if (op->getUsers().empty())
         return;
       auto dotUser = dyn_cast<triton::DotOp>(*op->user_begin());
       if (!dotUser)
         return;
-      auto BOp = dotUser.getOperand(1).getDefiningOp();
-      if (!BOp)
+      auto AOp =
+          dotUser.getOperand(0).getDefiningOp<triton::gpu::ConvertLayoutOp>();
+      if (!AOp)
         return;
-      // TODO: An alternative would be to move cvt of OpIdx=0 down instead of
-      // movig cvt of OpIdx=1 up. This would allow re-ordering more cases.
-      if (!dom.dominates(op.getOperand(), BOp))
+      // Check that the conversion to OpIdx=1 happens before and can be moved
+      // after the conversion to OpIdx=0.
+      if (!dom.dominates(op.getOperation(), AOp.getOperation()))
         return;
-      op->moveBefore(BOp);
+      op->moveAfter(AOp);
     });
     return;
   }
