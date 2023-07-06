@@ -66,6 +66,7 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          python3 -m pip install pytest-xdist
 
       - name: Run lit tests
         if: ${{ env.BACKEND == 'CUDA'}}
@@ -82,7 +83,9 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python/test/unit
-          python3 -m pytest
+          python3 -m pytest -n 8 --ignore=runtime
+          # run runtime tests serially to avoid race condition with cache handling.
+          python3 -m pytest runtime/
 
       - name: Create artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
