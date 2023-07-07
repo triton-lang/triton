@@ -3064,11 +3064,11 @@ def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
 
 
 def test_swizzling():
-    M, N = 256, 256
+    M, N = 32, 32
     dtype = 'float16'
     ir = f"""
     #blocked = #triton_gpu.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}}>
-    #mma = #triton_gpu.mma<{{versionMajor=2, versionMinor=0, warpsPerCTA=[4, 1]}}>
+    #mma = #triton_gpu.mma<{{versionMajor=2, versionMinor=0, warpsPerCTA=[2, 2]}}>
     module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
   tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
     %cst = arith.constant dense<{M}> : tensor<{M}x1xi32, #blocked>

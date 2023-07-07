@@ -16,6 +16,16 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
+SmallVector<Value> castInt32To2xF16(Value i32Val, Location loc,
+                                    ConversionPatternRewriter &rewriter) {
+  SmallVector<Value> ret;
+  auto floatVectorType = vec_ty(f16_ty, 2);
+  auto vec = rewriter.create<LLVM::BitcastOp>(loc, floatVectorType, i32Val);
+  ret.push_back(extract_element(f16_ty, vec, i32_val(0)));
+  ret.push_back(extract_element(f16_ty, vec, i32_val(1)));
+  return ret;
+}
+
 // Data loader for mma.16816 instruction.
 class MMA16816SmemLoader {
 public:
@@ -31,9 +41,9 @@ public:
   // lane = thread % 32
   // warpOff = (thread/32) % warpsPerTile(0)
   llvm::SmallVector<Value> computeOffsets(Value warpOff, Value lane,
-                                          Value cSwizzleOffset) {
+                                          Value cSwizzleOffset, Value thread) {
     if (canUseLdmatrix)
-      return computeLdmatrixMatOffs(warpOff, lane, cSwizzleOffset);
+      return computeLdmatrixMatOffs(warpOff, lane, cSwizzleOffset, thread);
     else
       return computeLdsMatOffs(warpOff, lane, cSwizzleOffset);
     return {};
@@ -44,7 +54,7 @@ public:
   // Compute the offset to the matrix this thread(indexed by warpOff and lane)
   // mapped to.
   SmallVector<Value> computeLdmatrixMatOffs(Value warpId, Value lane,
-                                            Value cSwizzleOffset);
+                                            Value cSwizzleOffset, Value thread);
   // compute 8-bit matrix offset.
   SmallVector<Value> computeLdsMatOffs(Value warpOff, Value lane,
                                        Value cSwizzleOffset);
@@ -52,8 +62,8 @@ public:
   // Load 4 matrices and returns 4 vec<2> elements.
   std::tuple<Value, Value, Value, Value> loadX4(int mat0, int mat1,
                                                 ArrayRef<Value> ptrs,
-                                                Type matTy,
-                                                Type shemPtrTy) const;
+                                                Type matTy, Type shemPtrTy,
+                                                Value thread) const;
 
 private:
   SmallVector<uint32_t> order;
@@ -96,7 +106,7 @@ private:
 
 SmallVector<Value>
 MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
-                                           Value cSwizzleOffset) {
+                                           Value cSwizzleOffset, Value thread) {
   // 4x4 matrices
   Value rowInMat = urem(lane, i32_val(8)); // row in the 8x8 matrix
   Value matIndex =
@@ -166,6 +176,8 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
     Value contiguousIndexSwizzled = xor_(contiguousIndex, phase);
     offs[i] = add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
                   mul(rowOffset, stridedSmemOffset));
+    mlir::LLVM::vprintf(std::to_string(i) + " tid: %d, offs[i]: %d",
+                        {thread, offs[i]}, rewriter);
   }
 
   return offs;
@@ -265,7 +277,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
 
 std::tuple<Value, Value, Value, Value>
 MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
-                           Type shemPtrTy) const {
+                           Type shemPtrTy, Value thread) const {
   assert(mat0 % 2 == 0 && mat1 % 2 == 0 && "smem matrix load must be aligned");
   int matIdx[2] = {mat0, mat1};
 
@@ -275,7 +287,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
   else
     ptrIdx = matIdx[order[0]] * 4 / elemBytes;
-
+  std::cout << "ptrIdx = " << ptrIdx << std::endl;
   // The main difference with the original triton code is we removed the
   // prefetch-related logic here for the upstream optimizer phase should
   // take care with it, and that is transparent in dot conversion.
@@ -305,7 +317,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
         mul(i32_val(matIdx[order[1]] * stridedLoadMatOffset * stridedMatShape),
             stridedSmemOffset);
     Value readPtr = gep(shemPtrTy, ptr, stridedOffset);
-
+    mlir::LLVM::vprintf("tid: %d, ptr: %d, stridedOffset: %d, readPtr: %d",
+                        {thread, ptr, stridedOffset, readPtr}, rewriter);
     PTXBuilder builder;
     // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
     // thread.
@@ -475,14 +488,13 @@ Value composeValuesToDotOperandLayoutStruct(
   return result;
 }
 
-std::function<void(int, int)>
-getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
-                MmaEncodingAttr mmaLayout, int warpsPerTile, uint32_t kOrder,
-                int kWidth, SmallVector<int> instrShape,
-                SmallVector<int> matShape, Value warpId, Value lane,
-                ValueTable &vals, bool isA,
-                TritonGPUToLLVMTypeConverter *typeConverter,
-                ConversionPatternRewriter &rewriter, Location loc) {
+std::function<void(int, int)> getLoadMatrixFn(
+    RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
+    MmaEncodingAttr mmaLayout, int warpsPerTile, uint32_t kOrder, int kWidth,
+    SmallVector<int> instrShape, SmallVector<int> matShape, Value warpId,
+    Value lane, ValueTable &vals, bool isA,
+    TritonGPUToLLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, Location loc, Value thread) {
   Type eltTy = tensorTy.getElementType();
   // We assumes that the input operand of Dot should be from shared layout.
   // TODO(Superjomn) Consider other layouts if needed later.
@@ -502,20 +514,26 @@ getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs =
-        loader.computeOffsets(warpId, lane, cSwizzleOffset);
+        loader.computeOffsets(warpId, lane, cSwizzleOffset, thread);
     // initialize pointers
     const int numPtrs = loader.getNumPtrs();
     SmallVector<Value> ptrs(numPtrs);
     Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
     Type smemPtrTy = getSharedMemPtrTy(eltTy);
-    for (int i = 0; i < numPtrs; ++i)
+    for (int i = 0; i < numPtrs; ++i) {
       ptrs[i] = bitcast(gep(smemPtrTy, smemBase, offs[i]), smemPtrTy);
+      mlir::LLVM::vprintf(
+          std::to_string(i) +
+              " Here - tid: %d, smemBase: %d, offs[i]: %d, ptrs[i]: %d",
+          {thread, smemBase, offs[i], ptrs[i]}, rewriter);
+    }
+
     // actually load from shared memory
     auto matTy = LLVM::LLVMStructType::getLiteral(eltTy.getContext(),
                                                   SmallVector<Type>(4, i32_ty));
     auto [ha0, ha1, ha2, ha3] = loader.loadX4(
         (kOrder == 1) ? a : b /*mat0*/, (kOrder == 1) ? b : a /*mat1*/, ptrs,
-        matTy, getSharedMemPtrTy(eltTy));
+        matTy, getSharedMemPtrTy(eltTy), thread);
     if (!isA)
       std::swap(ha1, ha2);
     // the following is incorrect
@@ -529,6 +547,14 @@ getLoadMatrixFn(RankedTensorType tensorTy, const SharedMemoryObject &smemObj,
     vals[{a + 1, b}] = ha1;
     vals[{a, b + 1}] = ha2;
     vals[{a + 1, b + 1}] = ha3;
+    auto vec0 = castInt32To2xF16(ha0, loc, rewriter);
+    auto vec1 = castInt32To2xF16(ha1, loc, rewriter);
+    auto vec2 = castInt32To2xF16(ha2, loc, rewriter);
+    auto vec3 = castInt32To2xF16(ha3, loc, rewriter);
+    mlir::LLVM::vprintf("tid: %d, vals: %f, %f, %f, %f, %f, %f, %f, %f",
+                        {thread, vec0[0], vec0[1], vec1[0], vec1[1], vec2[0],
+                         vec2[1], vec3[0], vec3[1]},
+                        rewriter);
   };
 
   return load;
@@ -578,18 +604,19 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
         1 /*kOrder*/, kWidth, {mmaInstrM, mmaInstrK} /*instrShape*/,
         {matShapeM, matShapeK} /*matShape*/, warpM /*warpId*/, lane /*laneId*/,
         vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
-        rewriter /*rewriter*/, loc /*loc*/);
+        rewriter /*rewriter*/, loc /*loc*/, thread);
   else
     loadFn = getLoadMatrixFn(
         tensorTy, smemObj, mmaLayout, warpsPerTile /*warpsPerTile*/,
         0 /*kOrder*/, kWidth, {mmaInstrK, mmaInstrN} /*instrShape*/,
         {matShapeK, matShapeN} /*matShape*/, warpN /*warpId*/, lane /*laneId*/,
         vals /*vals*/, isA /*isA*/, typeConverter /* typeConverter */,
-        rewriter /*rewriter*/, loc /*loc*/);
+        rewriter /*rewriter*/, loc /*loc*/, thread);
 
   // Perform loading.
   int numRepOuter = isA ? numRep[0] : std::max<int>(numRep[1] / 2, 1);
   int numRepK = isA ? numRep[1] : numRep[0];
+  numRepK = 1;
   for (int m = 0; m < numRepOuter; ++m)
     for (int k = 0; k < numRepK; ++k)
       loadFn(2 * m, 2 * k);

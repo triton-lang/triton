@@ -14,7 +14,7 @@ using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-
+static int counter = 0;
 // Forward declarations
 namespace SharedToDotOperandMMAv1 {
 using CoordTy = SmallVector<Value>;
@@ -65,7 +65,7 @@ bool canUseLdMatrix(RankedTensorType srcTy, RankedTensorType dstTy) {
     isDstMmaV1 = mmaLayout.isVolta();
   }
   return dstLayout.isa<MmaEncodingAttr>() && !isDstMmaV1 &&
-         triton::gpu::getWarpsPerCTA(dstLayout)[1] == 1 &&
+         // triton::gpu::getWarpsPerCTA(dstLayout)[1] == 1 &&
          srcTy.getElementType().getIntOrFloatBitWidth() != 32;
 }
 struct ConvertLayoutOpConversion
@@ -282,11 +282,17 @@ private:
           else if (isPtr)
             currVal = ptrtoint(llvmElemTy, currVal);
           word = insert_element(wordTy, word, currVal, i32_val(i % minVec));
+          // if (counter == 1)
+          //   mlir::LLVM::vprintf("store - tid: %d, currVal: %f",
+          //                       {tid_val(), currVal}, rewriter);
 
           if (i % minVec == minVec - 1) {
 
             Value smemAddr = sharedPtrs[linearCTAIdInRep * accumSizePerThread +
                                         i / minVec * minVec];
+            if (counter == 1)
+              mlir::LLVM::vprintf("store - tid: %d, smemAddr: %d, currVal: %f",
+                                  {tid_val(), smemAddr, currVal}, rewriter);
 
             smemAddr = bitcast(smemAddr, ptr_ty(wordTy, 3));
 
@@ -325,6 +331,8 @@ private:
                          ArrayRef<unsigned> repShape, ArrayRef<unsigned> outOrd,
                          SmallVector<Value> &vals, Value smemBase,
                          triton::gpu::SharedEncodingAttr sharedLayout) const {
+    std::cout << "repShape = " << repShape[0] << ", " << repShape[1]
+              << std::endl;
     auto rank = type.getRank();
     auto layout = type.getEncoding();
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
@@ -332,7 +340,7 @@ private:
     auto accumSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<unsigned> numCTAs(rank);
     auto shapePerCTA = getShapePerCTA(layout, type.getShape());
-    shapePerCTA[1] = 16; // todo: hack
+    shapePerCTA[1] = 16 * triton::gpu::getWarpsPerCTA(layout)[1]; // todo: hack
     auto order = getOrder(layout);
     for (unsigned d = 0; d < rank; ++d) {
       numCTAs[d] = ceil<unsigned>(type.getShape()[d], shapePerCTA[d]);
@@ -355,16 +363,22 @@ private:
     auto smemStrides = getStridesFromShapeAndOrder(
         convertType<int64_t>(repShape), getOrder(sharedLayout), loc, rewriter);
 
-    SmallVector<Value> smemOffsetVals = {i32_val(0), i32_val(0)};
-
-    SharedMemoryObject smemObj(smemBase, smemStrides, smemOffsetVals);
-    Value res = SharedToDotOperandMMAv2::convertLayout(
-        dstDotOp.getOpIdx(), rewriter, loc, sharedTy, dstDotOp, smemObj,
-        getTypeConverter(), tid_val());
-
-    SmallVector<Value> valsInt32 =
-        getTypeConverter()->unpackLLElements(loc, res, rewriter, i32_ty);
     for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ctaId++) {
+      Value warp = udiv(tid_val(), i32_val(32));
+
+      SmallVector<Value> multiDimWarpId = delinearize(
+          rewriter, loc, warp, triton::gpu::getWarpsPerCTA(layout), order);
+      SmallVector<Value> smemOffsetVals = {i32_val(0),
+                                           mul(multiDimWarpId[1], i32_val(16))};
+
+      SharedMemoryObject smemObj(smemBase, smemStrides, smemOffsetVals);
+      Value res = SharedToDotOperandMMAv2::convertLayout(
+          dstDotOp.getOpIdx(), rewriter, loc, sharedTy, dstDotOp, smemObj,
+          getTypeConverter(), tid_val());
+
+      SmallVector<Value> valsInt32 =
+          getTypeConverter()->unpackLLElements(loc, res, rewriter, i32_ty);
+      std::cout << "valsInt32.size() = " << valsInt32.size() << std::endl;
       auto multiDimCTAInRepId =
           getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
       SmallVector<unsigned> multiDimCTAId(rank);
@@ -376,6 +390,12 @@ private:
           getLinearIndex<unsigned>(multiDimCTAId, numCTAs, order);
       auto linearCTAIdInRep =
           getLinearIndex<unsigned>(multiDimCTAInRepId, numCTAs, order);
+      std::cout << "multiDimCTAId = " << multiDimCTAId[0] << ", "
+                << multiDimCTAId[1] << std::endl;
+      std::cout << "numCTAs = " << numCTAs[0] << ", " << numCTAs[1]
+                << std::endl;
+      std::cout << "ctaId: " << ctaId << " linearCTAId: " << linearCTAId
+                << std::endl;
       castInt32To2xF16(vals, valsInt32[ctaId * 4], linearCTAId * 8 + 0, loc,
                        rewriter);
       castInt32To2xF16(vals, valsInt32[ctaId * 4 + 2], linearCTAId * 8 + 2, loc,
@@ -385,6 +405,20 @@ private:
       castInt32To2xF16(vals, valsInt32[ctaId * 4 + 3], linearCTAId * 8 + 6, loc,
                        rewriter);
     }
+    mlir::LLVM::vprintf(
+        "loaded - tid: %d, vals: %f, %f, %f, %f, %f, %f, %f, %f",
+        {
+            tid_val(),
+            vals[0],
+            vals[1],
+            vals[2],
+            vals[3],
+            vals[4],
+            vals[5],
+            vals[6],
+            vals[7],
+        },
+        rewriter);
     // Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
     // if (isInt1)
     //   currVal =
@@ -534,7 +568,8 @@ private:
     auto srcShapePerCTA = getShapePerCTA(srcLayout, srcTy.getShape());
     auto dstShapePerCTA = getShapePerCTA(dstLayout, shape);
     if (useLdMatrix) {
-      dstShapePerCTA[1] = 16; // todo: hack
+      dstShapePerCTA[1] =
+          16 * triton::gpu::getWarpsPerCTA(dstLayout)[1]; // todo: hack
     }
 
     // For Volta, all the coords for a CTA are calculated.
@@ -573,6 +608,7 @@ private:
     unsigned outElems = getTotalElemsPerThread(dstTy);
     auto outOrd = getOrder(dstLayout);
     SmallVector<Value> outVals(outElems);
+    std::cout << "outElems: " << outElems << "\n";
 
     unsigned inVec = 0;
     unsigned outVec = 0;
@@ -591,7 +627,7 @@ private:
       // maxPhase
       repShape = getScratchConfigForCvtLayout(op, inVec, outVec, false);
       if (useLdMatrix)
-        repShape[1] = ceil<unsigned>(repShape[1], 16) * 16; // todo: hack
+        repShape[1] = dstShapePerCTA[1]; // todo: hack
       auto dstDotOp = triton::gpu::DotOperandEncodingAttr::get(
           getContext(), 0, dstLayout, dstTy.getElementType());
       sharedLayout = triton::gpu::SharedEncodingAttr::get(
@@ -645,7 +681,7 @@ private:
     Value result =
         getTypeConverter()->packLLElements(loc, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
-
+    counter++;
     return success();
   }
 
