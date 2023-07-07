@@ -36,7 +36,6 @@ bool isBroadcastConstantCombinable(Attribute value) {
 
 DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
                                    Value bcast_res) {
-
   auto resType = bcast_res.getType().cast<ShapedType>();
   DenseElementsAttr res;
   if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
