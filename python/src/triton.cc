@@ -72,6 +72,7 @@ void init_triton_runtime(py::module &&m) {
       .export_values();
 }
 
+// A custom op builder that keeps track of the last location
 class TritonOpBuilder {
 public:
   TritonOpBuilder(mlir::MLIRContext *context) {
@@ -132,7 +133,7 @@ public:
     return builder->create<OpTy>(loc, std::forward<Args>(args)...);
   }
 
-  /// Overload to create or fold a single result operation.
+  // Overload to create or fold a single result operation.
   template <typename OpTy, typename... Args>
   std::enable_if_t<OpTy::template hasTrait<mlir::OpTrait::OneResult>(),
                    mlir::Value>
@@ -141,7 +142,7 @@ public:
     return builder->createOrFold<OpTy>(loc, std::forward<Args>(args)...);
   }
 
-  /// Overload to create or fold a zero result operation.
+  // Overload to create or fold a zero result operation.
   template <typename OpTy, typename... Args>
   std::enable_if_t<OpTy::template hasTrait<mlir::OpTrait::ZeroResults>(), OpTy>
   createOrFold(Args &&...args) {
