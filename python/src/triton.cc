@@ -153,7 +153,7 @@ public:
 private:
   std::unique_ptr<mlir::OpBuilder> builder;
   std::unique_ptr<mlir::Location> lastLoc;
-  bool lineInfoEnabled = triton::tools::getBoolEnv("TRITON_LINE_INFO");
+  bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
 };
 
 /*****************************************************************************/
@@ -1664,7 +1664,9 @@ void init_triton_translation(py::module &m) {
           ofs.close();
 
           auto lineInfoOption =
-              triton::tools::getBoolEnv("TRITON_LINE_INFO") ? " -lineinfo" : "";
+              triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO")
+                  ? ""
+                  : " -lineinfo";
           auto capabilitySuffix = (capability == 90) ? "a " : " ";
           auto outputFileName = std::string(_fsrc) + ".o";
           auto logRedirect = " 2> " + std::string(_flog);

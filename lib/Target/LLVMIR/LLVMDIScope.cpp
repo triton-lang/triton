@@ -21,15 +21,15 @@ namespace {
 
 /// Attempt to extract a filename for the given loc.
 FileLineColLoc extractFileLoc(Location loc) {
-  if (auto fileLoc = loc.dyn_cast<FileLineColLoc>())
+  if (auto fileLoc = dyn_cast<FileLineColLoc>(loc))
     return fileLoc;
-  if (auto nameLoc = loc.dyn_cast<NameLoc>())
+  if (auto nameLoc = dyn_cast<NameLoc>(loc))
     return extractFileLoc(nameLoc.getChildLoc());
-  if (auto opaqueLoc = loc.dyn_cast<OpaqueLoc>())
+  if (auto opaqueLoc = dyn_cast<OpaqueLoc>(loc))
     return extractFileLoc(opaqueLoc.getFallbackLocation());
-  if (auto fusedLoc = loc.dyn_cast<FusedLoc>())
+  if (auto fusedLoc = dyn_cast<FusedLoc>(loc))
     return extractFileLoc(fusedLoc.getLocations().front());
-  if (auto callerLoc = loc.dyn_cast<CallSiteLoc>())
+  if (auto callerLoc = dyn_cast<CallSiteLoc>(loc))
     return extractFileLoc(callerLoc.getCaller());
   StringAttr unknownFile = mlir::StringAttr::get(loc.getContext(), "<unknown>");
   return mlir::FileLineColLoc::get(unknownFile, 0, 0);
