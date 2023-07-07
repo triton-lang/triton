@@ -2982,7 +2982,7 @@ def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
         pytest.skip()
     if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
         pytest.skip()
-
+    M, N = shape[0], shape[1]
     layouts = f"""
     #src = {src_layout}
     #dst = {dst_layout}
@@ -2994,6 +2994,11 @@ def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
 
     conversion = f"""
     %12 = triton_gpu.convert_layout %9 : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #dst>
+    %19 = tt.impure_extern_elementwise  {{libname = "cuda", libpath = "/root/code/triton/python/triton/language/extra/cuda.bc", symbol = "globaltimer"}} : () -> i64
+    scf.for %arg3 = %c0_i32 to %c10000_i32 step %c1_i32  : i32 {{
+    %13 = triton_gpu.convert_layout %11 : (tensor<{M}x{N}xf16, #src>) -> tensor<{M}x{N}xf16, #dst>
+    }}
+    %20 = tt.impure_extern_elementwise  {{libname = "cuda", libpath = "/root/code/triton/python/triton/language/extra/cuda.bc", symbol = "globaltimer"}} : () -> i64
     %13 = triton_gpu.convert_layout %11 : (tensor<{M}x{N}xf16, #src>) -> tensor<{M}x{N}xf16, #dst>
     """ if interm_layout is None else f"""
     %15 = triton_gpu.convert_layout %9 : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #interm>
@@ -3002,13 +3007,21 @@ def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
     %18 = triton_gpu.convert_layout %17 : (tensor<{M}x{N}xf16, #interm>) -> tensor<{M}x{N}xf16, #src>
 
     %12 = triton_gpu.convert_layout %16 : (tensor<{M}x{N}xi32, #src>) -> tensor<{M}x{N}xi32, #dst>
+    %19 = tt.impure_extern_elementwise  {{libname = "cuda", libpath = "/root/code/triton/python/triton/language/extra/cuda.bc", symbol = "globaltimer"}} : () -> i64
+    scf.for %arg3 = %c0_i32 to %c10000_i32 step %c1_i32  : i32 {{
+    %13 = triton_gpu.convert_layout %18 : (tensor<{M}x{N}xf16, #src>) -> tensor<{M}x{N}xf16, #dst>
+    }}
+    %20 = tt.impure_extern_elementwise  {{libname = "cuda", libpath = "/root/code/triton/python/triton/language/extra/cuda.bc", symbol = "globaltimer"}} : () -> i64
     %13 = triton_gpu.convert_layout %18 : (tensor<{M}x{N}xf16, #src>) -> tensor<{M}x{N}xf16, #dst>
     """
 
     ir = layouts + f"""
     module attributes {{"triton_gpu.num-warps" = 4 : i32}} {{
-  tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+  tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<i64> {{tt.divisibility = 16 : i32}}) {{
     %cst = arith.constant dense<{M}> : tensor<{M}x1xi32, #src>
+    %c10000_i32 = arith.constant 10000 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
     %0 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #triton_gpu.slice<{{dim = 1, parent = #src}}>>
     %1 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 0, parent = #src}}>>
     %2 = tt.splat %arg0 : (!tt.ptr<f16>) -> tensor<{M}x{N}x!tt.ptr<f16>, #src>
@@ -3022,6 +3035,8 @@ def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
     %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xf16, #src>
     %3 = tt.splat %arg1 : (!tt.ptr<f16>) -> tensor<{M}x{N}x!tt.ptr<f16>, #dst>
     """ + conversion + f"""
+    %21 = arith.subi %20, %19 : i64
+    tt.store %arg2, %21 {{cache = 1 : i32, evict = 1 : i32}} : i64
     %14 = tt.addptr %3, %12 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>, tensor<{M}x{N}xi32, #dst>
     tt.store %14, %13 : tensor<{M}x{N}xf16, #dst>
     tt.return
@@ -3034,6 +3049,7 @@ def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
     x_np = np.array(x_list, dtype=dtype)
     x = to_triton(x_np)
     z = torch.empty_like(x)
+    elapsed = to_triton(np.zeros((1,), dtype=np.int64), device=device)
 
     # write the IR to a temporary file using mkstemp
     import tempfile
@@ -3041,8 +3057,9 @@ def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
         f.write(ir)
         f.flush()
         kernel = triton.compile(f.name)
-    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
+    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr(), elapsed.data_ptr())
+    print(f"Layout conversion elapsed time: {float(elapsed)/ 10000}")
     assert torch.equal(z, x)
 
 
