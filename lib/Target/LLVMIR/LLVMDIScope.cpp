@@ -8,7 +8,7 @@
 
 //===----------------------------------------------------------------------===//
 // This file implements a pass to add debug info scope to LLVM operations, and
-// is inspired by the DIScopeForLLVMFuncOpPass in LLVM. Different from the
+// is inspired by the DIScopeForLLVMFuncOpPass in LLVM/MLIR. Different from the
 // DIScopeForLLVMFuncOpPass, this pass also handles inlined functions.
 //===----------------------------------------------------------------------===//
 
@@ -20,7 +20,7 @@ using namespace mlir;
 namespace {
 
 /// Attempt to extract a filename for the given loc.
-static FileLineColLoc extractFileLoc(Location loc) {
+FileLineColLoc extractFileLoc(Location loc) {
   if (auto fileLoc = loc.dyn_cast<FileLineColLoc>())
     return fileLoc;
   if (auto nameLoc = loc.dyn_cast<NameLoc>())

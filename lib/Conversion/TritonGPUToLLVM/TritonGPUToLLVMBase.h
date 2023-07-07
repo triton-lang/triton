@@ -5,8 +5,6 @@
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
 #include "triton/Analysis/Allocation.h"
-#include "llvm/BinaryFormat/Dwarf.h"
-#include "llvm/Support/Path.h"
 
 #include "TypeConverter.h"
 //
