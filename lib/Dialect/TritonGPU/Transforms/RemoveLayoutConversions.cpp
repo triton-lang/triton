@@ -492,7 +492,7 @@ public:
     // replace
     SmallVector<Value, 4> newResults = newForOp->getResults();
     newResults[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        rewriter.getUnknownLoc(), origType, newForOp->getResult(i));
+        newForOp.getLoc(), origType, newForOp->getResult(i));
     newResults[i].getDefiningOp()->moveAfter(newForOp);
     return newResults;
   }

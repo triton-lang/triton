@@ -339,7 +339,7 @@ namespace SharedToDotOperandMMAv1 {
 using CoordTy = SmallVector<Value>;
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
-SmallVector<CoordTy> getMNCoords(Value thread,
+SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  ArrayRef<unsigned int> wpt,
                                  const MmaEncodingAttr &mmaLayout,
@@ -348,7 +348,6 @@ SmallVector<CoordTy> getMNCoords(Value thread,
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
 
   auto *ctx = thread.getContext();
-  auto loc = UnknownLoc::get(ctx);
   Value _1 = i32_val(1);
   Value _2 = i32_val(2);
   Value _4 = i32_val(4);
