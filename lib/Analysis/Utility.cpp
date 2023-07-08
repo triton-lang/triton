@@ -60,7 +60,9 @@ unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  return std::min(srcReduceDimSize,
+  unsigned elementPerThreads = triton::gpu::getUniqueContigPerThread(
+      getSrcLayout(), getSrcShape())[axis];
+  return std::min(srcReduceDimSize / elementPerThreads,
                   triton::gpu::getThreadsPerWarpWithUniqueData(
                       getSrcLayout(), getSrcShape())[axis]);
 }
