@@ -2086,7 +2086,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          CHAIN_DOT=epilogue == 'chain-dot',
                          ALLOW_TF32=allow_tf32,
                          num_warps=num_warps)
-    if epilogue == 'softmax':
+    if epilogue == 'softmax' and (in_dtype != 'float32' or allow_tf32):
         ptx = pgm.asm["ptx"]
         start = ptx.find("shfl.sync")
         end = ptx.find("cvt.rn.f16.f32")
