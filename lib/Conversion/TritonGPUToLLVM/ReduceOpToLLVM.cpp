@@ -387,6 +387,10 @@ private:
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);
 
+    /*
+     */
+
+    std::map<SmallVector<unsigned>, SmallVector<Value>> finalAccs;
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> acc = it.second;
@@ -400,6 +404,11 @@ private:
         accumulate(rewriter, *combineOp, acc, shfl, false);
       }
 
+      if (sizeInterWarps == 1) {
+        finalAccs[key] = acc;
+        continue;
+      }
+
       SmallVector<Value> writeIdx = indices[key];
       writeIdx[axis] = (sizeInterWarps == 1) ? zero : warpIdAxis;
       Value writeOffset =
@@ -408,6 +417,28 @@ private:
         Value writePtr = gep(elemPtrTys[i], smemBases[i], writeOffset);
         storeShared(rewriter, loc, writePtr, acc[i], laneZero);
       }
+    }
+
+    if (sizeInterWarps == 1) {
+      SmallVector<Value> results(op.getNumOperands());
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        if (auto resultTy =
+                op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+          auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
+          unsigned resultElems = getTotalElemsPerThread(resultTy);
+          SmallVector<Value> resultVals;
+          for (int j = 0; j < resultElems; j++) {
+            SmallVector<unsigned> key = offset[j];
+            key[axis] = 0;
+            resultVals.push_back(finalAccs[key][i]);
+          }
+          results[i] = getTypeConverter()->packLLElements(loc, resultVals,
+                                                          rewriter, resultTy);
+        } else
+          results[i] = accs.begin()->second[i];
+      }
+      rewriter.replaceOp(op, results);
+      return success();
     }
 
     barrier();
