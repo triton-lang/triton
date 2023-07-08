@@ -331,17 +331,19 @@ private:
     unsigned elems = product<unsigned>(smemShapes[0]);
     unsigned maxElems = std::max(elems, product<unsigned>(smemShapes[1]));
 
-    SmallVector<Value> smemBases(op.getNumOperands());
-    smemBases[0] = bitcast(
-        getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
-    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] =
-          bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems)),
-                  elemPtrTys[i]);
-    }
-
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
+
+    SmallVector<Value> smemBases(op.getNumOperands());
+    if (sizeInterWarps > 1) {
+      smemBases[0] = bitcast(
+          getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
+      for (unsigned i = 1; i < op.getNumOperands(); ++i) {
+        smemBases[i] =
+            bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems)),
+                    elemPtrTys[i]);
+      }
+    }
 
     unsigned srcElems = getTotalElemsPerThread(srcTys[0]);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);
@@ -387,9 +389,6 @@ private:
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);
 
-    /*
-     */
-
     std::map<SmallVector<unsigned>, SmallVector<Value>> finalAccs;
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
@@ -410,7 +409,7 @@ private:
       }
 
       SmallVector<Value> writeIdx = indices[key];
-      writeIdx[axis] = (sizeInterWarps == 1) ? zero : warpIdAxis;
+      writeIdx[axis] = warpIdAxis;
       Value writeOffset =
           linearize(rewriter, loc, writeIdx, smemShapes[0], order);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -427,8 +426,8 @@ private:
           auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
           unsigned resultElems = getTotalElemsPerThread(resultTy);
           SmallVector<Value> resultVals;
-          for (int j = 0; j < resultElems; j++) {
-            SmallVector<unsigned> key = offset[j];
+          for (auto it : accs) {
+            auto key = it.first;
             key[axis] = 0;
             resultVals.push_back(finalAccs[key][i]);
           }
@@ -494,9 +493,6 @@ private:
       }
     }
 
-    // We could avoid this barrier in some of the layouts, however this is not
-    // the general case.
-    // TODO: optimize the barrier in case the layouts are accepted.
     barrier();
 
     // set output values

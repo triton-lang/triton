@@ -119,7 +119,7 @@ def check_type_supported(dtype, device):
 class MmaLayout:
     def __init__(self, version, warps_per_cta):
         self.version = version
-        self.warps_per_cta = str(warps_per_cta)
+        self.warps_per_cta = warps_per_cta
 
     def __str__(self):
         return f"#triton_gpu.mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}}}>"
@@ -127,10 +127,10 @@ class MmaLayout:
 
 class BlockedLayout:
     def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
-        self.sz_per_thread = str(size_per_thread)
-        self.threads_per_warp = str(threads_per_warp)
-        self.warps_per_cta = str(warps_per_cta)
-        self.order = str(order)
+        self.sz_per_thread = size_per_thread
+        self.threads_per_warp = threads_per_warp
+        self.warps_per_cta = warps_per_cta
+        self.order = order
 
     def __str__(self):
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
@@ -1674,14 +1674,11 @@ def test_reduce_layouts(M, N, src_layout, axis, device):
         z = np.zeros((1, N)).astype('float32')
     else:
         z = np.zeros((M, 1)).astype('float32')
-
     x_tri = torch.tensor(x, device=device)
     z_tri = torch.tensor(z, device=device)
 
-    pgm = kernel[(1, 1, 4)](x_tri, x_tri.stride(0), z_tri)
-
+    kernel[(1, 1, 4)](x_tri, x_tri.stride(0), z_tri)
     z_ref = np.max(x, axis=axis, keepdims=True)
-
     np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
@@ -2073,7 +2070,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         out_dtype = tl.float16
     else:
         out_dtype = tl.float32
-
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
                          y_tri, y_tri.stride(0), y_tri.stride(1),
                          w_tri, w_tri.stride(0), w_tri.stride(1),
@@ -2088,6 +2084,14 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          CHAIN_DOT=epilogue == 'chain-dot',
                          ALLOW_TF32=allow_tf32,
                          num_warps=num_warps)
+    if epilogue == 'softmax':
+        ptx = pgm.asm["ptx"]
+        start = ptx.find("shfl.sync")
+        end = ptx.find("cvt.rn.f6.f32")
+        red_code = ptx[start:end]
+        assert len(red_code) > 0
+        assert "shared" not in red_code
+        assert "bar.sync" not in red_code
     # torch result
     if in_dtype == 'int8':
         z_ref = np.matmul(x.astype(np.float32),
