@@ -9,7 +9,7 @@ print_path = os.path.join(dir_path, "print_helper.py")
 assert_path = os.path.join(dir_path, "assert_helper.py")
 
 # TODO: bfloat16 after LLVM-15
-func_types = ["device_assert", "assert", "static_assert", "no_debug"]
+assert_types = ["device_assert", "assert", "static_assert", "no_debug"]
 nested_types = [(caller, callee) for caller in ["true", "false", "none"] for callee in ["true", "false", "none"]]
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
 
@@ -37,7 +37,7 @@ def test_print(func_type: str, data_type: str):
         assert len(new_lines) == 1
 
 
-@pytest.mark.parametrize("func_type", func_types)
+@pytest.mark.parametrize("func_type", assert_types)
 def test_assert(func_type: str):
     os.environ["TRITON_DEBUG"] = "1"
     proc = subprocess.Popen([sys.executable, assert_path, func_type], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
