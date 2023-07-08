@@ -425,10 +425,12 @@ private:
                 op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
           auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
           unsigned resultElems = getTotalElemsPerThread(resultTy);
+          SmallVector<SmallVector<unsigned>> resultOffset =
+              emitOffsetForLayout(resultLayout, resultTy);
           SmallVector<Value> resultVals;
-          for (auto it : accs) {
-            auto key = it.first;
-            key[axis] = 0;
+          for (int j = 0; j < resultElems; j++) {
+            auto key = resultOffset[j];
+            key.insert(key.begin() + axis, 0);
             resultVals.push_back(finalAccs[key][i]);
           }
           results[i] = getTypeConverter()->packLLElements(loc, resultVals,
