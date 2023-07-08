@@ -434,7 +434,7 @@ private:
           results[i] = getTypeConverter()->packLLElements(loc, resultVals,
                                                           rewriter, resultTy);
         } else
-          results[i] = accs.begin()->second[i];
+          results[i] = finalAccs.begin()->second[i];
       }
       rewriter.replaceOp(op, results);
       return success();
