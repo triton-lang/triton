@@ -2089,7 +2089,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if epilogue == 'softmax':
         ptx = pgm.asm["ptx"]
         start = ptx.find("shfl.sync")
-        end = ptx.find("cvt.rn.f6.f32")
+        end = ptx.find("cvt.rn.f16.f32")
         red_code = ptx[start:end]
         assert len(red_code) > 0
         assert "shared" not in red_code
