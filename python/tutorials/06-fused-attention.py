@@ -25,7 +25,7 @@ def _fwd_kernel(
     Z, H, N_CTX,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
-    STAGE: tl.constexpr,
+    MODE: tl.constexpr,
 ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
@@ -69,15 +69,20 @@ def _fwd_kernel(
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
-    if STAGE == 2:
+    # causal check on every loop iteration can be expensive
+    # and peeling the last iteration of the loop does not work well with ptxas
+    # so we have a mode to do the causal check in a separate kernel entirely
+    if MODE == 0:  # entire causal attention
+        lo, hi = 0, (start_m + 1) * BLOCK_M
+    elif MODE == 1:  # off band-diagonal
+        lo, hi = 0, start_m * BLOCK_M
+    elif MODE == 2:  # on band-diagonal
         l_ptrs = L + off_hz * N_CTX + offs_m
         m_ptrs = M + off_hz * N_CTX + offs_m
         m_i = tl.load(m_ptrs)
         l_i = tl.load(l_ptrs)
         acc += tl.load(O_block_ptr).to(tl.float32)
         lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
-    else:
-        lo, hi = 0, start_m * BLOCK_M
     # credits to: Adam P. Goucher (https://github.com/apgoucher):
     # scale sm_scale by 1/log_2(e) and use
     # 2^x instead of exp in the loop because CSE and LICM
@@ -93,8 +98,8 @@ def _fwd_kernel(
         k = tl.load(tl.advance(K_block_ptr, (0, start_n)))
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
-        if STAGE == 2:
-            qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0., float("-inf"))
+        if MODE != 1:
+            qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
         p = tl.math.exp2(qk - m_ij[:, None])
@@ -251,7 +256,8 @@ class _attention(torch.autograd.Function):
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
         num_warps = 4 if Lk <= 64 else 8
-        for stage in [1, 2]:
+        modes = [0] if q.shape[2] <= 2048 else [1, 2]
+        for mode in modes:
             _fwd_kernel[grid](
                 q, k, v, sm_scale,
                 L, m,
@@ -262,7 +268,7 @@ class _attention(torch.autograd.Function):
                 o.stride(0), o.stride(1), o.stride(2), o.stride(3),
                 q.shape[0], q.shape[1], q.shape[2],
                 BLOCK_M=128, BLOCK_N=BLOCK, BLOCK_DMODEL=Lk,
-                STAGE=stage,
+                MODE=mode,
                 num_warps=num_warps,
                 num_stages=2)
 
