@@ -72,11 +72,13 @@ def _fwd_kernel(
     # causal check on every loop iteration can be expensive
     # and peeling the last iteration of the loop does not work well with ptxas
     # so we have a mode to do the causal check in a separate kernel entirely
-    if MODE == 0:  # entire causal attention
+    if MODE == 0:  # entire non-causal attention
+        lo, hi = 0, N_CTX
+    if MODE == 1:  # entire causal attention
         lo, hi = 0, (start_m + 1) * BLOCK_M
-    elif MODE == 1:  # off band-diagonal
+    if MODE == 2:  # off band-diagonal
         lo, hi = 0, start_m * BLOCK_M
-    elif MODE == 2:  # on band-diagonal
+    if MODE == 3:  # on band-diagonal
         l_ptrs = L + off_hz * N_CTX + offs_m
         m_ptrs = M + off_hz * N_CTX + offs_m
         m_i = tl.load(m_ptrs)
@@ -98,7 +100,7 @@ def _fwd_kernel(
         k = tl.load(tl.advance(K_block_ptr, (0, start_n)))
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
-        if MODE != 1:
+        if MODE == 1 or MODE == 3:
             qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
@@ -165,6 +167,7 @@ def _bwd_kernel(
     num_block,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    MODE: tl.constexpr,
 ):
     off_hz = tl.program_id(0)
     off_z = off_hz // H
@@ -179,7 +182,10 @@ def _bwd_kernel(
     DK += off_z * stride_qz + off_h * stride_qh
     DV += off_z * stride_qz + off_h * stride_qh
     for start_n in range(0, num_block):
-        lo = start_n * BLOCK_M
+        if MODE == 0:
+            lo = 0
+        else:
+            lo = start_n * BLOCK_M
         # initialize row/col offsets
         offs_qm = lo + tl.arange(0, BLOCK_M)
         offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -207,7 +213,11 @@ def _bwd_kernel(
             q = tl.load(q_ptrs)
             # recompute p = softmax(qk, dim=-1).T
             # NOTE: `do` is pre-divided by `l`; no normalization here
-            qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), float(0.), float("-inf"))
+            # if MODE == 1:
+            if MODE == 1:
+                qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), float(0.), float("-inf"))
+            else:
+                qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
             qk += tl.dot(q, tl.trans(k))
             qk *= qk_scale
             m = tl.load(m_ptrs + offs_m_curr)
@@ -244,7 +254,7 @@ empty = torch.empty(128, device="cuda")
 class _attention(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, q, k, v, sm_scale):
+    def forward(ctx, q, k, v, causal, sm_scale):
         BLOCK = 128
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
@@ -256,7 +266,10 @@ class _attention(torch.autograd.Function):
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
         num_warps = 4 if Lk <= 64 else 8
-        modes = [0] if q.shape[2] <= 2048 else [1, 2]
+        if causal:
+            modes = [1] if q.shape[2] <= 2048 else [2, 3]
+        else:
+            modes = [0]
         for mode in modes:
             _fwd_kernel[grid](
                 q, k, v, sm_scale,
@@ -276,6 +289,7 @@ class _attention(torch.autograd.Function):
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.BLOCK_DMODEL = Lk
+        ctx.causal = causal
         return o
 
     @staticmethod
@@ -288,6 +302,10 @@ class _attention(torch.autograd.Function):
         dv = torch.empty_like(v)
         do_scaled = torch.empty_like(do)
         delta = torch.empty_like(l)
+        if ctx.causal:
+            mode = 1
+        else:
+            mode = 0
         _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
             o, do, l,
             do_scaled, delta,
@@ -306,17 +324,18 @@ class _attention(torch.autograd.Function):
             ctx.grid[0],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
             BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
+            MODE=mode,
             num_stages=1,
         )
-        # print(h.asm["ttgir"])
-        return dq, dk, dv, None
+        return dq, dk, dv, None, None
 
 
 attention = _attention.apply
 
 
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(6, 9, 1024, 64)])
-def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
+@pytest.mark.parametrize('causal', [False, True])
+def test_op(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
@@ -326,9 +345,10 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     # reference implementation
     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
-    for z in range(Z):
-        for h in range(H):
-            p[:, :, M == 0] = float("-inf")
+    if causal:
+        for z in range(Z):
+            for h in range(H):
+                p[:, :, M == 0] = float("-inf")
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
@@ -337,15 +357,12 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     ref_dk, k.grad = k.grad.clone(), None
     ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
-    tri_out = attention(q, k, v, sm_scale).half()
-    # print(ref_out)
-    # print(tri_out)
+    tri_out = attention(q, k, v, causal, sm_scale).half()
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
     tri_dq, q.grad = q.grad.clone(), None
     # compare
-    print((ref_dv - tri_dv).abs().max())
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
     assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
     assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
@@ -369,12 +386,12 @@ configs = [triton.testing.Benchmark(
     styles=[('red', '-'), ('blue', '-')],
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
-    args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode}
-) for mode in ['fwd']]
+    args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode, 'causal': causal}
+) for mode in ['fwd', 'bwd'] for causal in [False, True]]
 
 
 @triton.testing.perf_report(configs)
-def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.float16, device="cuda"):
+def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype=torch.float16, device="cuda"):
     assert mode in ['fwd', 'bwd']
     warmup = 25
     rep = 100
@@ -383,7 +400,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
         k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
         sm_scale = 1.3
-        fn = lambda: attention(q, k, v, sm_scale)
+        fn = lambda: attention(q, k, v, causal, sm_scale)
         if mode == 'bwd':
             o = fn()
             do = torch.randn_like(o)
@@ -400,8 +417,10 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
-    flops_per_matmul = 2. * BATCH * H * N_CTX * N_CTX * D_HEAD * 0.5
+    flops_per_matmul = 2. * BATCH * H * N_CTX * N_CTX * D_HEAD
     total_flops = 2 * flops_per_matmul
+    if causal:
+        total_flops *= 0.5
     if mode == 'bwd':
         total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
     return total_flops / ms * 1e-9
