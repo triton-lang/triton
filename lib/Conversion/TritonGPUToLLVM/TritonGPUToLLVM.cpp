@@ -129,9 +129,15 @@ struct PrintOpConversion
     } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
       return "%f";
     } else if (type.isSignedInteger()) {
-      return "%i";
+      if (type.getIntOrFloatBitWidth() == 64)
+        return "%lli";
+      else
+        return "%i";
     } else if (type.isUnsignedInteger() || type.isSignlessInteger()) {
-      return "%u";
+      if (type.getIntOrFloatBitWidth() == 64)
+        return "%llu";
+      else
+        return "%u";
     }
     assert(false && "not supported type");
     return "";

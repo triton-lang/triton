@@ -19,25 +19,28 @@ jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix-required: ${{ steps.set-matrix.outputs.matrix-required }}
+      matrix-optional: ${{ steps.set-matrix.outputs.matrix-optional }}
     steps:
       - name: Prepare runner matrix
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
-            echo '::set-output name=matrix::[["self-hosted", "A100"], ["self-hosted", "H100"], ["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
+            echo '::set-output name=matrix-required::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
+            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
           else
-            echo '::set-output name=matrix::["ubuntu-latest"]'
+            echo '::set-output name=matrix-required::["ubuntu-latest"]'
+            echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
 
-  Integration-Tests:
+  Integration-Tests-Nvidia:
     needs: Runner-Preparation
 
     runs-on: ${{ matrix.runner }}
 
     strategy:
       matrix:
-        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-required)}}
 
     steps:
       - name: Checkout
@@ -47,6 +50,84 @@ jobs:
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Install Triton
+        if: ${{ env.BACKEND == 'CUDA'}}
+        run: |
+          cd python
+          python3 -m pip install --upgrade pip
+          python3 -m pip install cmake==3.24
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          python3 -m pip install pytest-xdist
+
+      - name: Run lit tests
+        if: ${{ env.BACKEND == 'CUDA'}}
+        run: |
+          python3 -m pip install lit
+          cd python
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
+          fi
+          lit -v "${LIT_TEST_DIR}"
+
+      - name: Run python tests on CUDA
+        if: ${{ env.BACKEND == 'CUDA'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 --ignore=runtime
+          # run runtime tests serially to avoid race condition with cache handling.
+          python3 -m pytest runtime/
+
+      - name: Create artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
+        run: |
+          cd ~/.triton
+          tar -czvf artifacts.tar.gz cache
+
+      - name: Upload artifacts archive
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
+        uses: actions/upload-artifact@v2
+        with:
+          name: artifacts ${{ matrix.runner[1] }}
+          path: ~/.triton/artifacts.tar.gz
+
+      - name: Run CXX unittests
+        if: ${{ env.BACKEND == 'CUDA'}}
+        run: |
+          cd python
+          cd "build/$(ls build | grep -i cmake)"
+          ctest
+
+      - name: Regression tests
+        if: ${{ contains(matrix.runner, 'A100') }}
+        run: |
+          cd python/test/regression
+          sudo nvidia-smi -i 0 -pm 1
+          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
+          python3 -m pytest -vs .
+          sudo nvidia-smi -i 0 -rgc
+
+  Integration-Tests-Third-Party:
+    needs: Runner-Preparation
+
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-optional)}}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
 
       - name: Set ROCM ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'gfx908')}}
@@ -81,14 +162,6 @@ jobs:
           python3 -m pip install --upgrade pre-commit
           python3 -m pre_commit run --all-files
 
-      - name: Install Triton
-        if: ${{ env.BACKEND == 'CUDA'}}
-        run: |
-          cd python
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24
-          python3 -m pip install --no-build-isolation -vvv '.[tests]'
-
       - name: Install Triton on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
@@ -113,43 +186,6 @@ jobs:
           python3 setup.py build
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
-      - name: Run lit tests
-        if: ${{ env.BACKEND == 'CUDA'}}
-        run: |
-          python3 -m pip install lit
-          cd python
-          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
-          if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Coult not find '${LIT_TEST_DIR}'" ; exit -1
-          fi
-          lit -v "${LIT_TEST_DIR}"
-
-      - name: Run python tests on CUDA
-        if: ${{ env.BACKEND == 'CUDA'}}
-        run: |
-          cd python/test/unit
-          python3 -m pytest
-
-      - name: Create artifacts archive
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        run: |
-          cd ~/.triton
-          tar -czvf artifacts.tar.gz cache
-
-      - name: Upload artifacts archive
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
-        uses: actions/upload-artifact@v2
-        with:
-          name: artifacts ${{ matrix.runner[1] }}
-          path: ~/.triton/artifacts.tar.gz
-
-      - name: Run CXX unittests
-        if: ${{ env.BACKEND == 'CUDA'}}
-        run: |
-          cd python
-          cd "build/$(ls build | grep -i cmake)"
-          ctest
-
       - name: Run python tests on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
@@ -165,17 +201,8 @@ jobs:
           cd python/test/backend/third_party_backends
           python3 -m pytest --capture=tee-sys -rfs --verbose --backend xpu
 
-      - name: Regression tests
-        if: ${{ contains(matrix.runner, 'A100') }}
-        run: |
-          cd python/test/regression
-          sudo nvidia-smi -i 0 -pm 1
-          sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          python3 -m pytest -vs .
-          sudo nvidia-smi -i 0 -rgc
-
   Compare-artifacts:
-    needs: Integration-Tests
+    needs: Integration-Tests-Nvidia
 
     runs-on: ubuntu-latest
 
@@ -193,7 +220,7 @@ jobs:
       - name: Download latest main artifacts
         env:
           ARTIFACT_NAME: artifacts A100
-          ARTIFACT_JOB_NAME: Integration-Tests
+          ARTIFACT_JOB_NAME: Integration-Tests-Nvidia
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OWNER_REPO="${{ github.repository }}"
@@ -202,7 +229,19 @@ jobs:
 
           BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
           echo "BRANCH_NAME: $BRANCH_NAME"
-          WORKFLOW_RUN_ID=$(gh api --method GET repos/$OWNER_REPO/actions/runs | jq --arg branch_name "$BRANCH_NAME" '.workflow_runs[] | select(.head_branch == $branch_name)' | jq '.id' | head -1)
+
+          page=1
+          while true; do
+            run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" '.workflow_runs[] | select(.head_branch == $branch_name)' | jq '.id' | head -1)
+            if [ "$run_id" != "" ]; then
+              echo "First run ID on branch $BRANCH_NAME is: $run_id"
+              WORKFLOW_RUN_ID=$run_id
+              break
+            fi
+
+            ((page++))
+          done
+
           echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
           ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq --arg artifact_name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $artifact_name).archive_download_url' --raw-output)
           echo "ARTIFACT_URL: $ARTIFACT_URL"
@@ -220,6 +259,7 @@ jobs:
             mv cache reference
           else
             echo "No artifact found with the name: $ARTIFACT_NAME"
+            exit 1
           fi
       - name: Download current job artifacts
         uses: actions/download-artifact@v2
@@ -270,6 +310,7 @@ jobs:
         if: ${{ env.COMPARISON_RESULT == 'false' }}
         uses: actions/github-script@v5
         with:
+          github-token: ${{ secrets.CI_ACCESS_TOKEN }}
           script: |
             const run_id = ${{ env.RUN_ID }};
             const issue_number = context.payload.pull_request.number;

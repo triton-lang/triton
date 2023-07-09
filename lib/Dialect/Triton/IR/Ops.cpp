@@ -6,7 +6,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 namespace mlir {
 namespace triton {
@@ -558,6 +558,36 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
 }
 
 unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
+
+//-- ScanOp --
+void ScanOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                   mlir::ValueRange operands, int axis) {
+  SmallVector<Type> inferredReturnTypes;
+  for (auto arg : operands)
+    inferredReturnTypes.push_back(arg.getType());
+  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+}
+
+mlir::LogicalResult mlir::triton::ScanOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  for (auto arg : operands)
+    inferredReturnTypes.push_back(arg.getType());
+  return success();
+}
+
+mlir::LogicalResult mlir::triton::ScanOp::verify() {
+  if (this->getOperands().size() < 1) {
+    return this->emitOpError() << "must have at least 1 operand";
+  }
+  for (const auto &operand : this->getOperands()) {
+    if (!dyn_cast<RankedTensorType>(operand.getType())) {
+      return this->emitOpError() << "operands must be RankedTensorType";
+    }
+  }
+  return success();
+}
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
