@@ -25,11 +25,11 @@ def _fwd_kernel(
     Z, H, N_CTX,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    STAGE: tl.constexpr,
 ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     qvk_offset = off_hz * stride_qh
-    # Q pointer
     Q_block_ptr = tl.make_block_ptr(
         base=Q + qvk_offset,
         shape=(N_CTX, BLOCK_DMODEL),
@@ -38,7 +38,6 @@ def _fwd_kernel(
         block_shape=(BLOCK_M, BLOCK_DMODEL),
         order=(1, 0)
     )
-    # K pointer
     K_block_ptr = tl.make_block_ptr(
         base=K + qvk_offset,
         shape=(BLOCK_DMODEL, N_CTX),
@@ -47,13 +46,20 @@ def _fwd_kernel(
         block_shape=(BLOCK_DMODEL, BLOCK_N),
         order=(0, 1)
     )
-    # V pointer
     V_block_ptr = tl.make_block_ptr(
         base=V + qvk_offset,
         shape=(N_CTX, BLOCK_DMODEL),
         strides=(stride_vk, stride_vn),
         offsets=(0, 0),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
+        order=(1, 0)
+    )
+    O_block_ptr = tl.make_block_ptr(
+        base=Out + qvk_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_om, stride_on),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
         order=(1, 0)
     )
     # initialize offsets
@@ -63,18 +69,28 @@ def _fwd_kernel(
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
+    if STAGE == 2:
+        l_ptrs = L + off_hz * N_CTX + offs_m
+        m_ptrs = M + off_hz * N_CTX + offs_m
+        m_i = tl.load(m_ptrs)
+        l_i = tl.load(l_ptrs)
+        acc += tl.load(O_block_ptr).to(tl.float32)
+        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
+    else:
+        lo, hi = 0, start_m * BLOCK_M
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
     qk_scale = sm_scale * 1.44269504
     q = (q * qk_scale).to(tl.float16)
     # loop over k, v and update accumulator
-    for start_n in range(0, (start_m + 1) * BLOCK_M, BLOCK_N):
+    for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = tl.load(K_block_ptr)
+        k = tl.load(tl.advance(K_block_ptr, (0, start_n)))
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
-        qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+        if STAGE == 2:
+            qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0., float("-inf"))
         # -- compute m_ij, p, l_ij
         m_ij = tl.max(qk, 1)
         p = tl.math.exp2(qk - m_ij[:, None])
@@ -92,33 +108,18 @@ def _fwd_kernel(
         acc_scale = l_i / l_i_new
         acc = acc * acc_scale[:, None]
         # update acc
-        v = tl.load(V_block_ptr)
+        v = tl.load(tl.advance(V_block_ptr, (start_n, 0)))
         p = p.to(tl.float16)
         acc += tl.dot(p, v)
         # update m_i and l_i
         l_i = l_i_new
         m_i = m_i_new
-        # advance pointers
-        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
-        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
-    # last iteration
-    # rematerialize offsets to save registers
-    start_m = tl.program_id(0)
-    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     # write back l and m
     l_ptrs = L + off_hz * N_CTX + offs_m
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(l_ptrs, l_i)
     tl.store(m_ptrs, m_i)
     # write back O
-    O_block_ptr = tl.make_block_ptr(
-        base=Out + qvk_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
-        strides=(stride_om, stride_on),
-        offsets=(start_m * BLOCK_M, 0),
-        block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
-    )
     tl.store(O_block_ptr, acc.to(tl.float16))
 
 
@@ -159,6 +160,7 @@ def _bwd_kernel(
     off_hz = tl.program_id(0)
     off_z = off_hz // H
     off_h = off_hz % H
+    qk_scale = sm_scale * 1.44269504
     # offset pointers for batch/head
     Q += off_z * stride_qz + off_h * stride_qh
     K += off_z * stride_qz + off_h * stride_qh
@@ -198,8 +200,9 @@ def _bwd_kernel(
             # NOTE: `do` is pre-divided by `l`; no normalization here
             qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), float(0.), float("-inf"))
             qk += tl.dot(q, tl.trans(k))
+            qk *= qk_scale
             m = tl.load(m_ptrs + offs_m_curr)
-            p = tl.exp(qk * sm_scale - m[:, None])
+            p = tl.math.exp2(qk - m[:, None])
             # compute dv
             do = tl.load(do_ptrs)
             dv += tl.dot(tl.trans(p.to(Q.dtype.element_ty)), do)
@@ -239,25 +242,25 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
+        grid = (triton.cdiv(q.shape[2], 128), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-        num_warps = 4 if Lk <= 64 else 8
 
-        _fwd_kernel[grid](
-            q, k, v, sm_scale,
-            L, m,
-            o,
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-            o.stride(0), o.stride(1), o.stride(2), o.stride(3),
-            q.shape[0], q.shape[1], q.shape[2],
-            BLOCK_M=BLOCK, BLOCK_N=BLOCK,
-            BLOCK_DMODEL=Lk, num_warps=num_warps,
-            num_stages=2,
-        )
-        # print(h.asm["ttgir"])
+        num_warps = 4 if Lk <= 64 else 8
+        for stage in [1, 2]:
+            _fwd_kernel[grid](
+                q, k, v, sm_scale,
+                L, m,
+                o,
+                q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+                k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+                v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+                o.stride(0), o.stride(1), o.stride(2), o.stride(3),
+                q.shape[0], q.shape[1], q.shape[2],
+                BLOCK_M=128, BLOCK_N=BLOCK, BLOCK_DMODEL=Lk,
+                STAGE=stage,
+                num_warps=num_warps,
+                num_stages=2)
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.grid = grid
@@ -302,7 +305,7 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(6, 9, 1024, 64)])
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
@@ -320,23 +323,23 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
     ref_out.backward(dout)
-    # ref_dv, v.grad = v.grad.clone(), None
-    # ref_dk, k.grad = k.grad.clone(), None
-    # ref_dq, q.grad = q.grad.clone(), None
+    ref_dv, v.grad = v.grad.clone(), None
+    ref_dk, k.grad = k.grad.clone(), None
+    ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
     tri_out = attention(q, k, v, sm_scale).half()
     # print(ref_out)
     # print(tri_out)
     tri_out.backward(dout)
-    # tri_dv, v.grad = v.grad.clone(), None
-    # tri_dk, k.grad = k.grad.clone(), None
-    # tri_dq, q.grad = q.grad.clone(), None
+    tri_dv, v.grad = v.grad.clone(), None
+    tri_dk, k.grad = k.grad.clone(), None
+    tri_dq, q.grad = q.grad.clone(), None
     # compare
-    # print((tri_dv - ref_dv).abs().max())
+    print((ref_dv - tri_dv).abs().max())
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
-    # assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
-    # assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
-    # assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
+    assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=0)
 
 
 try:
@@ -391,9 +394,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
     total_flops = 2 * flops_per_matmul
     if mode == 'bwd':
         total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
-    cur_gpu_perf = total_flops / ms * 1e-9
-    print(cur_gpu_perf)
-    return ms
+    return total_flops / ms * 1e-9
 
 
 # only works on post-Ampere GPUs right now
