@@ -78,9 +78,13 @@ def _fwd_kernel(
         lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
     else:
         lo, hi = 0, start_m * BLOCK_M
+    # credits to: Adam P. Goucher (https://github.com/apgoucher):
+    # scale sm_scale by 1/log_2(e) and use
+    # 2^x instead of exp in the loop because CSE and LICM
+    # don't work as expected with `exp` in the loop
+    qk_scale = sm_scale * 1.44269504
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
-    qk_scale = sm_scale * 1.44269504
     q = (q * qk_scale).to(tl.float16)
     # loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
