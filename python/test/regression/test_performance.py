@@ -196,27 +196,28 @@ def test_elementwise(N, dtype_str):
 
 flash_attention_data = {
     "a100": {
-        (4, 48, 4096, 64, False, 'forward', 'float16'): 0.39,
-        (4, 48, 4096, 64, False, 'backward', 'float16'): 0.252,
-        (4, 48, 4096, 64, False, 'forward', 'bfloat16'): 0.358,
-        (4, 48, 4096, 64, False, 'backward', 'bfloat16'): 0.243,
-        (4, 48, 1024, 16, False, 'forward', 'float32'): 0.092,
-        (4, 48, 1024, 16, False, 'backward', 'float32'): 0.118,
-        (4, 48, 4096, 64, True, 'forward', 'float16'): 0.39,
-        (4, 48, 4096, 64, True, 'backward', 'float16'): 0.175,
-        (4, 48, 4096, 64, True, 'forward', 'bfloat16'): 0.355,
-        (4, 48, 4096, 64, True, 'backward', 'bfloat16'): 0.168,
-        (4, 48, 1024, 16, True, 'forward', 'float32'): 0.092,
-        (4, 48, 1024, 16, True, 'backward', 'float32'): 0.087
+        (4, 48, 4096, 64, False, True, 'forward', 'float16'): 0.39,
+        (4, 48, 4096, 64, False, True, 'backward', 'float16'): 0.252,
+        (4, 48, 4096, 64, False, True, 'forward', 'bfloat16'): 0.358,
+        (4, 48, 4096, 64, False, True, 'backward', 'bfloat16'): 0.243,
+        (4, 48, 1024, 16, False, True, 'forward', 'float32'): 0.092,
+        (4, 48, 1024, 16, False, True, 'backward', 'float32'): 0.118,
+        (4, 48, 4096, 64, True, True, 'forward', 'float16'): 0.39,
+        (4, 48, 4096, 64, True, True, 'backward', 'float16'): 0.175,
+        (4, 48, 4096, 64, True, True, 'forward', 'bfloat16'): 0.355,
+        (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.168,
+        (4, 48, 1024, 16, True, True, 'forward', 'float32'): 0.092,
+        (4, 48, 1024, 16, True, True, 'backward', 'float32'): 0.087
     }
 }
 
 
 @pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [[4, 48, 4096, 64]])
 @pytest.mark.parametrize("seq_par", [True, False])
+@pytest.mark.parametrize("causal", [True, False])
 @pytest.mark.parametrize("mode", ['forward', 'backward'])
 @pytest.mark.parametrize("dtype_str", ['float16', 'bfloat16', 'float32'])
-def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, mode, dtype_str):
+def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
     is_backward = mode == 'backward'
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
@@ -232,7 +233,7 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, mode, dtype_str):
     v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
     sm_scale = 0.2
     # benchmark
-    fn = lambda: triton.ops.attention(q, k, v, sm_scale, seq_par)
+    fn = lambda: triton.ops.attention(q, k, v, causal, sm_scale, seq_par)
     if is_backward:
         o = fn()
         do = torch.randn_like(o)
