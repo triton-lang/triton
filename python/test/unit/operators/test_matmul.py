@@ -89,9 +89,9 @@ def f8_to_f16(x):
                 (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
                 (128, 128, 32, 8, 4, 2, 256, 256, 128, AT, BT, ADTYPE, BDTYPE),
-            ] for ADTYPE, BDTYPE in [("float8e5", "float8e5"),
+            ] for ADTYPE, BDTYPE in [("float8e4b15", "float8e5"),
                                      ("float8e5", "float16"),
-                                     ("float16", "float8e5"),
+                                     ("float16", "float8e4b15"),
                                      ("float16", "float32"),
                                      ("float32", "float16"),
                                      ("bfloat16", "float32"),
@@ -123,27 +123,27 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     a_fp8 = "float8" in ADTYPE
     b_fp8 = "float8" in BDTYPE
 
-    def maybe_upcast(x, dtype):
-        if a_fp8:
+    def maybe_upcast(x, is_float8):
+        if is_float8:
             return f8_to_f16(x)
         return x
 
-    def init_input(n, m, t, dtype):
+    def init_input(n, m, t, dtype, is_float8):
         if t:
-            return init_input(m, n, False, dtype).t()
-        if "float8" in dtype:
+            return init_input(m, n, False, dtype, is_float8).t()
+        if is_float8:
             return torch.randint(20, 60, (n, m), device="cuda", dtype=torch.int8)
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dtype]
         return .1 * torch.randn((n, m), device="cuda", dtype=dtype)
 
     # allocate/transpose inputs
-    a = init_input(M, K, AT, ADTYPE)
-    b = init_input(K, N, BT, BDTYPE)
+    a = init_input(M, K, AT, ADTYPE, a_fp8)
+    b = init_input(K, N, BT, BDTYPE, b_fp8)
     # run test
-    th_a = maybe_upcast(a, ADTYPE).to(torch.float32)
+    th_a = maybe_upcast(a, a_fp8).to(torch.float32)
     if AT and a_fp8:
         th_a = th_a.view(th_a.shape[::-1]).T
-    th_b = maybe_upcast(b, BDTYPE).to(torch.float32)
+    th_b = maybe_upcast(b, b_fp8).to(torch.float32)
     if BT and b_fp8:
         th_b = th_b.view(th_b.shape[::-1]).T
     th_c = torch.matmul(th_a, th_b)
