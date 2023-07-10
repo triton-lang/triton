@@ -67,7 +67,7 @@ def f8_to_f16(x):
                 (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 311, AT, BT, DTYPE, DTYPE),
                 (128, 256, 64, 1, 8, 3, 256, 512, 160, AT, BT, DTYPE, DTYPE),
-            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
+            ] for DTYPE in ["float8", "float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
         ],
         # n-stage
         *[
@@ -90,8 +90,11 @@ def f8_to_f16(x):
                 (128, 256, 16, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (32, 64, 16, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
                 (128, 128, 32, 8, 4, 2, 256, 256, 128, AT, BT, ADTYPE, BDTYPE),
-            ] for ADTYPE, BDTYPE in [("float8", "float16"), ("float16", "float32"), ("float32", "float16"),
-                                     ("bfloat16", "float32"), ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True]
+            ] for ADTYPE, BDTYPE in [("float8", "float16"),
+                                     ("float16", "float32"),
+                                     ("float32", "float16"),
+                                     ("bfloat16", "float32"),
+                                     ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True]
         ]
     ),
 )

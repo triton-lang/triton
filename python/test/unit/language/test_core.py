@@ -36,7 +36,9 @@ def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, h
         shape = (shape, )
     if rs is None:
         rs = RandomState(seed=17)
-    if dtype_str in int_dtypes + uint_dtypes:
+    if 'float8' in dtype_str or \
+            dtype_str in int_dtypes + uint_dtypes:
+        dtype_str = 'int8' if 'float8' in dtype_str else dtype_str
         iinfo = np.iinfo(getattr(np, dtype_str))
         low = iinfo.min if low is None else max(low, iinfo.min)
         high = iinfo.max if high is None else min(high, iinfo.max)
@@ -1943,6 +1945,23 @@ def test_permute(dtype_str, shape, perm, device):
 # ---------------
 
 
+def fp8e5_to_fp16(x):
+
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        y = x.to(tl.float8e5)
+        tl.store(Y + offs, y, mask=mask)
+
+    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
+    kernel[grid](ret, triton.reinterpret(x, tl.float8e5), ret.numel(), BLOCK_SIZE=1024)
+    return ret
+
+
 @pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype",
                          [(*shape, 4, False, False, epilogue, allow_tf32, in_dtype, out_dtype)
                           for shape in [(64, 64, 64), (16, 16, 16)]
@@ -1967,7 +1986,8 @@ def test_permute(dtype_str, shape, perm, device):
                           for allow_tf32 in [True]
                           for col_a in [True, False]
                           for col_b in [True, False]
-                          for in_dtype, out_dtype in [('int8', 'int8'),
+                          for in_dtype, out_dtype in [('float8', 'float8'),
+                                                      ('int8', 'int8'),
                                                       ('float16', 'float16'),
                                                       ('float16', 'float32'),
                                                       ('float32', 'float32')]])
@@ -2043,7 +2063,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     else:
         y = numpy_random((K, N), dtype_str=in_dtype, rs=rs)
     w = numpy_random((N, N), dtype_str=in_dtype, rs=rs)
-    if 'int' not in in_dtype:
+    if 'int' not in str(x.dtype):
         x *= .1
         y *= .1
     if in_dtype == 'float32' and allow_tf32:
@@ -2065,10 +2085,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 
     if out_dtype == 'int8':
         out_dtype = tl.int8
-    elif out_dtype == 'float16' and epilogue != 'softmax':
-        # TODO: for out_dtype == 'float16' and epilogue == 'softmax', it will
-        # fail with the following error: 'llvm.fmul' op requires the same type
-        # for all operands and results
+    elif out_dtype == 'float16':
         out_dtype = tl.float16
     else:
         out_dtype = tl.float32
