@@ -208,8 +208,9 @@ class JITFunction(KernelInterface[T]):
         dtype_str = str(key).split(".")[-1]
         tys = {
             "bool": "i1",
-            "float8e5": "fp8e5",
             "float8e4": "fp8e4",
+            "float8e5": "fp8e5",
+            "float8e4b15": "fp8e4b15",
             "float16": "fp16",
             "bfloat16": "bf16",
             "float32": "fp32",
@@ -573,9 +574,13 @@ class TensorWrapper:
         self.base = base
         self.is_cuda = base.is_cuda
         self.device = base.device
+        self.shape = self.base.shape
 
     def data_ptr(self):
         return self.base.data_ptr()
+
+    def stride(self, i):
+        return self.base.stride(i)
 
     def __str__(self) -> str:
         return f'TensorWrapper[{self.dtype}]({self.base})'

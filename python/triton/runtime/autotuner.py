@@ -111,7 +111,9 @@ class Autotuner(KernelInterface):
         if config.pre_hook is not None:
             full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
             config.pre_hook(full_nargs)
-        return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        ret = self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        self.nargs = None
+        return ret
 
     def prune_configs(self, kwargs):
         pruned_configs = self.configs

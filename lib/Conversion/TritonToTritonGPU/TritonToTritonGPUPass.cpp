@@ -154,10 +154,24 @@ public:
   matchAndRewrite(arith::SelectOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
-                      op, retType, adaptor.getCondition(),
-                      adaptor.getTrueValue(), adaptor.getFalseValue()),
-                  adaptor.getAttributes());
+
+    Value cond = adaptor.getCondition();
+    if (llvm::isa<RankedTensorType>(retType) &&
+        !llvm::isa<TensorType>(cond.getType())) {
+      // triton_gpu.select doesn't support scalar condition values, so add a
+      // splat
+      auto retTypeTensor = llvm::cast<RankedTensorType>(retType);
+      auto retShape = retTypeTensor.getShape();
+      auto retEncoding = retTypeTensor.getEncoding();
+      Type condTy =
+          RankedTensorType::get(retShape, cond.getType(), retEncoding);
+      cond = rewriter.create<triton::SplatOp>(op.getLoc(), condTy, cond);
+    }
+
+    addNamedAttrs(
+        rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
+            op, retType, cond, adaptor.getTrueValue(), adaptor.getFalseValue()),
+        adaptor.getAttributes());
     return success();
   }
 };
