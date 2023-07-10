@@ -479,6 +479,8 @@ public:
     for (auto it = allOperands.begin(), end = allOperands.end(); it != end;) {
       auto curr = static_cast<const ConcreteT *>(this)->createDestOps(
           op, adaptor, rewriter, elemTy, MultipleOperandsRange(it, end), loc);
+      if (curr.size() == 0)
+        return failure();
       for (auto v : curr) {
         if (!static_cast<bool>(v))
           return failure();
@@ -632,7 +634,7 @@ struct FpToFpOpConversion
         v = convertFp32ToFp16(loc, rewriter, v);
     SmallVector<Value> outVals =
         cvtFunc(loc, rewriter, inVals[0], inVals[1], inVals[2], inVals[3]);
-    assert(outVals.size() == operands.size());
+    assert(outVals.size() == inVals.size());
     if (isDstFP32)
       for (Value &v : outVals)
         v = convertFp16ToFp32(loc, rewriter, v);
