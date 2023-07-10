@@ -1,7 +1,8 @@
 import torch
 
-from ... import cdiv, heuristics, jit
+from ... import heuristics, jit
 from ... import language as tl
+from ...misc import cdiv
 
 # ********************************************************
 # --------------------------------------------------------

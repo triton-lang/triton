@@ -20,6 +20,7 @@ from .runtime.jit import jit
 from .compiler import compile, CompilationError
 
 from . import language
+from . import ops
 from . import testing
 
 __all__ = [

@@ -7,8 +7,9 @@ This is a Triton implementation of the Flash Attention algorithm
 
 import torch
 
-from .. import cdiv, jit
+from .. import jit
 from .. import language as tl
+from ..misc import cdiv
 
 
 @jit

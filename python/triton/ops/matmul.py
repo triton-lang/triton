@@ -1,7 +1,8 @@
 import torch
 
-from .. import Config, autotune, cdiv, heuristics, jit
+from .. import Config, autotune, heuristics, jit
 from .. import language as tl
+from ..misc import cdiv
 from .matmul_perf_model import early_config_prune, estimate_matmul_time
 
 _ordered_datatypes = [torch.float16, torch.bfloat16, torch.float32]

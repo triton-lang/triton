@@ -66,10 +66,14 @@ def get_pybind11_package_info():
 
 
 def get_llvm_package_info():
-    # download if nothing is installed
+    # added statement for Apple Silicon
     system = platform.system()
+    arch = 'x86_64'
     if system == "Darwin":
         system_suffix = "apple-darwin"
+        cpu_type = os.popen('sysctl machdep.cpu.brand_string').read()
+        if "apple" in cpu_type.lower():
+            arch = 'arm64'
     elif system == "Linux":
         vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
         vglibc = vglibc[0] * 100 + vglibc[1]
@@ -79,7 +83,7 @@ def get_llvm_package_info():
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
+    name = f'llvm+mlir-17.0.0-{arch}-{system_suffix}-{release_suffix}'
     version = "llvm-17.0.0-c5dede880d17"
     url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
@@ -118,6 +122,7 @@ def get_thirdparty_packages(triton_cache_path):
 
 
 def download_and_copy_ptxas():
+
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
     version = "12.1.105"
@@ -260,6 +265,11 @@ class CMakeBuild(build_ext):
 download_and_copy_ptxas()
 
 
+COMPILE_CPP = (os.environ.get('COMPILE_CPP'))
+ext_modules = [] if COMPILE_CPP is not None and COMPILE_CPP.lower() == "false" else [CMakeExtension("triton", "triton/_C/")]
+cmdclass = {} if COMPILE_CPP is not None and COMPILE_CPP.lower() == "false" else {"build_ext": CMakeBuild, "build_py": CMakeBuildPy}
+
+
 setup(
     name="triton",
     version="2.1.0",
@@ -286,8 +296,9 @@ setup(
         "filelock",
     ],
     include_package_data=True,
-    ext_modules=[CMakeExtension("triton", "triton/_C/")],
-    cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy},
+    ext_modules=ext_modules,
+    cmdclass=cmdclass,
+
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],
