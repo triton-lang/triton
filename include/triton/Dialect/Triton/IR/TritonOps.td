@@ -76,8 +76,8 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     // TODO: Add verifier
 }
 
-def TT_FpToFpOp : TT_Op<"fp_to_fp", [Elementwise,
-                                     SameOperandsAndResultShape,
+// FIXME: Not elementwise because scalars are not supported
+def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
                                      /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
