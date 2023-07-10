@@ -69,6 +69,13 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   int32_t n_regs = 0;
   int32_t n_spills = 0;
   // create driver handles
+  CUcontext pctx = 0;
+  CUDA_CHECK(cuCtxGetCurrent(&pctx));
+  if (!pctx) {
+    CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
+    CUDA_CHECK(cuCtxSetCurrent(pctx));
+  }
+
   CUDA_CHECK(cuModuleLoadData(&mod, data));
   CUDA_CHECK(cuModuleGetFunction(&fun, mod, name));
   // get allocated registers and spilled registers from the function
