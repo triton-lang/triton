@@ -15,6 +15,8 @@ from .runtime import (
     TensorWrapper,
     OutOfResources,
     MockTensor,
+    enable_exception_analysis,
+    disable_exception_analysis,
 )
 from .runtime.jit import jit
 from .compiler import compile, CompilationError
@@ -28,6 +30,8 @@ __all__ = [
     "CompilationError",
     "compile",
     "Config",
+    "enable_exception_analysis",
+    "disable_exception_analysis",
     "heuristics",
     "impl",
     "jit",

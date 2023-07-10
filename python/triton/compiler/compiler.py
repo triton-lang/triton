@@ -16,11 +16,9 @@ from .._C.libtriton.triton import (add_external_libs, compile_ptx_to_cubin,
                                    translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
                                    translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend
-# from ..runtime import driver, jit, JITFunction
-# TODO: runtime.errors
-from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
+from ..runtime.errors import OutOfResources
 from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device,
                            get_device_capability, version_key)
 from ..tools.disasm import extract
