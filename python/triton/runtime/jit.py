@@ -574,9 +574,13 @@ class TensorWrapper:
         self.base = base
         self.is_cuda = base.is_cuda
         self.device = base.device
+        self.shape = self.base.shape
 
     def data_ptr(self):
         return self.base.data_ptr()
+
+    def stride(self, i):
+        return self.base.stride(i)
 
     def __str__(self) -> str:
         return f'TensorWrapper[{self.dtype}]({self.base})'
