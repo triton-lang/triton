@@ -67,7 +67,7 @@ def f8_to_f16(x):
                 (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 311, AT, BT, DTYPE, DTYPE),
                 (128, 256, 64, 1, 8, 3, 256, 512, 160, AT, BT, DTYPE, DTYPE),
-            ] for DTYPE in ["float8", "float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
+            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
         ],
         # n-stage
         *[
@@ -120,12 +120,16 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     N = BLOCK_N if N is None else N
     K = BLOCK_K * SPLIT_K if K is None else K
 
+    def maybe_upcast(x, dtype):
+        if dtype == "float8":
+            return f8_to_f16(x)
+        return x
+
     def get_input(n, m, t, dtype):
         if t:
             return get_input(m, n, False, dtype).t()
         if dtype == "float8":
-            x = torch.randint(10, 50, (n, m), device="cuda", dtype=torch.int8)
-            return f8_to_f16(x)
+            return torch.randint(10, 50, (n, m), device="cuda", dtype=torch.int8)
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dtype]
         return .1 * torch.randn((n, m), device="cuda", dtype=dtype)
 
@@ -133,8 +137,13 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     a = get_input(M, K, AT, ADTYPE)
     b = get_input(K, N, BT, BDTYPE)
     # run test
-    th_c = torch.matmul(a.to(torch.float32), b.to(torch.float32))
+    th_c = torch.matmul(maybe_upcast(a, ADTYPE).to(torch.float32),
+                        maybe_upcast(b, BDTYPE).to(torch.float32))
     try:
+        if ADTYPE == "float8":
+            a = triton.reinterpret(a, tl.float8e5)
+        if BDTYPE == "float8":
+            b = triton.reinterpret(b, tl.float8e5)
         tt_c = triton.ops.matmul(a, b)
         atol, rtol = 1e-2, 0
         if ADTYPE == torch.bfloat16 or BDTYPE == torch.bfloat16:

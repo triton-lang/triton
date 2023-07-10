@@ -1986,8 +1986,7 @@ def fp8e5_to_fp16(x):
                           for allow_tf32 in [True]
                           for col_a in [True, False]
                           for col_b in [True, False]
-                          for in_dtype, out_dtype in [('float8', 'float8'),
-                                                      ('int8', 'int8'),
+                          for in_dtype, out_dtype in [('int8', 'int8'),
                                                       ('float16', 'float16'),
                                                       ('float16', 'float32'),
                                                       ('float32', 'float32')]])

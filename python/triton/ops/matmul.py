@@ -149,7 +149,11 @@ class _matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
         # allocates output
-        c_dtype = get_higher_dtype(a.dtype, b.dtype)
+        if a.dtype in [tl.float8e4, tl.float8e4b15, tl.float8e5] or\
+           b.dtype in [tl.float8e4, tl.float8e4b15, tl.float8e5]:
+            c_dtype = torch.float16
+        else:
+            c_dtype = get_higher_dtype(a.dtype, b.dtype)
         c = torch.empty((M, N), device=device, dtype=c_dtype)
         if dot_out_dtype is None:
             if c_dtype in [torch.float16, torch.float32, torch.bfloat16]:
