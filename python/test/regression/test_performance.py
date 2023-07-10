@@ -69,19 +69,19 @@ matmul_data = {
         # square
         (512, 512, 512): {'float16': 0.084, 'float32': 0.12, 'int8': 0.05},
         (1024, 1024, 1024): {'float16': 0.332, 'float32': 0.352, 'int8': 0.169},
-        (2048, 2048, 2048): {'float16': 0.598, 'float32': 0.522, 'int8': 0.34},
-        (4096, 4096, 4096): {'float16': 0.702, 'float32': 0.804, 'int8': 0.46},
-        (8192, 8192, 8192): {'float16': 0.829, 'float32': 0.917, 'int8': 0.51},
+        (2048, 2048, 2048): {'float16': 0.635, 'float32': 0.522, 'int8': 0.34},
+        (4096, 4096, 4096): {'float16': 0.750, 'float32': 0.713, 'int8': 0.46},
+        (8192, 8192, 8192): {'float16': 0.760, 'float32': 0.760, 'int8': 0.51},
         # tall-skinny
         (16, 1024, 1024): {'float16': 0.008, 'float32': 0.009, 'int8': 0.005},
         (16, 4096, 4096): {'float16': 0.036, 'float32': 0.038, 'int8': 0.026},
         (16, 8192, 8192): {'float16': 0.056, 'float32': 0.061, 'int8': 0.043},
-        (64, 1024, 1024): {'float16': 0.038, 'float32': 0.047, 'int8': 0.017},
-        (64, 4096, 4096): {'float16': 0.143, 'float32': 0.162, 'int8': 0.097},
-        (64, 8192, 8192): {'float16': 0.232, 'float32': 0.257, 'int8': 0.174},
-        (1024, 64, 1024): {'float16': 0.003, 'float32': 0.004, 'int8': 0.017},
-        (4096, 64, 4096): {'float16': 0.14, 'float32': 0.122, 'int8': 0.102},
-        (8192, 64, 8192): {'float16': 0.207, 'float32': 0.23, 'int8': 0.177},
+        (64, 1024, 1024): {'float16': 0.020, 'float32': 0.038, 'int8': 0.017},
+        (64, 4096, 4096): {'float16': 0.160, 'float32': 0.162, 'int8': 0.097},
+        (64, 8192, 8192): {'float16': 0.280, 'float32': 0.257, 'int8': 0.174},
+        (1024, 64, 1024): {'float16': 0.040, 'float32': 0.050, 'int8': 0.017},
+        (4096, 64, 4096): {'float16': 0.160, 'float32': 0.200, 'int8': 0.102},
+        (8192, 64, 8192): {'float16': 0.250, 'float32': 0.23, 'int8': 0.177},
         # Non pow 2 shapes
         (1000, 200, 100): {'float16': 0.011, 'float32': 0.017, 'int8': 0.05},
         (1000, 200, 700): {'float16': 0.027, 'float32': 0.047, 'int8': 0.05},
@@ -154,17 +154,17 @@ elementwise_data = {
         10003 * 7007: {'float16': 0.010, 'float32': 0.010},
     },
     'a100': {
-        1024 * 16: {'float16': 0.010, 'bfloat16': 0.010, 'float32': 0.010},
-        1024 * 64: {'float16': 0.040, 'bfloat16': 0.010, 'float32': 0.010},
-        1024 * 256: {'float16': 0.132, 'bfloat16': 0.010, 'float32': 0.010},
-        1024 * 1024: {'float16': 0.353, 'bfloat16': 0.010, 'float32': 0.010},
-        1024 * 4096: {'float16': 0.605, 'bfloat16': 0.010, 'float32': 0.010},
-        1024 * 16384: {'float16': 0.758, 'bfloat16': 0.010, 'float32': 0.010},
-        1024 * 65536: {'float16': 0.850, 'bfloat16': 0.010, 'float32': 0.010},
+        1024 * 16: {'float16': 0.010, 'bfloat16': 0.010, 'float32': 0.020},
+        1024 * 64: {'float16': 0.040, 'bfloat16': 0.040, 'float32': 0.066},
+        1024 * 256: {'float16': 0.132, 'bfloat16': 0.132, 'float32': 0.227},
+        1024 * 1024: {'float16': 0.353, 'bfloat16': 0.353, 'float32': 0.488},
+        1024 * 4096: {'float16': 0.605, 'bfloat16': 0.605, 'float32': 0.705},
+        1024 * 16384: {'float16': 0.758, 'bfloat16': 0.750, 'float32': 0.819},
+        1024 * 65536: {'float16': 0.850, 'bfloat16': 0.850, 'float32': 0.870},
         # Non pow 2
-        1020 * 100: {'float16': 0.010, 'bfloat16': 0.010, 'float32': 0.010},
-        995 * 125: {'float16': 0.010, 'bfloat16': 0.010, 'float32': 0.010},
-        10003 * 7007: {'float16': 0.010, 'bfloat16': 0.010, 'float32': 0.010},
+        1020 * 100: {'float16': 0.051, 'bfloat16': 0.051, 'float32': 0.103},
+        995 * 125: {'float16': 0.063, 'bfloat16': 0.063, 'float32': 0.126},
+        10003 * 7007: {'float16': 0.544, 'bfloat16': 0.541, 'float32': 0.861},
     }
 }
 
@@ -207,7 +207,19 @@ flash_attention_data = {
         (4, 48, 4096, 64, True, True, 'forward', 'bfloat16'): 0.355,
         (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.168,
         (4, 48, 1024, 16, True, True, 'forward', 'float32'): 0.092,
-        (4, 48, 1024, 16, True, True, 'backward', 'float32'): 0.087
+        (4, 48, 1024, 16, True, True, 'backward', 'float32'): 0.087,
+        (4, 48, 4096, 64, False, False, 'forward', 'float16'): 0.39,
+        (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.252,
+        (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.358,
+        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.243,
+        (4, 48, 1024, 16, False, False, 'forward', 'float32'): 0.092,
+        (4, 48, 1024, 16, False, False, 'backward', 'float32'): 0.118,
+        (4, 48, 4096, 64, True, False, 'forward', 'float16'): 0.39,
+        (4, 48, 4096, 64, True, False, 'backward', 'float16'): 0.175,
+        (4, 48, 4096, 64, True, False, 'forward', 'bfloat16'): 0.355,
+        (4, 48, 4096, 64, True, False, 'backward', 'bfloat16'): 0.168,
+        (4, 48, 1024, 16, True, False, 'forward', 'float32'): 0.092,
+        (4, 48, 1024, 16, True, False, 'backward', 'float32'): 0.087
     }
 }
 
@@ -249,6 +261,6 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
-    ref_gpu_util = flash_attention_data[DEVICE_NAME][(Z, H, N_CTX, D_HEAD, seq_par, mode, dtype_str)]
+    ref_gpu_util = flash_attention_data[DEVICE_NAME][(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str)]
     print_perf(ms, cur_gpu_util, ref_gpu_util)
     triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
