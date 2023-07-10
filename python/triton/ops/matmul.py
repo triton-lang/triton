@@ -111,8 +111,9 @@ def _kernel(A, B, C, M, N, K,
             b = tl.load(B)
         else:
             k_remaining = K - k * (BLOCK_K * SPLIT_K)
-            a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.)
-            b = tl.load(B, mask=rk[:, None] < k_remaining, other=0.)
+            _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
+            a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
+            b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
         a = a.to(C.dtype.element_ty)
         b = b.to(C.dtype.element_ty)
         acc += tl.dot(a, b, out_dtype=dot_out_dtype)
