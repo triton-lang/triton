@@ -83,6 +83,9 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python/test/unit
+          # warm up the cache
+          python3 -m pytest --warmup -n 64 --ignore=runtime
+          # run the tests
           python3 -m pytest -n 8 --ignore=runtime
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
