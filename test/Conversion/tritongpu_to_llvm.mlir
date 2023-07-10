@@ -1652,7 +1652,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     // PTX: llvm.inline_asm
     // PTX-SAME: @$3 atom.global.gpu.add.noftz.f16x2
     // GCN-COUNT-8: llvm.atomicrmw fadd {{.*}}  monotonic  : !llvm.ptr<f16, 1>, f16
-    %8 = "tt.atomic_rmw"(%5, %6, %7) {atomic_rmw_op = 5 : i32} : (tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xf16, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf16, #blocked>
+    %8 = "tt.atomic_rmw"(%5, %6, %7) {atomic_rmw_op = 5 : i32, sem = 1: i32} : (tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xf16, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf16, #blocked>
     tt.return
   }
 }
