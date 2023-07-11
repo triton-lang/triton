@@ -44,7 +44,6 @@ matmul_data = {
         (512, 512, 512): {'float16': 0.061, 'float32': 0.097, 'int8': 0.05},
         (1024, 1024, 1024): {'float16': 0.283, 'float32': 0.313, 'int8': 0.169},
         (2048, 2048, 2048): {'float16': 0.618, 'float32': 0.532, 'int8': 0.34},
-        (4096, 4096, 4096): {'float16': 0.751, 'float32': 0.726, 'int8': 0.46},
         (8192, 8192, 8192): {'float16': 0.786, 'float32': 0.754, 'int8': 0.51},
         # tall-skinny
         (16, 1024, 1024): {'float16': 0.006, 'float32': 0.009, 'int8': 0.005},
@@ -115,7 +114,6 @@ elementwise_data = {
         1024 * 64: {'float16': 0.013, 'float32': 0.026},
         1024 * 256: {'float16': 0.053, 'float32': 0.105},
         1024 * 1024: {'float16': 0.212, 'float32': 0.420},
-        1024 * 4096: {'float16': 0.791, 'float32': 0.668},
         1024 * 16384: {'float16': 0.762, 'float32': 0.812},
         1024 * 65536: {'float16': 0.846, 'float32': 0.869},
         # Non pow 2
@@ -162,7 +160,7 @@ flash_attention_data = {
         (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.202,
         (4, 48, 1024, 16, True, True, 'backward', 'float32'): 0.089,
         (4, 48, 4096, 64, True, False, 'forward', 'float16'): 0.242,
-        (4, 48, 4096, 64, True, False, 'forward', 'bfloat16'): 0.248,
+        (4, 48, 4096, 64, True, False, 'forward', 'bfloat16'): 0.220,
         (4, 48, 1024, 16, True, False, 'forward', 'float32'): 0.069,
         (4, 48, 4096, 64, True, False, 'backward', 'float16'): 0.136,
         (4, 48, 4096, 64, True, False, 'backward', 'bfloat16'): 0.135,
@@ -174,7 +172,7 @@ flash_attention_data = {
         (4, 48, 4096, 64, False, True, 'backward', 'bfloat16'): 0.257,
         (4, 48, 1024, 16, False, True, 'backward', 'float32'): 0.128,
         (4, 48, 4096, 64, False, False, 'forward', 'float16'): 0.242,
-        (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.248,
+        (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.220,
         (4, 48, 1024, 16, False, False, 'forward', 'float32'): 0.069,
         (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.159,
         (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.138,
