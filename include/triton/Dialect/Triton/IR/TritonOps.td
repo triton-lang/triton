@@ -31,7 +31,8 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 //   fptoui, fptosi, uitofp, sitofp,
 //   extf, tructf,
 //   extui, extsi, tructi
-def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape,
+def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
+                                         SameOperandsAndResultShape,
                                          SameOperandsAndResultEncoding,
                                          Pure,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
@@ -44,7 +45,8 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [SameOperandsAndResultShape,
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 }
 
-def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
+def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
+                                         SameOperandsAndResultShape,
                                          SameOperandsAndResultEncoding,
                                          Pure,
                                          /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
@@ -58,7 +60,8 @@ def TT_PtrToIntOp : TT_Op<"ptr_to_int", [SameOperandsAndResultShape,
 }
 
 // arith.bitcast doesn't support pointers
-def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape,
+def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
+                                     SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
                                      /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
@@ -73,6 +76,7 @@ def TT_BitcastOp : TT_Op<"bitcast", [SameOperandsAndResultShape,
     // TODO: Add verifier
 }
 
+// FIXME: Not elementwise because scalars are not supported
 def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
@@ -99,6 +103,7 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
 //
 def TT_AddPtrOp : TT_Op<"addptr",
                      [Pure,
+                      Elementwise,
                       SameOperandsAndResultShape,
                       SameOperandsAndResultEncoding,
                       TypesMatchWith<"result type matches ptr type",
@@ -458,7 +463,8 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
 //
 class TT_ExternElementwiseOpBase<string mnemonic, list<Trait> traits = []> :
     TT_Op<mnemonic,
-         traits # [SameOperandsAndResultEncoding,
+         traits # [Elementwise,
+                   SameOperandsAndResultEncoding,
                    SameVariadicOperandSize]> {
 
     let description = [{

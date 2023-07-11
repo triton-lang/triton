@@ -16,6 +16,67 @@ def nvsmi(attrs):
     return ret
 
 
+def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
+    import torch
+    """
+    Benchmark the runtime of the provided function.
+
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param rep: Repetition time (in ms)
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    """
+    if torch.cuda.current_stream() == torch.cuda.default_stream():
+        raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
+    # record CUDAGraph
+    fn()
+    if grad_to_none is not None:
+        for x in grad_to_none:
+            x.detach_()
+            x.requires_grad_(True)
+            x.grad = None
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        fn()
+    torch.cuda.synchronize()
+    fn = lambda: g.replay()
+    # Estimate the runtime of the function
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+    fn()
+    end_event.record()
+    torch.cuda.synchronize()
+    estimate_ms = start_event.elapsed_time(end_event)
+    # compute number of repetition to last `rep` ms
+    n_repeat = max(1, int(rep / estimate_ms))
+    # compute number of repetition to last `rep` ms
+    start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
+    end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
+    ret = []
+    n_retries = 50
+    for _ in range(n_retries):
+        # Benchmark
+        torch.cuda.synchronize()
+        for i in range(n_repeat):
+            # we don't want `fn` to accumulate gradient values
+            # if it contains a backward pass. So we clear the
+            # provided gradients
+            if grad_to_none is not None:
+                for x in grad_to_none:
+                    x.grad = None
+            # record time of `fn`
+            start_event[i].record()
+            fn()
+            end_event[i].record()
+        torch.cuda.synchronize()
+        times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
+        ret.append(torch.min(times))
+    return torch.mean(torch.tensor(ret)).item()
+
+
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
              quantiles=None,
              fast_flush=True,
