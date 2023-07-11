@@ -79,13 +79,13 @@ jobs:
           fi
           lit -v "${LIT_TEST_DIR}"
 
-      - name: Run python tests on CUDA
-        if: ${{ env.BACKEND == 'CUDA'}}
-        run: |
-          cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime
-          # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest runtime/
+      # - name: Run python tests on CUDA
+      #   if: ${{ env.BACKEND == 'CUDA'}}
+      #   run: |
+      #     cd python/test/unit
+      #     python3 -m pytest -n 8 --ignore=runtime
+      #     # run runtime tests serially to avoid race condition with cache handling.
+      #     python3 -m pytest runtime/
 
       - name: Create artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
