@@ -74,7 +74,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
         torch.cuda.synchronize()
         times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)])
         ret.append(torch.min(times))
-    return torch.min(torch.tensor(ret)).item()
+    return torch.mean(torch.tensor(ret)).item()
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
