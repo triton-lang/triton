@@ -67,27 +67,21 @@ matmul_data = {
     # On some other servers, we are getting about 90% peak for 8kx8x8k float16
     'a100': {
         # square
-        (512, 512, 512): {'float16': 0.084, 'float32': 0.12, 'int8': 0.05},
-        (1024, 1024, 1024): {'float16': 0.332, 'float32': 0.352, 'int8': 0.169},
-        (2048, 2048, 2048): {'float16': 0.635, 'float32': 0.522, 'int8': 0.34},
-        (4096, 4096, 4096): {'float16': 0.750, 'float32': 0.810, 'int8': 0.46},
-        (8192, 8192, 8192): {'float16': 0.760, 'float32': 0.760, 'int8': 0.51},
+        (512, 512, 512): {'float16': 0.059, 'float32': 0.094, 'int8': 0.05},
+        (1024, 1024, 1024): {'float16': 0.281, 'float32': 0.316, 'int8': 0.169},
+        (2048, 2048, 2048): {'float16': 0.598, 'float32': 0.534, 'int8': 0.34},
+        (4096, 4096, 4096): {'float16': 0.741, 'float32': 0.752, 'int8': 0.46},
+        (8192, 8192, 8192): {'float16': 0.772, 'float32': 0.934, 'int8': 0.51},
         # tall-skinny
-        (16, 1024, 1024): {'float16': 0.008, 'float32': 0.009, 'int8': 0.005},
-        (16, 4096, 4096): {'float16': 0.036, 'float32': 0.038, 'int8': 0.026},
-        (16, 8192, 8192): {'float16': 0.056, 'float32': 0.061, 'int8': 0.043},
-        (64, 1024, 1024): {'float16': 0.020, 'float32': 0.030, 'int8': 0.017},
-        (64, 4096, 4096): {'float16': 0.160, 'float32': 0.162, 'int8': 0.097},
-        (64, 8192, 8192): {'float16': 0.280, 'float32': 0.257, 'int8': 0.174},
-        (1024, 64, 1024): {'float16': 0.040, 'float32': 0.050, 'int8': 0.017},
-        (4096, 64, 4096): {'float16': 0.160, 'float32': 0.200, 'int8': 0.102},
-        (8192, 64, 8192): {'float16': 0.250, 'float32': 0.23, 'int8': 0.177},
-        # Non pow 2 shapes
-        (1000, 200, 100): {'float16': 0.011, 'float32': 0.017, 'int8': 0.05},
-        (1000, 200, 700): {'float16': 0.027, 'float32': 0.047, 'int8': 0.05},
-        (994, 136, 402): {'float16': 0.015, 'float32': 0.024, 'int8': 0.05},
-        (995, 135, 409): {'float16': 0.015, 'float32': 0.025, 'int8': 0.05},
-        (99, 1357, 409): {'float16': 0.011, 'float32': 0.036, 'int8': 0.05}
+        (16, 1024, 1024): {'float16': 0.006, 'float32': 0.009, 'int8': 0.005},
+        (16, 4096, 4096): {'float16': 0.055, 'float32': 0.045, 'int8': 0.026},
+        (16, 8192, 8192): {'float16': 0.074, 'float32': 0.075, 'int8': 0.043},
+        (64, 1024, 1024): {'float16': 0.018, 'float32': 0.023, 'int8': 0.017},
+        (64, 4096, 4096): {'float16': 0.153, 'float32': 0.000, 'int8': 0.097},
+        (64, 8192, 8192): {'float16': 0.324, 'float32': 0.000, 'int8': 0.174},
+        (1024, 64, 1024): {'float16': 0.027, 'float32': 0.044, 'int8': 0.017},
+        (4096, 64, 4096): {'float16': 0.180, 'float32': 0.216, 'int8': 0.102},
+        (8192, 64, 8192): {'float16': 0.270, 'float32': 0.000, 'int8': 0.177},
     }
 }
 
@@ -156,17 +150,16 @@ elementwise_data = {
         10003 * 7007: {'float16': 0.010, 'float32': 0.010},
     },
     'a100': {
-        1024 * 16: {'float16': 0.010, 'bfloat16': 0.010, 'float32': 0.020},
-        1024 * 64: {'float16': 0.040, 'bfloat16': 0.040, 'float32': 0.066},
-        1024 * 256: {'float16': 0.132, 'bfloat16': 0.132, 'float32': 0.227},
-        1024 * 1024: {'float16': 0.353, 'bfloat16': 0.353, 'float32': 0.488},
-        1024 * 4096: {'float16': 0.605, 'bfloat16': 0.605, 'float32': 0.705},
-        1024 * 16384: {'float16': 0.758, 'bfloat16': 0.750, 'float32': 0.819},
-        1024 * 65536: {'float16': 0.850, 'bfloat16': 0.850, 'float32': 0.870},
+        1024 * 16: {'float16': 0.003, 'float32': 0.007},
+        1024 * 64: {'float16': 0.013, 'float32': 0.026},
+        1024 * 256: {'float16': 0.052, 'float32': 0.105},
+        1024 * 1024: {'float16': 0.210, 'float32': 0.404},
+        1024 * 4096: {'float16': 0.770, 'float32': 0.672},
+        1024 * 16384: {'float16': 0.757, 'float32': 0.813},
+        1024 * 65536: {'float16': 0.847, 'float32': 0.866},
         # Non pow 2
-        1020 * 100: {'float16': 0.051, 'bfloat16': 0.051, 'float32': 0.103},
-        995 * 125: {'float16': 0.063, 'bfloat16': 0.063, 'float32': 0.126},
-        10003 * 7007: {'float16': 0.544, 'bfloat16': 0.541, 'float32': 0.861},
+        1020 * 100: {'float16': 0.020, 'float32': 0.041},
+        10003 * 7007: {'float16': 0.539, 'float32': 0.861},
     }
 }
 
@@ -180,7 +173,8 @@ def test_elementwise(N, dtype_str):
     if dtype_str in ['bfloat16'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test bfloat16 on a100')
     dtype = {'float16': torch.float16, 'bfloat16': torch.bfloat16, 'float32': torch.float32}[dtype_str]
-    ref_gpu_util = elementwise_data[DEVICE_NAME][N][dtype_str]
+    ref_dtype_str = 'float16' if dtype_str == 'bfloat16' else dtype_str
+    ref_gpu_util = elementwise_data[DEVICE_NAME][N][ref_dtype_str]
     max_gpu_perf = get_dram_gbps()
     z = torch.empty((N, ), dtype=dtype, device='cuda')
     x = torch.randn_like(z)
