@@ -56,7 +56,7 @@ matmul_data = {
         (4096, 64, 4096): {'float16': 0.179, 'float32': 0.214, 'int8': 0.102},
         (8192, 64, 8192): {'float16': 0.278, 'float32': 0.000, 'int8': 0.177},
         # test EVEN_K==False
-        (8192, 8192, 8176): {'float16': 0.786, 'float32': 0.754, 'int8': 0.51},
+        (8192, 8192, 8176): {'float16': 0.786, 'float32': 0.696, 'int8': 0.51},
     }
 }
 
@@ -64,7 +64,7 @@ matmul_data = {
 @pytest.mark.parametrize('M, N, K, dtype_str',
                          [(M, N, K, dtype_str)
                           for M, N, K in matmul_data[DEVICE_NAME].keys()
-                          for dtype_str in ['float16']])
+                          for dtype_str in ['float16', 'float32']])
 def test_matmul(M, N, K, dtype_str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
