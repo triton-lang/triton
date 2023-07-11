@@ -114,7 +114,7 @@ jobs:
           cd python/test/regression
           sudo nvidia-smi -i 0 -pm 1
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
-          python3 -m pytest -vs . --reruns 10 --reruns-delay 1
+          python3 -m pytest -vs . --reruns 10
           sudo nvidia-smi -i 0 -rgc
 
   Integration-Tests-Third-Party:
