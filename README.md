@@ -41,11 +41,6 @@ cd triton/python;
 pip install cmake; # build-time dependency
 pip install -e .
 ```
-To install the package without recompiling C++ code, after modifying only Python source, use:
-```
-COMPILE_CPP=False pip install -e .
-```
-for signficantly faster re-installation time.
 
 
 

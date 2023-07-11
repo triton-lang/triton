@@ -265,11 +265,6 @@ class CMakeBuild(build_ext):
 download_and_copy_ptxas()
 
 
-COMPILE_CPP = (os.environ.get('COMPILE_CPP'))
-ext_modules = [] if COMPILE_CPP is not None and COMPILE_CPP.lower() == "false" else [CMakeExtension("triton", "triton/_C/")]
-cmdclass = {} if COMPILE_CPP is not None and COMPILE_CPP.lower() == "false" else {"build_ext": CMakeBuild, "build_py": CMakeBuildPy}
-
-
 setup(
     name="triton",
     version="2.1.0",
@@ -296,9 +291,8 @@ setup(
         "filelock",
     ],
     include_package_data=True,
-    ext_modules=ext_modules,
-    cmdclass=cmdclass,
-
+    ext_modules=[CMakeExtension("triton", "triton/_C/")],
+    cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy},
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],
