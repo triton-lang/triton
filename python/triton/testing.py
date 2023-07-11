@@ -56,7 +56,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     ret = []
-    n_retries = 25
+    n_retries = 50
     for _ in range(n_retries):
         # Benchmark
         torch.cuda.synchronize()
