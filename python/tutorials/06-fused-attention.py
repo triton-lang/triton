@@ -346,9 +346,7 @@ def test_op(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
-        for z in range(Z):
-            for h in range(H):
-                p[:, :, M == 0] = float("-inf")
+        p[:, :, M == 0] = float("-inf")
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
