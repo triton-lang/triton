@@ -60,9 +60,10 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
 
   auto argLayout = getSrcLayout();
   auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
-  // if (argLayoutMma && argLayoutMma.getVersionMajor() == 2 &&
-  //     triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
-  //   return {{1, 1}, {1, 1}};
+
+  // that case doesn't need inter-warp communication
+  if (isFastReduction() && triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
+    return {{0, 0}, {0, 0}};
 
   /// shared memory block0
   smemShapes[0] = convertType<unsigned>(getSrcShape());

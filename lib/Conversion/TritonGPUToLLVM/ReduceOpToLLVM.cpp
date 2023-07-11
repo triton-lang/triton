@@ -349,17 +349,19 @@ private:
     unsigned elems = product<unsigned>(smemShapes[0]);
     unsigned maxElems = std::max(elems, product<unsigned>(smemShapes[1]));
 
-    SmallVector<Value> smemBases(op.getNumOperands());
-    smemBases[0] = bitcast(
-        getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
-    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] =
-          bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems)),
-                  elemPtrTys[i]);
-    }
-
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
+
+    SmallVector<Value> smemBases(op.getNumOperands());
+    if (sizeInterWarps > 1) {
+      smemBases[0] = bitcast(
+          getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
+      for (unsigned i = 1; i < op.getNumOperands(); ++i) {
+        smemBases[i] =
+            bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems)),
+                    elemPtrTys[i]);
+      }
+    }
 
     unsigned srcElems = getTotalElemsPerThread(srcTys[0]);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);
@@ -418,6 +420,7 @@ private:
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);
 
+    std::map<SmallVector<unsigned>, SmallVector<Value>> finalAccs;
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> acc = it.second;
@@ -440,14 +443,43 @@ private:
         accumulate(rewriter, *combineOp, acc, shfl, false);
       }
 
+      if (sizeInterWarps == 1) {
+        finalAccs[key] = acc;
+        continue;
+      }
+
       SmallVector<Value> writeIdx = indices[key];
-      writeIdx[axis] = (sizeInterWarps == 1) ? zero : warpIdAxis;
+      writeIdx[axis] = warpIdAxis;
       Value writeOffset =
           linearize(rewriter, loc, writeIdx, smemShapes[0], order);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         Value writePtr = gep(elemPtrTys[i], smemBases[i], writeOffset);
         storeShared(rewriter, loc, writePtr, acc[i], laneZero);
       }
+    }
+
+    if (sizeInterWarps == 1) {
+      SmallVector<Value> results(op.getNumOperands());
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        if (auto resultTy =
+                op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+          auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
+          unsigned resultElems = getTotalElemsPerThread(resultTy);
+          SmallVector<SmallVector<unsigned>> resultOffset =
+              emitOffsetForLayout(resultLayout, resultTy);
+          SmallVector<Value> resultVals;
+          for (int j = 0; j < resultElems; j++) {
+            auto key = resultOffset[j];
+            key.insert(key.begin() + axis, 0);
+            resultVals.push_back(finalAccs[key][i]);
+          }
+          results[i] = getTypeConverter()->packLLElements(loc, resultVals,
+                                                          rewriter, resultTy);
+        } else
+          results[i] = finalAccs.begin()->second[i];
+      }
+      rewriter.replaceOp(op, results);
+      return success();
     }
 
     barrier();
@@ -508,9 +540,6 @@ private:
       }
     }
 
-    // We could avoid this barrier in some of the layouts, however this is not
-    // the general case.
-    // TODO: optimize the barrier in case the layouts are accepted.
     barrier();
 
     // set output values
