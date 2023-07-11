@@ -1122,7 +1122,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device):
         # intmax, so avoid negatives for now.
         # TODO: figure out which one should actually be happening, and test it
         if dtype_z in uint_dtypes:
-          x = np.absolute(x)
+            x = np.absolute(x)
         x_tri = to_triton(x, device=device)
 
     # triton kernel
