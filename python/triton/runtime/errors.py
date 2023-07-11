@@ -1,8 +1,8 @@
 import os
-import sys
-import traceback
 import subprocess
 import atexit
+import time
+
 
 class OutOfResources(Exception):
     def __init__(self, required, limit, name):
@@ -20,7 +20,15 @@ class OutOfResources(Exception):
         return (type(self), (self.required, self.limit, self.name))
 
 
-def _analyze_exception():
+def _rename_cuda_core(core_file_path: str):
+    # append pid
+    core_file_path = core_file_path + "." + str(os.getpid())
+    # append timestamp
+    core_file_path = core_file_path + "." + str(int(time.time()))
+    return core_file_path
+
+
+def _analyze_illegal_memory_access():
     if os.environ.get("CUDA_ENABLE_COREDUMP_ON_EXCEPTION", "0") == "1":
         if (core_file_path := os.environ["CUDA_COREDUMP_FILE"]) != "" and os.path.exists(core_file_path):
             # Use cuda-gdb to open the core file and print the exception line number
@@ -31,15 +39,14 @@ def _analyze_exception():
             print(output)
 
 
-def enable_exception_analysis(core_file_path: str):
+def enable_illegal_memory_analysis(core_file_path: str):
     os.environ["CUDA_ENABLE_COREDUMP_ON_EXCEPTION"] = "1"
     # convert core_file_path to absolute path
-    core_file_path = os.path.abspath(core_file_path)
+    core_file_path = os.path.abspath(_rename_cuda_core(core_file_path))
     os.environ["CUDA_COREDUMP_FILE"] = core_file_path
     # register the atexit hook
-    atexit.register(_analyze_exception)
+    atexit.register(_analyze_illegal_memory_access)
 
 
 def disable_exception_analysis():
-    atexit.unregister(_analyze_exception)
-
+    atexit.unregister(_analyze_illegal_memory_access)
