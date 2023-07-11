@@ -16,7 +16,7 @@ def nvsmi(attrs):
     return ret
 
 
-def benchmark(fn, rep=10, grad_to_none=None):
+def benchmark(fn, rep=20, grad_to_none=None):
     import torch
     """
     Benchmark the runtime of the provided function.
@@ -32,6 +32,7 @@ def benchmark(fn, rep=10, grad_to_none=None):
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float]
     """
+    n_retries = 10
     if torch.cuda.current_stream() == torch.cuda.default_stream():
         raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
     # record CUDAGraph
@@ -60,7 +61,6 @@ def benchmark(fn, rep=10, grad_to_none=None):
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     ret = []
-    n_retries = 50
     for _ in range(n_retries):
         # Benchmark
         torch.cuda.synchronize()
