@@ -382,6 +382,13 @@ private:
     DenseMap<BufferT *, size_t> bufferStart;
     calculateStarts(buffers, bufferStart);
 
+    // NOTE: The original paper doesn't consider interference between
+    // the bumped ranges. Buffers that previously do not interfere with
+    // could interfere after offset bumping if their liveness ranges overlap.
+    // Therefore, we rerun the interference graph algorithm after bumping so
+    // that we regroup the buffers and color them again. Since we always
+    // increase the buffer offset and keep reducing conflicts, we will
+    // eventually reach a fixed point.
     GraphT interference;
     buildInterferenceGraph(buffers, bufferStart, interference);
     do {
