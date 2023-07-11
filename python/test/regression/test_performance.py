@@ -114,11 +114,11 @@ def test_matmul(M, N, K, dtype_str):
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench(fn, return_mode="min", warmup=100, rep=300)
+    ms = triton.testing.benchmark(fn)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
-    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
+    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.02, rtol=0.01)
 
 
 #######################
@@ -183,11 +183,11 @@ def test_elementwise(N, dtype_str):
     y = torch.randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.do_bench(fn, return_mode="min", warmup=100, rep=500)
+    ms = triton.testing.benchmark(fn)
     cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
-    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
+    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.02, rtol=0.01)
 
 #######################
 # Flash-Attention
@@ -250,7 +250,7 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
         o = fn()
         do = torch.randn_like(o)
         fn = lambda: o.backward(do, retain_graph=True)
-    ms = triton.testing.do_bench(fn, return_mode="min", warmup=100, rep=500)
+    ms = triton.testing.benchmark(fn)
     # compute flops
     flops_per_matmul = 2. * Z * H * N_CTX * N_CTX * D_HEAD * 0.5
     total_flops = 2 * flops_per_matmul
@@ -263,4 +263,4 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     ref_gpu_util = flash_attention_data[DEVICE_NAME][(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str)]
     print_perf(ms, cur_gpu_util, ref_gpu_util)
-    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.01, rtol=0.05)
+    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.02, rtol=0.01)
