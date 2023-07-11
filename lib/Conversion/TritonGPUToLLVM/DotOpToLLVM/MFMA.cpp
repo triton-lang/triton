@@ -97,6 +97,7 @@ struct DotOpMFMAConversionHelper {
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
+    assert(mfmaLayout.getNonKDim() == 32);
     auto mfmaTy = getMatrixCoreTypeFromDot(op);
 
     Value a = op.getA();

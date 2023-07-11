@@ -885,8 +885,8 @@ def test_load_store_same_ptr():
         assert torch.all(x == 2)
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5]) 
-@pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32]) 
+@pytest.mark.parametrize("in_dtype", [tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
 def test_f8_xf16_roundtrip(in_dtype, out_dtype):
     """Tests that converting an f8 to f16 and back to f8 doesn't change its value"""
     check_type_supported(out_dtype)
@@ -1231,8 +1231,8 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
                                            [256, 32, 32, 4],
                                            ]
                           for allow_tf32 in [False, True]
-                          for col_a in [True,False]
-                          for col_b in [True,False]
+                          for col_a in [True, False]
+                          for col_b in [True, False]
                           for dtype in ['int8', 'float16', 'float32']])
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, device='cuda'):
     capability = torch.cuda.get_device_capability()
@@ -1451,6 +1451,7 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak, stride_bk, stride_b
     c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
     tl.store(c_ptrs, accumulator)
 
+
 def get_variant_golden(a, b):
     SIZE_M = a.shape[0]
     SIZE_K = a.shape[1]
@@ -1466,6 +1467,7 @@ def get_variant_golden(a, b):
     b_padded = torch.cat((b_padded, zero_3K_N, zero_3K_N), 1)
     c_padded = torch.matmul(a_padded, b_padded)
     return c_padded[:SIZE_M, :SIZE_N]
+
 
 @pytest.mark.parametrize('SIZE_M,SIZE_N,SIZE_K,NUM_WARPS,BLOCK_SIZE_M,BLOCK_SIZE_N,BLOCK_SIZE_K', [
     [64, 32, 128, 4, 64, 32, 64],
@@ -2126,11 +2128,12 @@ class MmaLayout:
 
 
 class MfmaLayout:
-    def __init__(self, warps_per_cta):
+    def __init__(self, non_k_dim, warps_per_cta):
+        self.non_k_dim = str(non_k_dim)
         self.warps_per_cta = str(warps_per_cta)
 
     def __str__(self):
-        return f"#triton_gpu.mfma<{{warpsPerCTA = {self.warps_per_cta}}}>"
+        return f"#triton_gpu.mfma<{{nonKDim = {self.non_k_dim}, warpsPerCTA = {self.warps_per_cta}}}>"
 
 
 class BlockedLayout:
@@ -2143,10 +2146,12 @@ class BlockedLayout:
     def __str__(self):
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
+
 def _get_warp_size():
     if torch.version.hip is None:
-        return 32 # CUDA_DEFAULT_WARP_SIZE
+        return 32  # CUDA_DEFAULT_WARP_SIZE
     return _triton.get_warp_size()
+
 
 if _get_warp_size() == 64:
     layouts = [
@@ -2177,6 +2182,7 @@ else:
         BlockedLayout([1, 1], [16, 2], [2, 2], [0, 1]),
         BlockedLayout([4, 2], [1, 32], [4, 1], [1, 0])
     ]
+
 
 @pytest.mark.parametrize("shape", [(128, 128)])
 @pytest.mark.parametrize("dtype", ['float16'])
@@ -2232,8 +2238,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 if _get_warp_size() == 64:
     layouts = [
-        MfmaLayout(warps_per_cta=[4, 1]),
-        MfmaLayout(warps_per_cta=[2, 2]),
+        MfmaLayout(non_k_dim=32, warps_per_cta=[4, 1]),
+        MfmaLayout(non_k_dim=32, warps_per_cta=[2, 2]),
     ]
     shapes = [[128, 32], [128, 128], [32, 128], [64, 64]]
 else:
@@ -2243,6 +2249,7 @@ else:
         MmaLayout(version=(2, 0), warps_per_cta=[4, 1])
     ]
     shapes = [[128, 16], [128, 128], [32, 128]]
+
 
 @pytest.mark.parametrize("M, N", shapes)
 @pytest.mark.parametrize("src_layout", layouts)
@@ -2311,7 +2318,7 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
 
 @pytest.mark.parametrize("shape", [(64, 64)])
 @pytest.mark.parametrize("dtype", ['float16'])
-@pytest.mark.parametrize("src_layout", [MfmaLayout(warps_per_cta=[2, 1]), MfmaLayout(warps_per_cta=[4, 1])])
+@pytest.mark.parametrize("src_layout", [MfmaLayout(non_k_dim=32, warps_per_cta=[2, 1]), MfmaLayout(non_k_dim=32, warps_per_cta=[4, 1])])
 @pytest.mark.parametrize("dst_layout", [BlockedLayout([1, 4], [4, 16], [1, 1], [1, 0])])
 def test_make_range(dtype, shape, src_layout, dst_layout, device='cuda'):
     ir = f"""

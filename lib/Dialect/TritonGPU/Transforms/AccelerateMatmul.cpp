@@ -152,9 +152,13 @@ public:
     auto ctx = oldAType.getContext();
 
     triton::gpu::MfmaEncodingAttr mfmaEnc;
+
+    int64_t nonKDim = 32;
+
     auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
+
     mfmaEnc = triton::gpu::MfmaEncodingAttr::get(oldRetType.getContext(),
-                                                 warpsPerTile);
+                                                 nonKDim, warpsPerTile);
 
     auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), mfmaEnc);

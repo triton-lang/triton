@@ -1171,7 +1171,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared0 = #triton_gpu.shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0]}>
-#mfma0 = #triton_gpu.mfma<{warpsPerCTA=[1,1]}>
+#mfma0 = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [1, 1]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma0}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma0}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
@@ -1194,7 +1194,7 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 // -----
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
-#mfma = #triton_gpu.mfma<{warpsPerCTA = [2, 2]}>
+#mfma = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [2, 2]}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK: llvm.mlir.global external @global_smem() {addr_space = 3 : i32} : !llvm.array<0 x i8>
   // CHECK-LABEL: convert_layout_mfma_block
@@ -1344,7 +1344,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#mfma = #triton_gpu.mfma<{warpsPerCTA = [2, 2]}>
+#mfma = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [2, 2]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {

@@ -905,20 +905,27 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
+  unsigned nonKDim = 0;
   SmallVector<unsigned, 2> warpsPerCTA;
 
   for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "nonKDim") {
+      if (parseUInt(parser, attr, nonKDim, "nonKDim").failed())
+        return {};
+    }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
     }
   }
 
-  return parser.getChecked<MfmaEncodingAttr>(parser.getContext(), warpsPerCTA);
+  return parser.getChecked<MfmaEncodingAttr>(parser.getContext(), nonKDim,
+                                             warpsPerCTA);
 }
 
 void MfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
+          << "nonKDim = " << getNonKDim() << ", "
           << "warpsPerCTA = [" << getWarpsPerCTA() << "]"
           << "}>";
 }
