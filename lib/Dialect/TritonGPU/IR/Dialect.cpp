@@ -7,7 +7,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -222,20 +221,15 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   }
 }
 
-SmallVector<unsigned> getUniqueContigPerThread(Type type) {
-  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
-    return SmallVector<unsigned>(1, 1);
-  auto tensorType = type.cast<RankedTensorType>();
-  auto shape = tensorType.getShape();
+SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
+                                               ArrayRef<int64_t> shape) {
   // If slice layout, call recursively on parent layout, and drop
   // sliced dim
-  if (auto sliceLayout =
-          tensorType.getEncoding().dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     auto parentShape = sliceLayout.paddedShape(shape);
-    auto parentTy = RankedTensorType::get(
-        parentShape, tensorType.getElementType(), parentLayout);
-    auto parentUniqueContigPerThread = getUniqueContigPerThread(parentTy);
+    auto parentUniqueContigPerThread =
+        getUniqueContigPerThread(parentLayout, parentShape);
     parentUniqueContigPerThread.erase(parentUniqueContigPerThread.begin() +
                                       sliceLayout.getDim());
     return parentUniqueContigPerThread;
@@ -243,7 +237,7 @@ SmallVector<unsigned> getUniqueContigPerThread(Type type) {
   // Base case
   auto rank = shape.size();
   SmallVector<unsigned> ret(rank);
-  auto contigPerThread = getContigPerThread(tensorType.getEncoding());
+  auto contigPerThread = getContigPerThread(layout);
   assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
   for (int d = 0; d < rank; ++d) {
     ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
@@ -368,9 +362,21 @@ bool isSharedEncoding(Value value) {
   return false;
 }
 
+bool isExpensiveCat(CatOp cat, Attribute &targetEncoding) {
+  // If the new elements per thread is less than the old one, we will need to do
+  // convert encoding that goes through shared memory anyway. So we consider it
+  // as expensive.
+  auto tensorTy = cat.getResult().getType().cast<RankedTensorType>();
+  auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
+  auto shape = tensorTy.getShape();
+  auto elemTy = tensorTy.getElementType();
+  auto newTotalElemsPerThread =
+      gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
+  return newTotalElemsPerThread < totalElemsPerThread;
+}
+
 } // namespace gpu
 } // namespace triton
-
 } // namespace mlir
 
 static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,

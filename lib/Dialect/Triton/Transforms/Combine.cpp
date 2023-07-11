@@ -36,7 +36,6 @@ bool isBroadcastConstantCombinable(Attribute value) {
 
 DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
                                    Value bcast_res) {
-
   auto resType = bcast_res.getType().cast<ShapedType>();
   DenseElementsAttr res;
   if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
@@ -101,6 +100,93 @@ public:
   }
 };
 
+// sum(x[:, :, None] * y[None, :, :], 1)
+// -> dot(x, y)
+class CombineBroadcastMulReducePattern : public mlir::RewritePattern {
+private:
+  static bool isAddF32(const Operation *op) {
+    if (auto addf = dyn_cast_or_null<arith::AddFOp>(op))
+      return addf.getType().getIntOrFloatBitWidth() <= 32;
+    return false;
+  }
+
+  static SmallVector<int> getEqualIndices(ArrayRef<int64_t> x,
+                                          ArrayRef<int64_t> y) {
+    SmallVector<int> res;
+    for (int i = 0; i < x.size(); ++i)
+      if (x[i] == y[i])
+        res.push_back(i);
+    return res;
+  }
+
+public:
+  CombineBroadcastMulReducePattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::ReduceOp::getOperationName(), 1, context) {
+  }
+
+  mlir::LogicalResult matchAndRewrite(mlir::Operation *op,
+                                      mlir::PatternRewriter &rewriter) const {
+    auto reduceOp = llvm::dyn_cast<triton::ReduceOp>(op);
+    if (!reduceOp)
+      return mlir::failure();
+    // only support reduce with simple addition
+    Region &combineOp = reduceOp.getCombineOp();
+    bool isReduceAdd = combineOp.hasOneBlock() &&
+                       combineOp.front().getOperations().size() == 2 &&
+                       isAddF32(&*combineOp.front().getOperations().begin());
+    if (!isReduceAdd)
+      return mlir::failure();
+    // operand of reduce has to be mul
+    auto mulOp = llvm::dyn_cast_or_null<arith::MulFOp>(
+        reduceOp.getOperand(0).getDefiningOp());
+    if (!mulOp)
+      return mlir::failure();
+    // mul operand has to be broadcast
+    auto broadcastLhsOp = llvm::dyn_cast_or_null<triton::BroadcastOp>(
+        mulOp.getOperand(0).getDefiningOp());
+    if (!broadcastLhsOp)
+      return mlir::failure();
+    auto broadcastRhsOp = llvm::dyn_cast_or_null<triton::BroadcastOp>(
+        mulOp.getOperand(1).getDefiningOp());
+    if (!broadcastRhsOp)
+      return mlir::failure();
+    // broadcast operand is expand dims
+    auto expandLhsOp = llvm::dyn_cast_or_null<triton::ExpandDimsOp>(
+        broadcastLhsOp.getOperand().getDefiningOp());
+    if (!expandLhsOp)
+      return mlir::failure();
+    auto expandRhsOp = llvm::dyn_cast_or_null<triton::ExpandDimsOp>(
+        broadcastRhsOp.getOperand().getDefiningOp());
+    if (!expandRhsOp)
+      return mlir::failure();
+    // get not-broadcast dimensions
+    int expandLhsAxis = expandLhsOp.getAxis();
+    int expandRhsAxis = expandRhsOp.getAxis();
+    if (expandLhsAxis != 2 || expandRhsAxis != 0)
+      return mlir::failure();
+    auto broadcastLhsShape =
+        broadcastLhsOp.getType().cast<ShapedType>().getShape();
+    auto broadcastRhsShape =
+        broadcastLhsOp.getType().cast<ShapedType>().getShape();
+    if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
+      return mlir::failure();
+    Type newAccType =
+        RankedTensorType::get({broadcastLhsShape[0], broadcastRhsShape[2]},
+                              broadcastLhsOp.getOperand()
+                                  .getType()
+                                  .cast<ShapedType>()
+                                  .getElementType());
+    rewriter.setInsertionPoint(op);
+    auto newAcc = rewriter.create<triton::SplatOp>(
+        op->getLoc(), newAccType,
+        rewriter.create<arith::ConstantOp>(op->getLoc(),
+                                           rewriter.getF32FloatAttr(0)));
+    rewriter.replaceOpWithNewOp<triton::DotOp>(
+        op, expandLhsOp.getOperand(), expandRhsOp.getOperand(), newAcc, true);
+    return mlir::success();
+  }
+};
+
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
@@ -120,6 +206,7 @@ public:
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     // patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastConstantPattern>(context);
+    patterns.add<CombineBroadcastMulReducePattern>(context);
 
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();

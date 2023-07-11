@@ -13,11 +13,13 @@ from .standard import (
     zeros_like,
 )
 from .core import (
+    TRITON_MAX_TENSOR_NUMEL,
     abs,
     advance,
     arange,
     argmin,
     argmax,
+    associative_scan,
     atomic_add,
     atomic_and,
     atomic_cas,
@@ -33,6 +35,8 @@ from .core import (
     cat,
     constexpr,
     cos,
+    cumprod,
+    cumsum,
     debug_barrier,
     device_assert,
     device_print,
@@ -104,11 +108,13 @@ from .random import (
 
 
 __all__ = [
+    "TRITON_MAX_TENSOR_NUMEL",
     "abs",
     "advance",
     "arange",
     "argmin",
     "argmax",
+    "associative_scan",
     "atomic_add",
     "atomic_and",
     "atomic_cas",
@@ -126,6 +132,8 @@ __all__ = [
     "cdiv",
     "constexpr",
     "cos",
+    "cumprod",
+    "cumsum",
     "debug_barrier",
     "device_assert",
     "device_print",
