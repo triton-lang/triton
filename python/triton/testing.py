@@ -16,7 +16,7 @@ def nvsmi(attrs):
     return ret
 
 
-def do_bench_cudagraph(fn, n_warmup=10, n_repeat=20, grad_to_none=None):
+def do_bench_cudagraph(fn, n_warmup=20, n_repeat=40, grad_to_none=None):
     import torch
     """
     Benchmark the runtime of the provided function.
@@ -56,6 +56,7 @@ def do_bench_cudagraph(fn, n_warmup=10, n_repeat=20, grad_to_none=None):
         torch.cuda.synchronize()
         for i in range(n_warmup):
             fn()
+        torch.cuda.synchronize()
         for i in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
