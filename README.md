@@ -41,6 +41,13 @@ cd triton/python;
 pip install cmake; # build-time dependency
 pip install -e .
 ```
+To install the package without recompiling C++ code, after modifying only Python source, use:
+```
+COMPILE_CPP=False pip install -e .
+```
+for signficantly faster re-installation time.
+
+
 
 # Changelog
 
@@ -56,11 +63,6 @@ Community contributions are more than welcome, whether it be to fix bugs or to a
 
 If you’re interested in joining our team and working on Triton & GPU kernels, [we’re hiring](https://openai.com/jobs/#acceleration)!
 
-To install the package without recompiling C++ code, after modifying only Python source, use:
-```
-COMPILE_CPP=False pip install -e .
-```
-for signficantly faster re-installation time.
 
 
 
