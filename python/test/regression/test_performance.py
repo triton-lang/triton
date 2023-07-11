@@ -97,6 +97,8 @@ matmul_data = {
                           for M, N, K in matmul_data[DEVICE_NAME].keys()
                           for dtype_str in ['float16', 'float32']])
 def test_matmul(M, N, K, dtype_str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
     if dtype_str in ['float32', 'int8'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test float32 & int8 on a100')
     if (M, N, K) in [(64, 4096, 4096), (64, 8192, 8192), (8192, 64, 8192)] and dtype_str == 'float32':
@@ -172,6 +174,8 @@ elementwise_data = {
 @pytest.mark.parametrize('N', elementwise_data[DEVICE_NAME].keys())
 @pytest.mark.parametrize("dtype_str", ['float16', 'bfloat16', 'float32'])
 def test_elementwise(N, dtype_str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
     torch.manual_seed(0)
     if dtype_str in ['bfloat16'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test bfloat16 on a100')
@@ -230,6 +234,8 @@ flash_attention_data = {
 @pytest.mark.parametrize("seq_par", [True, False])
 @pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [[4, 48, 4096, 64]])
 def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
     is_backward = mode == 'backward'
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
