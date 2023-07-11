@@ -401,6 +401,9 @@ class constexpr:
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
 
+    def __index__(self):
+        return self.value
+
     def __add__(self, other):
         return constexpr(self.value + other.value)
 
