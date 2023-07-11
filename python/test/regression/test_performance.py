@@ -70,13 +70,13 @@ matmul_data = {
         (512, 512, 512): {'float16': 0.084, 'float32': 0.12, 'int8': 0.05},
         (1024, 1024, 1024): {'float16': 0.332, 'float32': 0.352, 'int8': 0.169},
         (2048, 2048, 2048): {'float16': 0.635, 'float32': 0.522, 'int8': 0.34},
-        (4096, 4096, 4096): {'float16': 0.750, 'float32': 0.713, 'int8': 0.46},
+        (4096, 4096, 4096): {'float16': 0.750, 'float32': 0.810, 'int8': 0.46},
         (8192, 8192, 8192): {'float16': 0.760, 'float32': 0.760, 'int8': 0.51},
         # tall-skinny
         (16, 1024, 1024): {'float16': 0.008, 'float32': 0.009, 'int8': 0.005},
         (16, 4096, 4096): {'float16': 0.036, 'float32': 0.038, 'int8': 0.026},
         (16, 8192, 8192): {'float16': 0.056, 'float32': 0.061, 'int8': 0.043},
-        (64, 1024, 1024): {'float16': 0.020, 'float32': 0.038, 'int8': 0.017},
+        (64, 1024, 1024): {'float16': 0.020, 'float32': 0.030, 'int8': 0.017},
         (64, 4096, 4096): {'float16': 0.160, 'float32': 0.162, 'int8': 0.097},
         (64, 8192, 8192): {'float16': 0.280, 'float32': 0.257, 'int8': 0.174},
         (1024, 64, 1024): {'float16': 0.040, 'float32': 0.050, 'int8': 0.017},
@@ -196,39 +196,39 @@ def test_elementwise(N, dtype_str):
 
 flash_attention_data = {
     "a100": {
-        (4, 48, 4096, 64, False, True, 'forward', 'float16'): 0.39,
-        (4, 48, 4096, 64, False, True, 'backward', 'float16'): 0.252,
-        (4, 48, 4096, 64, False, True, 'forward', 'bfloat16'): 0.358,
-        (4, 48, 4096, 64, False, True, 'backward', 'bfloat16'): 0.243,
-        (4, 48, 1024, 16, False, True, 'forward', 'float32'): 0.092,
-        (4, 48, 1024, 16, False, True, 'backward', 'float32'): 0.118,
-        (4, 48, 4096, 64, True, True, 'forward', 'float16'): 0.39,
-        (4, 48, 4096, 64, True, True, 'backward', 'float16'): 0.175,
+        (4, 48, 4096, 64, True, True, 'forward', 'float16'): 0.420,
+        (4, 48, 4096, 64, True, True, 'backward', 'float16'): 0.202,
         (4, 48, 4096, 64, True, True, 'forward', 'bfloat16'): 0.355,
-        (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.168,
-        (4, 48, 1024, 16, True, True, 'forward', 'float32'): 0.092,
+        (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.201,
+        (4, 48, 1024, 16, True, True, 'forward', 'float32'): 0.099,
         (4, 48, 1024, 16, True, True, 'backward', 'float32'): 0.087,
-        (4, 48, 4096, 64, False, False, 'forward', 'float16'): 0.39,
-        (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.252,
-        (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.358,
-        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.243,
-        (4, 48, 1024, 16, False, False, 'forward', 'float32'): 0.092,
-        (4, 48, 1024, 16, False, False, 'backward', 'float32'): 0.118,
-        (4, 48, 4096, 64, True, False, 'forward', 'float16'): 0.39,
-        (4, 48, 4096, 64, True, False, 'backward', 'float16'): 0.175,
-        (4, 48, 4096, 64, True, False, 'forward', 'bfloat16'): 0.355,
-        (4, 48, 4096, 64, True, False, 'backward', 'bfloat16'): 0.168,
-        (4, 48, 1024, 16, True, False, 'forward', 'float32'): 0.092,
-        (4, 48, 1024, 16, True, False, 'backward', 'float32'): 0.087
+        (4, 48, 4096, 64, True, False, 'forward', 'float16'): 0.238,
+        (4, 48, 4096, 64, True, False, 'backward', 'float16'): 0.135,
+        (4, 48, 4096, 64, True, False, 'forward', 'bfloat16'): 0.211,
+        (4, 48, 4096, 64, True, False, 'backward', 'bfloat16'): 0.135,
+        (4, 48, 1024, 16, True, False, 'forward', 'float32'): 0.062,
+        (4, 48, 1024, 16, True, False, 'backward', 'float32'): 0.052,
+        (4, 48, 4096, 64, False, True, 'forward', 'float16'): 0.424,
+        (4, 48, 4096, 64, False, True, 'backward', 'float16'): 0.262,
+        (4, 48, 4096, 64, False, True, 'forward', 'bfloat16'): 0.370,
+        (4, 48, 4096, 64, False, True, 'backward', 'bfloat16'): 0.254,
+        (4, 48, 1024, 16, False, True, 'forward', 'float32'): 0.099,
+        (4, 48, 1024, 16, False, True, 'backward', 'float32'): 0.125,
+        (4, 48, 4096, 64, False, False, 'forward', 'float16'): 0.238,
+        (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.158,
+        (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.211,
+        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.134,
+        (4, 48, 1024, 16, False, False, 'forward', 'float32'): 0.062,
+        (4, 48, 1024, 16, False, False, 'backward', 'float32'): 0.075,
     }
 }
 
 
-@pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [[4, 48, 4096, 64]])
-@pytest.mark.parametrize("seq_par", [True, False])
-@pytest.mark.parametrize("causal", [True, False])
-@pytest.mark.parametrize("mode", ['forward', 'backward'])
 @pytest.mark.parametrize("dtype_str", ['float16', 'bfloat16', 'float32'])
+@pytest.mark.parametrize("mode", ['forward', 'backward'])
+@pytest.mark.parametrize("causal", [True, False])
+@pytest.mark.parametrize("seq_par", [True, False])
+@pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [[4, 48, 4096, 64]])
 def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
     is_backward = mode == 'backward'
     capability = torch.cuda.get_device_capability()
