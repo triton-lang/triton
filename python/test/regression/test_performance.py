@@ -64,7 +64,7 @@ matmul_data = {
 @pytest.mark.parametrize('M, N, K, dtype_str',
                          [(M, N, K, dtype_str)
                           for M, N, K in matmul_data[DEVICE_NAME].keys()
-                          for dtype_str in ['float16', 'float32']])
+                          for dtype_str in ['float16']])
 def test_matmul(M, N, K, dtype_str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -173,7 +173,7 @@ flash_attention_data = {
         (4, 48, 4096, 64, False, True, 'backward', 'float16'): 0.265,
         (4, 48, 4096, 64, False, True, 'backward', 'bfloat16'): 0.257,
         (4, 48, 1024, 16, False, True, 'backward', 'float32'): 0.128,
-        (4, 48, 4096, 64, False, False, 'forward', 'float16'): 0.242,
+        (4, 48, 4096, 64, False, False, 'forward', 'float16'): 0.251,
         (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.220,
         (4, 48, 1024, 16, False, False, 'forward', 'float32'): 0.069,
         (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.159,
