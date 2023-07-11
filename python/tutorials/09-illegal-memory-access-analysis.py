@@ -9,7 +9,7 @@ In this tutorial, you will learn utlities to detect illegal memory accesses, inc
 """
 
 # %%
-# Compute Kernel
+# Runtime Illegal Memory Access Analysis
 # --------------
 
 import os
@@ -62,6 +62,8 @@ y = torch.rand(size, device='cuda')
 output_triton = add(x, y)
 
 # %%
+# Compute-Sanitizer Illegal Memory Access Analysis
+# --------------
 # Alternatively, you can try NVIDIA "compute-sanitizer" to instrument binaries and
 # capture invalide memory accesses.
 # See https://docs.nvidia.com/cuda/compute-sanitizer/index.html
