@@ -3,7 +3,7 @@ Illegal Memory Access Analysis
 ===============
 
 In this tutorial, you will learn utlities to detect illegal memory accesses, including:
-1. `triton.enable_illegal_memory_analysis` that catches exceptions on-the-fly and print the problematic line number.
+1. `triton.enable_illegal_memory_access_analysis` that catches exceptions on-the-fly and print the problematic line number.
 2. `compute-sanitizer` as an external tool to instrument binaries and exhaustively capture illegal memory accesses.
 
 """
@@ -12,11 +12,12 @@ In this tutorial, you will learn utlities to detect illegal memory accesses, inc
 # Compute Kernel
 # --------------
 
+import os
+
 import torch
 
 import triton
 import triton.language as tl
-import os
 
 
 @triton.jit
@@ -53,7 +54,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
 # We register the exception handling hook to print the exception stack trace.
 os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
 
-triton.enable_illegal_memory_analysis('./core_file')
+triton.enable_illegal_memory_access_analysis('./core_file')
 torch.manual_seed(0)
 size = 127
 x = torch.rand(size, device='cuda')

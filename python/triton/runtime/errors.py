@@ -1,6 +1,6 @@
+import atexit
 import os
 import subprocess
-import atexit
 import time
 
 
@@ -39,7 +39,7 @@ def _analyze_illegal_memory_access():
             print(output)
 
 
-def enable_illegal_memory_analysis(core_file_path: str):
+def enable_illegal_memory_access_analysis(core_file_path: str):
     os.environ["CUDA_ENABLE_COREDUMP_ON_EXCEPTION"] = "1"
     # convert core_file_path to absolute path
     core_file_path = os.path.abspath(_rename_cuda_core(core_file_path))
@@ -48,5 +48,5 @@ def enable_illegal_memory_analysis(core_file_path: str):
     atexit.register(_analyze_illegal_memory_access)
 
 
-def disable_exception_analysis():
+def disable_illegal_memory_access_analysis():
     atexit.unregister(_analyze_illegal_memory_access)
