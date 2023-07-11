@@ -71,7 +71,7 @@ matmul_data = {
         (1024, 1024, 1024): {'float16': 0.281, 'float32': 0.316, 'int8': 0.169},
         (2048, 2048, 2048): {'float16': 0.598, 'float32': 0.534, 'int8': 0.34},
         (4096, 4096, 4096): {'float16': 0.741, 'float32': 0.752, 'int8': 0.46},
-        (8192, 8192, 8192): {'float16': 0.772, 'float32': 0.934, 'int8': 0.51},
+        (8192, 8192, 8192): {'float16': 0.772, 'float32': 0.816, 'int8': 0.51},
         # tall-skinny
         (16, 1024, 1024): {'float16': 0.006, 'float32': 0.009, 'int8': 0.005},
         (16, 4096, 4096): {'float16': 0.055, 'float32': 0.045, 'int8': 0.026},
@@ -110,7 +110,7 @@ def test_matmul(M, N, K, dtype_str):
         a = torch.randn((M, K), dtype=dtype, device='cuda')
         b = torch.randn((K, N), dtype=dtype, device='cuda')
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.benchmark(fn)
+    ms = triton.testing.do_bench_cudagraph(fn)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
@@ -181,7 +181,7 @@ def test_elementwise(N, dtype_str):
     y = torch.randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.benchmark(fn)
+    ms = triton.testing.do_bench_cudagraph(fn)
     cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
@@ -195,29 +195,28 @@ def test_elementwise(N, dtype_str):
 flash_attention_data = {
     "a100": {
         (4, 48, 4096, 64, True, True, 'forward', 'float16'): 0.424,
-        (4, 48, 4096, 64, True, True, 'backward', 'float16'): 0.201,
         (4, 48, 4096, 64, True, True, 'forward', 'bfloat16'): 0.379,
-        (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.199,
         (4, 48, 1024, 16, True, True, 'forward', 'float32'): 0.098,
+        (4, 48, 4096, 64, True, True, 'backward', 'float16'): 0.201,
+        (4, 48, 4096, 64, True, True, 'backward', 'bfloat16'): 0.199,
         (4, 48, 1024, 16, True, True, 'backward', 'float32'): 0.087,
-
         (4, 48, 4096, 64, True, False, 'forward', 'float16'): 0.240,
-        (4, 48, 4096, 64, True, False, 'backward', 'float16'): 0.135,
         (4, 48, 4096, 64, True, False, 'forward', 'bfloat16'): 0.210,
-        (4, 48, 4096, 64, True, False, 'backward', 'bfloat16'): 0.135,
         (4, 48, 1024, 16, True, False, 'forward', 'float32'): 0.061,
+        (4, 48, 4096, 64, True, False, 'backward', 'float16'): 0.135,
+        (4, 48, 4096, 64, True, False, 'backward', 'bfloat16'): 0.135,
         (4, 48, 1024, 16, True, False, 'backward', 'float32'): 0.052,
         (4, 48, 4096, 64, False, True, 'forward', 'float16'): 0.424,
-        (4, 48, 4096, 64, False, True, 'backward', 'float16'): 0.262,
         (4, 48, 4096, 64, False, True, 'forward', 'bfloat16'): 0.378,
-        (4, 48, 4096, 64, False, True, 'backward', 'bfloat16'): 0.254,
         (4, 48, 1024, 16, False, True, 'forward', 'float32'): 0.099,
+        (4, 48, 4096, 64, False, True, 'backward', 'float16'): 0.262,
+        (4, 48, 4096, 64, False, True, 'backward', 'bfloat16'): 0.254,
         (4, 48, 1024, 16, False, True, 'backward', 'float32'): 0.125,
         (4, 48, 4096, 64, False, False, 'forward', 'float16'): 0.238,
-        (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.158,
         (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.211,
-        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.134,
         (4, 48, 1024, 16, False, False, 'forward', 'float32'): 0.062,
+        (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.158,
+        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.134,
         (4, 48, 1024, 16, False, False, 'backward', 'float32'): 0.075,
     }
 }
@@ -251,7 +250,7 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
         o = fn()
         do = torch.randn_like(o)
         fn = lambda: o.backward(do, retain_graph=True)
-    ms = triton.testing.benchmark(fn)
+    ms = triton.testing.do_bench_cudagraph(fn)
     # compute flops
     flops_per_matmul = 2. * Z * H * N_CTX * N_CTX * D_HEAD * 0.5
     total_flops = 2 * flops_per_matmul

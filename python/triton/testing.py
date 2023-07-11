@@ -16,7 +16,7 @@ def nvsmi(attrs):
     return ret
 
 
-def benchmark(fn, rep=20, grad_to_none=None):
+def do_bench_cudagraph(fn, n_warmup=10, n_repeat=20, grad_to_none=None):
     import torch
     """
     Benchmark the runtime of the provided function.
@@ -32,7 +32,6 @@ def benchmark(fn, rep=20, grad_to_none=None):
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float]
     """
-    n_retries = 10
     if torch.cuda.current_stream() == torch.cuda.default_stream():
         raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
     # record CUDAGraph
@@ -47,23 +46,16 @@ def benchmark(fn, rep=20, grad_to_none=None):
         fn()
     torch.cuda.synchronize()
     fn = lambda: g.replay()
-    # Allocate events for benchmarking
-    # Estimate the runtime of the function
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
-    start_event.record()
-    fn()
-    end_event.record()
-    torch.cuda.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event)
     # compute number of repetition to last `rep` ms
-    n_repeat = max(1, int(rep / estimate_ms))
     start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
     ret = []
+    n_retries = 1
     for _ in range(n_retries):
         # Benchmark
         torch.cuda.synchronize()
+        for i in range(n_warmup):
+            fn()
         for i in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
