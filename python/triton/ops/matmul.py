@@ -111,8 +111,9 @@ def _kernel(A, B, C, M, N, K,
             b = tl.load(B)
         else:
             k_remaining = K - k * (BLOCK_K * SPLIT_K)
-            a = tl.load(A, mask=rk[None, :] < k_remaining, other=0.)
-            b = tl.load(B, mask=rk[:, None] < k_remaining, other=0.)
+            _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
+            a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
+            b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
         a = a.to(C.dtype.element_ty)
         b = b.to(C.dtype.element_ty)
         acc += tl.dot(a, b, out_dtype=dot_out_dtype)
@@ -149,7 +150,11 @@ class _matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
         # allocates output
-        c_dtype = get_higher_dtype(a.dtype, b.dtype)
+        if a.dtype in [tl.float8e4, tl.float8e4b15, tl.float8e5] or\
+           b.dtype in [tl.float8e4, tl.float8e4b15, tl.float8e5]:
+            c_dtype = torch.float16
+        else:
+            c_dtype = get_higher_dtype(a.dtype, b.dtype)
         c = torch.empty((M, N), device=device, dtype=c_dtype)
         if dot_out_dtype is None:
             if c_dtype in [torch.float16, torch.float32, torch.bfloat16]:

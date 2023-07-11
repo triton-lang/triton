@@ -2178,9 +2178,13 @@ def test_dot_mulbroadcastred(in_dtype, device):
     assert "triton_gpu.async_wait {num = 2 : i32}" in h.asm['ttgir']
 
 
-@pytest.mark.parametrize("dtype_str", int_dtypes + float_dtypes + ['bfloat16'])
+@pytest.mark.parametrize("dtype_str", int_dtypes + uint_dtypes + float_dtypes + ['bfloat16'])
 def test_full(dtype_str, device):
-    dtype = getattr(torch, dtype_str)
+    if dtype_str in uint_dtypes and not hasattr(torch, dtype_str):
+        # PyTorch only has unsigned 8, but not 16, 32, or 64
+        dtype = getattr(torch, dtype_str[1:])  # uintx -> intx
+    else:
+        dtype = getattr(torch, dtype_str)
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
 
     @triton.jit
