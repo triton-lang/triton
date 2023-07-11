@@ -1,8 +1,10 @@
 """
-Exception Analysis
+Illegal Memory Access Analysis
 ===============
 
-In this tutorial, you will write a simple vector addition using Triton.
+In this tutorial, you will learn utlities to detect illegal memory accesses, including:
+1. `triton.enable_illegal_memory_analysis` that catches exceptions on-the-fly and print the problematic line number.
+2. `compute-sanitizer` as an external tool to instrument binaries and exhaustively capture illegal memory accesses.
 
 """
 
