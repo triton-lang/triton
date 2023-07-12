@@ -253,8 +253,8 @@ struct SharedMemoryObject {
     return offsets[order];
   }
 
-  Value getBaseBeforeSwizzle(int order, Location loc,
-                             ConversionPatternRewriter &rewriter) const {
+  Value getBaseBeforeSlice(int order, Location loc,
+                           ConversionPatternRewriter &rewriter) const {
     Value cSwizzleOffset = getCSwizzleOffset(order);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();

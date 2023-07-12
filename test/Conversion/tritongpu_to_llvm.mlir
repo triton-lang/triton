@@ -132,6 +132,21 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: store_with_cache_attr
+  tt.func @store_with_cache_attr(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
+    //      PTX: llvm.inline_asm
+    // PTX-SAME: st.global.L1::evict_last.b32
+    //      PTX: llvm.inline_asm
+    // PTX-SAME: st.global.L1::evict_last.b32
+    tt.store %a_ptr_init, %cst_0, %cst {cache = 1 : i32, evict = 3 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
 module attributes {"triton_gpu.num-warps" = 2 : i32} {
   // CHECK-LABEL: global_load_store_no_vec
@@ -1464,11 +1479,11 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   tt.func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
     // GCN-NOT: llvm.inline_asm
     // GCN: llvm.atomicrmw fadd {{.*}}  monotonic  : !llvm.ptr<f32, 1>, f32
-    // PTC: llvm.inline_asm
+    // PTX: llvm.inline_asm
     // PTX-SAME: @$3 atom.global.gpu.add.f32
     // PTX: llvm.inline_asm
     // PTX-SAME: @$3 atom.global.gpu.add.f32
-    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
+    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32, sem = 1 : i32} : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.return
   }
 }
@@ -1484,7 +1499,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
     // PTX: llvm.inline_asm
     // PTX: llvm.inline_asm
     // PTX-SAME: @$3 atom.global.gpu.add.f32
-    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32} : (!tt.ptr<f32>, f32, i1) -> f32
+    %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32, sem = 1: i32} : (!tt.ptr<f32>, f32, i1) -> f32
     tt.return
   }
 }
@@ -1637,7 +1652,7 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
     // PTX: llvm.inline_asm
     // PTX-SAME: @$3 atom.global.gpu.add.noftz.f16x2
     // GCN-COUNT-8: llvm.atomicrmw fadd {{.*}}  monotonic  : !llvm.ptr<f16, 1>, f16
-    %8 = "tt.atomic_rmw"(%5, %6, %7) {atomic_rmw_op = 5 : i32} : (tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xf16, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf16, #blocked>
+    %8 = "tt.atomic_rmw"(%5, %6, %7) {atomic_rmw_op = 5 : i32, sem = 1: i32} : (tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xf16, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf16, #blocked>
     tt.return
   }
 }

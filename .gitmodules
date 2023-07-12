@@ -1,0 +1,3 @@
+[submodule "third_party/intel_xpu_backend"]
+	path = third_party/intel_xpu_backend
+	url = http://github.com/intel/intel-xpu-backend-for-triton
