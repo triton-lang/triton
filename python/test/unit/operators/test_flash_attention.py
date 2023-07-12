@@ -5,14 +5,23 @@ import triton
 import triton.ops
 
 
+def _banded_sq_matrix(size, value=1, device=None, dtype=None):
+    """Return a square matrix with some bands filled with the given value."""
+    mat = torch.full((size, size), value, device=device, dtype=dtype)
+    for i in range(-size + 1, size, 3):
+        torch.diagonal(mat, offset=i)[:] = 0
+    return mat
+
+
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 16),
                                                  (4, 48, 1024, 32),
                                                  (4, 48, 1024, 64),
                                                  (4, 48, 1024, 128)])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('causal', [True, False])
+@pytest.mark.parametrize('masked', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
-def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
+def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, masked, seq_par):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
@@ -34,6 +43,18 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     else:
         M = torch.zeros((N_CTX, N_CTX), device="cuda", dtype=dtype)
 
+    if masked:
+        # Use an interesting mask but let the Triton kernel handle causality.
+        M_triton = _banded_sq_matrix(N_CTX, float('-inf'), dtype=dtype, device="cuda")
+        # Keep causality setting for the reference calculation.
+        M = torch.where(
+            M == float('-inf'),
+            M,
+            M + M_triton,
+        )
+    else:
+        M_triton = None
+
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     p = p + M
     p = torch.softmax(p.float(), dim=-1).to(dtype)
@@ -44,7 +65,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     ref_dk, k.grad = k.grad.clone(), None
     ref_dq, q.grad = q.grad.clone(), None
     # # triton implementation
-    tri_out = triton.ops.attention(q, k, v, causal, sm_scale, seq_par)
+    tri_out = triton.ops.attention(q, k, v, causal, sm_scale, M_triton, seq_par)
     # print(ref_out)
     # print(tri_out)
     tri_out.backward(dout)
