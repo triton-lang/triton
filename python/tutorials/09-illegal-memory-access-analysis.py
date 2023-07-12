@@ -51,7 +51,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
 # %%
 # Before running the kernel, we disable PyTorch's caching allocator.
 # Otherwise, PyTorch could allocate additional memory for tensors.
-# We register the exception handling hook to print the exception stack trace.
+# It is not required in production.
 os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
 
 triton.enable_invalid_memory_access_analysis('./core_file')
