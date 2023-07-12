@@ -228,19 +228,19 @@ jobs:
           echo "OWNER_REPO: $OWNER_REPO"
           PR_NUMBERS=($(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq -r ".[] | select(.merged_at != null) | .number"))
 
-          # Not all PRs go through the integration test
+          # Not all PRs go through integration tests
           success=0
           for PR_NUMBER in "${PR_NUMBERS[@]}"
           do
             echo "Last merged PR number: $PR_NUMBER"
-            BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.label')
+            BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
             echo "BRANCH_NAME: $BRANCH_NAME"
             USER_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.user.id')
             echo "USER_ID: $USER_ID"
 
             page=1
             while true; do
-              run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" --arg run_name "Integration Test" --arg user_id "$USER_ID" '.workflow_runs[] | select(.head_branch == $branch_name and .name == $run_name and .actor.id == $user_id)' | jq '.id' | head -1)
+              run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" --arg run_name "Integration Tests" --arg user_id "$USER_ID" '.workflow_runs[] | select(.head_branch == $branch_name and .name == $run_name and .actor.id == $user_id)' | jq '.id' | head -1)
               if [ "$run_id" != "" ]; then
                 echo "First run ID on branch $BRANCH_NAME is: $run_id"
                 WORKFLOW_RUN_ID=$run_id
