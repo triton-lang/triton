@@ -87,7 +87,11 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
       return {8, 4};
   }
   if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-    return {2, 32};
+    if (mfmaLayout.getIsTransposed()) {
+      return {32, 2};
+    } else {
+      return {2, 32};
+    }
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
@@ -200,7 +204,11 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
       llvm_unreachable("Unexpected mma version");
     }
   } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-    return {16, 1};
+    if (mfmaLayout.getIsTransposed()) {
+      return {1, 16};
+    } else {
+      return {16, 1};
+    }
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
@@ -457,6 +465,17 @@ static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
   return success();
 }
 
+static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
+                                        bool &value, StringRef desc) {
+  auto boolAttr = attr.dyn_cast<BoolAttr>();
+  if (!boolAttr) {
+    parser.emitError(parser.getNameLoc(), "expected bool type in ") << desc;
+    return failure();
+  }
+  value = boolAttr.getValue();
+  return success();
+}
+
 // parse an array of integers
 static LogicalResult parseIntArrayAttr(AsmParser &parser,
                                        const NamedAttribute &attr,
@@ -479,6 +498,11 @@ static LogicalResult parseIntArrayAttr(AsmParser &parser,
 static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
                                unsigned &value, StringRef desc) {
   return parseIntAttrValue(parser, attr.getValue(), value, desc);
+};
+
+static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
+                               bool &value, StringRef desc) {
+  return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
 //===----------------------------------------------------------------------===//
@@ -551,10 +575,17 @@ MfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   assert(rank == 2 && "Unexpected rank of mma layout");
 
   SmallVector<unsigned> elemsPerThread(rank);
-  unsigned elemsCol = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]);
-  unsigned elemsRow = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]) * 16;
-  elemsPerThread[0] = elemsRow;
-  elemsPerThread[1] = elemsCol;
+  if (getIsTransposed()) {
+    unsigned elemsCol = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]) * 16;
+    unsigned elemsRow = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]);
+    elemsPerThread[0] = elemsRow;
+    elemsPerThread[1] = elemsCol;
+  } else {
+    unsigned elemsCol = ceil<unsigned>(shape[1], 32 * getWarpsPerCTA()[1]);
+    unsigned elemsRow = ceil<unsigned>(shape[0], 32 * getWarpsPerCTA()[0]) * 16;
+    elemsPerThread[0] = elemsRow;
+    elemsPerThread[1] = elemsCol;
+  }
   return elemsPerThread;
 }
 
@@ -908,6 +939,7 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   unsigned nonKDim = 0;
   SmallVector<unsigned, 2> warpsPerCTA;
+  bool isTransposed;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "nonKDim") {
@@ -917,18 +949,21 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
+    } else if (attr.getName() == "isTransposed") {
+      if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
+        return {};
     }
   }
 
   return parser.getChecked<MfmaEncodingAttr>(parser.getContext(), nonKDim,
-                                             warpsPerCTA);
+                                             warpsPerCTA, isTransposed);
 }
 
 void MfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "nonKDim = " << getNonKDim() << ", "
           << "warpsPerCTA = [" << getWarpsPerCTA() << "]"
-          << "}>";
+          << ", isTransposed = " << getIsTransposed() << "}>";
 }
 
 //===----------------------------------------------------------------------===//

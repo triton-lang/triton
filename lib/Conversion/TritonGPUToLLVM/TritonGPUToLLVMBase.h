@@ -655,6 +655,34 @@ public:
     llvm_unreachable("unsupported emitOffsetForLayout");
   }
 
+#ifdef USE_ROCM
+  void emitMfmaOffsetForCTA(const MfmaEncodingAttr &mfmaLayout,
+                            SmallVector<SmallVector<unsigned>> &offsets,
+                            unsigned ctaOffsetX, unsigned ctaOffsetY) const {
+    // MFMA output tile consists of repeated "dot operand B" layout groups along
+    // row axis. This variable defines number of these groups.
+    const unsigned numGroups = 4;
+    const unsigned elemsPerThreadPerGroup = 4;
+    auto warpSize = getWarpSize(mfmaLayout);
+    assert(warpSize == 64);
+    auto shapePerCta = getShapePerCTA(mfmaLayout);
+    for (unsigned block = 0; block < numGroups; block++) {
+      unsigned rowOrColOffset = block * elemsPerThreadPerGroup * warpSize / 32;
+      for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
+        if (mfmaLayout.getIsTransposed()) {
+          offsets.push_back(
+              {ctaOffsetX * shapePerCta[0],
+               ctaOffsetY * shapePerCta[1] + elem + rowOrColOffset});
+        } else {
+          offsets.push_back(
+              {ctaOffsetX * shapePerCta[0] + elem + rowOrColOffset,
+               ctaOffsetY * shapePerCta[1]});
+        }
+      }
+    }
+  }
+#endif
+
   // -----------------------------------------------------------------------
   // Emit indices
   // -----------------------------------------------------------------------
@@ -979,16 +1007,16 @@ private:
 
   SmallVector<Value>
   emitBaseIndexForMfmaLayout(Location loc, ConversionPatternRewriter &rewriter,
-                             const MfmaEncodingAttr &mmaLayout,
+                             const MfmaEncodingAttr &mfmaLayout,
                              RankedTensorType type) const {
     auto shape = type.getShape();
-    auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
+    auto _warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     assert(_warpsPerCTA.size() == 2);
     SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
                                       i32_val(_warpsPerCTA[1])};
 
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(triton::gpu::getWarpSize(mmaLayout));
+    Value warpSize = i32_val(triton::gpu::getWarpSize(mfmaLayout));
     Value laneId = urem(threadId, warpSize);
 
     Value warpId = udiv(threadId, warpSize);
@@ -1000,29 +1028,35 @@ private:
     Value offWarp1 = mul(warpId1, i32_val(32));
 
     SmallVector<Value> multiDimBase(2);
-    multiDimBase[0] = add(mul(i32_val(4), udiv(laneId, i32_val(32))), offWarp0);
-    multiDimBase[1] = add(urem(laneId, i32_val(32)), offWarp1);
+    if (mfmaLayout.getIsTransposed()) {
+      multiDimBase[1] =
+          add(mul(i32_val(4), udiv(laneId, i32_val(32))), offWarp1);
+      multiDimBase[0] = add(urem(laneId, i32_val(32)), offWarp0);
+    } else {
+      multiDimBase[0] =
+          add(mul(i32_val(4), udiv(laneId, i32_val(32))), offWarp0);
+      multiDimBase[1] = add(urem(laneId, i32_val(32)), offWarp1);
+    }
     return multiDimBase;
   }
 
   SmallVector<SmallVector<unsigned>>
-  emitOffsetForMfmaLayout(const MfmaEncodingAttr &mmaLayout,
+  emitOffsetForMfmaLayout(const MfmaEncodingAttr &mfmaLayout,
                           RankedTensorType type) const {
 
     auto tensorShape = type.getShape();
     SmallVector<SmallVector<unsigned>> offsets;
-    auto shapePerCta = getShapePerCTA(mmaLayout);
-    const unsigned iterationCount = 4;
+    auto shapePerCta = getShapePerCTA(mfmaLayout);
 
-    for (unsigned i = 0; i < tensorShape[0]; i += shapePerCta[0]) {
-      for (unsigned j = 0; j < tensorShape[1]; j += shapePerCta[1]) {
-        unsigned rowOffset = 0;
-        for (unsigned k = 0; k < iterationCount; k++) {
-          for (unsigned l = 0; l < iterationCount; l++) {
-            offsets.push_back({i + l + rowOffset, j});
-          }
-          rowOffset += iterationCount * 2;
-        }
+    SmallVector<unsigned> numCTAPerDim(2);
+    for (unsigned d = 0; d < 2; ++d) {
+      unsigned inPerCTA = std::min<unsigned>(tensorShape[d], shapePerCta[d]);
+      numCTAPerDim[d] = ceil<unsigned>(tensorShape[d], inPerCTA);
+    }
+
+    for (unsigned i = 0; i < numCTAPerDim[0]; ++i) {
+      for (unsigned j = 0; j < numCTAPerDim[1]; ++j) {
+        emitMfmaOffsetForCTA(mfmaLayout, offsets, i, j);
       }
     }
     return offsets;

@@ -142,7 +142,9 @@ struct DotOpMFMAConversionHelper {
         }
 
         for (size_t k = 0; k < numRepK; k++) {
-          acc = generateMFMAOp(mfmaTy, ha[{m, k}], hb[{n, k}], acc);
+          acc = mfmaLayout.getIsTransposed()
+                    ? generateMFMAOp(mfmaTy, hb[{n, k}], ha[{m, k}], acc)
+                    : generateMFMAOp(mfmaTy, ha[{m, k}], hb[{n, k}], acc);
         }
         for (unsigned v = 0; v < 16; ++v) {
           fc[m * numRepN * 16 + n * 16 + v] =

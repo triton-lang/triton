@@ -17,6 +17,7 @@ using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
+using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -62,6 +63,14 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
       dstLayout.isa<DotOperandEncodingAttr>())
     if (isMmaToDotShortcut(srcTy, dstTy))
       return {};
+
+#ifdef USE_ROCM
+  if (srcLayout.isa<MfmaEncodingAttr>() &&
+      srcLayout.dyn_cast<MfmaEncodingAttr>().getIsTransposed() &&
+      dstLayout.isa<DotOperandEncodingAttr>())
+    if (isMfmaToDotShortcut(srcTy, dstTy))
+      return {};
+#endif
 
   assert(srcLayout && dstLayout &&
          "Unexpected layout in getScratchConfigForCvtLayout()");

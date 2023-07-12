@@ -1202,7 +1202,7 @@ def test_permute(dtype_str, shape, perm, device='cuda'):
 @pytest.mark.parametrize("M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype",
                          [(*shape, 2, False, False, epilogue, allow_tf32, dtype)
                           for shape in [(64, 64, 64), (32, 32, 32)]
-                          for epilogue in ['none', 'trans', 'add-matrix']
+                          for epilogue in ['none', 'trans', 'add-matrix', 'chain-dot', 'softmax']
                           for allow_tf32 in [True, False]
                           for dtype in ['float16', 'float32']
                           if not (allow_tf32 and (dtype in ['float16']))] +
@@ -2128,12 +2128,13 @@ class MmaLayout:
 
 
 class MfmaLayout:
-    def __init__(self, non_k_dim, warps_per_cta):
+    def __init__(self, non_k_dim, warps_per_cta, isTransposed):
         self.non_k_dim = str(non_k_dim)
         self.warps_per_cta = str(warps_per_cta)
+        self.isTransposed = str(isTransposed).lower()
 
     def __str__(self):
-        return f"#triton_gpu.mfma<{{nonKDim = {self.non_k_dim}, warpsPerCTA = {self.warps_per_cta}}}>"
+        return f"#triton_gpu.mfma<{{nonKDim = {self.non_k_dim}, warpsPerCTA = {self.warps_per_cta}, isTransposed = {self.isTransposed}}}>"
 
 
 class BlockedLayout:
@@ -2238,8 +2239,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 if _get_warp_size() == 64:
     layouts = [
-        MfmaLayout(non_k_dim=32, warps_per_cta=[4, 1]),
-        MfmaLayout(non_k_dim=32, warps_per_cta=[2, 2]),
+        MfmaLayout(non_k_dim=32, warps_per_cta=[4, 1], isTransposed=True),
+        MfmaLayout(non_k_dim=32, warps_per_cta=[2, 2], isTransposed=False),
     ]
     shapes = [[128, 32], [128, 128], [32, 128], [64, 64]]
 else:
@@ -2255,6 +2256,9 @@ else:
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
+    if torch.version.hip is not None:
+        if src_layout.isTransposed and axis == 0:
+            pytest.skip("Reduce along axis 0 is not supported in transposed mfma layout")
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     rdims_1d = f"{N}" if axis == 0 else f"{M}"
     store_range = "%7" if axis == 0 else "%1"
@@ -2318,7 +2322,7 @@ def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
 
 @pytest.mark.parametrize("shape", [(64, 64)])
 @pytest.mark.parametrize("dtype", ['float16'])
-@pytest.mark.parametrize("src_layout", [MfmaLayout(non_k_dim=32, warps_per_cta=[2, 1]), MfmaLayout(non_k_dim=32, warps_per_cta=[4, 1])])
+@pytest.mark.parametrize("src_layout", [MfmaLayout(non_k_dim=32, warps_per_cta=[2, 1], isTransposed=False), MfmaLayout(non_k_dim=32, warps_per_cta=[4, 1], isTransposed = True)])
 @pytest.mark.parametrize("dst_layout", [BlockedLayout([1, 4], [4, 16], [1, 1], [1, 0])])
 def test_make_range(dtype, shape, src_layout, dst_layout, device='cuda'):
     ir = f"""

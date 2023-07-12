@@ -130,6 +130,7 @@ private:
         writeIdx[axis] = udiv(index[axis], axisSizePerThread);
       }
     } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+      // TODO: Support MFMA transposed layout.
       if (axis == 0) {
         // Because warpTileSize = [32, 32] and threadsPerWarp = [2, 32], each 2
         // rows in smem would correspond to a warp. The mapping
@@ -424,8 +425,17 @@ private:
       // Reduce within warps
       for (unsigned N = sizeIntraWarps / 2; N > 0; N >>= 1) {
         SmallVector<Value> shfl(op.getNumOperands());
+        unsigned shuffleIdx = N;
+#ifdef USE_ROCM
+        if (inMfma && inMfma.getIsTransposed()) {
+          assert(sizeIntraWarps == 2);
+          // Adjecant threads in y dimension in transposed MFMA layout are 32
+          // apart: [[0 0 0 0 32 32 32 32 ...] [1 1 1 1 33 33 33 33 ...] ...].
+          shuffleIdx = 32;
+        }
+#endif
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-          shfl[i] = shflSync(loc, rewriter, acc[i], N);
+          shfl[i] = shflSync(loc, rewriter, acc[i], shuffleIdx);
         }
         accumulate(rewriter, *combineOp, acc, shfl, false);
       }

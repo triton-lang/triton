@@ -126,6 +126,18 @@ public:
   BlockedToMFMA(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context) {}
 
+  bool isChainDot(triton::DotOp &dotOp) const {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+    auto slices = mlir::getSlice(dotOp, filter);
+    for (Operation *op : slices) {
+      if (isa<triton::DotOp>(op) && (op != dotOp))
+        return true;
+    }
+    return false;
+  }
+
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -157,8 +169,9 @@ public:
 
     auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
 
-    mfmaEnc = triton::gpu::MfmaEncodingAttr::get(oldRetType.getContext(),
-                                                 nonKDim, warpsPerTile);
+    bool isTransposed = isChainDot(dotOp);
+    mfmaEnc = triton::gpu::MfmaEncodingAttr::get(
+        oldRetType.getContext(), nonKDim, warpsPerTile, isTransposed);
 
     auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), mfmaEnc);
@@ -194,7 +207,6 @@ public:
     return success();
   }
 };
-
 #endif
 
 class BlockedToMMA : public mlir::RewritePattern {

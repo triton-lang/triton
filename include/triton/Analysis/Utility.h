@@ -126,6 +126,10 @@ template <typename T> T nextPowOf2(T n) {
   return n + 1;
 }
 
+#ifdef USE_ROCM
+bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy);
+#endif
+
 /// Multi-root DAG topological sort.
 /// Performs a topological sort of the Operation in the `toSort` SetVector.
 /// Returns a topologically sorted SetVector.
