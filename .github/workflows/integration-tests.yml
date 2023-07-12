@@ -226,7 +226,7 @@ jobs:
         run: |
           OWNER_REPO="${{ github.repository }}"
           echo "OWNER_REPO: $OWNER_REPO"
-          PR_NUMBERS=$(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq ".[] | select(.merged_at != null) | .number")
+          PR_NUMBERS=($(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq -r ".[] | select(.merged_at != null) | .number"))
 
           # Not all PRs go through the integration test
           success=0
