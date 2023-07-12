@@ -2691,7 +2691,7 @@ def test_call(type, device):
 # -------------
 
 
-@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and"])
+@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and_dynamic", "if_and_static"])
 def test_if(if_type, device):
 
     @triton.jit
