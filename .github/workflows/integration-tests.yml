@@ -240,7 +240,7 @@ jobs:
 
             page=1
             while true; do
-              run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" --arg run_name "Integration Tests" --arg user_id "$USER_ID" '.workflow_runs[] | select(.head_branch == $branch_name and .name == $run_name and .actor.id == $user_id)' | jq '.id' | head -1)
+              run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" --arg run_name "Integration Tests" --arg user_id "$USER_ID" '.workflow_runs[] | select(.head_branch == $branch_name and .name == $run_name and .actor.id == ($user_id | tonumber))' | jq '.id' | head -1)
               if [ "$run_id" != "" ]; then
                 echo "First run ID on branch $BRANCH_NAME is: $run_id"
                 WORKFLOW_RUN_ID=$run_id
