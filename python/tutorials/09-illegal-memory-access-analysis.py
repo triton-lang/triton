@@ -9,7 +9,7 @@ In this tutorial, you will learn utlities to detect invalid memory accesses, inc
 """
 
 # %%
-# Runtime invalid Memory Access Analysis
+# Runtime Invalid Memory Access Analysis
 # --------------
 
 import os
