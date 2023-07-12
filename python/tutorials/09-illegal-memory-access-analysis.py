@@ -33,7 +33,7 @@ def add_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    # This line will cause an out-of-bounds error
+    # This line will cause an illegal memory access error
     y = tl.load(y_ptr + offsets - 2147483647, mask=mask)
     output = x + y
     tl.store(output_ptr + offsets, output, mask=mask)
