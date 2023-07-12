@@ -3,9 +3,6 @@ import os
 import subprocess
 import signal
 import time
-import sys
-
-_triton_aborted = False
 
 
 class OutOfResources(Exception):
@@ -33,29 +30,20 @@ def _rename_cuda_core(core_file_path: str):
 
 
 def _analyze_illegal_memory_access():
+    print("Triton Illegal Memory Access Analysis...")
     if os.environ.get("CUDA_ENABLE_COREDUMP_ON_EXCEPTION", "0") == "1":
         core_file_path = os.environ.get("CUDA_COREDUMP_FILE", "")
-        global _triton_aborted
-        if _triton_aborted:
-            print("Triton aborted due to illegal memory access.")
-            if os.path.exists(core_file_path):
-                print(f"Analyzing core file saved at {core_file_path}...")
-                # Use cuda-gdb to open the core file and print the exception line number
-                cmd = f"cuda-gdb -ex 'target cudacore {core_file_path}' -ex 'quit'"
-                output = subprocess.check_output(cmd, shell=True).decode("utf-8")
-                # Output anything after "CUDA Exception:"
-                output = output.split("CUDA Exception:")[-1]
-                print(output)
-            else:
-                print(f"Core file not found at {core_file_path}...")
-                print("Please check if the core file is saved correctly and use cuda-gdb to analyze it.")
-
-
-def _sigbrt_handler(signum, frame):
-    print('SIGABRT received, saving data and exiting.')
-    global _triton_aborted
-    _triton_aborted = True
-    sys.exit(1)
+        if os.path.exists(core_file_path):
+            print(f"Analyzing core file saved at {core_file_path}...")
+            # Use cuda-gdb to open the core file and print the exception line number
+            cmd = f"cuda-gdb -ex 'target cudacore {core_file_path}' -ex 'quit'"
+            output = subprocess.check_output(cmd, shell=True).decode("utf-8")
+            # Output anything after "CUDA Exception:"
+            output = output.split("CUDA Exception:")[-1]
+            print(output)
+        else:
+            print(f"Core file not found at {core_file_path}...")
+            print("Please check if the core file is saved correctly and use cuda-gdb to analyze it.")
 
 
 def enable_illegal_memory_access_analysis(core_file_path: str):
@@ -64,7 +52,6 @@ def enable_illegal_memory_access_analysis(core_file_path: str):
     core_file_path = os.path.abspath(_rename_cuda_core(core_file_path))
     os.environ["CUDA_COREDUMP_FILE"] = core_file_path
     # register the atexit hook
-    signal.signal(signal.SIGABRT, _sigbrt_handler)
     atexit.register(_analyze_illegal_memory_access)
 
 
