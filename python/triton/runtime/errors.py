@@ -33,10 +33,10 @@ def _analyze_illegal_memory_access():
     print("Triton Illegal Memory Access Analysis...")
     if os.environ.get("CUDA_ENABLE_COREDUMP_ON_EXCEPTION", "0") == "1":
         core_file_path = os.environ.get("CUDA_COREDUMP_FILE", "")
+        cmd = f"cuda-gdb -ex 'target cudacore {core_file_path}' -ex 'quit'"
         if os.path.exists(core_file_path):
             print(f"Analyzing core file saved at {core_file_path}...")
             # Use cuda-gdb to open the core file and print the exception line number
-            cmd = f"cuda-gdb -ex 'target cudacore {core_file_path}' -ex 'quit'"
             output = subprocess.check_output(cmd, shell=True).decode("utf-8")
             # Output anything after "CUDA Exception:"
             output = output.split("CUDA Exception:")[-1]
@@ -44,6 +44,7 @@ def _analyze_illegal_memory_access():
         else:
             print(f"Core file not found at {core_file_path}...")
             print("Please check if the core file is saved correctly and use cuda-gdb to analyze it.")
+            print(f"Example: {cmd}")
 
 
 def enable_illegal_memory_access_analysis(core_file_path: str):

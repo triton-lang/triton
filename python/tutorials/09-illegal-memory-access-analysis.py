@@ -68,15 +68,15 @@ output_triton = add(x, y)
 # capture invalide memory accesses.
 # See https://docs.nvidia.com/cuda/compute-sanitizer/index.html
 # for more details.
-# For example, you can turn off Triton's illegal memory analysis
+# For example, you can turn off Triton's illegal memory analysis (Line 57)
 # and run the following command to instrument the binary:
-# $ compute-sanitizer --tool memcheck python ./09-exception-analysis.py
+# $ compute-sanitizer --tool memcheck python ./09-illegal-memory-access-analysis.py
 # Then, you are expected to see the following output:
 # ```
 # ========= Compute Sanitizer Output =========
 # ========= CUDA-MEMCHECK
 # ========= Invalid __global__ read of size 4 bytes
-# =========     at 0x270 in /root/code/triton/python/tutorials/09-exception-analysis.py:34:add_kernel_0d1d2d3
+# =========     at 0x270 in /root/code/triton/python/tutorials/09-exception-analysis.py:37:add_kernel_0d1d2d3
 # =========     by thread (24,0,0) in block (0,0,0)
 # =========     Address 0x7fa158380388 is out of bounds
 # =========     and is 13106296 bytes before the nearest allocation at 0x7fa159000000 of size 508 bytes
