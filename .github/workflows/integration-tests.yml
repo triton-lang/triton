@@ -229,7 +229,8 @@ jobs:
           PR_NUMBER=$(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq ".[] | select(.merged_at != null) | .number" | head -1)
           echo "Last merged PR number: $PR_NUMBER"
 
-          BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
+          BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.label')
+          BRANCH_NAME="${BRANCH_NAME/://}"
           echo "BRANCH_NAME: $BRANCH_NAME"
 
           page=1
