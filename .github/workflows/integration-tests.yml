@@ -235,7 +235,7 @@ jobs:
             echo "Last merged PR number: $PR_NUMBER"
             BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.label')
             echo "BRANCH_NAME: $BRANCH_NAME"
-            USER_ID=$(gh api --method GET repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.user.id')
+            USER_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.user.id')
             echo "USER_ID: $USER_ID"
 
             page=1
