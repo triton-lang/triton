@@ -230,7 +230,7 @@ jobs:
 
           # Not all PRs go through the integration test
           success=0
-          for i in "${PR_NUMBERS[@]}"
+          for PR_NUMBER in "${PR_NUMBERS[@]}"
           do
             echo "Last merged PR number: $PR_NUMBER"
             BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.label')
