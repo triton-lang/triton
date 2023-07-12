@@ -624,7 +624,7 @@ class CompiledKernel:
                     stream = get_cuda_stream()
                 else:
                     stream = get_backend(self.device_type).get_stream(None)
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.warp_size, self.shared, stream, self.cu_function,
+            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
 

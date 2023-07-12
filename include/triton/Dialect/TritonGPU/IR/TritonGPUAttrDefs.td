@@ -463,10 +463,11 @@ def MfmaEncodingAttr : DistributedEncoding<"MfmaEncoding"> {
 
   let description = [{
 An encoding for tensors that have been produced by MI100 && MI200 tensor cores.
-It is characterized by parameter `warpsPerCTA` that indicates how data should be partitioned
+It is characterized by parameters `warpsPerCTA` and `nonKDim` that indicates how data should be partitioned
 between waves (analogous to the term 'warp' used in NVIDIA's CUDA programming model).
 
-Suppose we have a tensor with a shape of [32, 64] and warpsPerCTA set to [1, 2].
+Example 1:
+Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and nonKDim set to 32.
 The data will be distributed between threads as follows:
 
                 wave 0                                 wave 1
@@ -503,10 +504,34 @@ The data will be distributed between threads as follows:
 [ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
 [ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
 [ 32  33  34  35 ...... 62  63 ]      [ 96  97  98  99 ...... 126  127 ]
+
+Example 2:
+Suppose we have a tensor with a shape of [16, 32], warpsPerCTA set to [1, 2] and nonKDim set to 16.
+The data will be distributed between threads as follows:
+
+                wave 0                                 wave 1
+-----------------/\-------------      ------------------/\---------------
+[ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
+[ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
+[ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
+[ 0   1   2   3  ...... 14  15 ]      [ 64  65  66  67  ...... 78   79  ]
+[ 16  17  18  19 ...... 30  31 ]      [ 80  81  82  83  ...... 94   95  ]
+[ 16  17  18  19 ...... 30  31 ]      [ 80  81  82  83  ...... 94   95  ]
+[ 16  17  18  19 ...... 30  31 ]      [ 80  81  82  83  ...... 94   95  ]
+[ 16  17  18  19 ...... 30  31 ]      [ 80  81  82  83  ...... 94   95  ]
+[ 32  33  34  35 ...... 46  47 ]      [ 96  97  98  99  ...... 110  111 ]
+[ 32  33  34  35 ...... 46  47 ]      [ 96  97  98  99  ...... 110  111 ]
+[ 32  33  34  35 ...... 46  47 ]      [ 96  97  98  99  ...... 110  111 ]
+[ 32  33  34  35 ...... 46  47 ]      [ 96  97  98  99  ...... 110  111 ]
+[ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
+[ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
+[ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
+[ 48  49  50  51 ...... 62  63 ]      [ 112 113 114 115 ...... 126  127 ]
 }];
 
   let parameters = (
     ins
+    "unsigned":$nonKDim,
     ArrayRefParameter<"unsigned">:$warpsPerCTA
   );
 

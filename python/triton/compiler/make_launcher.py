@@ -95,7 +95,7 @@ def generate_launcher(constants, signature):
             "int64_t": "L",
         }[ty]
 
-    format = "iiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
     if is_hip():
@@ -119,9 +119,19 @@ def generate_launcher(constants, signature):
 
     #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-    static void _launch(int gridX, int gridY, int gridZ, int num_warps, int warp_size, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
+    static int getWarpSize(hipStream_t stream)
+    {{
+      int device_id = hipGetStreamDeviceId(stream);
+      gpuAssert(device_id >= 0 ? hipSuccess : hipErrorInvalidDevice, __FILE__, __LINE__);
+      hipDeviceProp_t prop;
+      HIP_CHECK(hipGetDeviceProperties(&prop, device_id));
+      return prop.warpSize;
+    }}
+
+    static void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, hipStream_t stream, hipFunction_t function, {arg_decls}) {{
       void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
       if (gridX*gridY*gridZ > 0) {{
+          int warp_size = getWarpSize(stream);
           HIP_CHECK(hipModuleLaunchKernel(function, gridX, gridY, gridZ, num_warps * warp_size, 1, 1, shared_memory, stream, params, 0));
       }}
     }}
@@ -187,14 +197,13 @@ def generate_launcher(constants, signature):
       uint64_t _stream;
       uint64_t _function;
       int num_warps;
-      int warp_size;
       int shared_memory;
       PyObject *launch_enter_hook = NULL;
       PyObject *launch_exit_hook = NULL;
       PyObject *compiled_kernel = NULL;
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if (!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &warp_size, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+      if (!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
         return NULL;
       }}
 
@@ -204,7 +213,7 @@ def generate_launcher(constants, signature):
 
       // raise exception asap
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-      _launch(gridX, gridY, gridZ, num_warps, warp_size, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items())});
+      _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items())});
       if (launch_exit_hook != Py_None) {{
         PyObject_CallObject(launch_exit_hook, args);
       }}
@@ -261,10 +270,10 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int warp_size, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
-    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, num_warps * warp_size, 1, 1, shared_memory, stream, params, 0));
+    CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, num_warps * 32, 1, 1, shared_memory, stream, params, 0));
   }}
 }}
 
@@ -319,13 +328,12 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   uint64_t _stream;
   uint64_t _function;
   int num_warps;
-  int warp_size;
   int shared_memory;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *compiled_kernel = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &warp_size, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
     return NULL;
   }}
 
@@ -336,7 +344,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-  _launch(gridX, gridY, gridZ, num_warps, warp_size, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
 
   if (launch_exit_hook != Py_None) {{
     PyObject_CallObject(launch_exit_hook, args);
