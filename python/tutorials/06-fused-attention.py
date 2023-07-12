@@ -313,10 +313,19 @@ def test_op(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     sm_scale = 0.5
     dout = torch.randn_like(q)
     # reference implementation
-    M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
-    p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
-        p[:, :, M == 0] = float("-inf")
+        M = torch.triu(
+            torch.full(
+                # Cannot give dtype here due to BF16 incompatibility with torch<=2.0:
+                # RuntimeError: "triu_tril_cuda_template" not implemented for 'BFloat16'
+                (N_CTX, N_CTX), float('-inf'), device="cuda"),
+            diagonal=1,
+        ).to(dtype)
+    else:
+        M = torch.zeros((N_CTX, N_CTX), device="cuda", dtype=dtype)
+
+    p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
+    p = p + M
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
