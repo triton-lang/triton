@@ -35,6 +35,49 @@ Value getWaveN(ConversionPatternRewriter &rewriter, Location loc, Value wave,
 namespace SharedToDotOperandMFMA {
 
 /**
+ * @brief swizzling tensor element indexes according pattern encoded in
+ * SharedEncodingAttr
+ *
+ * @param rewriter
+ * @param loc
+ * @param row row of target tensor element related to the start of smemObj
+ * @param col col of target tensor element related to the start of smemObj
+ * @param smemObj shared memory object, contains info about tensor in LDS
+ * @param attr layout attribute, contains swizzling info
+ * @return swizzled row, col indexes in tensor notation
+ */
+std::pair<mlir::Value, mlir::Value>
+swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
+               Value col, SharedMemoryObject smemObj, SharedEncodingAttr attr) {
+  (void)smemObj; // unused in current pattern
+  bool transposed = (attr.getOrder()[0] != 1);
+  if (transposed) {
+    // tensor is column-wise, so swapping col and row in computations
+    std::swap(row, col);
+  }
+  auto vec = i32_val(attr.getVec());
+  auto perPhase = i32_val(attr.getPerPhase());
+  auto maxPhase = i32_val(attr.getMaxPhase());
+
+  // Original algorithm taken from getSwizzledSharedPtrs function
+  // (TritonGPUToLLVMBase.h): Basic algorithm for row-major tensor is following:
+  //
+  // phase = (row // perPhase) % maxPhase
+  // colOffSwizzled = ((col // vec) ^ phase) * vec
+  // colOffOrdered = col % vec
+  // colOff = colOffSwizzled + colOffOrdered
+  auto phase = urem(udiv(row, perPhase), maxPhase);
+  auto colOffSwizzled = mul(xor_(udiv(col, vec), phase), vec);
+  auto colOffOrdered = urem(col, vec);
+  auto colOff = add(colOffSwizzled, colOffOrdered);
+
+  if (transposed)
+    return {colOff, row};
+  else
+    return {row, colOff};
+}
+
+/**
  * @brief This function maps particular load of mfma dot operand to element
  * indexes(row, col)
  *
@@ -113,9 +156,11 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
 Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     Value row, Value col, SharedMemoryObject smemObj,
                     SharedEncodingAttr srcLayout) {
+  auto [swizzledRow, swizzledCol] =
+      swizzleIndexes(rewriter, loc, row, col, smemObj, srcLayout);
   auto &strides = smemObj.strides;
-  Value rowOffset = mul(row, strides[0]);
-  Value colOffset = mul(col, strides[1]);
+  Value rowOffset = mul(swizzledRow, strides[0]);
+  Value colOffset = mul(swizzledCol, strides[1]);
   return add(rowOffset, colOffset);
 }
 
