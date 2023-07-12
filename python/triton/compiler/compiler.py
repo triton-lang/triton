@@ -579,7 +579,7 @@ class CompiledKernel:
         def runner(*args, stream=None):
             if stream is None:
                 stream = triton.runtime.jit.get_cuda_stream()
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.warp_size, self.shared, stream, self.cu_function,
+            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args)
         return runner
 
