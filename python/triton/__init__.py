@@ -15,8 +15,8 @@ from .runtime import (
     TensorWrapper,
     OutOfResources,
     MockTensor,
-    enable_illegal_memory_access_analysis,
-    disable_illegal_memory_access_analysis,
+    enable_invalid_memory_access_analysis,
+    disable_invalid_memory_access_analysis,
 )
 from .runtime.jit import jit
 from .compiler import compile, CompilationError
@@ -30,8 +30,8 @@ __all__ = [
     "CompilationError",
     "compile",
     "Config",
-    "enable_illegal_memory_access_analysis",
-    "disable_illegal_memory_access_analysis",
+    "enable_invalid_memory_access_analysis",
+    "disable_invalid_memory_access_analysis",
     "heuristics",
     "impl",
     "jit",

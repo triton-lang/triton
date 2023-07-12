@@ -29,8 +29,8 @@ def _rename_cuda_core(core_file_path: str):
     return core_file_path
 
 
-def _analyze_illegal_memory_access():
-    print("Triton Illegal Memory Access Analysis...")
+def _analyze_invalid_memory_access():
+    print("Triton Invalid Memory Access Analysis...")
     if os.environ.get("CUDA_ENABLE_COREDUMP_ON_EXCEPTION", "0") == "1":
         core_file_path = os.environ.get("CUDA_COREDUMP_FILE", "")
         cmd = f"cuda-gdb -ex 'target cudacore {core_file_path}' -ex 'quit'"
@@ -47,15 +47,15 @@ def _analyze_illegal_memory_access():
             print(f"Example: {cmd}")
 
 
-def enable_illegal_memory_access_analysis(core_file_path: str):
+def enable_invalid_memory_access_analysis(core_file_path: str):
     os.environ["CUDA_ENABLE_COREDUMP_ON_EXCEPTION"] = "1"
     # convert core_file_path to absolute path
     core_file_path = os.path.abspath(_rename_cuda_core(core_file_path))
     os.environ["CUDA_COREDUMP_FILE"] = core_file_path
     # register the atexit hook
-    atexit.register(_analyze_illegal_memory_access)
+    atexit.register(_analyze_invalid_memory_access)
 
 
-def disable_illegal_memory_access_analysis():
+def disable_invalid_memory_access_analysis():
     signal.signal(signal.SIGABRT, signal.SIG_DFL)
-    atexit.unregister(_analyze_illegal_memory_access)
+    atexit.unregister(_analyze_invalid_memory_access)
