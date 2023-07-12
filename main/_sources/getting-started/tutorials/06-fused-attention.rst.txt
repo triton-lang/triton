@@ -24,7 +24,7 @@ Fused Attention
 This is a Triton implementation of the Flash Attention algorithm
 (see: Dao et al., https://arxiv.org/pdf/2205.14135v2.pdf; Rabe and Staats https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 8-431
+.. GENERATED FROM PYTHON SOURCE LINES 8-435
 
 
 
@@ -66,32 +66,32 @@ This is a Triton implementation of the Flash Attention algorithm
 
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0  123.694672
-    1   2048.0  135.766808
-    2   4096.0  141.977690
-    3   8192.0  142.197056
-    4  16384.0  144.691264
+    0   1024.0  125.332295
+    1   2048.0  134.354293
+    2   4096.0  141.582988
+    3   8192.0  144.049082
+    4  16384.0  143.934826
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0   87.861346
-    1   2048.0  108.263890
-    2   4096.0  125.133328
-    3   8192.0  135.779194
-    4  16384.0  141.979252
+    0   1024.0   88.718017
+    1   2048.0  104.429568
+    2   4096.0  121.586258
+    3   8192.0  132.855966
+    4  16384.0  138.798066
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  76.580505
-    1   2048.0  88.241150
-    2   4096.0  94.445265
-    3   8192.0  96.241018
-    4  16384.0  97.982557
+    0   1024.0  76.930955
+    1   2048.0  86.511102
+    2   4096.0  92.121347
+    3   8192.0  95.202260
+    4  16384.0  96.290214
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  52.773188
-    1   2048.0  66.928899
-    2   4096.0  76.662463
-    3   8192.0  82.281592
-    4  16384.0  85.177945
+    0   1024.0  53.863260
+    1   2048.0  67.531705
+    2   4096.0  76.618287
+    3   8192.0  81.684017
+    4  16384.0  84.442434
 
 
 
@@ -190,11 +190,14 @@ This is a Triton implementation of the Flash Attention algorithm
         # load q: it will stay in SRAM throughout
         q = tl.load(Q_block_ptr)
         q = (q * qk_scale).to(tl.float16)
+        # advance block pointers to first iteration of the loop
+        K_block_ptr = tl.advance(K_block_ptr, (0, lo))
+        V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
         # loop over k, v and update accumulator
         for start_n in range(lo, hi, BLOCK_N):
             start_n = tl.multiple_of(start_n, BLOCK_N)
             # -- compute qk ----
-            k = tl.load(tl.advance(K_block_ptr, (0, start_n)))
+            k = tl.load(K_block_ptr)
             qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
             qk += tl.dot(q, k)
             if MODE == 1 or MODE == 3:
@@ -216,12 +219,15 @@ This is a Triton implementation of the Flash Attention algorithm
             acc_scale = l_i / l_i_new
             acc = acc * acc_scale[:, None]
             # update acc
-            v = tl.load(tl.advance(V_block_ptr, (start_n, 0)))
+            v = tl.load(V_block_ptr)
             p = p.to(tl.float16)
             acc += tl.dot(p, v)
             # update m_i and l_i
             l_i = l_i_new
             m_i = m_i_new
+            # update pointers
+            K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+            V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
         # write back l and m
         l_ptrs = L + off_hz * N_CTX + offs_m
         m_ptrs = M + off_hz * N_CTX + offs_m
@@ -443,9 +449,7 @@ This is a Triton implementation of the Flash Attention algorithm
         M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
         p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
         if causal:
-            for z in range(Z):
-                for h in range(H):
-                    p[:, :, M == 0] = float("-inf")
+            p[:, :, M == 0] = float("-inf")
         p = torch.softmax(p.float(), dim=-1).half()
         # p = torch.exp(p)
         ref_out = torch.matmul(p, v)
@@ -508,7 +512,7 @@ This is a Triton implementation of the Flash Attention algorithm
             cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
             cu_seqlens[1:] = lengths.cumsum(0)
             qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
-            fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)
+            fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=causal)
             if mode == 'bwd':
                 o = fn()
                 do = torch.randn_like(o)
@@ -529,7 +533,7 @@ This is a Triton implementation of the Flash Attention algorithm
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  16.594 seconds)
+   **Total running time of the script:** ( 0 minutes  17.019 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:

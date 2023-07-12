@@ -93,11 +93,14 @@ def _fwd_kernel(
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
     q = (q * qk_scale).to(tl.float16)
+    # advance block pointers to first iteration of the loop
+    K_block_ptr = tl.advance(K_block_ptr, (0, lo))
+    V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
     # loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = tl.load(tl.advance(K_block_ptr, (0, start_n)))
+        k = tl.load(K_block_ptr)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if MODE == 1 or MODE == 3:
@@ -119,12 +122,15 @@ def _fwd_kernel(
         acc_scale = l_i / l_i_new
         acc = acc * acc_scale[:, None]
         # update acc
-        v = tl.load(tl.advance(V_block_ptr, (start_n, 0)))
+        v = tl.load(V_block_ptr)
         p = p.to(tl.float16)
         acc += tl.dot(p, v)
         # update m_i and l_i
         l_i = l_i_new
         m_i = m_i_new
+        # update pointers
+        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
     # write back l and m
     l_ptrs = L + off_hz * N_CTX + offs_m
     m_ptrs = M + off_hz * N_CTX + offs_m
@@ -346,9 +352,7 @@ def test_op(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
     M = torch.tril(torch.ones((N_CTX, N_CTX), device="cuda"))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
-        for z in range(Z):
-            for h in range(H):
-                p[:, :, M == 0] = float("-inf")
+        p[:, :, M == 0] = float("-inf")
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
@@ -411,7 +415,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
         cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
         cu_seqlens[1:] = lengths.cumsum(0)
         qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
-        fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=True)
+        fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=causal)
         if mode == 'bwd':
             o = fn()
             do = torch.randn_like(o)
