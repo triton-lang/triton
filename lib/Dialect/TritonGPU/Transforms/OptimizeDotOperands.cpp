@@ -1,3 +1,4 @@
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -201,132 +202,6 @@ public:
 
 } // namespace
 
-static bool isConvertToDotEncoding(Operation *op) {
-  auto convertLayout = llvm::dyn_cast<ConvertLayoutOp>(op);
-  if (!convertLayout)
-    return false;
-  auto tensorType =
-      convertLayout.getResult().getType().cast<RankedTensorType>();
-  return tensorType.getEncoding().isa<DotOperandEncodingAttr>();
-}
-
-static ConvertLayoutOp updateConvert(OpBuilder &builder, ConvertLayoutOp cvt,
-                                     IRMapping &mapping, Type smallestType) {
-  auto cvtDstTy = cvt.getResult().getType().cast<RankedTensorType>();
-  auto cvtDstEnc = cvtDstTy.getEncoding().cast<DotOperandEncodingAttr>();
-  Value operand = cvt.getOperand();
-  if (mapping.contains(operand))
-    operand = mapping.lookup(operand);
-  auto newDstTy = RankedTensorType::get(
-      cvtDstTy.getShape(), cvtDstTy.getElementType(),
-      DotOperandEncodingAttr::get(cvtDstEnc.getContext(), cvtDstEnc.getOpIdx(),
-                                  cvtDstEnc.getParent(), smallestType));
-  auto newCvt =
-      builder.create<ConvertLayoutOp>(cvt.getLoc(), newDstTy, operand);
-  mapping.map(cvt.getResult(), newCvt.getResult());
-  return newCvt;
-}
-
-// Update kWidth based on the smallestType found in the given convert ops and
-// propagate the type change.
-static void
-updateDotEncodingLayout(SmallVector<ConvertLayoutOp> &convertsToDotEncoding,
-                        Type smallestType) {
-  IRMapping mapping;
-  OpBuilder builder(smallestType.getContext());
-  SetVector<Operation *> slices(convertsToDotEncoding.begin(),
-                                convertsToDotEncoding.end());
-  // Collect all the operations where the type needs to be propagated.
-  for (auto cvt : convertsToDotEncoding) {
-    auto forwardFilter = [&](Operation *op) {
-      if (op == cvt.getOperation())
-        return true;
-      for (Value operand : op->getOperands()) {
-        auto tensorType = operand.getType().dyn_cast<RankedTensorType>();
-        if (tensorType &&
-            tensorType.getEncoding().isa<DotOperandEncodingAttr>())
-          return true;
-      }
-      return false;
-    };
-    auto backwardFilter = [&](Operation *op) {
-      for (Value results : op->getResults()) {
-        auto tensorType = results.getType().dyn_cast<RankedTensorType>();
-        if (tensorType &&
-            tensorType.getEncoding().isa<DotOperandEncodingAttr>())
-          return true;
-      }
-      return false;
-    };
-    SetVector<Operation *> opSlice =
-        getSlice(cvt.getOperation(), {backwardFilter}, {forwardFilter});
-    slices.insert(opSlice.begin(), opSlice.end());
-  }
-  // Apply the type change by walking ops in topological order.
-  slices = mlir::topologicalSort(slices);
-  for (Operation *op : slices) {
-    builder.setInsertionPoint(op);
-    if (isConvertToDotEncoding(op)) {
-      auto cvt = cast<ConvertLayoutOp>(op);
-      ConvertLayoutOp newCvt =
-          updateConvert(builder, cvt, mapping, smallestType);
-      continue;
-    }
-    auto *newOp = cloneWithInferType(builder, op, mapping);
-    for (auto [result, newResult] :
-         llvm::zip(op->getResults(), newOp->getResults())) {
-      result.replaceUsesWithIf(newResult, [&](OpOperand &operand) {
-        return slices.count(operand.getOwner()) == 0;
-      });
-    }
-  }
-  for (Operation *op : llvm::reverse(slices))
-    op->erase();
-}
-
-// Change the layout of dotOperand layout to use the kWidth from the smallest
-// loaded type. This allows better code generation for mixed-mode matmul.
-static void optimizeKWidth(triton::FuncOp func) {
-  SmallVector<ConvertLayoutOp> convertsToDotEncoding;
-  Type smallestType;
-  func->walk([&](triton::LoadOp loadOp) {
-    if (!loadOp.getResult().hasOneUse())
-      return;
-    Operation *use = *loadOp.getResult().getUsers().begin();
-
-    // Advance to the first conversion as long as the use resides in shared
-    // memory and it has a single use itself
-    while (use) {
-      if (use->getNumResults() != 1 || !use->getResult(0).hasOneUse())
-        break;
-      auto tensorType =
-          use->getResult(0).getType().dyn_cast<RankedTensorType>();
-      if (!tensorType || !tensorType.getEncoding().isa<SharedEncodingAttr>())
-        break;
-      use = *use->getResult(0).getUsers().begin();
-    }
-
-    auto convertLayout = llvm::dyn_cast<ConvertLayoutOp>(use);
-    if (!convertLayout)
-      return;
-    auto tensorType =
-        convertLayout.getResult().getType().cast<RankedTensorType>();
-    if (!tensorType.getEncoding().isa<DotOperandEncodingAttr>())
-      return;
-    convertsToDotEncoding.push_back(convertLayout);
-
-    // Update the smallest type.
-    auto ty = loadOp.getType().cast<RankedTensorType>();
-    Type eltTy = ty.getElementType();
-    if (!smallestType ||
-        (eltTy.getIntOrFloatBitWidth() < smallestType.getIntOrFloatBitWidth()))
-      smallestType = eltTy;
-  });
-  if (!smallestType)
-    return;
-  updateDotEncodingLayout(convertsToDotEncoding, smallestType);
-}
-
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
@@ -351,10 +226,6 @@ public:
       signalPassFailure();
     if (fixupLoops(m).failed())
       signalPassFailure();
-
-    // Change the layout of dotOperand layout to use the kWidth from the
-    // smallest loaded type.
-    m->walk([](triton::FuncOp func) { optimizeKWidth(func); });
   }
 };
 

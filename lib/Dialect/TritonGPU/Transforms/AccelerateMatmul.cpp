@@ -1,3 +1,4 @@
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -76,6 +77,81 @@ class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
   mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
 
+  static bool bwdFilterCvtLayout(Operation *op) {
+    // only a single operand
+    if (op->getNumOperands() != 1)
+      return false;
+    if (op->getNumResults() != 1)
+      return false;
+    // input must be a tensor with the same shape and encoding
+    auto outTensorType = op->getResult(0).getType().cast<RankedTensorType>();
+    auto inTensorType = op->getOperand(0).getType().cast<RankedTensorType>();
+    if (outTensorType.getShape() != inTensorType.getShape())
+      return false;
+    if (outTensorType.getEncoding() != inTensorType.getEncoding())
+      return false;
+    return true;
+  }
+
+  static bool bwdFilterCvtType(Operation *op) {
+    // only a single operand
+    if (op->getNumOperands() != 1)
+      return false;
+    if (op->getNumResults() != 1)
+      return false;
+    // input must be a tensor with the same shape and encoding
+    auto outTensorType = op->getResult(0).getType().cast<RankedTensorType>();
+    auto inTensorType = op->getOperand(0).getType().cast<RankedTensorType>();
+    if (outTensorType.getShape() != inTensorType.getShape())
+      return false;
+    if (outTensorType.getElementType() != inTensorType.getElementType())
+      return false;
+    return true;
+  }
+
+  static Type findOrigType(Operation *op, Type FinalType) {
+    SetVector<Operation *> slice;
+    getBackwardSlice(op, &slice, bwdFilterCvtType);
+    Operation *src = (*slice.begin())->getOperand(0).getDefiningOp();
+    if (!src || src->getNumOperands() != 1)
+      return Type();
+    return getElementTypeOrSelf(src->getOperand(0).getType());
+  }
+
+  int computeMinBitWidth(Value A, Value B) const {
+    SmallVector<Value, 2> dotOperands = {A, B};
+    if (!A.getDefiningOp() || !B.getDefiningOp())
+      return -1;
+    if (A.getDefiningOp()->getNumOperands() != 1 ||
+        B.getDefiningOp()->getNumOperands() != 1)
+      return -1;
+    // find conversion to DotOperand
+    SmallVector<Operation *> cvts;
+    for (int i = 0; i < 2; i++) {
+      SetVector<Operation *> slice;
+      Operation *op = dotOperands[i].getDefiningOp();
+      getBackwardSlice(op, &slice, bwdFilterCvtLayout);
+      if (slice.size())
+        op = (*slice.begin())->getOperand(0).getDefiningOp();
+      cvts.push_back(dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op));
+    }
+    if (!cvts[0] || !cvts[1])
+      return -1;
+    // find smallest dtype among original operand type
+    // and operand type before casts
+    SmallVector<Type> types(4);
+    for (int i = 0; i < 2; i++)
+      types[i] = getElementTypeOrSelf(cvts[i]->getResult(0).getType());
+    for (int i = 0; i < 2; i++)
+      types[2 + i] = findOrigType(cvts[i], types[i]);
+    if (!types[0] || !types[1] || !types[2] || !types[3])
+      return -1;
+    unsigned ret = INT_MAX;
+    for (Type ty : types)
+      ret = std::min(ret, ty.getIntOrFloatBitWidth());
+    return ret;
+  }
+
 public:
   BlockedToMMA(mlir::MLIRContext *context, int computeCapability)
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context),
@@ -87,6 +163,7 @@ public:
     if (computeCapability < 70)
       return failure();
     auto dotOp = cast<triton::DotOp>(op);
+    auto ctx = op->getContext();
     // TODO: Check data-types and SM compatibility
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
     if (!oldRetType.getEncoding() ||
@@ -151,36 +228,28 @@ public:
     }
     auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), mmaEnc);
-
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
-    auto oldAOrder = oldAType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-    auto oldBOrder = oldBType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-
+    // convert operands
+    int minBitwidth = computeMinBitWidth(a, b);
+    Type minType = IntegerType::get(ctx, minBitwidth);
+    // convert A operand
     auto newAEncoding = triton::gpu::DotOperandEncodingAttr::get(
         oldAType.getContext(), 0, newRetType.getEncoding(),
-        oldAType.getElementType());
-    auto newBEncoding = triton::gpu::DotOperandEncodingAttr::get(
-        oldBType.getContext(), 1, newRetType.getEncoding(),
-        oldBType.getElementType());
-
+        minBitwidth > 0 ? minType : oldAType.getElementType());
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(), newAEncoding);
+    a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
+    // convert B operand
+    auto newBEncoding = triton::gpu::DotOperandEncodingAttr::get(
+        oldBType.getContext(), 1, newRetType.getEncoding(),
+        minBitwidth > 0 ? minType : oldBType.getElementType());
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(), newBEncoding);
-
-    a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
+    // convert dot instruction
     auto newDot = rewriter.create<triton::DotOp>(
         dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.getAllowTF32());
 
