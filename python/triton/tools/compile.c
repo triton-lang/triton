@@ -54,11 +54,11 @@ void load_{kernel_name}() {{
 /*
 {kernel_docstring}
 */
-CUresult {kernel_name}(CUstream stream, unsigned int gX,unsigned int gY,unsigned int gZ,unsigned int numWarps, {signature}) {{
+CUresult {kernel_name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {signature}) {{
     if ({kernel_name}_func == NULL)
        load_{kernel_name}();
     void *args[{num_args}] = {{ {arg_pointers} }};
     // TODO: shared memory
     if(gX * gY * gZ > 0)
-      return cuLaunchKernel({kernel_name}_func, gX, gY, gZ, numWarps * 32, 1, 1, {shared}, stream, args, NULL);
+      return cuLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * 32, 1, 1, {shared}, stream, args, NULL);
 }}

@@ -107,6 +107,7 @@ if __name__ == "__main__":
         "num_args": len(arg_names),
         "kernel_docstring": "",
         "shared": ccinfo.shared,
+        "num_warps": args.num_warps,
     }
     for ext in ['h', 'c']:
         template_path = Path(__file__).parent / f"compile.{ext}"
