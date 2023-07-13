@@ -131,7 +131,6 @@ def test_compile_link_matmul():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_dir = "/home/chunwei/project/triton/python/test/unit/tools/out2"
         kernel_path = os.path.join(tmp_dir, "kernel.py")
         with open(kernel_path, "w") as file:
             file.write(kernel_src)

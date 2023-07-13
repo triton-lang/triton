@@ -61,7 +61,6 @@ if __name__ == "__main__":
 
     # validate and parse signature
     signature = list(map(lambda s: s.strip(" "), args.signature.split(",")))
-    print('signature', signature)
 
     def hash_signature(signature: List[str]):
         m = hashlib.sha256()
