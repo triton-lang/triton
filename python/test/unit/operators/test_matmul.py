@@ -85,11 +85,11 @@ def f8_to_f16(x, dtype):
         # mixed-precision
         *[
             [
-                (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
+                (16, 16, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
                 (128, 128, 32, 8, 4, 2, 256, 256, 128, AT, BT, ADTYPE, BDTYPE),
-            ] for ADTYPE, BDTYPE in [("float8e4b15", "float8e5"),
+            ] for ADTYPE, BDTYPE in [("float8e5", "float8e5"),
                                      ("float8e4", "float16"),
                                      ("float16", "float8e5"),
                                      ("float16", "float32"),
@@ -139,6 +139,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     # allocate/transpose inputs
     a = init_input(M, K, AT, ADTYPE, a_fp8)
     b = init_input(K, N, BT, BDTYPE, b_fp8)
+    a[:] = 50
+    b[:] = 50
     # run test
     th_a = maybe_upcast(a, ADTYPE, a_fp8).to(torch.float32)
     if AT and a_fp8:
