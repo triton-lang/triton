@@ -6,7 +6,6 @@
 #include "mlir/IR/OperationSupport.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 namespace mlir {
 namespace triton {
@@ -404,18 +403,17 @@ LogicalResult mlir::triton::DotOp::verify() {
   auto bTy = getOperand(1).getType().cast<RankedTensorType>();
   if (aTy.getElementType() != bTy.getElementType())
     return emitError("element types of operands A and B must match");
-  auto aEncoding =
-      aTy.getEncoding().dyn_cast_or_null<triton::gpu::DotOperandEncodingAttr>();
-  auto bEncoding =
-      bTy.getEncoding().dyn_cast_or_null<triton::gpu::DotOperandEncodingAttr>();
+  auto aEncoding = aTy.getEncoding();
+  auto bEncoding = bTy.getEncoding();
   if (!aEncoding && !bEncoding)
     return mlir::success();
   // Verify that the encodings are valid.
   if (!aEncoding || !bEncoding)
     return emitError("mismatching encoding between A and B operands");
-  if (aEncoding.getMMAv2kWidth() != bEncoding.getMMAv2kWidth())
-    return emitError("mismatching kWidth between A and B operands");
-  return mlir::success();
+  Dialect &dialect = aEncoding.getDialect();
+  auto interface = cast<DialectInferLayoutInterface>(&dialect);
+  return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
+                                                     bEncoding);
 }
 
 //-- ReduceOp --
