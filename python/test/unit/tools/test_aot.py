@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
   cuMemAlloc(&B, K * N * 2);
   cuMemAlloc(&C, M * N * 4);
   cuStreamCreate(&stream, 0);
-  load_kernel();
+  load_matmul_fp16xfp16_16x16x16();
 
   // initialize input data
   int16_t hA[M*K];
@@ -105,10 +105,9 @@ int main(int argc, char **argv) {
   cuMemcpyHtoD(B, hB, K*N*2);
 
   // launch kernel
-  int numWarps = 1;
   int gX = 1, gY = 1, gZ = 1;
   cuStreamSynchronize(stream);
-  kernel(stream, M/BM, N/BN, 1, numWarps, C, A, B, N, K, N);
+  matmul_fp16xfp16_16x16x16(stream, M/BM, N/BN, 1, C, A, B, N, K, N);
   cuStreamSynchronize(stream);
 
   // read data
@@ -119,7 +118,7 @@ int main(int argc, char **argv) {
 
 
   // free cuda handles
-  unload_kernel();
+  unload_matmul_fp16xfp16_16x16x16();
   cuMemFree(A);
   cuMemFree(B);
   cuMemFree(C);
@@ -132,6 +131,7 @@ def test_compile_link_matmul():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_dir = "/home/chunwei/project/triton/python/test/unit/tools/out2"
         kernel_path = os.path.join(tmp_dir, "kernel.py")
         with open(kernel_path, "w") as file:
             file.write(kernel_src)
@@ -153,10 +153,12 @@ def test_compile_link_matmul():
             for hb in hints:
                 sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, 1, i32{hb}, 1, i32:16, 1, {BM}, {BN}, {BK}'
                 name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
-                subprocess.run([sys.executable, compiler_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", name, "-w", 1, kernel_path], check=True, cwd=tmp_dir)
+                subprocess.run([sys.executable, compiler_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", name, "-w", "1", kernel_path], check=True, cwd=tmp_dir)
 
         # link all desired configs
         h_files = glob.glob(os.path.join(tmp_dir, "*.h"))
+        print('h_files', h_files)
+        print(' '.join([sys.executable, linker_path] + h_files + ["-o", "kernel"]))
         subprocess.run([sys.executable, linker_path] + h_files + ["-o", "kernel"], check=True, cwd=tmp_dir)
 
         # compile test case

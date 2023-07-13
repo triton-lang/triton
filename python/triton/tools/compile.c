@@ -41,7 +41,7 @@ void load_{kernel_name}() {{
     void *bin = (void *)&CUBIN_NAME;
     int shared = {shared};
     CUDA_CHECK(cuModuleLoadData(&{kernel_name}_mod, bin));
-    CUDA_CHECK(cuModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{kernel_name}"));
+    CUDA_CHECK(cuModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{triton_kernel_name}"));
     // set dynamic shared memory if necessary
     int shared_optin;
     CUDA_CHECK(cuDeviceGetAttribute(&shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev));

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 import triton
+from triton.compiler.code_generator import kernel_suffix
 from triton.compiler.make_launcher import ty_to_cpp
 
 desc = """
@@ -27,7 +28,7 @@ and argument 2 is assumed to be a compile-time constant of value 1024, i.e. it w
 
 The resulting entry point will have signature
 
-CUresult kernel_{specialization_suffix}(CUstream stream, unsigned gX, unsigned gY, unsigned gZ, unsigned numWarps, float* arg0, int32_t arg1, int32_t arg2)
+CUresult kernel_{specialization_suffix}(CUstream stream, unsigned gX, unsigned gY, unsigned gZ, float* arg0, int32_t arg1, int32_t arg2)
 
 Different such specialized entry points can be combined using the `linker.py` script.
 
@@ -41,7 +42,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description=desc)
     parser.add_argument("path", help="Path to Python source containing desired kernel in its scope. File will be executed.")
     parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile", required=True)
-    parser.add_argument("--num-warps", "-w", type=int, help="Number of warps to launch the kernel", default=1)
+    parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
     parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
@@ -60,6 +61,14 @@ if __name__ == "__main__":
 
     # validate and parse signature
     signature = list(map(lambda s: s.strip(" "), args.signature.split(",")))
+    print('signature', signature)
+
+    def hash_signature(signature: List[str]):
+        m = hashlib.sha256()
+        m.update(" ".join(signature).encode())
+        return m.hexdigest()[:8]
+
+    sig_hash = hash_signature(signature)
 
     def constexpr(s):
         try:
@@ -73,11 +82,6 @@ if __name__ == "__main__":
         except ValueError:
             pass
         return None
-
-    def hash_signature(signature: List[str]):
-        m = hashlib.sha256()
-        m.update("".join(signature).encode())
-        return m.hexdigest()[:8]
 
     hints = {i: constexpr(s.split(":")[1]) for i, s in enumerate(signature) if ":" in s}
     hints = {k: v for k, v in hints.items() if v is not None}
@@ -95,11 +99,13 @@ if __name__ == "__main__":
     arg_names = [kernel.arg_names[i] for i in signature.keys()]
 
     # dump C stub code
-    suffix = hash_signature(signature.values())
-    func_name = '_'.join([out_name, suffix])
+    suffix = kernel_suffix(signature.values(), config)
+    func_name = '_'.join([out_name, sig_hash, suffix])
+    triton_kernel_name = '_'.join([args.kernel_name, suffix])
     hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
     params = {
         "kernel_name": func_name,
+        "triton_kernel_name": triton_kernel_name,
         "bin_size": len(hex_),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, signature.values())]),
@@ -108,8 +114,9 @@ if __name__ == "__main__":
         "kernel_docstring": "",
         "shared": ccinfo.shared,
         "num_warps": args.num_warps,
+        "_placeholder": "",
     }
     for ext in ['h', 'c']:
         template_path = Path(__file__).parent / f"compile.{ext}"
-        with out_path.with_suffix(f".{suffix}.{ext}").open("w") as fp:
+        with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))
