@@ -156,8 +156,6 @@ def test_compile_link_matmul():
 
         # link all desired configs
         h_files = glob.glob(os.path.join(tmp_dir, "*.h"))
-        print('h_files', h_files)
-        print(' '.join([sys.executable, linker_path] + h_files + ["-o", "kernel"]))
         subprocess.run([sys.executable, linker_path] + h_files + ["-o", "kernel"], check=True, cwd=tmp_dir)
 
         # compile test case
