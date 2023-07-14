@@ -323,9 +323,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else {
-    // if (needTrans && (4 / elemBytes) != kWidth)
-    //   llvm_unreachable("unimplemented Shared -> DotOperandMmav2 code path");
-    llvm::outs() << mat0 << " " << mat1 << "\n";
     // base pointers
     std::array<std::array<Value, 4>, 2> ptrs;
     int vecWidth = 4 / elemBytes;
@@ -594,8 +591,6 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
       loadFn(2 * m, 2 * k);
 
   // Format the values to LLVM::Struct to passing to mma codegen.
-  llvm::outs() << vals.size() << "\n";
-  // llvm::outs() << vals.begin()->second << "\n";
   return composeValuesToDotOperandLayoutStruct(vals, numRepOuter, numRepK,
                                                typeConverter, loc, rewriter);
 }
