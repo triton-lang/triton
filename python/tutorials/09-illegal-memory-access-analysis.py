@@ -4,6 +4,7 @@ Invalid Memory Access Analysis
 
 In this tutorial, you will learn utlities to detect invalid memory accesses, including:
 1. `triton.enable_invalid_memory_access_analysis` that catches exceptions on-the-fly and print the problematic line number.
+It is worth noting that not all invalid memory accesses produce exceptions, so this mode won't catch all of them.
 2. `compute-sanitizer` as an external tool to instrument binaries and exhaustively capture invalid memory accesses.
 
 """
