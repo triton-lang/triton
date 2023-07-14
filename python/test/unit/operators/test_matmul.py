@@ -139,8 +139,11 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     # allocate/transpose inputs
     a = init_input(M, K, AT, ADTYPE, a_fp8)
     b = init_input(K, N, BT, BDTYPE, b_fp8)
-    a[:] = 50
-    b[:] = 50
+    # a[:,  0:16] = 40
+    # a[:,  8:16] = 50
+    # a[:, 16:32] = 60
+    # a[:, 24:32] = 70
+    # b[:] = 70
     # run test
     th_a = maybe_upcast(a, ADTYPE, a_fp8).to(torch.float32)
     if AT and a_fp8:
@@ -158,6 +161,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         atol, rtol = 1e-2, 0
         if ADTYPE == torch.bfloat16 or BDTYPE == torch.bfloat16:
             atol, rtol = 3.5e-2, 0
+        # print(((th_c - tt_c).abs() > 1e-2).nonzero())
         torch.testing.assert_allclose(th_c, tt_c, atol=atol, rtol=rtol)
     except triton.OutOfResources as e:
         pytest.skip(str(e))

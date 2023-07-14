@@ -486,8 +486,12 @@ std::function<void(int, int)> getLoadMatrixFn(
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
+  const int vecPhase = sharedLayout.getVec();
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
+
+  if (kWidth != (4 / elemBytes))
+    assert(vecPhase == 1);
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int a, int b) {
