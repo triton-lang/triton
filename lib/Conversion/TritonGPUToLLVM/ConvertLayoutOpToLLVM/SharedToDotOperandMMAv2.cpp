@@ -179,13 +179,13 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 // <----------------------------------------->
 // vecWidth
 // <------->
-//  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3  /|\
+//  *#t0 ... *#t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  *t0 ... *t0  t1 ... t1  t2 ... t2  t3 ... t3  /|\
 //  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   ||  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   |
 //  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   ||  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   | quad height
 // ...                                                                                            |
 // t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31   || t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31  \|/
 // --------------------------------------------- || --------------------------------------------
-//  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3
+//  *#t0 ... *#t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3
 //  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   ||  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7
 //  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   ||  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11
 // ...
@@ -258,6 +258,8 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
         } else {
           offs[idx] = add(mul(i, stridedSmemOffset), j);
         }
+        // if (needTrans)
+        //   LLVM::vprintf("%d %d\n", {i32_val(idx), offs[idx]}, rewriter);
       }
 
   return offs;
@@ -412,7 +414,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   } else {
     numPtrs = tileShape[order[0]] / (needTrans ? warpsPerTile : 1) /
               matShape[order[0]];
-    numPtrs *= vecWidth;
+    numPtrs *= kWidth;
   }
   numPtrs = std::max<int>(numPtrs, 2);
 

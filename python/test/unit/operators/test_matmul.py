@@ -139,9 +139,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     # allocate/transpose inputs
     a = init_input(M, K, AT, ADTYPE, a_fp8)
     b = init_input(K, N, BT, BDTYPE, b_fp8)
-    # a[:,  0:16] = 40
+    a[:, 0:16] = 40
     # a[:,  8:16] = 50
-    # a[:, 16:32] = 60
+    a[:, 16:32] = 60
     # a[:, 24:32] = 70
     # b[:] = 70
     # run test
