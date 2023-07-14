@@ -11,5 +11,6 @@
 void unload_{kernel_name}(void);
 void load_{kernel_name}(void);
 // tt-linker: {kernel_name}:{signature}
-CUresult{kernel_name}(CUstream stream, unsigned int gX, unsigned int gY,
-                      unsigned int gZ, unsigned int numWarps, {signature});
+CUresult{_placeholder} {kernel_name}(CUstream stream, unsigned int gX,
+                                     unsigned int gY, unsigned int gZ,
+                                     {signature});

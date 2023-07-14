@@ -14,6 +14,11 @@ import triton.language as tl
 
 
 @triton.jit
+def max_fn(x, y):
+    return tl.math.max(x, y)
+
+
+@triton.jit
 def _fwd_kernel(
     Q, K, V, sm_scale,
     L, M,

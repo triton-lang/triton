@@ -388,10 +388,19 @@ private:
     DenseMap<BufferT *, size_t> bufferStart;
     calculateStarts(buffers, bufferStart);
 
+    // NOTE: The original paper doesn't consider interference between
+    // the bumped ranges. Buffers that previously do not interfere with
+    // could interfere after offset bumping if their liveness ranges overlap.
+    // Therefore, we rerun the interference graph algorithm after bumping so
+    // that we regroup the buffers and color them again. Since we always
+    // increase the buffer offset and keep reducing conflicts, we will
+    // eventually reach a fixed point.
     GraphT interference;
     buildInterferenceGraph(buffers, bufferStart, interference);
-
-    allocate(buffers, bufferStart, interference);
+    do {
+      allocate(buffers, interference, bufferStart);
+      buildInterferenceGraph(buffers, bufferStart, interference);
+    } while (!interference.empty());
   }
 
   /// Computes the initial shared memory offsets.
@@ -457,6 +466,8 @@ private:
   void buildInterferenceGraph(const SmallVector<BufferT *> &buffers,
                               const DenseMap<BufferT *, size_t> &bufferStart,
                               GraphT &interference) {
+    // Reset interference graph
+    interference.clear();
     for (auto x : buffers) {
       for (auto y : buffers) {
         if (x == y)
@@ -479,8 +490,10 @@ private:
 
   /// Finalizes shared memory offsets considering interference.
   void allocate(const SmallVector<BufferT *> &buffers,
-                const DenseMap<BufferT *, size_t> &bufferStart,
-                const GraphT &interference) {
+                const GraphT &interference,
+                DenseMap<BufferT *, size_t> &bufferStart) {
+    // Reset shared memory size
+    allocation->sharedMemorySize = 0;
     // First-fit graph coloring
     // Neighbors are nodes that interfere with each other.
     // We color a node by finding the index of the first available
@@ -514,6 +527,7 @@ private:
         adj = std::max(adj, bufferStart.lookup(y) + y->size);
       }
       x->offset = bufferStart.lookup(x) + colors.lookup(x) * adj;
+      bufferStart[x] = x->offset;
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }

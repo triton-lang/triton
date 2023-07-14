@@ -761,27 +761,29 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
-  // Clone the loop body, replace original args with args of the new ForOp
-  // Insert async wait if necessary.
+  // Clone the loop body, replace original args with args of the new ForOp.
+  // We want to find cvt ops that match the following pattern:
+  // %0 = load %ptr
+  // %1 (dotOperand) = cvt %0
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    // is modified
-    auto it = std::find(validLoads.begin(), validLoads.end(), op.getOperand(0));
-    if (it == validLoads.end()) {
-      Operation *newOp = cloneWithInferType(builder, &op, mapping);
-      continue;
+    if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+      auto result = op.getResult(0);
+      auto cvtDstTy = result.getType().cast<RankedTensorType>();
+      if (cvtDstTy.getEncoding().isa<ttg::DotOperandEncodingAttr>()) {
+        auto it =
+            std::find(validLoads.begin(), validLoads.end(), op.getOperand(0));
+        if (it != validLoads.end()) {
+          // We replace the use new load use with a convert layout
+          auto loadArgIdx = std::distance(validLoads.begin(), it);
+          auto cvt = builder.create<ttg::ConvertLayoutOp>(
+              result.getLoc(), cvtDstTy,
+              newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
+          mapping.map(result, cvt.getResult());
+          continue;
+        }
+      }
     }
-
-    // we replace the use new load use with a convert layout
-    size_t i = std::distance(validLoads.begin(), it);
-    auto cvtDstTy = op.getResult(0).getType().cast<RankedTensorType>();
-    if (!cvtDstTy.getEncoding().isa<ttg::DotOperandEncodingAttr>()) {
-      builder.clone(op, mapping);
-      continue;
-    }
-    auto cvt = builder.create<ttg::ConvertLayoutOp>(
-        op.getResult(0).getLoc(), cvtDstTy,
-        newForOp.getRegionIterArgs()[loadIdx + i]);
-    mapping.map(op.getResult(0), cvt.getResult());
+    cloneWithInferType(builder, &op, mapping);
   }
 
   return newForOp;
@@ -807,11 +809,11 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
                                     nextIV, newForOp.getUpperBound());
 
   pipelineIterIdx = newForOp.getRegionIterArgs()[ivIndex + 1];
-  Value insertSliceIndex = builder.create<arith::RemSIOp>(
+  Value insertSliceIndex = builder.create<arith::RemUIOp>(
       nextIV.getLoc(), pipelineIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
   loopIterIdx = newForOp.getRegionIterArgs()[ivIndex + 2];
-  Value extractSliceIndex = builder.create<arith::RemSIOp>(
+  Value extractSliceIndex = builder.create<arith::RemUIOp>(
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
 
