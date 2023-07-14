@@ -1496,8 +1496,8 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         else:
             return _reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
     else:
-        if input.dtype.primitive_bitwidth() < 32:
-            if input.dtype.is_floating_point():
+        if constexpr(input.dtype.primitive_bitwidth) < 32:
+            if constexpr(input.dtype.is_floating_point()):
                 input = input.to(float32)
             else:
                 assert input.dtype.is_integer_type()
