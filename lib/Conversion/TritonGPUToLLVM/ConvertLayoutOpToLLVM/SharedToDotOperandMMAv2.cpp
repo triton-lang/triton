@@ -60,6 +60,7 @@ private:
   SmallVector<uint32_t> warpsPerCTA;
   int kOrder;
   int kWidth;
+  int vecWidth;
   SmallVector<int64_t> tileShape;
   SmallVector<int> instrShape;
   SmallVector<int> matShape;
@@ -206,23 +207,22 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
 
   SmallVector<Value> offs(numPtrs);
 
-  int vecWidth = kWidth;
   int threadsPerQuad[2] = {8, 4};
   int laneWidth = 4;
   int laneHeight = 8;
-  int quadWidth = laneWidth * vecWidth;
+  int quadWidth = laneWidth * kWidth;
   int quadHeight = laneHeight;
   int numQuadI = 2;
 
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
 
-  for (int rep = 0; rep < numPtrs / (2 * vecWidth); ++rep)
+  for (int rep = 0; rep < numPtrs / (2 * kWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
-      for (int elemId = 0; elemId < vecWidth; ++elemId) {
-        int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
+      for (int elemId = 0; elemId < kWidth; ++elemId) {
+        int idx = rep * 2 * kWidth + quadId * kWidth + elemId;
         // inner index base
-        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
+        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(kWidth));
         jBase = add(jBase, i32_val(elemId));
         // inner index offset
         Value jOff = i32_val(0);
@@ -274,7 +274,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
   if (canUseLdmatrix)
     ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
   else
-    ptrIdx = matIdx[order[0]] * 4 / elemBytes;
+    ptrIdx = matIdx[order[0]] * vecWidth;
 
   // The main difference with the original triton code is we removed the
   // prefetch-related logic here for the upstream optimizer phase should
@@ -325,7 +325,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
   } else {
     // base pointers
     std::array<std::array<Value, 4>, 2> ptrs;
-    int vecWidth = 4 / elemBytes;
     for (int i = 0; i < vecWidth; i++)
       ptrs[0][i] = getPtr(ptrIdx + i);
     for (int i = 0; i < vecWidth; i++)
@@ -396,13 +395,13 @@ MMA16816SmemLoader::MMA16816SmemLoader(
       ctx(rewriter.getContext()) {
   contiguousMatShape = matShape[order[0]];
   stridedMatShape = matShape[order[1]];
-
   stridedSmemOffset = smemStrides[order[1]];
+  vecWidth = 4 / elemBytes;
 
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans);
-  canUseLdmatrix = canUseLdmatrix && (kWidth == 4 / elemBytes);
+  canUseLdmatrix = canUseLdmatrix && (kWidth == vecWidth);
   canUseLdmatrix = false;
 
   if (canUseLdmatrix) {
@@ -413,7 +412,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   } else {
     numPtrs = tileShape[order[0]] / (needTrans ? warpsPerTile : 1) /
               matShape[order[0]];
-    numPtrs *= 4 / elemBytes;
+    numPtrs *= vecWidth;
   }
   numPtrs = std::max<int>(numPtrs, 2);
 
