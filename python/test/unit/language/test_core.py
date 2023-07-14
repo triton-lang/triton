@@ -2493,13 +2493,17 @@ def test_default(device):
     ret1 = torch.zeros(1, dtype=torch.int32, device=device)
 
     @triton.jit
-    def _kernel(ret0, ret1, value):
+    def _kernel(ret0, ret1, value=3):
         tl.store(ret0, _impl())
         tl.store(ret1, _impl(value))
 
     _kernel[(1,)](ret0, ret1, value)
     assert ret0.item() == 10
     assert ret1.item() == value
+
+    _kernel[(1,)](ret0, ret1)
+    assert ret0.item() == 10
+    assert ret1.item() == 3
 
 # ---------------
 # test noop
