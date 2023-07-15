@@ -6,7 +6,6 @@
 #include "mlir/IR/OperationSupport.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 namespace mlir {
 namespace triton {
@@ -404,18 +403,17 @@ LogicalResult mlir::triton::DotOp::verify() {
   auto bTy = getOperand(1).getType().cast<RankedTensorType>();
   if (aTy.getElementType() != bTy.getElementType())
     return emitError("element types of operands A and B must match");
-  auto aEncoding =
-      aTy.getEncoding().dyn_cast_or_null<triton::gpu::DotOperandEncodingAttr>();
-  auto bEncoding =
-      bTy.getEncoding().dyn_cast_or_null<triton::gpu::DotOperandEncodingAttr>();
+  auto aEncoding = aTy.getEncoding();
+  auto bEncoding = bTy.getEncoding();
   if (!aEncoding && !bEncoding)
     return mlir::success();
   // Verify that the encodings are valid.
   if (!aEncoding || !bEncoding)
     return emitError("mismatching encoding between A and B operands");
-  if (aEncoding.getMMAv2kWidth() != bEncoding.getMMAv2kWidth())
-    return emitError("mismatching kWidth between A and B operands");
-  return mlir::success();
+  Dialect &dialect = aEncoding.getDialect();
+  auto interface = cast<DialectInferLayoutInterface>(&dialect);
+  return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
+                                                     bEncoding);
 }
 
 //-- ReduceOp --
@@ -641,6 +639,31 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
                                                  splat.getOperand());
     return mlir::success();
   }
+  // expand_dims(broadcast) -> broadcast(expand_dims)
+  //
+  // On it's own this doesn't do much, but consider
+  //    broadcast(expand_dims(broadcast))
+  // -> broadcast(broadcast(expand_dims))
+  // -> broadcast(expand_dims)
+  if (auto broadcast = dyn_cast<triton::BroadcastOp>(definingOp)) {
+    auto src = broadcast.getSrc();
+    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
+    auto elemTy = srcTy.getElementType();
+    auto srcShape = srcTy.getShape();
+
+    llvm::SmallVector<int64_t, 4> newExpandShape(srcShape.begin(),
+                                                 srcShape.end());
+    newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
+    auto newExpandTy = RankedTensorType::get(newExpandShape, elemTy);
+
+    auto newExpand = rewriter.create<triton::ExpandDimsOp>(
+        op.getLoc(), newExpandTy, src, op.getAxis());
+    auto newBroadcast = rewriter.create<triton::BroadcastOp>(
+        broadcast.getLoc(), op.getType(), newExpand.getResult());
+    rewriter.replaceOp(op, {newBroadcast.getResult()});
+    return mlir::success();
+  }
+
   return mlir::failure();
 }
 

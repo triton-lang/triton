@@ -7,7 +7,7 @@ from typing import Callable, List, Sequence, TypeVar
 
 from .._C.libtriton.triton import ir
 from ..runtime.jit import jit
-from . import semantic
+from . import math, semantic
 
 T = TypeVar('T')
 
@@ -400,6 +400,9 @@ class constexpr:
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
+
+    def __index__(self):
+        return self.value
 
     def __add__(self, other):
         return constexpr(self.value + other.value)
@@ -1420,6 +1423,11 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
+def _fast_max(x, y):
+    return math.max(x, y)
+
+
+@jit
 @_add_reduction_docstr("maximum",
                        return_indices_arg="return_indices",
                        tie_break_arg="return_indices_tie_break_left")
@@ -1431,7 +1439,13 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         else:
             return _reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
     else:
-        return reduce(input, axis, maximum)
+        if constexpr(input.dtype.primitive_bitwidth) < 32:
+            if constexpr(input.dtype.is_floating()):
+                input = input.to(float32)
+            else:
+                assert input.dtype.is_integer_type()
+                input = input.to(int32)
+        return reduce(input, axis, _fast_max)
 
 
 @jit
@@ -1466,6 +1480,11 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
+def _fast_min(x, y):
+    return math.min(x, y)
+
+
+@jit
 @_add_reduction_docstr("minimum",
                        return_indices_arg="return_indices",
                        tie_break_arg="return_indices_tie_break_left")
@@ -1477,7 +1496,13 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         else:
             return _reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
     else:
-        return reduce(input, axis, minimum)
+        if constexpr(input.dtype.primitive_bitwidth) < 32:
+            if constexpr(input.dtype.is_floating()):
+                input = input.to(float32)
+            else:
+                assert input.dtype.is_integer_type()
+                input = input.to(int32)
+        return reduce(input, axis, _fast_min)
 
 
 @jit

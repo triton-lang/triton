@@ -202,6 +202,34 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   tt.return
 }
 
+// This example triggers graph coloring with multiple rounds
+// CHECK-LABEL: multi_color_multi_rounds
+tt.func @multi_color_multi_rounds(%arg0: !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 32
+  %cst = arith.constant dense<0.000000e+00> : tensor<4x4xf16, #A_SHARED>
+  // CHECK-NEXT: offset = 1184, size = 128
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<16x4xf16, #A_SHARED>
+  // CHECK-NEXT: offset = 1312, size = 8192
+  %cst_1 = arith.constant dense<0.000000e+00> : tensor<1024x4xf16, #A_SHARED>
+  %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // CHECK-NEXT: scratch offset = 32, size = 1152
+  %0 = triton_gpu.convert_layout %cst_2 : (tensor<16x32xf16, #AL>) -> tensor<16x32xf16, #AL>
+  %1 = triton_gpu.convert_layout %cst : (tensor<4x4xf16, #A_SHARED>) -> tensor<4x4xf16, #AL>
+  // CHECK-NEXT: offset = 11968, size = 128
+  %cst_3 = arith.constant dense<0.000000e+00> : tensor<2x32xf16, #A_SHARED>
+  %2 = triton_gpu.convert_layout %cst : (tensor<4x4xf16, #A_SHARED>) -> tensor<4x4xf16, #AL>
+  // CHECK-NEXT: offset = 0, size = 512
+  %cst_4 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %3 = triton_gpu.convert_layout %cst_0 : (tensor<16x4xf16, #A_SHARED>) -> tensor<16x4xf16, #AL>
+  %4 = triton_gpu.convert_layout %cst_1 : (tensor<1024x4xf16, #A_SHARED>) -> tensor<1024x4xf16, #AL>
+  // CHECK-NEXT: scratch offset = 0, size = 1152
+  %5 = triton_gpu.convert_layout %cst_2 : (tensor<16x32xf16, #AL>) -> tensor<16x32xf16, #AL>
+  %6 = triton_gpu.convert_layout %cst_3 : (tensor<2x32xf16, #A_SHARED>) -> tensor<2x32xf16, #AL>
+  // CHECK-NEXT: size = 12096
+  tt.return
+}
+
+
 // CHECK-LABEL: alloc
 tt.func @alloc(%A : !tt.ptr<f16>) {
   // CHECK: offset = 0, size = 512

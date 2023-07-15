@@ -659,6 +659,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
+            ip, last_loc = self._get_insertion_point_and_loc()
 
             # loop body (the after region)
             # loop_block = self.builder.create_block()
@@ -668,6 +669,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
             loop_defs = self.local_defs
+            dummy.erase()
 
             # collect loop-carried values
             names = []
@@ -684,7 +686,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ret_types.append(loop_defs[name].type)
                     init_args.append(liveins[name])
 
-            self.builder.set_insertion_point_to_end(insert_block)
+            self._set_insertion_point_and_loc(ip, last_loc)
             while_op = self.builder.create_while_op([ty.to_ir(self.builder) for ty in ret_types],
                                                     [arg.handle for arg in init_args])
             # merge the condition region

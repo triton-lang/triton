@@ -119,7 +119,7 @@ def check_type_supported(dtype, device):
 class MmaLayout:
     def __init__(self, version, warps_per_cta):
         self.version = version
-        self.warps_per_cta = str(warps_per_cta)
+        self.warps_per_cta = warps_per_cta
 
     def __str__(self):
         return f"#triton_gpu.mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}}}>"
@@ -127,10 +127,10 @@ class MmaLayout:
 
 class BlockedLayout:
     def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
-        self.sz_per_thread = str(size_per_thread)
-        self.threads_per_warp = str(threads_per_warp)
-        self.warps_per_cta = str(warps_per_cta)
-        self.order = str(order)
+        self.sz_per_thread = size_per_thread
+        self.threads_per_warp = threads_per_warp
+        self.warps_per_cta = warps_per_cta
+        self.order = order
 
     def __str__(self):
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
@@ -1101,6 +1101,7 @@ def test_atomic_cas(sem, device):
     ('bfloat16', 'float32', False),
     ('float32', 'int32', True),
     ('float32', 'int1', False),
+    ('int8', 'bfloat16', False),
 ] + [
     (f'uint{x}', f'int{x}', True) for x in [8, 16, 32, 64]
 ] + [
@@ -1111,21 +1112,24 @@ def test_cast(dtype_x, dtype_z, bitcast, device):
     check_type_supported(dtype_x, device)
     check_type_supported(dtype_z, device)
 
+    size = 1024
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
-    x0 = 43 if dtype_x in int_dtypes else 43.5
-    if dtype_x in float_dtypes and dtype_z == 'int1':
-        x0 = 0.5
     if dtype_x.startswith('bfloat'):
-        x_tri = torch.tensor([x0], dtype=getattr(torch, dtype_x), device=device)
+        x_tri = torch.randn(size, dtype=getattr(torch, dtype_x), device=device)
     else:
-        x = np.array([x0], dtype=getattr(np, dtype_x))
+        x = numpy_random(size, dtype_str=dtype_x, low=-10, high=10) * 10
+        # Triton clamps negative values to zero, while numpy wraps around
+        # intmax, so avoid negatives for now.
+        # TODO: figure out which one should actually be happening, and test it
+        if dtype_z in uint_dtypes:
+            x = np.absolute(x)
         x_tri = to_triton(x, device=device)
 
     # triton kernel
     @triton.jit
-    def kernel(X, Z, BITCAST: tl.constexpr):
-        x_ptr = X + tl.arange(0, 1)
-        z_ptr = Z + tl.arange(0, 1)
+    def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr):
+        x_ptr = X + tl.arange(0, SIZE)
+        z_ptr = Z + tl.arange(0, SIZE)
         x = tl.load(x_ptr)
         z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
         tl.store(z_ptr, z)
@@ -1133,21 +1137,21 @@ def test_cast(dtype_x, dtype_z, bitcast, device):
     dtype_z_np = dtype_z if dtype_z != 'int1' else 'bool_'
     # triton result
     if dtype_z.startswith('bfloat'):
-        z_tri = torch.empty((1,), dtype=getattr(torch, dtype_z), device=device)
+        z_tri = torch.empty((size,), dtype=getattr(torch, dtype_z), device=device)
     else:
-        z_tri = to_triton(np.empty((1, ), dtype=getattr(np, dtype_z_np)), device=device)
-    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast)
+        z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
+    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, num_warps=1)
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat'):
         assert bitcast is False
         z_ref = x_tri.to(z_tri.dtype)
-        assert z_tri == z_ref
+        torch.testing.assert_close(z_ref, z_tri, rtol=0, atol=0)
     else:
         if bitcast:
             z_ref = x.view(getattr(np, dtype_z_np))
         else:
             z_ref = x.astype(getattr(np, dtype_z_np))
-        assert to_numpy(z_tri) == z_ref
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("dtype_str, num_warps", [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
@@ -2072,7 +2076,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         out_dtype = tl.float16
     else:
         out_dtype = tl.float32
-
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1),
                          y_tri, y_tri.stride(0), y_tri.stride(1),
                          w_tri, w_tri.stride(0), w_tri.stride(1),
@@ -2087,6 +2090,14 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          CHAIN_DOT=epilogue == 'chain-dot',
                          ALLOW_TF32=allow_tf32,
                          num_warps=num_warps)
+    if epilogue == 'softmax' and (in_dtype != 'float32' or allow_tf32):
+        ptx = pgm.asm["ptx"]
+        start = ptx.find("shfl.sync")
+        end = ptx.find("cvt.rn.f16.f32")
+        red_code = ptx[start:end]
+        assert len(red_code) > 0
+        assert "shared" not in red_code
+        assert "bar.sync" not in red_code
     # torch result
     if in_dtype == 'int8':
         z_ref = np.matmul(x.astype(np.float32),
@@ -2171,9 +2182,13 @@ def test_dot_mulbroadcastred(in_dtype, device):
     assert "triton_gpu.async_wait {num = 2 : i32}" in h.asm['ttgir']
 
 
-@pytest.mark.parametrize("dtype_str", int_dtypes + float_dtypes + ['bfloat16'])
+@pytest.mark.parametrize("dtype_str", int_dtypes + uint_dtypes + float_dtypes + ['bfloat16'])
 def test_full(dtype_str, device):
-    dtype = getattr(torch, dtype_str)
+    if dtype_str in uint_dtypes and not hasattr(torch, dtype_str):
+        # PyTorch only has unsigned 8, but not 16, 32, or 64
+        dtype = getattr(torch, dtype_str[1:])  # uintx -> intx
+    else:
+        dtype = getattr(torch, dtype_str)
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
 
     @triton.jit
@@ -2478,13 +2493,17 @@ def test_default(device):
     ret1 = torch.zeros(1, dtype=torch.int32, device=device)
 
     @triton.jit
-    def _kernel(ret0, ret1, value):
+    def _kernel(ret0, ret1, value=3):
         tl.store(ret0, _impl())
         tl.store(ret1, _impl(value))
 
     _kernel[(1,)](ret0, ret1, value)
     assert ret0.item() == 10
     assert ret1.item() == value
+
+    _kernel[(1,)](ret0, ret1)
+    assert ret0.item() == 10
+    assert ret1.item() == 3
 
 # ---------------
 # test noop
@@ -2676,7 +2695,7 @@ def test_call(type, device):
 # -------------
 
 
-@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and"])
+@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and_dynamic", "if_and_static"])
 def test_if(if_type, device):
 
     @triton.jit
@@ -3062,6 +3081,21 @@ def test_while(device):
     assert out_init_i[0] == init_i[0]
     assert out_i[0] == init_i[0] + 1
     assert out_j[0] == bound[0]
+
+def test_while(device):
+    @triton.jit
+    def nested_while(data, countPtr):
+        for i in range(10):
+            count = tl.load(countPtr)
+            while count > 0:
+                tl.store(data, tl.load(data) + 1.0)
+                count = count - 2
+
+    counter = torch.tensor([8], dtype=torch.int32, device=device)
+    data = torch.zeros((1,), device=device, dtype=torch.float32)
+    nested_while[(1,)](data, counter)
+    assert data[0] == 40
+
 
 # def test_for_if(device):
 
