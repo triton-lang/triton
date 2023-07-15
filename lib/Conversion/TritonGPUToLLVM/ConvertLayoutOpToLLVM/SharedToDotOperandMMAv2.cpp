@@ -351,8 +351,10 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     // (equivalent to ldmatrix.x4)
     SmallVector<SmallVector<Value>> vptrs(4, SmallVector<Value>(vecWidth));
     for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < vecWidth; ++j)
+      for (int j = 0; j < vecWidth; ++j) {
         vptrs[i][j] = gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]);
+        llvm::outs() << vptrs[0][0] << "\n";
+      }
     // row + trans and col + no-trans are equivalent
     bool isActualTrans =
         (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
@@ -410,7 +412,8 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans);
   canUseLdmatrix = canUseLdmatrix && (kWidth == vecWidth);
-  canUseLdmatrix = false;
+  // canUseLdmatrix = false;
+  // llvm::outs() << canUseLdmatrix << "\n";
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwarpsPerTile] if not transposed,
