@@ -114,7 +114,7 @@ class BlockedToMMA : public mlir::RewritePattern {
     getBackwardSlice(op, &slice, bwdFilterCvtType);
     Operation *src = (*slice.begin())->getOperand(0).getDefiningOp();
     if (!src || src->getNumOperands() != 1)
-      return Type();
+      return FinalType;
     return getElementTypeOrSelf(src->getOperand(0).getType());
   }
 
