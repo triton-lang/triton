@@ -499,7 +499,7 @@ std::function<void(int, int)> getLoadMatrixFn(
   auto order = sharedLayout.getOrder();
 
   if (kWidth != (4 / elemBytes))
-    assert(vecPhase == 1);
+    assert(vecPhase == 1 || vecPhase == 4 * kWidth);
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int a, int b) {

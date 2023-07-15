@@ -112,7 +112,8 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
           // for now, disable swizzle when using transposed int8 tensor cores
           if (typeWidthInBit == 8 && order[0] == inner)
             return $_get(context, 1, 1, 1, order);
-          return $_get(context, 1, 1, 1, order);
+          if (32 / typeWidthInBit != dotOpEnc.getMMAv2kWidth())
+            return $_get(context, 1, 1, 1, order);
 
           // --- handle A operand ---
           if (opIdx == 0) { // compute swizzling for A operand
