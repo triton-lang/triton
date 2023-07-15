@@ -220,7 +220,6 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
   for (int rep = 0; rep < numPtrs / (2 * kWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < kWidth; ++elemId) {
-        int idx = rep * 2 * kWidth + quadId * kWidth + elemId;
         // inner index base
         Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(kWidth));
         jBase = add(jBase, i32_val(elemId));
@@ -250,16 +249,22 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
         // To prevent out-of-bound access when tile is too small.
         Value i = add(iBase, mul(iOff, i32_val(quadHeight)));
         Value j = add(jBase, mul(jOff, i32_val(quadWidth)));
-        // wrap around the bounds
-        // i = urem(i, i32_val(cTileShape));
-        // j = urem(j, i32_val(sTileShape));
+        // Compute id of this ptr
+        int idx = rep * 2 * kWidth;
+        if (needTrans) {
+          idx += quadId * vecWidth;
+          idx += elemId % vecWidth;
+          idx += elemId / vecWidth * kWidth;
+        } else {
+          idx += quadId * kWidth;
+          idx += elemId;
+        }
+
         if (needTrans) {
           offs[idx] = add(i, mul(j, stridedSmemOffset));
         } else {
           offs[idx] = add(mul(i, stridedSmemOffset), j);
         }
-        // if (needTrans)
-        //   LLVM::vprintf("%d %d\n", {i32_val(idx), offs[idx]}, rewriter);
       }
 
   return offs;
@@ -276,7 +281,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
   if (canUseLdmatrix)
     ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
   else
-    ptrIdx = matIdx[order[0]] * vecWidth;
+    ptrIdx = matIdx[order[0]] * (needTrans ? kWidth : vecWidth);
 
   // The main difference with the original triton code is we removed the
   // prefetch-related logic here for the upstream optimizer phase should
@@ -335,7 +340,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     int _i0 = matIdx[order[1]] * (stridedLoadMatOffset * stridedMatShape);
     int _i1 = _i0;
     if (needTrans)
-      _i1 += stridedLoadMatOffset * stridedMatShape;
+      _i1 += (kWidth != vecWidth) ? vecWidth
+                                  : stridedLoadMatOffset * stridedMatShape;
     else
       _i1 += (kOrder == 1 ? 1 : stridedLoadMatOffset) * stridedMatShape;
     Value i0 = mul(i32_val(_i0), stridedSmemOffset);
