@@ -3082,6 +3082,21 @@ def test_while(device):
     assert out_i[0] == init_i[0] + 1
     assert out_j[0] == bound[0]
 
+def test_while(device):
+    @triton.jit
+    def nested_while(data, countPtr):
+        for i in range(10):
+            count = tl.load(countPtr)
+            while count > 0:
+                tl.store(data, tl.load(data) + 1.0)
+                count = count - 2
+
+    counter = torch.tensor([8], dtype=torch.int32, device=device)
+    data = torch.zeros((1,), device=device, dtype=torch.float32)
+    nested_while[(1,)](data, counter)
+    assert data[0] == 40
+
+
 # def test_for_if(device):
 
 #     @triton.jit
