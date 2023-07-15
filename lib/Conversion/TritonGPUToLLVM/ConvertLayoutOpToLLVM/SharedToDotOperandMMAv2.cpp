@@ -312,6 +312,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
         mul(i32_val(matIdx[order[1]] * stridedLoadMatOffset * stridedMatShape),
             stridedSmemOffset);
     Value readPtr = gep(shemPtrTy, ptr, stridedOffset);
+    // llvm::outs() << readPtr << "\n";
 
     PTXBuilder builder;
     // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
@@ -353,7 +354,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     for (int i = 0; i < 4; ++i)
       for (int j = 0; j < vecWidth; ++j) {
         vptrs[i][j] = gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]);
-        llvm::outs() << vptrs[0][0] << "\n";
       }
     // row + trans and col + no-trans are equivalent
     bool isActualTrans =
@@ -413,7 +413,6 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   canUseLdmatrix = elemBytes == 2 || (!needTrans);
   canUseLdmatrix = canUseLdmatrix && (kWidth == vecWidth);
   // canUseLdmatrix = false;
-  // llvm::outs() << canUseLdmatrix << "\n";
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwarpsPerTile] if not transposed,
