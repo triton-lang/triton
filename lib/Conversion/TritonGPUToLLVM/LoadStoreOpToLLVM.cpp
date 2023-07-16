@@ -783,6 +783,7 @@ struct InsertSliceAsyncOpConversion
     unsigned inVec = getContiguity(src);
     unsigned outVec = resSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
+    minVec = inVec;
     unsigned numElems = getTotalElemsPerThread(srcTy);
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();

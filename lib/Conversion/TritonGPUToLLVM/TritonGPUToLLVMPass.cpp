@@ -537,8 +537,9 @@ private:
       if (mask)
         inVec =
             std::min<unsigned>(axisInfoAnalysis.getMaskAlignment(mask), inVec);
-      unsigned outVec = resSharedLayout.getVec();
-      unsigned minVec = std::min(outVec, inVec);
+      // unsigned outVec = resSharedLayout.getVec();
+      // unsigned minVec = std::min(outVec, inVec);
+      unsigned minVec = inVec;
       auto maxBitWidth =
           std::max<unsigned>(128, resElemTy.getIntOrFloatBitWidth());
       auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
@@ -549,8 +550,9 @@ private:
       // capability does not support async copy, then we do decompose
       if (triton::gpu::InsertSliceAsyncOp::getEligibleLoadByteWidth(
               computeCapability)
-              .contains(byteWidth))
+              .contains(byteWidth)) {
         return;
+      }
 
       // load
       auto tmpTy =

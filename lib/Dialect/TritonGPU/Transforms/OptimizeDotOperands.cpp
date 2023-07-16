@@ -76,48 +76,48 @@ public:
 
 // convert(layout_preserving_op(x), dot_operand)
 // -> layout_preserving_op(convert(x, dot_operand))
-// class MoveOpAfterLayoutConversion : public mlir::RewritePattern {
-// public:
-//   MoveOpAfterLayoutConversion(mlir::MLIRContext *context)
-//       :
-//       mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
-//                              1, context) {}
+class MoveOpAfterLayoutConversion2 : public mlir::RewritePattern {
+public:
+  MoveOpAfterLayoutConversion2(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
 
-//   LogicalResult
-//   matchAndRewrite(mlir::Operation *op,
-//                   mlir::PatternRewriter &rewriter) const override {
-//     auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
-//     auto cvtTy = cvt.getType().cast<RankedTensorType>();
-//     auto cvtArgOp = cvt.getSrc().getDefiningOp();
-//     // llvm::outs() << *cvtArgOp << "\n";
-//     if (!isa<triton::FpToFpOp>(cvtArgOp))
-//       return mlir::failure();
-//     if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
-//       return mlir::failure();
-//     if (!cvtArgOp || cvtArgOp->getNumOperands() != 1)
-//       return mlir::failure();
+  LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto cvtTy = cvt.getType().cast<RankedTensorType>();
+    auto cvtArgOp = cvt.getSrc().getDefiningOp();
+    // llvm::outs() << *cvtArgOp << "\n";
+    if (!cvtArgOp)
+      return mlir::failure();
+    if (!isa<triton::FpToFpOp>(cvtArgOp))
+      return mlir::failure();
+    if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
+      return mlir::failure();
+    if (!cvtArgOp || cvtArgOp->getNumOperands() != 1)
+      return mlir::failure();
 
-//     auto argTy = cvtArgOp->getOperand(0).getType().cast<RankedTensorType>();
-//     auto retTy = cvtArgOp->getResult(0).getType().cast<RankedTensorType>();
-//     if (!argTy || !retTy || argTy.getEncoding() != retTy.getEncoding())
-//       return mlir::failure();
+    auto argTy = cvtArgOp->getOperand(0).getType().cast<RankedTensorType>();
+    auto retTy = cvtArgOp->getResult(0).getType().cast<RankedTensorType>();
+    if (!argTy || !retTy || argTy.getEncoding() != retTy.getEncoding())
+      return mlir::failure();
 
-//     Type newRetTy = RankedTensorType::get(
-//         retTy.getShape(), retTy.getElementType(), cvtTy.getEncoding());
-//     Type newCvtTy = RankedTensorType::get(
-//         retTy.getShape(), argTy.getElementType(), cvtTy.getEncoding());
-//     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-//         cvt.getLoc(), newCvtTy, cvtArgOp->getOperand(0));
-//     auto newRet = rewriter.clone(*cvtArgOp);
-//     newRet->setOperand(0, newCvt);
-//     newRet->getResult(0).setType(newRetTy);
-//     rewriter.replaceOp(op, newRet->getResults());
-//     llvm::outs() << newCvt << "\n";
-//     llvm::outs() << *newRet << "\n";
-//     return mlir::success();
-//   }
-// };
-//
+    Type newRetTy = RankedTensorType::get(
+        retTy.getShape(), retTy.getElementType(), cvtTy.getEncoding());
+    Type newCvtTy = RankedTensorType::get(
+        retTy.getShape(), argTy.getElementType(), cvtTy.getEncoding());
+    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+        cvt.getLoc(), newCvtTy, cvtArgOp->getOperand(0));
+    auto newRet = rewriter.clone(*cvtArgOp);
+    newRet->setOperand(0, newCvt);
+    newRet->getResult(0).setType(newRetTy);
+    rewriter.replaceOp(op, newRet->getResults());
+    // llvm::outs() << newCvt << "\n";
+    // llvm::outs() << *newRet << "\n";
+    return mlir::success();
+  }
+};
 
 class MoveOpAfterLayoutConversion : public mlir::RewritePattern {
 
@@ -219,7 +219,7 @@ public:
           replaceOperand = false;
           break;
         }
-        // we only push back when the first op in the chain has a load operand
+        // we only push back when the first op in the chain has a load
         if ((op == processed.back()) &&
             !isa<triton::LoadOp>(op->getOperand(0).getDefiningOp())) {
           replaceOperand = false;
@@ -267,7 +267,7 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<ConvertTransConvert>(context);
-    patterns.add<MoveOpAfterLayoutConversion>(context);
+    patterns.add<MoveOpAfterLayoutConversion2>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
     if (fixupLoops(m).failed())
