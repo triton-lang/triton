@@ -470,8 +470,8 @@ public:
 
   void runOnOperation() override {
     // Only rewrite if the hardware does not support
-    if (computeCapability >= 90)
-      return;
+    // if (computeCapability >= 90)
+    //   return;
 
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
     // MLIR does not support one-multiple value mapping. For example, if we use
