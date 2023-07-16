@@ -89,7 +89,7 @@ def f8_to_f16(x, dtype):
                 (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
                 (128, 128, 32, 8, 4, 2, 256, 256, 128, AT, BT, ADTYPE, BDTYPE),
-            ] for ADTYPE, BDTYPE in [("float8e5", "float8e5"),
+            ] for ADTYPE, BDTYPE in [("float8e4b15", "float8e5"),
                                      ("float8e4", "float16"),
                                      ("float16", "float8e5"),
                                      ("float16", "float32"),
@@ -156,7 +156,6 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         atol, rtol = 1e-2, 0
         if ADTYPE == torch.bfloat16 or BDTYPE == torch.bfloat16:
             atol, rtol = 3.5e-2, 0
-        # print(((th_c - tt_c).abs() > 1e-2).nonzero())
         torch.testing.assert_allclose(th_c, tt_c, atol=atol, rtol=rtol)
     except triton.OutOfResources as e:
         pytest.skip(str(e))

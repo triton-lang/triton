@@ -188,7 +188,6 @@ public:
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
     // convert operands
-    // int minBitwidth = computeMinBitWidth(a, b);
     int minBitwidth = std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
     Type minType = IntegerType::get(ctx, minBitwidth);
     // convert A operand

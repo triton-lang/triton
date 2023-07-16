@@ -312,7 +312,6 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
         mul(i32_val(matIdx[order[1]] * stridedLoadMatOffset * stridedMatShape),
             stridedSmemOffset);
     Value readPtr = gep(shemPtrTy, ptr, stridedOffset);
-    // llvm::outs() << readPtr << "\n";
 
     PTXBuilder builder;
     // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
