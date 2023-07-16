@@ -139,17 +139,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     # allocate/transpose inputs
     a = init_input(M, K, AT, ADTYPE, a_fp8)
     b = init_input(K, N, BT, BDTYPE, b_fp8)
-    # a[:] = 50
-    # for i in range(0, 32, 4):
-    #     a[:, i:i+4] = a[0, 0:4]
-    # a[:, 8:16] = a[:, 16:24] = a[:, 24:32] = a[:, 0:8]
-    # a[:, 0:16] = 40
-    # a[:,  8:16] = 50
-    # a[:, 16:32] = 60
-    # a[:, 24:32] = 70
-    # b[:] = 70
     # run test
-    # print(a)
     th_a = maybe_upcast(a, ADTYPE, a_fp8).to(torch.float32)
     if AT and a_fp8:
         th_a = th_a.view(th_a.shape[::-1]).T
