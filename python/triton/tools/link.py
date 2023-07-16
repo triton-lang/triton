@@ -18,6 +18,7 @@ class KernelLinkerMeta:
     arg_names: Sequence[str]
     arg_ctypes: Sequence[str]
     sizes: Sequence[Union[int, None]]
+    sig_hash: str
     suffix: str
     num_specs: int
     """ number of specialized arguments """
@@ -30,7 +31,7 @@ class HeaderParser:
         # [kernel_name, c signature]
         self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+)")
         # [name, suffix]
-        self.kernel_name = re.compile("([\\w]+)_([\\w]+)")
+        self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]+)$")
         # [(argnum, d|c)]
         self.kernel_suffix = re.compile("([0-9]+)([c,d])")
         # [(type, name)]
@@ -45,7 +46,7 @@ class HeaderParser:
                 m = self.linker_directives.match(ln)
                 if _exists(m):
                     ker_name, c_sig = m.group(1), m.group(2)
-                    name, suffix = self._match_name(ker_name)
+                    name, sig_hash, suffix = self._match_name(ker_name)
                     c_types, arg_names = self._match_c_sig(c_sig)
                     num_specs, sizes = self._match_suffix(suffix)
                     self._add_kernel(
@@ -54,6 +55,7 @@ class HeaderParser:
                             arg_names=arg_names,
                             arg_ctypes=c_types,
                             sizes=sizes,
+                            sig_hash=sig_hash,
                             suffix=suffix,
                             num_specs=num_specs,
                         ),
@@ -62,8 +64,8 @@ class HeaderParser:
     def _match_name(self, ker_name: str):
         m = self.kernel_name.match(ker_name)
         if _exists(m):
-            name, suffix = m.group(1), m.group(2)
-            return name, suffix
+            name, sig_hash, suffix = m.group(1), m.group(2), m.group(3)
+            return name, sig_hash, suffix
         raise LinkerError(f"{ker_name} is not a valid kernel name")
 
     def _match_c_sig(self, c_sig: str):
@@ -110,7 +112,7 @@ def gen_signature(m):
 
 def make_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     return f"""
-CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {gen_signature(metas[-1])});
+CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature(metas[-1])});
 void load_{name}();
 void unload_{name}();
     """
@@ -119,26 +121,26 @@ void unload_{name}();
 def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        src += f"CUresult {name}_{meta.suffix}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {gen_signature(meta)});\n"
+        src += f"CUresult {name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature(meta)});\n"
     src += "\n"
 
-    src += f"CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, unsigned int numWarps, {gen_signature(metas[-1])}){{"
+    src += f"CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature(metas[-1])}){{"
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
         cond_fn = lambda val, hint: f"({val} % {hint} == 0)" if hint == 16 else f"({val} == {hint})" if hint == 1 else None
         conds = " && ".join([cond_fn(val, hint) for val, hint in zip(meta.arg_names, meta.sizes) if hint is not None])
         src += f"  if ({conds})\n"
-        src += f"    return {name}_{meta.suffix}(stream, gX, gY, gZ, numWarps, {', '.join(meta.arg_names)});\n"
+        src += f"    return {name}_{meta.sig_hash}_{meta.suffix}(stream, gX, gY, gZ, {', '.join(meta.arg_names)});\n"
     src += "}\n"
 
     for mode in ["load", "unload"]:
         src += f"\n// {mode} for: {name}\n"
         for meta in sorted(metas, key=lambda m: -m.num_specs):
-            src += f"void {mode}_{name}_{meta.suffix}();\n"
+            src += f"void {mode}_{name}_{meta.sig_hash}_{meta.suffix}();\n"
         src += f"void {mode}_{name}() {{"
         src += "\n"
         for meta in sorted(metas, key=lambda m: -m.num_specs):
-            src += f"  {mode}_{name}_{meta.suffix}();\n"
+            src += f"  {mode}_{name}_{meta.sig_hash}_{meta.suffix}();\n"
         src += "}\n"
     return src
 
