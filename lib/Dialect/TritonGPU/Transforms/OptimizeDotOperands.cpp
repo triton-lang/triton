@@ -88,28 +88,32 @@ public:
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
     auto cvtTy = cvt.getType().cast<RankedTensorType>();
     auto cvtArgOp = cvt.getSrc().getDefiningOp();
-    if (!cvtArgOp)
+    if (!cvtArgOp || cvtArgOp->getNumOperands() == 0)
       return mlir::failure();
-    if (!isa<triton::FpToFpOp>(cvtArgOp))
+    // only consider custom conversions or arith ops
+    if (!isa<triton::FpToFpOp, triton::BitcastOp>(cvtArgOp) &&
+        cvtArgOp->getDialect()->getTypeID() !=
+            mlir::TypeID::get<arith::ArithDialect>())
       return mlir::failure();
+    // only considers conversions to dot operand
     if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
       return mlir::failure();
-    if (!cvtArgOp || cvtArgOp->getNumOperands() != 1)
-      return mlir::failure();
-
     auto argTy = cvtArgOp->getOperand(0).getType().cast<RankedTensorType>();
     auto retTy = cvtArgOp->getResult(0).getType().cast<RankedTensorType>();
-    if (!argTy || !retTy || argTy.getEncoding() != retTy.getEncoding())
+    if (!argTy || !retTy)
       return mlir::failure();
-
     Type newRetTy = RankedTensorType::get(
         retTy.getShape(), retTy.getElementType(), cvtTy.getEncoding());
     Type newCvtTy = RankedTensorType::get(
         retTy.getShape(), argTy.getElementType(), cvtTy.getEncoding());
-    auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        cvt.getLoc(), newCvtTy, cvtArgOp->getOperand(0));
+    int numArgs = cvtArgOp->getNumOperands();
+    SmallVector<triton::gpu::ConvertLayoutOp> newCvts(numArgs);
+    for (int i = 0; i < numArgs; i++)
+      newCvts[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          cvt.getLoc(), newCvtTy, cvtArgOp->getOperand(i));
     auto newRet = rewriter.clone(*cvtArgOp);
-    newRet->setOperand(0, newCvt);
+    for (int i = 0; i < numArgs; i++)
+      newRet->setOperand(i, newCvts[i]);
     newRet->getResult(0).setType(newRetTy);
     rewriter.replaceOp(op, newRet->getResults());
     return mlir::success();
