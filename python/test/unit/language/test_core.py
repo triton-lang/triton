@@ -3082,6 +3082,7 @@ def test_while(device):
     assert out_i[0] == init_i[0] + 1
     assert out_j[0] == bound[0]
 
+
 def test_while(device):
     @triton.jit
     def nested_while(data, countPtr):
