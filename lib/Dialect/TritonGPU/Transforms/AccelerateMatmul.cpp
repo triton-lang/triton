@@ -77,79 +77,22 @@ class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
   mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
 
-  static bool bwdFilterCvtLayout(Operation *op) {
-    // only a single operand
-    if (op->getNumOperands() != 1)
-      return false;
-    if (op->getNumResults() != 1)
-      return false;
-    // input must be a tensor with the same shape and encoding
-    auto outTensorType = op->getResult(0).getType().cast<RankedTensorType>();
-    auto inTensorType = op->getOperand(0).getType().cast<RankedTensorType>();
-    if (outTensorType.getShape() != inTensorType.getShape())
-      return false;
-    if (outTensorType.getEncoding() != inTensorType.getEncoding())
-      return false;
-    return true;
-  }
-
-  static bool bwdFilterCvtType(Operation *op) {
-    // only a single operand
-    if (op->getNumOperands() != 1)
-      return false;
-    if (op->getNumResults() != 1)
-      return false;
-    // input must be a tensor with the same shape and encoding
-    auto outTensorType = op->getResult(0).getType().cast<RankedTensorType>();
-    auto inTensorType = op->getOperand(0).getType().cast<RankedTensorType>();
-    if (outTensorType.getShape() != inTensorType.getShape())
-      return false;
-    if (outTensorType.getElementType() != inTensorType.getElementType())
-      return false;
-    return true;
-  }
-
-  static Type findOrigType(Operation *op, Type FinalType) {
-    SetVector<Operation *> slice;
-    getBackwardSlice(op, &slice, bwdFilterCvtType);
-    Operation *src = (*slice.begin())->getOperand(0).getDefiningOp();
-    if (!src || src->getNumOperands() != 1)
-      return FinalType;
-    return getElementTypeOrSelf(src->getOperand(0).getType());
-  }
-
-  int computeMinBitWidth(Value A, Value B) const {
-    SmallVector<Value, 2> dotOperands = {A, B};
-    if (!A.getDefiningOp() || !B.getDefiningOp())
-      return -1;
-    if (A.getDefiningOp()->getNumOperands() != 1 ||
-        B.getDefiningOp()->getNumOperands() != 1)
-      return -1;
-    // find conversion to DotOperand
-    SmallVector<Operation *> cvts;
-    for (int i = 0; i < 2; i++) {
-      SetVector<Operation *> slice;
-      Operation *op = dotOperands[i].getDefiningOp();
-      getBackwardSlice(op, &slice, bwdFilterCvtLayout);
-      if (slice.size())
-        op = (*slice.begin())->getOperand(0).getDefiningOp();
-      cvts.push_back(dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op));
+  static int computeOrigBitWidth(Value x) {
+    auto finalTy = x.getType().cast<RankedTensorType>();
+    Operation *op = x.getDefiningOp();
+    int finalBitWidth = finalTy.getElementType().getIntOrFloatBitWidth();
+    int argBitWidth = finalBitWidth;
+    while (op && op->getNumOperands() == 1 &&
+           op->getOperand(0).getType().isa<RankedTensorType>()) {
+      Value arg = op->getOperand(0);
+      auto argTy = arg.getType().cast<RankedTensorType>();
+      argBitWidth = argTy.getElementType().getIntOrFloatBitWidth();
+      if (!argTy || (argTy.getShape() != finalTy.getShape()) ||
+          argBitWidth != finalBitWidth)
+        break;
+      op = arg.getDefiningOp();
     }
-    if (!cvts[0] || !cvts[1])
-      return -1;
-    // find smallest dtype among original operand type
-    // and operand type before casts
-    SmallVector<Type> types(4);
-    for (int i = 0; i < 2; i++)
-      types[i] = getElementTypeOrSelf(cvts[i]->getResult(0).getType());
-    for (int i = 0; i < 2; i++)
-      types[2 + i] = findOrigType(cvts[i], types[i]);
-    if (!types[0] || !types[1] || !types[2] || !types[3])
-      return -1;
-    unsigned ret = INT_MAX;
-    for (Type ty : types)
-      ret = std::min(ret, ty.getIntOrFloatBitWidth());
-    return ret;
+    return std::min(finalBitWidth, argBitWidth);
   }
 
 public:
@@ -233,7 +176,8 @@ public:
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
     // convert operands
-    int minBitwidth = computeMinBitWidth(a, b);
+    // int minBitwidth = computeMinBitWidth(a, b);
+    int minBitwidth = std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
     Type minType = IntegerType::get(ctx, minBitwidth);
     // convert A operand
     auto newAEncoding = triton::gpu::DotOperandEncodingAttr::get(
