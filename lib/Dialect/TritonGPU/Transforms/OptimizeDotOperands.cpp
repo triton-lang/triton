@@ -88,7 +88,6 @@ public:
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
     auto cvtTy = cvt.getType().cast<RankedTensorType>();
     auto cvtArgOp = cvt.getSrc().getDefiningOp();
-    // llvm::outs() << *cvtArgOp << "\n";
     if (!cvtArgOp)
       return mlir::failure();
     if (!isa<triton::FpToFpOp>(cvtArgOp))
@@ -113,136 +112,7 @@ public:
     newRet->setOperand(0, newCvt);
     newRet->getResult(0).setType(newRetTy);
     rewriter.replaceOp(op, newRet->getResults());
-    // llvm::outs() << newCvt << "\n";
-    // llvm::outs() << *newRet << "\n";
     return mlir::success();
-  }
-};
-
-class MoveOpAfterLayoutConversion : public mlir::RewritePattern {
-
-public:
-  MoveOpAfterLayoutConversion(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::DotOp::getOperationName(), 1, context) {}
-
-  static mlir::LogicalResult
-  isBlockedToDotOperand(mlir::Operation *op,
-                        triton::gpu::DotOperandEncodingAttr &retEncoding,
-                        triton::gpu::BlockedEncodingAttr &srcEncoding) {
-    auto cvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(op);
-    if (!cvt)
-      return failure();
-    auto srcTy = cvt.getOperand().getType().cast<RankedTensorType>();
-    auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
-    retEncoding =
-        retTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-    srcEncoding =
-        srcTy.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
-    if (!retTy)
-      return failure();
-    if (!retEncoding)
-      return failure();
-    auto retEncodingParent =
-        retEncoding.getParent().dyn_cast<triton::gpu::MmaEncodingAttr>();
-    if (!retEncodingParent || retEncodingParent.isVolta())
-      return failure();
-    if (!srcEncoding)
-      return failure();
-    return success();
-  }
-
-  static bool isTrans(const triton::gpu::DotOperandEncodingAttr &retEncoding,
-                      const triton::gpu::BlockedEncodingAttr &srcEncoding) {
-    int kOrder = retEncoding.getOpIdx() ^ 1;
-    return kOrder != srcEncoding.getOrder()[0];
-  }
-
-  static bool isDotNT(triton::DotOp dotOp) {
-    triton::gpu::DotOperandEncodingAttr aRetEncoding;
-    triton::gpu::DotOperandEncodingAttr bRetEncoding;
-    triton::gpu::BlockedEncodingAttr aSrcEncoding;
-    triton::gpu::BlockedEncodingAttr bSrcEncoding;
-    if (isBlockedToDotOperand(dotOp.getOperand(0).getDefiningOp(), aRetEncoding,
-                              aSrcEncoding)
-            .failed())
-      return false;
-    if (isBlockedToDotOperand(dotOp.getOperand(1).getDefiningOp(), bRetEncoding,
-                              bSrcEncoding)
-            .failed())
-      return false;
-    if (!aRetEncoding || !bRetEncoding || !aSrcEncoding || !bSrcEncoding)
-      return false;
-    return !isTrans(aRetEncoding, aSrcEncoding) &&
-           !isTrans(bRetEncoding, bSrcEncoding);
-  }
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto dotOp = cast<triton::DotOp>(op);
-    // only supports dot NT
-    // llvm::outs() << isDotNT << "\n";
-    // if (!isDotNT(dotOp))
-    //   return failure();
-    bool changed = false;
-    for (Value operand : {dotOp.getOperand(0), dotOp.getOperand(1)}) {
-      auto cvt = operand.getDefiningOp<triton::gpu::ConvertLayoutOp>();
-      triton::gpu::DotOperandEncodingAttr retEncoding;
-      triton::gpu::BlockedEncodingAttr srcEncoding;
-      bool failed =
-          isBlockedToDotOperand(cvt, retEncoding, srcEncoding).failed();
-      if (failed)
-        return failure();
-      // assert(!failed);
-
-      // don't move things around when cvt operand is a block arg
-      Operation *argOp = cvt.getOperand().getDefiningOp();
-      if (!argOp)
-        continue;
-      SetVector<Operation *> processed;
-      SetVector<Attribute> layout;
-      llvm::MapVector<Value, Attribute> toConvert;
-      int numCvts = simulateBackwardRematerialization(cvt, processed, layout,
-                                                      toConvert, retEncoding);
-      if (numCvts > 1 || toConvert.size() == 1)
-        continue;
-      bool replaceOperand = true;
-      for (Operation *op : processed) {
-        if (op->getNumOperands() != 1)
-          continue;
-        auto srcTy = op->getOperand(0).getType().cast<RankedTensorType>();
-        auto dstTy = op->getResult(0).getType().cast<RankedTensorType>();
-        // we don't want to push conversions backward if there is a downcast
-        // since it would result in more shared memory traffic
-        if (srcTy.getElementType().getIntOrFloatBitWidth() >
-            dstTy.getElementType().getIntOrFloatBitWidth()) {
-          replaceOperand = false;
-          break;
-        }
-        // we only push back when the first op in the chain has a load
-        if ((op == processed.back()) &&
-            !isa<triton::LoadOp>(op->getOperand(0).getDefiningOp())) {
-          replaceOperand = false;
-          break;
-        }
-        // we don't want to use ldmatrix for 8-bit data that requires trans
-        // since Nvidia GPUs can't do it efficiently
-        int kOrder = retEncoding.getOpIdx() ^ 1;
-        bool isTrans = kOrder != srcEncoding.getOrder()[0];
-        bool isInt8 = srcTy.getElementType().getIntOrFloatBitWidth() == 8;
-        if (isTrans && isInt8) {
-          replaceOperand = false;
-          break;
-        }
-      }
-      if (!replaceOperand)
-        continue;
-      IRMapping mapping;
-      rematerializeConversionChain(toConvert, rewriter, processed, mapping);
-      rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
-      changed = true;
-    }
-    return mlir::success(changed);
   }
 };
 
@@ -267,7 +137,7 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<ConvertTransConvert>(context);
-    patterns.add<MoveOpAfterLayoutConversion2>(context);
+    patterns.add<MoveOpAfterLayoutConversion>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
     if (fixupLoops(m).failed())
