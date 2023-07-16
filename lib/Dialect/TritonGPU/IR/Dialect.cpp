@@ -1106,6 +1106,23 @@ struct TritonGPUInferLayoutInterface
           location, "Dot's a/b's encoding should be of DotOperandEncodingAttr");
     return success();
   }
+
+  LogicalResult
+  verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
+                                   Attribute operandEncodingB) const override {
+    auto aEncoding =
+        operandEncodingA.dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+    auto bEncoding =
+        operandEncodingB.dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+    if (!aEncoding && !bEncoding)
+      return mlir::success();
+    // Verify that the encodings are valid.
+    if (!aEncoding || !bEncoding)
+      return op->emitError("mismatching encoding between A and B operands");
+    if (aEncoding.getMMAv2kWidth() != bEncoding.getMMAv2kWidth())
+      return op->emitError("mismatching kWidth between A and B operands");
+    return success();
+  }
 };
 
 //===----------------------------------------------------------------------===//

@@ -45,6 +45,12 @@ public:
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      std::optional<Location> location) const = 0;
+
+  // Verify that the encoding are compatible to be used together in a dot
+  // operation
+  virtual LogicalResult
+  verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
+                                   Attribute operandEncodingB) const = 0;
 };
 
 } // namespace triton

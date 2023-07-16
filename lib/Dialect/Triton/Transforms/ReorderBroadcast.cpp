@@ -143,7 +143,8 @@ struct MoveBroadcastAfterElementwisePattern
     auto operands = op->getOperands();
     triton::BroadcastOp broadcastOp;
     for (auto operand : operands) {
-      if (broadcastOp = operand.getDefiningOp<triton::BroadcastOp>()) {
+      broadcastOp = operand.getDefiningOp<triton::BroadcastOp>();
+      if (broadcastOp) {
         break;
       }
     }
