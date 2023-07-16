@@ -76,9 +76,9 @@ public:
 
 // convert(layout_preserving_op(x), dot_operand)
 // -> layout_preserving_op(convert(x, dot_operand))
-class MoveOpAfterLayoutConversion2 : public mlir::RewritePattern {
+class MoveOpAfterLayoutConversion : public mlir::RewritePattern {
 public:
-  MoveOpAfterLayoutConversion2(mlir::MLIRContext *context)
+  MoveOpAfterLayoutConversion(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
                              1, context) {}
 
