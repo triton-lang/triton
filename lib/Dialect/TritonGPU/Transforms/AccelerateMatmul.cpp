@@ -77,22 +77,34 @@ class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
   mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
 
+  static bool hasSameShapeAndBitwidth(Type _type1, Type _type2) {
+    RankedTensorType type1 = _type1.dyn_cast<RankedTensorType>();
+    RankedTensorType type2 = _type2.dyn_cast<RankedTensorType>();
+    return type1 && type2 && type1.getShape() == type2.getShape() &&
+           type1.getElementType().getIntOrFloatBitWidth() ==
+               type2.getElementType().getIntOrFloatBitWidth();
+  }
+
+  static bool bwdFilter(Operation *op) {
+    return op->getNumOperands() == 1 &&
+           hasSameShapeAndBitwidth(op->getResult(0).getType(),
+                                   op->getOperand(0).getType());
+  }
+
+  // finds the first different value bitwidth in the chain of
+  // shape-preserving unary ops  that x depends on
   static int computeOrigBitWidth(Value x) {
-    auto finalTy = x.getType().cast<RankedTensorType>();
-    Operation *op = x.getDefiningOp();
-    int finalBitWidth = finalTy.getElementType().getIntOrFloatBitWidth();
-    int argBitWidth = finalBitWidth;
-    while (op && op->getNumOperands() == 1 &&
-           op->getOperand(0).getType().isa<RankedTensorType>()) {
-      Value arg = op->getOperand(0);
-      auto argTy = arg.getType().cast<RankedTensorType>();
-      argBitWidth = argTy.getElementType().getIntOrFloatBitWidth();
-      if (!argTy || (argTy.getShape() != finalTy.getShape()) ||
-          argBitWidth != finalBitWidth)
-        break;
-      op = arg.getDefiningOp();
-    }
-    return std::min(finalBitWidth, argBitWidth);
+    int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
+    int origBitWidth = finalBitWidth;
+    SetVector<Operation *> slice;
+    slice.insert(x.getDefiningOp());
+    mlir::getBackwardSlice(x, &slice, bwdFilter);
+    Operation *firstOp = (*slice.begin())->getOperand(0).getDefiningOp();
+    if (firstOp)
+      if (Value arg = firstOp->getOperand(0))
+        if (RankedTensorType argTy = arg.getType().dyn_cast<RankedTensorType>())
+          origBitWidth = argTy.getElementType().getIntOrFloatBitWidth();
+    return origBitWidth;
   }
 
 public:
