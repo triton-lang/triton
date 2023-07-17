@@ -77,18 +77,12 @@ class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
   mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
 
-  static bool hasSameShapeAndBitwidth(Type _type1, Type _type2) {
-    RankedTensorType type1 = _type1.dyn_cast<RankedTensorType>();
-    RankedTensorType type2 = _type2.dyn_cast<RankedTensorType>();
-    return type1 && type2 && type1.getShape() == type2.getShape() &&
-           type1.getElementType().getIntOrFloatBitWidth() ==
-               type2.getElementType().getIntOrFloatBitWidth();
-  }
-
   static bool bwdFilter(Operation *op) {
     return op->getNumOperands() == 1 &&
-           hasSameShapeAndBitwidth(op->getResult(0).getType(),
-                                   op->getOperand(0).getType());
+           (isa<triton::FpToFpOp, triton::BitcastOp,
+                triton::gpu::ConvertLayoutOp>(op) ||
+            op->getDialect()->getTypeID() ==
+                mlir::TypeID::get<arith::ArithDialect>());
   }
 
   // finds the first different value bitwidth in the chain of
@@ -97,9 +91,8 @@ class BlockedToMMA : public mlir::RewritePattern {
     int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
     int origBitWidth = finalBitWidth;
     SetVector<Operation *> slice;
-    slice.insert(x.getDefiningOp());
     mlir::getBackwardSlice(x, &slice, bwdFilter);
-    Operation *firstOp = (*slice.begin())->getOperand(0).getDefiningOp();
+    Operation *firstOp = slice.empty() ? nullptr : *slice.begin();
     if (firstOp)
       if (Value arg = firstOp->getOperand(0))
         if (RankedTensorType argTy = arg.getType().dyn_cast<RankedTensorType>())
