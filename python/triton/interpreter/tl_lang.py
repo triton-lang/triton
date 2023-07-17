@@ -555,6 +555,10 @@ class TritonLangProxy:
         return input
 
     @_tensor_operation
+    def max_constancy(self, input, values):
+        return input
+
+    @_tensor_operation
     def abs(self, x):
         return torch.abs(x)
 
