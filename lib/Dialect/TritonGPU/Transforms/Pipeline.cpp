@@ -809,11 +809,11 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
                                     nextIV, newForOp.getUpperBound());
 
   pipelineIterIdx = newForOp.getRegionIterArgs()[ivIndex + 1];
-  Value insertSliceIndex = builder.create<arith::RemUIOp>(
+  Value insertSliceIndex = builder.create<arith::RemSIOp>(
       nextIV.getLoc(), pipelineIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
   loopIterIdx = newForOp.getRegionIterArgs()[ivIndex + 2];
-  Value extractSliceIndex = builder.create<arith::RemUIOp>(
+  Value extractSliceIndex = builder.create<arith::RemSIOp>(
       nextIV.getLoc(), loopIterIdx,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
 
