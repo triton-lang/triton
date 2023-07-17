@@ -1665,6 +1665,24 @@ def max_contiguous(input, values, _builder=None):
     values = [x.value for x in values]
     return semantic.max_contiguous(input, values)
 
+
+@builtin
+def max_constancy(input, values, _builder=None):
+    """
+    Let the compiler knows that the `value` first values in :code:`input` are constant.
+
+    e.g. if :code:`values` is [4], then each group of 4 values in :code:`input` should all be equal,
+    for example [0, 0, 0, 0, 1, 1, 1, 1].
+    """
+    if isinstance(values, constexpr):
+        values = [values]
+    for i, d in enumerate(values):
+        if not isinstance(d, constexpr):
+            raise TypeError(f"values element {i} must have type `constexpr`")
+        if not isinstance(d.value, int):
+            raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+    values = [x.value for x in values]
+    return semantic.max_constancy(input, values)
 # -----------------------
 # Debugging functions
 # -----------------------
