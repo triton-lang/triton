@@ -35,7 +35,7 @@ def _fwd_kernel(
     Z, H, N_CTX,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
-    MODE: tl.constexpr,
+    IS_CAUSAL: tl.constexpr,
 ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
@@ -82,19 +82,10 @@ def _fwd_kernel(
     # causal check on every loop iteration can be expensive
     # and peeling the last iteration of the loop does not work well with ptxas
     # so we have a mode to do the causal check in a separate kernel entirely
-    if MODE == 0:  # entire non-causal attention
-        lo, hi = 0, N_CTX
-    if MODE == 1:  # entire causal attention
+    if IS_CAUSAL:  # entire causal attention
         lo, hi = 0, (start_m + 1) * BLOCK_M
-    if MODE == 2:  # off band-diagonal
-        lo, hi = 0, start_m * BLOCK_M
-    if MODE == 3:  # on band-diagonal
-        l_ptrs = L + off_hz * N_CTX + offs_m
-        m_ptrs = M + off_hz * N_CTX + offs_m
-        m_i = tl.load(m_ptrs)
-        l_i = tl.load(l_ptrs)
-        acc += tl.load(O_block_ptr).to(tl.float32)
-        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
+    else:  # entire non-causal attention
+        lo, hi = 0, N_CTX
     # scale sm_scale by log_2(e) and use
     # 2^x instead of exp in the loop because CSE and LICM
     # don't work as expected with `exp` in the loop
@@ -111,9 +102,9 @@ def _fwd_kernel(
         # -- compute qk ----
         k = tl.load(K_block_ptr)
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, k)
-        if MODE == 1 or MODE == 3:
+        if IS_CAUSAL:
             qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+        qk += tl.dot(q, k)
         # -- compute m_ij, p, l_ij
         m_ij = tl.maximum(m_i, tl.max(qk, 1))
         p = tl.math.exp2(qk - m_ij[:, None])
@@ -278,24 +269,19 @@ class _attention(torch.autograd.Function):
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
         num_warps = 4 if Lk <= 64 else 8
-        if causal:
-            modes = [1] if q.shape[2] <= 2048 else [2, 3]
-        else:
-            modes = [0]
-        for mode in modes:
-            _fwd_kernel[grid](
-                q, k, v, sm_scale,
-                L, m,
-                o,
-                q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-                k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-                v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-                o.stride(0), o.stride(1), o.stride(2), o.stride(3),
-                q.shape[0], q.shape[1], q.shape[2],
-                BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
-                MODE=mode,
-                num_warps=num_warps,
-                num_stages=4)
+        _fwd_kernel[grid](
+            q, k, v, sm_scale,
+            L, m,
+            o,
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),
+            q.shape[0], q.shape[1], q.shape[2],
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
+            IS_CAUSAL=causal,
+            num_warps=num_warps,
+            num_stages=4)
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.grid = grid
@@ -397,7 +383,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode, 'causal': causal}
-) for mode in ['fwd'] for causal in [False]]
+) for mode in ['fwd', 'bwd'] for causal in [False, True]]
 
 
 @triton.testing.perf_report(configs)
