@@ -86,6 +86,27 @@ public:
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
+    // conversion should be dependent on a load
+    // and all operations between the load and the conversion
+    // should be layout preserving
+    SetVector<Operation *> slice;
+    getBackwardSlice(op, &slice);
+    int loadIdx = -1;
+    bool checkOp = false;
+    for (int i = 0; i < slice.size(); i++) {
+      Operation *op = *(slice.begin() + i);
+      if (isa<triton::LoadOp>(op))
+        checkOp = true;
+      else if (checkOp) {
+        if (!isa<triton::FpToFpOp, triton::BitcastOp>(op) &&
+            op->getDialect()->getTypeID() !=
+                mlir::TypeID::get<arith::ArithDialect>())
+          return mlir::failure();
+      }
+    }
+    if (!checkOp)
+      return mlir::failure();
+
     auto cvtTy = cvt.getType().cast<RankedTensorType>();
     auto cvtArgOp = cvt.getSrc().getDefiningOp();
     if (!cvtArgOp || cvtArgOp->getNumOperands() == 0)
