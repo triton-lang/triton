@@ -62,7 +62,7 @@ from .core import (
     log,
     make_block_ptr,
     max,
-    max_constant,
+    max_constancy,
     max_contiguous,
     maximum,
     min,

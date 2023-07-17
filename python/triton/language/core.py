@@ -1657,7 +1657,7 @@ def max_constancy(input, values, _builder=None):
         if not isinstance(d.value, int):
             raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
-    return semantic.max_constant(input, values)
+    return semantic.max_constancy(input, values)
 # -----------------------
 # Debugging functions
 # -----------------------
