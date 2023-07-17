@@ -99,30 +99,25 @@ def _fwd_kernel(
     # loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        # -- compute qk ----
+        # -- load k, v --
         k = tl.load(K_block_ptr)
+        v = tl.load(V_block_ptr)
+        # -- compute qk ---
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         if IS_CAUSAL:
             qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
         qk += tl.dot(q, k)
-        # -- compute m_ij, p, l_ij
-        m_ij = tl.maximum(m_i, tl.max(qk, 1))
-        p = tl.math.exp2(qk - m_ij[:, None])
-        l_ij = tl.sum(p, 1)
-        # -- update m_i and l_i
-        alpha = tl.math.exp2(m_i - m_ij)
-        l_i *= alpha
-        l_i_new = l_i + l_ij
-        # scale acc
-        acc_scale = l_i * 0 + alpha
-        acc = acc * acc_scale[:, None]
-        # update acc
-        v = tl.load(V_block_ptr)
-        p = p.to(tl.float16)
-        acc += tl.dot(p, v)
-        # update m_i and l_i
-        l_i = l_i_new
-        m_i = m_ij
+        # -- compute scaling constant ---
+        m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+        alpha = tl.math.exp2(m_i - m_i_new)
+        p = tl.math.exp2(qk - m_i_new[:, None])
+        # -- scale and update acc --
+        acc_scale = l_i * 0 + alpha  # workaround some compiler bug
+        acc *= acc_scale[:, None]
+        acc += tl.dot(p.to(tl.float16), v)
+        # -- update m_i and l_i --
+        l_i = l_i * alpha + tl.sum(p, 1)
+        m_i = m_i_new
         # update pointers
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
