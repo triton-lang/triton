@@ -493,9 +493,7 @@ void LoopPipeliner::createBufferTypes() {
     SmallVector<int64_t> bufferShape(ty.getShape().begin(),
                                      ty.getShape().end());
     bufferShape.insert(bufferShape.begin(), numStages);
-    unsigned bitWidth = dotOpEnc.getMMAv2kWidth()
-                            ? 32 / dotOpEnc.getMMAv2kWidth()
-                            : ty.getElementType().getIntOrFloatBitWidth();
+    unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
     auto sharedEnc =
         ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
                                      ttg::getOrder(ty.getEncoding()), bitWidth);
