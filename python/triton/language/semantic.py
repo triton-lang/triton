@@ -1452,6 +1452,13 @@ def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
     return x
 
 
+def max_constancy(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to max_constancy does not match the length of values")
+    x.handle.set_attr("tt.constancy", ir.make_attr(values, x.handle.get_context()))
+    return x
+
+
 def debug_barrier(builder: ir.builder) -> tl.tensor:
     return tl.tensor(builder.create_barrier(), tl.void)
 
