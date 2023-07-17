@@ -60,7 +60,9 @@ unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  return std::min(srcReduceDimSize,
+  unsigned elementPerThreads = triton::gpu::getUniqueContigPerThread(
+      getSrcLayout(), getSrcShape())[axis];
+  return std::min(srcReduceDimSize / elementPerThreads,
                   triton::gpu::getThreadsPerWarpWithUniqueData(
                       getSrcLayout(), getSrcShape())[axis]);
 }
@@ -84,9 +86,10 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
 
   auto argLayout = getSrcLayout();
   auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
-  // if (argLayoutMma && argLayoutMma.getVersionMajor() == 2 &&
-  //     triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
-  //   return {{1, 1}, {1, 1}};
+
+  // that case doesn't need inter-warp communication
+  if (isFastReduction() && triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
+    return {{0, 0}, {0, 0}};
 
   /// shared memory block0
   smemShapes[0] = convertType<unsigned>(getSrcShape());

@@ -162,16 +162,22 @@ private:
     }
   }
 
+  template <BufferT::BufferKind T>
+  void maybeAddScratchBuffer(Operation *op, unsigned bytes) {
+    if (bytes > 0)
+      allocation->addBuffer<T>(op, bytes);
+  }
+
   /// Initializes temporary shared memory for a given operation.
   void getScratchValueSize(Operation *op) {
     if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
       ReduceOpHelper helper(reduceOp);
       unsigned bytes = helper.getScratchSizeInBytes();
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto scanOp = dyn_cast<triton::ScanOp>(op)) {
       ScanLoweringHelper helper(scanOp);
       unsigned bytes = helper.getScratchSizeInBytes();
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
       auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();
@@ -195,7 +201,7 @@ private:
           srcTy.getElementType().isa<triton::PointerType>()
               ? elems * kPtrBitWidth / 8
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
       auto value = op->getOperand(0);
       // only scalar requires scratch memory
@@ -212,7 +218,7 @@ private:
             elemTy.isa<triton::PointerType>()
                 ? elems * kPtrBitWidth / 8
                 : elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
-        allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+        maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
       }
     } else if (auto atomicCASOp = dyn_cast<triton::AtomicCASOp>(op)) {
       auto value = op->getOperand(0);
@@ -224,13 +230,13 @@ private:
       auto bytes = elemTy.isa<triton::PointerType>()
                        ? elems * kPtrBitWidth / 8
                        : elems * elemTy.getIntOrFloatBitWidth() / 8;
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto callOp = dyn_cast<CallOpInterface>(op)) {
       auto callable = callOp.resolveCallable();
       auto funcOp = dyn_cast<FunctionOpInterface>(callable);
       auto *funcAlloc = &(*funcAllocMap)[funcOp];
       auto bytes = funcAlloc->getSharedMemorySize();
-      allocation->addBuffer<BufferT::BufferKind::Virtual>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, bytes);
     }
   }
 
@@ -382,10 +388,19 @@ private:
     DenseMap<BufferT *, size_t> bufferStart;
     calculateStarts(buffers, bufferStart);
 
+    // NOTE: The original paper doesn't consider interference between
+    // the bumped ranges. Buffers that previously do not interfere with
+    // could interfere after offset bumping if their liveness ranges overlap.
+    // Therefore, we rerun the interference graph algorithm after bumping so
+    // that we regroup the buffers and color them again. Since we always
+    // increase the buffer offset and keep reducing conflicts, we will
+    // eventually reach a fixed point.
     GraphT interference;
     buildInterferenceGraph(buffers, bufferStart, interference);
-
-    allocate(buffers, bufferStart, interference);
+    do {
+      allocate(buffers, interference, bufferStart);
+      buildInterferenceGraph(buffers, bufferStart, interference);
+    } while (!interference.empty());
   }
 
   /// Computes the initial shared memory offsets.
@@ -451,6 +466,8 @@ private:
   void buildInterferenceGraph(const SmallVector<BufferT *> &buffers,
                               const DenseMap<BufferT *, size_t> &bufferStart,
                               GraphT &interference) {
+    // Reset interference graph
+    interference.clear();
     for (auto x : buffers) {
       for (auto y : buffers) {
         if (x == y)
@@ -473,8 +490,10 @@ private:
 
   /// Finalizes shared memory offsets considering interference.
   void allocate(const SmallVector<BufferT *> &buffers,
-                const DenseMap<BufferT *, size_t> &bufferStart,
-                const GraphT &interference) {
+                const GraphT &interference,
+                DenseMap<BufferT *, size_t> &bufferStart) {
+    // Reset shared memory size
+    allocation->sharedMemorySize = 0;
     // First-fit graph coloring
     // Neighbors are nodes that interfere with each other.
     // We color a node by finding the index of the first available
@@ -508,6 +527,7 @@ private:
         adj = std::max(adj, bufferStart.lookup(y) + y->size);
       }
       x->offset = bufferStart.lookup(x) + colors.lookup(x) * adj;
+      bufferStart[x] = x->offset;
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }

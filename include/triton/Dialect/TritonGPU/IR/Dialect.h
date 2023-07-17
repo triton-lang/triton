@@ -49,7 +49,8 @@ SmallVector<unsigned> getContigPerThread(Attribute layout);
 // for thread 0 would be [A_{0, 0}, A_{0, 0}, A_{0, 0}, A_{0, 0}], returns [1,
 // 1]. Whereas for a tensor shape [128, 128], the elements for thread 0 would be
 // [A_{0, 0}, A_{0, 1}, A_{0, 2}, A_{0, 3}], returns [1, 4].
-SmallVector<unsigned> getUniqueContigPerThread(Type type);
+SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
+                                               ArrayRef<int64_t> tensorShape);
 
 // Returns the number of threads per warp that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
