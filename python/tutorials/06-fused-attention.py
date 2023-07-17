@@ -79,13 +79,6 @@ def _fwd_kernel(
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
-    # causal check on every loop iteration can be expensive
-    # and peeling the last iteration of the loop does not work well with ptxas
-    # so we have a mode to do the causal check in a separate kernel entirely
-    if IS_CAUSAL:  # entire causal attention
-        lo, hi = 0, (start_m + 1) * BLOCK_M
-    else:  # entire non-causal attention
-        lo, hi = 0, N_CTX
     # scale sm_scale by log_2(e) and use
     # 2^x instead of exp in the loop because CSE and LICM
     # don't work as expected with `exp` in the loop
@@ -93,10 +86,9 @@ def _fwd_kernel(
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
     q = (q * qk_scale).to(tl.float16)
-    # advance block pointers to first iteration of the loop
-    K_block_ptr = tl.advance(K_block_ptr, (0, lo))
-    V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
     # loop over k, v and update accumulator
+    lo = 0
+    hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- load k, v --
