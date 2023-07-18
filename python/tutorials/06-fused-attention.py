@@ -23,6 +23,12 @@ def max_fn(x, y):
     return tl.math.max(x, y)
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N}, num_stages=num_stages, num_warps=num_warps)
+        for BLOCK_M in [32, 64, 128] for BLOCK_N in [32, 64, 128] for num_stages in [2, 3, 4] for num_warps in [4, 8]],
+    key=['N_CTX']
+)
 @triton.jit
 def _fwd_kernel(
     Q, K, V, sm_scale,
@@ -64,14 +70,6 @@ def _fwd_kernel(
         block_shape=(BLOCK_N, BLOCK_DMODEL),
         order=(1, 0)
     )
-    O_block_ptr = tl.make_block_ptr(
-        base=Out + qvk_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
-        strides=(stride_om, stride_on),
-        offsets=(start_m * BLOCK_M, 0),
-        block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
-    )
     # initialize offsets
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
@@ -90,7 +88,6 @@ def _fwd_kernel(
     lo = 0
     hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
     for start_n in range(lo, hi, BLOCK_N):
-        start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- load k, v --
         k = tl.load(K_block_ptr)
         v = tl.load(V_block_ptr)
@@ -120,6 +117,14 @@ def _fwd_kernel(
     tl.store(l_ptrs, l_i)
     tl.store(m_ptrs, m_i)
     # write back O
+    O_block_ptr = tl.make_block_ptr(
+        base=Out + qvk_offset,
+        shape=(N_CTX, BLOCK_DMODEL),
+        strides=(stride_om, stride_on),
+        offsets=(start_m * BLOCK_M, 0),
+        block_shape=(BLOCK_M, BLOCK_DMODEL),
+        order=(1, 0)
+    )
     tl.store(O_block_ptr, acc.to(tl.float16))
 
 
@@ -249,13 +254,13 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        BLOCK_M = 128
-        BLOCK_N = 64
-        grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
+        # BLOCK_M = 128
+        # BLOCK_N = 64
+        grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
-        num_warps = 4 if Lk <= 64 else 8
+        # num_warps = 4 if Lk <= 64 else 8
         _fwd_kernel[grid](
             q, k, v, sm_scale,
             L, m,
@@ -265,10 +270,11 @@ class _attention(torch.autograd.Function):
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),
             q.shape[0], q.shape[1], q.shape[2],
-            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
+            BLOCK_DMODEL=Lk,
             IS_CAUSAL=causal,
-            num_warps=num_warps,
-            num_stages=4)
+            # num_warps=num_warps,
+            # num_stages=4
+        )
 
         ctx.save_for_backward(q, k, v, o, L, m)
         ctx.grid = grid
@@ -358,11 +364,11 @@ try:
 except BaseException:
     HAS_FLASH = False
 
-BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 32
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
-    x_vals=[2**i for i in range(10, 15)],
+    x_vals=[2**i for i in range(12, 13)],
     line_arg='provider',
     line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
     line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
@@ -370,7 +376,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode, 'causal': causal}
-) for mode in ['fwd', 'bwd'] for causal in [False, True]]
+) for mode in ['fwd'] for causal in [False]]
 
 
 @triton.testing.perf_report(configs)
