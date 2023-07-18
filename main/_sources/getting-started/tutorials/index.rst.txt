@@ -106,7 +106,7 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="This is a Triton implementation of the Flash Attention algorithm (see: Dao et al., https://arxi...">
+    <div class="sphx-glr-thumbcontainer" tooltip="This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://trida...">
 
 .. only:: html
 
