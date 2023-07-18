@@ -3,15 +3,10 @@ import os
 import tempfile
 
 from ..common import _build
+from ..common.build import is_hip
 from ..runtime.cache import get_cache_manager
 from ..runtime.jit import version_key
 from .utils import generate_cu_signature
-
-
-def is_hip():
-    import torch
-    return torch.version.hip is not None
-
 
 # ----- stub --------
 
