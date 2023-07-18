@@ -23,16 +23,10 @@ def max_fn(x, y):
     return tl.math.max(x, y)
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N}, num_stages=num_stages, num_warps=num_warps)
-        for BLOCK_M in [32, 64, 128] for BLOCK_N in [32, 64, 128] for num_stages in [2, 3, 4] for num_warps in [4, 8]],
-    key=['N_CTX']
-)
 @triton.jit
 def _fwd_kernel(
     Q, K, V, sm_scale,
-    L, M,
+    L,
     Out,
     stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
@@ -113,9 +107,7 @@ def _fwd_kernel(
     # write back l and m
     acc = acc / l_i[:, None]
     l_ptrs = L + off_hz * N_CTX + offs_m
-    m_ptrs = M + off_hz * N_CTX + offs_m
-    tl.store(l_ptrs, l_i)
-    tl.store(m_ptrs, m_i)
+    tl.store(l_ptrs, m_i + tl.math.log2(l_i))
     # write back O
     O_block_ptr = tl.make_block_ptr(
         base=Out + qvk_offset,
@@ -130,7 +122,7 @@ def _fwd_kernel(
 
 @triton.jit
 def _bwd_preprocess(
-    Out, DO, L,
+    Out, DO,
     NewDO, Delta,
     BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
 ):
@@ -139,9 +131,7 @@ def _bwd_preprocess(
     # load
     o = tl.load(Out + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
     do = tl.load(DO + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
-    denom = tl.load(L + off_m).to(tl.float32)
     # compute
-    do = do / denom[:, None]
     delta = tl.sum(o * do, axis=1)
     # write-back
     tl.store(NewDO + off_m[:, None] * D_HEAD + off_n[None, :], do)
@@ -152,7 +142,7 @@ def _bwd_preprocess(
 def _bwd_kernel(
     Q, K, V, sm_scale, Out, DO,
     DQ, DK, DV,
-    L, M,
+    L,
     D,
     stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
@@ -161,7 +151,7 @@ def _bwd_kernel(
     num_block,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
-    MODE: tl.constexpr,
+    CAUSAL: tl.constexpr,
 ):
     off_hz = tl.program_id(0)
     off_z = off_hz // H
@@ -176,10 +166,10 @@ def _bwd_kernel(
     DK += off_z * stride_qz + off_h * stride_qh
     DV += off_z * stride_qz + off_h * stride_qh
     for start_n in range(0, num_block):
-        if MODE == 0:
-            lo = 0
-        else:
+        if CAUSAL:
             lo = start_n * BLOCK_M
+        else:
+            lo = 0
         # initialize row/col offsets
         offs_qm = lo + tl.arange(0, BLOCK_M)
         offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -193,7 +183,7 @@ def _bwd_kernel(
         dq_ptrs = DQ + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
         # pointer to row-wise quantities in value-like data
         D_ptrs = D + off_hz * N_CTX
-        m_ptrs = M + off_hz * N_CTX
+        l_ptrs = L + off_hz * N_CTX
         # initialize dv amd dk
         dv = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
         dk = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
@@ -206,16 +196,14 @@ def _bwd_kernel(
             # load q, k, v, do on-chip
             q = tl.load(q_ptrs)
             # recompute p = softmax(qk, dim=-1).T
-            # NOTE: `do` is pre-divided by `l`; no normalization here
-            # if MODE == 1:
-            if MODE == 1:
+            if CAUSAL:
                 qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), float(0.), float("-inf"))
             else:
                 qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
             qk += tl.dot(q, tl.trans(k))
             qk *= qk_scale
-            m = tl.load(m_ptrs + offs_m_curr)
-            p = tl.math.exp2(qk - m[:, None])
+            l_i = tl.load(l_ptrs + offs_m_curr)
+            p = tl.math.exp2(qk - l_i[:, None])
             # compute dv
             do = tl.load(do_ptrs)
             dv += tl.dot(tl.trans(p.to(Q.dtype.element_ty)), do)
@@ -254,29 +242,27 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        # BLOCK_M = 128
-        # BLOCK_N = 64
-        grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), q.shape[0] * q.shape[1], 1)
+        BLOCK_M = 128
+        BLOCK_N = 64
+        grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-        m = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
-        # num_warps = 4 if Lk <= 64 else 8
+        num_warps = 4 if Lk <= 64 else 8
         _fwd_kernel[grid](
             q, k, v, sm_scale,
-            L, m,
+            L,
             o,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),
             q.shape[0], q.shape[1], q.shape[2],
-            BLOCK_DMODEL=Lk,
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
             IS_CAUSAL=causal,
-            # num_warps=num_warps,
-            # num_stages=4
-        )
+            num_warps=num_warps,
+            num_stages=4)
 
-        ctx.save_for_backward(q, k, v, o, L, m)
+        ctx.save_for_backward(q, k, v, o, L)
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.BLOCK_DMODEL = Lk
@@ -286,19 +272,15 @@ class _attention(torch.autograd.Function):
     @staticmethod
     def backward(ctx, do):
         BLOCK = 128
-        q, k, v, o, l, m = ctx.saved_tensors
+        q, k, v, o, L = ctx.saved_tensors
         do = do.contiguous()
         dq = torch.zeros_like(q, dtype=torch.float32)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
         do_scaled = torch.empty_like(do)
-        delta = torch.empty_like(l)
-        if ctx.causal:
-            mode = 1
-        else:
-            mode = 0
+        delta = torch.empty_like(L)
         _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
-            o, do, l,
+            o, do,
             do_scaled, delta,
             BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
@@ -306,8 +288,7 @@ class _attention(torch.autograd.Function):
             q, k, v, ctx.sm_scale,
             o, do_scaled,
             dq, dk, dv,
-            l, m,
-            delta,
+            L, delta,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
             k.stride(0), k.stride(1), k.stride(2), k.stride(3),
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),
@@ -315,7 +296,7 @@ class _attention(torch.autograd.Function):
             ctx.grid[0],
             BLOCK_M=BLOCK, BLOCK_N=BLOCK,
             BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=8,
-            MODE=mode,
+            CAUSAL=ctx.causal,
             num_stages=1,
         )
         return dq, dk, dv, None, None
@@ -364,11 +345,11 @@ try:
 except BaseException:
     HAS_FLASH = False
 
-BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 32
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
-    x_vals=[2**i for i in range(12, 13)],
+    x_vals=[2**i for i in range(10, 15)],
     line_arg='provider',
     line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
     line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
@@ -376,7 +357,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode, 'causal': causal}
-) for mode in ['fwd'] for causal in [False]]
+) for mode in ['bwd'] for causal in [False]]
 
 
 @triton.testing.perf_report(configs)
