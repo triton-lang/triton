@@ -89,13 +89,21 @@ def f8_to_f16(x, dtype):
                 (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
                 (128, 128, 32, 8, 4, 2, 256, 256, 128, AT, BT, ADTYPE, BDTYPE),
-            ] for ADTYPE, BDTYPE in [("float8e4b15", "float8e5"),
+            ] for ADTYPE, BDTYPE in [("float8e4", "float8e5"),
                                      ("float8e4", "float16"),
                                      ("float16", "float8e5"),
                                      ("float16", "float32"),
                                      ("float32", "float16"),
                                      ("bfloat16", "float32"),
                                      ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True]
+        ],
+        *[
+            # float8e4b15 only supports row-col layout
+            [
+                (128, 128, 32, 1, 4, 2, None, None, None, False, True, ADTYPE, BDTYPE),
+            ] for ADTYPE, BDTYPE in [("float8e4b15", "float8e5"),
+                                     ("float8e4b15", "float16"),
+                                     ("float16", "float8e4b15")]
         ]
     ),
 )
