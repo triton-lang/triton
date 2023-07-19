@@ -313,6 +313,7 @@ public:
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Preprocess
+    decomposeFp8e4b15Convert(mod);
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
@@ -440,6 +441,33 @@ private:
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
                                         allocation.getSharedMemorySize()));
+  }
+
+  void decomposeFp8e4b15Convert(ModuleOp mod) const {
+    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      OpBuilder builder(cvtOp);
+      if (!getElementTypeOrSelf(cvtOp).isa<mlir::Float8E4M3B11FNUZType>())
+        return;
+      auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
+      auto argEncoding =
+          cvtOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
+      auto cvtEncoding = cvtOp.getType().cast<RankedTensorType>().getEncoding();
+      if (argEncoding.isa<triton::gpu::DotOperandEncodingAttr>() ||
+          cvtEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+        return;
+      auto F16Ty = builder.getF16Type();
+
+      auto newArgType = RankedTensorType::get(shape, F16Ty, argEncoding);
+      auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
+      auto newArg = builder.create<mlir::triton::FpToFpOp>(
+          cvtOp.getLoc(), newArgType, cvtOp.getOperand());
+      auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
+          cvtOp.getLoc(), newCvtType, newArg);
+      auto newRet = builder.create<mlir::triton::FpToFpOp>(
+          cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
+      cvtOp.replaceAllUsesWith(newRet.getResult());
+      cvtOp.erase();
+    });
   }
 
   void decomposeMmaToDotOperand(ModuleOp mod, int numWarps,
