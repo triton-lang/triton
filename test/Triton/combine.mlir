@@ -1,4 +1,3 @@
-// RUN: triton-opt %s -split-input-file -canonicalize -triton-combine
 // RUN: triton-opt %s -split-input-file -canonicalize -triton-combine | FileCheck %s
 
 // CHECK-LABEL: @test_combine_dot_add_pattern
