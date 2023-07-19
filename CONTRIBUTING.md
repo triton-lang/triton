@@ -106,7 +106,7 @@ triton
 │   │	├──language: core of triton language, load tensors to SRAM, language logic, etc.
 │   │	│
 │   │	├──ops: contains functions for flash-attn, softmax, cross-entropy and other torch.nn.F functions
-│   │	├──runtime: contains impl jit compilation, autotuning, backend drivers,cahcing, error handles, etc.
+│   │	├──runtime: contains impl jit compilation, autotuning, backend drivers, caching, error handles, etc.
 │   │	├──third_party
 │   │	├──tools
 │   ├── triton.egg-info
