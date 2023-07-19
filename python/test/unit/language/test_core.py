@@ -44,7 +44,7 @@ def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, h
         x = rs.randint(low, high, shape, dtype=dtype)
         x[x == 0] = 1  # Hack. Never return zero so tests of division don't error out.
         return x
-    elif 'float8' in dtype_str:
+    elif dtype_str and 'float8' in dtype_str:
         x = rs.randint(20, 40, shape, dtype=np.int8)
         return x
     elif dtype_str in float_dtypes:
