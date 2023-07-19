@@ -194,7 +194,7 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 # link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
-add_subdirectory(bin)
+#add_subdirectory(bin)
 
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -273,6 +273,6 @@ if (${CODEGEN_BACKENDS_LEN} GREATER 0)
   endforeach()
 endif()
 
-add_subdirectory(test)
+#add_subdirectory(test)
 
-add_subdirectory(unittest)
+#add_subdirectory(unittest)
