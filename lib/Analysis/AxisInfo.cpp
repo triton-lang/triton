@@ -469,8 +469,7 @@ public:
   }
 };
 
-class LoadOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<triton::LoadOp> {
+class LoadOpAxisInfoVisitor final : public AxisInfoVisitorImpl<triton::LoadOp> {
 public:
   using AxisInfoVisitorImpl<triton::LoadOp>::AxisInfoVisitorImpl;
 
@@ -492,8 +491,8 @@ public:
       contiguity.push_back(1);
       divisibility.push_back(1);
       constancy.push_back(
-        gcd(ptrInfo.getConstancy(d),
-            maskInfo.has_value() ? maskInfo->getConstancy(d) : 0));
+          gcd(ptrInfo.getConstancy(d),
+              maskInfo.has_value() ? maskInfo->getConstancy(d) : 0));
     }
 
     return AxisInfo(contiguity, divisibility, constancy);
