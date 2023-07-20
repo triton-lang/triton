@@ -15,7 +15,7 @@ from .._C.libtriton.triton import (add_external_libs, compile_ptx_to_cubin,
                                    get_shared_memory_size, ir,
                                    translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
                                    translate_triton_gpu_to_llvmir)
-from ..common.backend import get_backend
+from ..common.backend import get_backend, path_to_ptxas
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
@@ -125,25 +125,6 @@ def ptx_get_version(cuda_version) -> int:
     if major == 10:
         return 63 + minor
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
-
-
-@functools.lru_cache()
-def path_to_ptxas():
-    base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
-    paths = [
-        os.environ.get("TRITON_PTXAS_PATH", ""),
-        os.path.join(base_dir, "third_party", "cuda", "bin", "ptxas")
-    ]
-
-    for ptxas in paths:
-        ptxas_bin = ptxas.split(" ")[0]
-        if os.path.exists(ptxas_bin) and os.path.isfile(ptxas_bin):
-            result = subprocess.check_output([ptxas_bin, "--version"], stderr=subprocess.STDOUT)
-            if result is not None:
-                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
-                if version is not None:
-                    return ptxas, version.group(1)
-    raise RuntimeError("Cannot find ptxas")
 
 
 def llir_to_ptx(mod: Any, arch: int, ptx_version: int = None) -> str:
