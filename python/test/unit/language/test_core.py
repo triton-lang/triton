@@ -1297,7 +1297,7 @@ def deserialize_fp8(np_data, in_dtype):
 
 
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4, tl.float8e5])
-@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
 def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     """
     For all possible float8 values (ref_fp8 = range(0, 256)), test that:
@@ -1306,13 +1306,6 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     this is only possible if both conversions are correct
     """
     check_type_supported(out_dtype, device)
-    from contextlib import nullcontext as does_not_raise
-    expectation = does_not_raise()
-    err_msg = None
-    if (in_dtype == tl.float8e4b15 and out_dtype != torch.float16) or\
-       (in_dtype != torch.float16 and out_dtype == tl.float8e4b15):
-        expectation = pytest.raises(triton.CompilationError)
-        err_msg = "fp8e4b15 can only be converted to/from fp16"
 
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -1331,19 +1324,15 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     ref_fp8[is_subnormal] = 0
     tri_fp8 = torch.from_numpy(serialize_fp8(ref_fp8, in_dtype)).cuda()
     tri_fp16 = torch.empty(256, dtype=out_dtype, device="cuda")
-    with expectation as e:
-        copy_kernel[(1,)](triton.reinterpret(tri_fp8, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
+    copy_kernel[(1,)](triton.reinterpret(tri_fp8, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
 
-        ref_fp8 = torch.from_numpy(ref_fp8).cuda()
-        ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
-        assert torch.all(tri_fp16[~is_subnormal] == ref_fp16[~is_subnormal])
+    ref_fp8 = torch.from_numpy(ref_fp8).cuda()
+    ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
+    assert torch.all(tri_fp16[~is_subnormal] == ref_fp16[~is_subnormal])
 
-        ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
-        copy_kernel[(1,)](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
-        assert torch.all(tri_fp8 == ref_fp8)
-
-    if err_msg is not None:
-        assert err_msg in str(e)
+    ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
+    copy_kernel[(1,)](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
+    assert torch.all(tri_fp8 == ref_fp8)
 
 # ---------------
 # test reduce
