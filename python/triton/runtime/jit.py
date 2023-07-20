@@ -11,7 +11,7 @@ from collections import defaultdict, namedtuple
 from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast,
                     overload)
 
-from ..common.backend import get_backend
+from ..common.backend import get_backend, path_to_ptxas
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
@@ -117,10 +117,8 @@ def version_key():
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.md5(f.read()).hexdigest()]
     # ptxas version
-    try:
-        ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
-    except Exception:
-        ptxas_version = ''
+    ptxas = path_to_ptxas()[0]
+    ptxas_version = hashlib.md5(subprocess.check_output([ptxas, "--version"])).hexdigest()
     return '-'.join(TRITON_VERSION) + '-' + ptxas_version + '-' + '-'.join(contents)
 
 
