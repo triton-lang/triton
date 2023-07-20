@@ -125,8 +125,8 @@ def download_and_copy_ptxas():
 
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
-    version = "12.2.91"
-    url = f"https://conda.anaconda.org/nvidia/label/cuda-12.2.0/linux-64/cuda-nvcc-{version}-0.tar.bz2"
+    version = "12.1.105"
+    url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-64/cuda-nvcc-{version}-0.tar.bz2"
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
