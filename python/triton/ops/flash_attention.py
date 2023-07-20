@@ -294,33 +294,29 @@ class _attention(torch.autograd.Function):
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
             raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
-        BLOCK = 128
+        BLOCK_M = 128
+        BLOCK_N = 64
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        grid = (cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1], 1)
+        grid = (cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
-        if causal:
-            modes = [1] if q.shape[2] <= 2048 else [2, 3]
-        else:
-            modes = [0]
-        for mode in modes:
-            _fwd_kernel[grid](
-                q, k, v, sm_scale,
-                L,
-                o,
-                q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-                k.stride(0), k.stride(1), k.stride(2), k.stride(3),
-                v.stride(0), v.stride(1), v.stride(2), v.stride(3),
-                o.stride(0), o.stride(1), o.stride(2), o.stride(3),
-                q.shape[0], q.shape[1], q.shape[2],
-                BLOCK_M=128, BLOCK_N=BLOCK, BLOCK_DMODEL=Lk,
-                IS_CAUSAL=causal,
-                num_warps=num_warps,
-                num_stages=2)
+        _fwd_kernel[grid](
+            q, k, v, sm_scale,
+            L,
+            o,
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),
+            q.shape[0], q.shape[1], q.shape[2],
+            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
+            IS_CAUSAL=causal,
+            num_warps=num_warps,
+            num_stages=4)
 
         ctx.save_for_backward(q, k, v, o, L)
         ctx.grid = grid
