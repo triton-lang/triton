@@ -83,7 +83,8 @@ SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
 
 bool ReduceOpHelper::isWarpSynchronous() {
   auto argsLayout = getSrcLayout();
-  return isFastReduction() && (triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1);
+  return isFastReduction() &&
+         (triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1);
 }
 
 SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
