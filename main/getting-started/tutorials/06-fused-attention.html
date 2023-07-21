@@ -109,13 +109,40 @@ to download the full example code</p>
 - Original flash attention paper (<a class="reference external" href="https://arxiv.org/abs/2205.14135">https://arxiv.org/abs/2205.14135</a>)
 - Rabe and Staats (<a class="reference external" href="https://arxiv.org/pdf/2112.05682v2.pdf">https://arxiv.org/pdf/2112.05682v2.pdf</a>)
 - Adam P. Goucher for simplified vector math</p>
-<img src="../../_images/sphx_glr_06-fused-attention_001.png" srcset="../../_images/sphx_glr_06-fused-attention_001.png" alt="06 fused attention" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-bwd:
+<ul class="sphx-glr-horizontal">
+<li><img src="../../_images/sphx_glr_06-fused-attention_001.png" srcset="../../_images/sphx_glr_06-fused-attention_001.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_06-fused-attention_002.png" srcset="../../_images/sphx_glr_06-fused-attention_002.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_06-fused-attention_003.png" srcset="../../_images/sphx_glr_06-fused-attention_003.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_06-fused-attention_004.png" srcset="../../_images/sphx_glr_06-fused-attention_004.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
+</ul>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd:
+     N_CTX      Triton
+0   1024.0  157.807875
+1   2048.0  165.101202
+2   4096.0  171.734589
+3   8192.0  174.607297
+4  16384.0  173.587809
+fused-attention-batch4-head48-d64-fwd:
+     N_CTX      Triton
+0   1024.0  119.866645
+1   2048.0  138.897448
+2   4096.0  149.895353
+3   8192.0  158.044391
+4  16384.0  156.773527
+fused-attention-batch4-head48-d64-bwd:
      N_CTX     Triton
-0   1024.0  77.503974
-1   2048.0  87.596934
-2   4096.0  93.024793
-3   8192.0  95.869807
-4  16384.0  97.779715
+0   1024.0  77.525193
+1   2048.0  87.562857
+2   4096.0  93.139921
+3   8192.0  96.149096
+4  16384.0  97.318577
+fused-attention-batch4-head48-d64-bwd:
+     N_CTX     Triton
+0   1024.0  54.158228
+1   2048.0  68.043696
+2   4096.0  77.231315
+3   8192.0  82.305138
+4  16384.0  85.443646
 </pre></div>
 </div>
 <div class="line-block">
@@ -467,7 +494,7 @@ to download the full example code</p>
     <span class="n">ylabel</span><span class="o">=</span><span class="s1">&#39;ms&#39;</span><span class="p">,</span>
     <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s1">&#39;fused-attention-batch</span><span class="si">{</span><span class="n">BATCH</span><span class="si">}</span><span class="s1">-head</span><span class="si">{</span><span class="n">N_HEADS</span><span class="si">}</span><span class="s1">-d</span><span class="si">{</span><span class="n">D_HEAD</span><span class="si">}</span><span class="s1">-</span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">,</span>
     <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;H&#39;</span><span class="p">:</span> <span class="n">N_HEADS</span><span class="p">,</span> <span class="s1">&#39;BATCH&#39;</span><span class="p">:</span> <span class="n">BATCH</span><span class="p">,</span> <span class="s1">&#39;D_HEAD&#39;</span><span class="p">:</span> <span class="n">D_HEAD</span><span class="p">,</span> <span class="s1">&#39;dtype&#39;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="s1">&#39;mode&#39;</span><span class="p">:</span> <span class="n">mode</span><span class="p">,</span> <span class="s1">&#39;causal&#39;</span><span class="p">:</span> <span class="n">causal</span><span class="p">}</span>
-<span class="p">)</span> <span class="k">for</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;bwd&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">causal</span> <span class="ow">in</span> <span class="p">[</span><span class="kc">False</span><span class="p">]]</span>
+<span class="p">)</span> <span class="k">for</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;fwd&#39;</span><span class="p">,</span> <span class="s1">&#39;bwd&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">causal</span> <span class="ow">in</span> <span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">]]</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span><span class="n">configs</span><span class="p">)</span>
@@ -510,7 +537,7 @@ to download the full example code</p>
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  6.727 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  14.165 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/54a35f6ec55f9746935b9566fb6bb1df/06-fused-attention.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">06-fused-attention.py</span></code></a></p>

@@ -32,23 +32,70 @@ Extra Credits:
 
 
 
-.. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_001.png
-   :alt: 06 fused attention
-   :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_001.png
-   :class: sphx-glr-single-img
+.. rst-class:: sphx-glr-horizontal
+
+
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_001.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_001.png
+         :class: sphx-glr-multi-img
+
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_002.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_002.png
+         :class: sphx-glr-multi-img
+
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_003.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_003.png
+         :class: sphx-glr-multi-img
+
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_004.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_004.png
+         :class: sphx-glr-multi-img
 
 
 .. rst-class:: sphx-glr-script-out
 
  .. code-block:: none
 
+    fused-attention-batch4-head48-d64-fwd:
+         N_CTX      Triton
+    0   1024.0  157.807875
+    1   2048.0  165.101202
+    2   4096.0  171.734589
+    3   8192.0  174.607297
+    4  16384.0  173.587809
+    fused-attention-batch4-head48-d64-fwd:
+         N_CTX      Triton
+    0   1024.0  119.866645
+    1   2048.0  138.897448
+    2   4096.0  149.895353
+    3   8192.0  158.044391
+    4  16384.0  156.773527
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  77.503974
-    1   2048.0  87.596934
-    2   4096.0  93.024793
-    3   8192.0  95.869807
-    4  16384.0  97.779715
+    0   1024.0  77.525193
+    1   2048.0  87.562857
+    2   4096.0  93.139921
+    3   8192.0  96.149096
+    4  16384.0  97.318577
+    fused-attention-batch4-head48-d64-bwd:
+         N_CTX     Triton
+    0   1024.0  54.158228
+    1   2048.0  68.043696
+    2   4096.0  77.231315
+    3   8192.0  82.305138
+    4  16384.0  85.443646
 
 
 
@@ -406,7 +453,7 @@ Extra Credits:
         ylabel='ms',
         plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
         args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode, 'causal': causal}
-    ) for mode in ['bwd'] for causal in [False]]
+    ) for mode in ['fwd', 'bwd'] for causal in [False, True]]
 
 
     @triton.testing.perf_report(configs)
@@ -451,7 +498,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  6.727 seconds)
+   **Total running time of the script:** ( 0 minutes  14.165 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
