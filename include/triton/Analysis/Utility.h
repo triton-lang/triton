@@ -37,6 +37,8 @@ public:
 
   bool isFastReduction();
 
+  bool isWarpSynchronous();
+
   unsigned getInterWarpSize();
 
   unsigned getIntraWarpSize();
