@@ -335,7 +335,9 @@ private:
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
 
     SmallVector<Value> smemBases(op.getNumOperands());
-    if (sizeInterWarps > 1) {
+    bool isWarpSync = helper.isWarpSynchronous();
+
+    if (!isWarpSync) {
       smemBases[0] = bitcast(
           getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
       for (unsigned i = 1; i < op.getNumOperands(); ++i) {
@@ -403,7 +405,7 @@ private:
         accumulate(rewriter, *combineOp, acc, shfl, false);
       }
 
-      if (sizeInterWarps == 1) {
+      if (isWarpSync) {
         finalAccs[key] = acc;
         continue;
       }
@@ -418,7 +420,7 @@ private:
       }
     }
 
-    if (sizeInterWarps == 1) {
+    if (isWarpSync) {
       SmallVector<Value> results(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         if (auto resultTy =

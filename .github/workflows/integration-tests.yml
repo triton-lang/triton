@@ -152,7 +152,7 @@ jobs:
         if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] != 'arc770') }}
         run: |
           python3 -m pip install --upgrade pre-commit
-          python3 -m pre_commit run --all-files
+          python3 -m pre_commit run --all-files --verbose
 
       - name: Check pre-commit arc770
         if: ${{ matrix.runner != 'macos-10.15' && (matrix.runner[1] == 'arc770') }}
