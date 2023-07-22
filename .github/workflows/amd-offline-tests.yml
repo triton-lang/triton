@@ -35,15 +35,15 @@ jobs:
           wget https://repo.radeon.com/amdgpu-install/5.5/ubuntu/jammy/amdgpu-install_5.5.50500-1_all.deb
           apt-get install -y ./amdgpu-install_5.5.50500-1_all.deb
           amdgpu-install -y --usecase=rocm --no-dkms
-          # install pytorch
-          pip3 install torch==2.0.1 --index-url https://download.pytorch.org/whl/rocm5.4.2
-          # uninstall system triton to eliminate conflicts with testing version
-          pip3 uninstall -y pytorch-triton-rocm
           # remove unused packages to free some disk space
           cp /opt/rocm/llvm/bin/ld.lld .
           apt purge -y rocblas rocm-llvm
           mkdir -p /opt/rocm/llvm/bin
           mv ld.lld /opt/rocm/llvm/bin/ld.lld
+          # install pytorch
+          pip3 install torch==2.0.1 --index-url https://download.pytorch.org/whl/rocm5.4.2
+          # uninstall system triton to eliminate conflicts with testing version
+          pip3 uninstall -y pytorch-triton-rocm
 
       - name: Install Triton
         run: |
