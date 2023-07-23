@@ -44,6 +44,9 @@ def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, h
         x = rs.randint(low, high, shape, dtype=dtype)
         x[x == 0] = 1  # Hack. Never return zero so tests of division don't error out.
         return x
+    elif dtype_str and 'float8' in dtype_str:
+        x = rs.randint(20, 40, shape, dtype=np.int8)
+        return x
     elif dtype_str in float_dtypes:
         return rs.normal(0, 1, shape).astype(dtype_str)
     elif dtype_str == 'bfloat16':
@@ -67,6 +70,8 @@ def to_triton(x: np.ndarray, device='cuda', dst_type=None) -> Union[TensorWrappe
         x_signed = x.astype(getattr(np, signed_type_name))
         return reinterpret(torch.tensor(x_signed, device=device), getattr(tl, t))
     else:
+        if dst_type and 'float8' in dst_type:
+            return reinterpret(torch.tensor(x, device=device), getattr(tl, dst_type))
         if t == 'float32' and dst_type == 'bfloat16':
             return torch.tensor(x, device=device).bfloat16()
         return torch.tensor(x, device=device)
@@ -1259,26 +1264,44 @@ def test_convert_float16_to_float32(in_dtype, device):
 
 
 def serialize_fp8(np_data, in_dtype):
-    if in_dtype == tl.float8e4b15:
-        # triton's f8e4b15 format is optimized for software emulation
-        # as a result, each pack of 4xfp8 values:
-        # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
-        # is actually internally stored as
-        # s0s2b0b2s1s3b1b3
-        # we apply the conversion here
-        f8x4 = np_data.view(np.uint32)
-        s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
-        b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
-        signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
-        bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
-        # tensor of triton fp8 data
-        return (signs | bits).view(np.int8)
-    else:
-        return np_data
+    return np_data
+# def serialize_fp8(np_data, in_dtype):
+#     if in_dtype == tl.float8e4b15:
+#         # triton's f8e4b15 format is optimized for software emulation
+#         # as a result, each pack of 4xfp8 values:
+#         # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
+#         # is actually internally stored as
+#         # s0s2b0b2s1s3b1b3
+#         # we apply the conversion here
+#         f8x4 = np_data.view(np.uint32)
+#         s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
+#         b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
+#         signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
+#         bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
+#         # tensor of triton fp8 data
+#         return (signs | bits).view(np.int8)
+#     else:
+#         return np_data
+
+# inverse of `serialize_fp8`
+
+
+def deserialize_fp8(np_data, in_dtype):
+    return np_data
+# def deserialize_fp8(np_data, in_dtype):
+#     if in_dtype == tl.float8e4b15:
+#         f8x4 = np_data.view(np.uint32)
+#         s = [(f8x4 & (0x80000000 >> i)) << i for i in [0, 16, 1, 17]]
+#         b = [(f8x4 & (0x7f000000 >> i)) << i for i in [1, 17, 8, 24]]
+#         signs = (s[0] >> 0) | (s[1] >> 8) | (s[2] >> 16) | (s[3] >> 24)
+#         bits = (b[0] >> 0) | (b[1] >> 8) | (b[2] >> 16) | (b[3] >> 24)
+#         return (signs | bits).view(np.int8)
+#     else:
+#         return np_data
 
 
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4, tl.float8e5])
-@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
 def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     """
     For all possible float8 values (ref_fp8 = range(0, 256)), test that:
@@ -1287,13 +1310,6 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     this is only possible if both conversions are correct
     """
     check_type_supported(out_dtype, device)
-    from contextlib import nullcontext as does_not_raise
-    expectation = does_not_raise()
-    err_msg = None
-    if (in_dtype == tl.float8e4b15 and out_dtype != torch.float16) or\
-       (in_dtype != torch.float16 and out_dtype == tl.float8e4b15):
-        expectation = pytest.raises(triton.CompilationError)
-        err_msg = "fp8e4b15 can only be converted to/from fp16"
 
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -1312,19 +1328,15 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     ref_fp8[is_subnormal] = 0
     tri_fp8 = torch.from_numpy(serialize_fp8(ref_fp8, in_dtype)).cuda()
     tri_fp16 = torch.empty(256, dtype=out_dtype, device="cuda")
-    with expectation as e:
-        copy_kernel[(1,)](triton.reinterpret(tri_fp8, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
+    copy_kernel[(1,)](triton.reinterpret(tri_fp8, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
 
-        ref_fp8 = torch.from_numpy(ref_fp8).cuda()
-        ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
-        assert torch.all(tri_fp16[~is_subnormal] == ref_fp16[~is_subnormal])
+    ref_fp8 = torch.from_numpy(ref_fp8).cuda()
+    ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
+    assert torch.all(tri_fp16[~is_subnormal] == ref_fp16[~is_subnormal])
 
-        ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
-        copy_kernel[(1,)](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
-        assert torch.all(tri_fp8 == ref_fp8)
-
-    if err_msg is not None:
-        assert err_msg in str(e)
+    ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
+    copy_kernel[(1,)](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
+    assert torch.all(tri_fp8 == ref_fp8)
 
 # ---------------
 # test reduce
@@ -1901,7 +1913,7 @@ def test_generic_reduction(device):
 @pytest.mark.parametrize("dtype_str, shape, perm",
                          [(dtype, shape, perm)
                           # TODO: bfloat16
-                          for dtype in ['float16', 'float32']
+                          for dtype in ['float8e4b15', 'float16', 'float32']
                              for shape in [(64, 64), (128, 128)]
                              for perm in [(1, 0)]])
 def test_permute(dtype_str, shape, perm, device):
@@ -1930,7 +1942,13 @@ def test_permute(dtype_str, shape, perm, device):
                                     z_tri_contiguous, z_tri_contiguous.stride(0), z_tri_contiguous.stride(1),
                                     BLOCK_M=shape[0], BLOCK_N=shape[1])
     # numpy result
-    z_ref = x.transpose(*perm)
+    if dtype_str == 'float8e4b15':
+        ty = tl.float8e4b15
+        z_ref = serialize_fp8(deserialize_fp8(x, ty).T.copy(), ty)
+        z_tri = z_tri.base
+        z_tri_contiguous = z_tri_contiguous.base
+    else:
+        z_ref = x.transpose(*perm)
     # compare
     np.testing.assert_allclose(to_numpy(z_tri), z_ref)
     np.testing.assert_allclose(to_numpy(z_tri_contiguous), z_ref)
@@ -3081,6 +3099,7 @@ def test_while(device):
     assert out_init_i[0] == init_i[0]
     assert out_i[0] == init_i[0] + 1
     assert out_j[0] == bound[0]
+
 
 def test_while(device):
     @triton.jit

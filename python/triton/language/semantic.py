@@ -687,11 +687,6 @@ def cast(input: tl.tensor,
         warnings.warn("Standard tl.float8e4 format will be deprecated on SM < 89. "
                       "Please use tl.float8e4b15.", DeprecationWarning)
 
-    # Unsupported conversion:
-    if (src_sca_ty.is_fp8e4b15() and not dst_sca_ty.is_fp16()) or \
-       (dst_sca_ty.is_fp8e4b15() and not src_sca_ty.is_fp16()):
-        raise ValueError('fp8e4b15 can only be converted to/from fp16')
-
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
        (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()):
@@ -1454,6 +1449,13 @@ def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
     if len(x.shape) != len(values):
         raise ValueError("Shape of input to max_contiguous does not match the length of values")
     x.handle.set_attr("tt.contiguity", ir.make_attr(values, x.handle.get_context()))
+    return x
+
+
+def max_constancy(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to max_constancy does not match the length of values")
+    x.handle.set_attr("tt.constancy", ir.make_attr(values, x.handle.get_context()))
     return x
 
 
