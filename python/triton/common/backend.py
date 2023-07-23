@@ -1,6 +1,10 @@
 
+import functools
 import importlib
 import importlib.util
+import os
+import re
+import subprocess
 from typing import Dict
 
 from ..runtime.driver import DriverBase
@@ -94,3 +98,22 @@ def get_backend(device_type: str):
         else:
             return None
     return _backends[device_type] if device_type in _backends else None
+
+
+@functools.lru_cache()
+def path_to_ptxas():
+    base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
+    paths = [
+        os.environ.get("TRITON_PTXAS_PATH", ""),
+        os.path.join(base_dir, "third_party", "cuda", "bin", "ptxas")
+    ]
+
+    for ptxas in paths:
+        ptxas_bin = ptxas.split(" ")[0]
+        if os.path.exists(ptxas_bin) and os.path.isfile(ptxas_bin):
+            result = subprocess.check_output([ptxas_bin, "--version"], stderr=subprocess.STDOUT)
+            if result is not None:
+                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+                if version is not None:
+                    return ptxas, version.group(1)
+    raise RuntimeError("Cannot find ptxas")
