@@ -123,7 +123,7 @@ def _fwd_kernel(
 @triton.jit
 def _bwd_preprocess(
     Out, DO,
-    NewDO, Delta,
+    Delta,
     BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
 ):
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -134,7 +134,6 @@ def _bwd_preprocess(
     # compute
     delta = tl.sum(o * do, axis=1)
     # write-back
-    tl.store(NewDO + off_m[:, None] * D_HEAD + off_n[None, :], do)
     tl.store(Delta + off_m, delta)
 
 
@@ -277,16 +276,15 @@ class _attention(torch.autograd.Function):
         dq = torch.zeros_like(q, dtype=torch.float32)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
-        do_scaled = torch.empty_like(do)
         delta = torch.empty_like(L)
         _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
             o, do,
-            do_scaled, delta,
+            delta,
             BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
         )
         _bwd_kernel[(ctx.grid[1],)](
             q, k, v, ctx.sm_scale,
-            o, do_scaled,
+            o, do,
             dq, dk, dv,
             L, delta,
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),
