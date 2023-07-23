@@ -18,8 +18,17 @@ def is_hip():
 
 @functools.lru_cache()
 def libcuda_dirs():
-    locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
-    return [os.path.dirname(loc) for loc in locs]
+    libs = subprocess.check_output(["ldconfig", "-p"]).decode()
+    # each line looks like the following:
+    # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
+    locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so" in line]
+    dirs = [os.path.dirname(loc) for loc in locs]
+    msg = 'libcuda.so cannot found!\n'
+    if locs:
+        msg += 'Possible files are located at %s.' % str(locs)
+        msg += 'Please create a symlink of libcuda.so to any of the file.'
+    assert any(os.path.exists(os.path.join(path, 'libcuda.so')) for path in dirs), msg
+    return dirs
 
 
 @functools.lru_cache()
