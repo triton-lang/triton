@@ -94,12 +94,14 @@ public:
     int loadIdx = -1;
     bool checkOp = false;
     for (int i = 0; i < slice.size(); i++) {
-      Operation *op = *(slice.begin() + i);
-      if (isa<triton::LoadOp>(op))
+      Operation *currOp = *(slice.begin() + i);
+      if (currOp->getParentRegion() != op->getParentRegion())
+        continue;
+      if (isa<triton::LoadOp>(currOp))
         checkOp = true;
       else if (checkOp) {
-        if (!isa<triton::FpToFpOp, triton::BitcastOp>(op) &&
-            op->getDialect()->getTypeID() !=
+        if (!isa<triton::FpToFpOp, triton::BitcastOp>(currOp) &&
+            currOp->getDialect()->getTypeID() !=
                 mlir::TypeID::get<arith::ArithDialect>())
           return mlir::failure();
       }
