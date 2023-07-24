@@ -28,7 +28,7 @@ Extra Credits:
 - Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 - Adam P. Goucher for simplified vector math
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-401
+.. GENERATED FROM PYTHON SOURCE LINES 13-399
 
 
 
@@ -70,32 +70,32 @@ Extra Credits:
 
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0  159.296401
-    1   2048.0  166.997603
-    2   4096.0  172.377877
-    3   8192.0  174.624346
-    4  16384.0  175.627362
+    0   1024.0  157.860784
+    1   2048.0  165.186092
+    2   4096.0  172.228558
+    3   8192.0  174.599752
+    4  16384.0  175.629769
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0  120.101887
-    1   2048.0  138.879723
-    2   4096.0  151.957700
-    3   8192.0  157.450411
-    4  16384.0  159.757261
+    0   1024.0  120.017170
+    1   2048.0  138.834658
+    2   4096.0  150.976069
+    3   8192.0  158.414006
+    4  16384.0  157.717652
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  77.489083
-    1   2048.0  87.833419
-    2   4096.0  93.871684
-    3   8192.0  96.169765
-    4  16384.0  97.675342
+    0   1024.0  77.793238
+    1   2048.0  87.920955
+    2   4096.0  92.952857
+    3   8192.0  95.529767
+    4  16384.0  97.845650
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  54.100661
-    1   2048.0  68.191194
-    2   4096.0  76.928617
-    3   8192.0  82.815517
-    4  16384.0  85.434130
+    0   1024.0  54.549761
+    1   2048.0  68.524681
+    2   4096.0  77.466501
+    3   8192.0  82.812960
+    4  16384.0  85.458609
 
 
 
@@ -219,7 +219,7 @@ Extra Credits:
     @triton.jit
     def _bwd_preprocess(
         Out, DO,
-        NewDO, Delta,
+        Delta,
         BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
     ):
         off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -230,7 +230,6 @@ Extra Credits:
         # compute
         delta = tl.sum(o * do, axis=1)
         # write-back
-        tl.store(NewDO + off_m[:, None] * D_HEAD + off_n[None, :], do)
         tl.store(Delta + off_m, delta)
 
 
@@ -373,16 +372,15 @@ Extra Credits:
             dq = torch.zeros_like(q, dtype=torch.float32)
             dk = torch.empty_like(k)
             dv = torch.empty_like(v)
-            do_scaled = torch.empty_like(do)
             delta = torch.empty_like(L)
             _bwd_preprocess[(ctx.grid[0] * ctx.grid[1], )](
                 o, do,
-                do_scaled, delta,
+                delta,
                 BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
             )
             _bwd_kernel[(ctx.grid[1],)](
                 q, k, v, ctx.sm_scale,
-                o, do_scaled,
+                o, do,
                 dq, dk, dv,
                 L, delta,
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),
@@ -498,7 +496,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  14.213 seconds)
+   **Total running time of the script:** ( 0 minutes  14.141 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
