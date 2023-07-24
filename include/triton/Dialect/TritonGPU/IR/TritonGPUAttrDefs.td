@@ -80,41 +80,11 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
                      "Type":$eltTy), [{
 
 #ifdef USE_ROCM
-        // ---- begin GFX908/GFX90A ----
+        // ---- begin MI200 ----
         auto mfmaEnc = dotOpEnc.getParent().dyn_cast<MfmaEncodingAttr>();
-
         if (mfmaEnc) {
-          int opIdx = dotOpEnc.getOpIdx();
-
-          // number of rows per phase
-          int perPhase = 128 / (shape[order[0]] * (eltTy.getIntOrFloatBitWidth() / 8));
-          perPhase = std::max<int>(perPhase, 1);
-
-          // index of the inner dimension in `order`
-          unsigned inner = (opIdx == 0) ? 0 : 1;
-          // for now, disable swizzle when using transposed int8 tensor cores
-          if (eltTy.isInteger(8) && order[0] == inner)
-            return $_get(context, 1, 1, 1, order);
-
-          // --- handle A operand ---
-          if (opIdx == 0) { // compute swizzling for A operand
-              // This is just an example of swizzle pattern, not a production ready
-              unsigned vec = 8;
-              unsigned maxPhase = 2;
-              unsigned perPhase = 1;
-              return $_get(context, vec, perPhase, maxPhase, order);
-          }
-
-          // --- handle B operand ---
-          if (opIdx == 1) {
-              // This is an example of swizzle pattern, not a production ready
-              unsigned vec = 2;
-              unsigned maxPhase = 2;
-              unsigned perPhase = 1;
-              return $_get(context, vec, perPhase, maxPhase, order);
-          }
-
-          llvm_unreachable("invalid operand index");
+          // Swizzling is currently disabled for MFMA
+          return $_get(context, 1, 1, 1, order);
         }
 #endif
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
