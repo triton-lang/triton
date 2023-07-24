@@ -63,8 +63,19 @@ public:
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto dstType = op.getResult().getType().cast<RankedTensorType>();
       auto dstEncoding = dstType.getEncoding();
+      // Enable moving shared->dot conversion after dependent load.
+      // For the Q tensor in flash attention, the shared->dot conversion acts as
+      // a loop invariant. Moving this conversion post dependent load,
+      // will hoist the conversion outside the loop. Consequently, during
+      // computation, we will be able to maintain the Q tensor in the registers.
+#ifdef USE_ROCM
+      if (!dstEncoding.isa<triton::gpu::SharedEncodingAttr>() &&
+          !dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+        return;
+#elif
       if (!dstEncoding.isa<triton::gpu::SharedEncodingAttr>())
         return;
+#endif
       Operation *argOp = op.getOperand().getDefiningOp();
       if (!argOp)
         return;
@@ -80,6 +91,13 @@ public:
     });
     // Move `dot` operand so that conversions to opIdx=0 happens before
     // conversions to opIdx=1
+#ifdef USE_ROCM
+    // Skip this reordering for ROCm backend since it will sink shared->dot
+    // conversion for Q tensor in flash attention into the main loop. This
+    // increases LDS pressure and requires additional computation in every loop
+    // iteration.
+    return;
+#endif
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto dstType = op.getResult().getType().cast<RankedTensorType>();
       auto dstEncoding =
