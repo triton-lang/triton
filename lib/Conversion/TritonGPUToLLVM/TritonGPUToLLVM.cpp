@@ -464,9 +464,25 @@ struct GetNumProgramsOpConversion
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
 
+#ifdef USE_ROCM
+    // Seem like GridDimOp returns the number of threads (not the number of 
+    // workgroups) in a kernel (a bug in llvm https://reviews.llvm.org/D156009), 
+    // so as a workaround here, we divide by the number of threads 
+    // per workgroup to get the number of workgroups in a kernel.
+    // TODO: when we do upstream to include llvm fix, we can remove this workaround
+    // The unit test added in this PR can guarantee that.
+    Value threadsPerGrid =
+        rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
+    Value threadsPerBlock =
+        rewriter.create<::mlir::gpu::BlockDimOp>(loc, dims[op.getAxis()]);
+    Value threadNumPerGrid = rewriter.create<arith::TruncIOp>(loc, i32_ty, threadsPerGrid);
+    Value threadNumPerBlock = rewriter.create<arith::TruncIOp>(loc, i32_ty, threadsPerBlock);    
+    rewriter.replaceOpWithNewOp<LLVM::UDivOp>(op, threadNumPerGrid, threadNumPerBlock);
+#else
     Value blockId =
         rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
+#endif // USE_ROCM
 
     return success();
   }
