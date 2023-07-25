@@ -117,32 +117,32 @@ to download the full example code</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd:
      N_CTX      Triton
-0   1024.0  157.860784
-1   2048.0  165.186092
-2   4096.0  172.228558
-3   8192.0  174.599752
-4  16384.0  175.629769
+0   1024.0  157.415728
+1   2048.0  165.463052
+2   4096.0  172.317023
+3   8192.0  174.601620
+4  16384.0  175.634550
 fused-attention-batch4-head48-d64-fwd:
      N_CTX      Triton
-0   1024.0  120.017170
-1   2048.0  138.834658
-2   4096.0  150.976069
-3   8192.0  158.414006
-4  16384.0  157.717652
+0   1024.0  119.564145
+1   2048.0  138.308878
+2   4096.0  151.987187
+3   8192.0  158.625495
+4  16384.0  156.451804
 fused-attention-batch4-head48-d64-bwd:
      N_CTX     Triton
-0   1024.0  77.793238
-1   2048.0  87.920955
-2   4096.0  92.952857
-3   8192.0  95.529767
-4  16384.0  97.845650
+0   1024.0  77.903830
+1   2048.0  87.986063
+2   4096.0  94.078948
+3   8192.0  95.667082
+4  16384.0  97.981358
 fused-attention-batch4-head48-d64-bwd:
      N_CTX     Triton
-0   1024.0  54.549761
-1   2048.0  68.524681
-2   4096.0  77.466501
-3   8192.0  82.812960
-4  16384.0  85.458609
+0   1024.0  54.569915
+1   2048.0  68.501546
+2   4096.0  77.525315
+3   8192.0  82.799340
+4  16384.0  85.959859
 </pre></div>
 </div>
 <div class="line-block">
@@ -475,10 +475,15 @@ fused-attention-batch4-head48-d64-bwd:
 
 
 <span class="k">try</span><span class="p">:</span>
-    <span class="kn">from</span> <span class="nn">flash_attn.flash_attn_interface</span> <span class="kn">import</span> <span class="n">flash_attn_func</span>
-    <span class="n">HAS_FLASH</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="kn">from</span> <span class="nn">flash_attn.flash_attn_interface</span> <span class="kn">import</span> <span class="n">flash_attn_qkvpacked_func</span> <span class="k">as</span> <span class="n">flash_attn_func</span>
+    <span class="n">FLASH_VER</span> <span class="o">=</span> <span class="mi">2</span>
 <span class="k">except</span> <span class="ne">BaseException</span><span class="p">:</span>
-    <span class="n">HAS_FLASH</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">from</span> <span class="nn">flash_attn.flash_attn_interface</span> <span class="kn">import</span> <span class="n">flash_attn_func</span>
+        <span class="n">FLASH_VER</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="k">except</span> <span class="ne">BaseException</span><span class="p">:</span>
+        <span class="n">FLASH_VER</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="n">HAS_FLASH</span> <span class="o">=</span> <span class="n">FLASH_VER</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
 
 <span class="n">BATCH</span><span class="p">,</span> <span class="n">N_HEADS</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">64</span>
 <span class="c1"># vary seq length for fixed head and batch=4</span>
@@ -487,7 +492,7 @@ fused-attention-batch4-head48-d64-bwd:
     <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">)],</span>
     <span class="n">line_arg</span><span class="o">=</span><span class="s1">&#39;provider&#39;</span><span class="p">,</span>
     <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;triton&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s1">&#39;flash&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
-    <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;Triton&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s1">&#39;Flash&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
+    <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;Triton&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="sa">f</span><span class="s1">&#39;Flash-</span><span class="si">{</span><span class="n">FLASH_VER</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
     <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;red&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)],</span>
     <span class="n">ylabel</span><span class="o">=</span><span class="s1">&#39;ms&#39;</span><span class="p">,</span>
     <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s1">&#39;fused-attention-batch</span><span class="si">{</span><span class="n">BATCH</span><span class="si">}</span><span class="s1">-head</span><span class="si">{</span><span class="n">N_HEADS</span><span class="si">}</span><span class="s1">-d</span><span class="si">{</span><span class="n">D_HEAD</span><span class="si">}</span><span class="s1">-</span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">,</span>
@@ -512,11 +517,17 @@ fused-attention-batch4-head48-d64-bwd:
             <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">o</span><span class="o">.</span><span class="n">backward</span><span class="p">(</span><span class="n">do</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
         <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="n">warmup</span><span class="p">,</span> <span class="n">rep</span><span class="o">=</span><span class="n">rep</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;flash&quot;</span><span class="p">:</span>
-        <span class="n">lengths</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">BATCH</span><span class="p">,),</span> <span class="n">fill_value</span><span class="o">=</span><span class="n">N_CTX</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-        <span class="n">cu_seqlens</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BATCH</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
-        <span class="n">cu_seqlens</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span> <span class="o">=</span> <span class="n">lengths</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-        <span class="n">qkv</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">BATCH</span> <span class="o">*</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-        <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">flash_attn_func</span><span class="p">(</span><span class="n">qkv</span><span class="p">,</span> <span class="n">cu_seqlens</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">causal</span><span class="o">=</span><span class="n">causal</span><span class="p">)</span>
+        <span class="n">qkv</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">FLASH_VER</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">lengths</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">BATCH</span><span class="p">,),</span> <span class="n">fill_value</span><span class="o">=</span><span class="n">N_CTX</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+            <span class="n">cu_seqlens</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BATCH</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+            <span class="n">cu_seqlens</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span> <span class="o">=</span> <span class="n">lengths</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+            <span class="n">qkv</span> <span class="o">=</span> <span class="n">qkv</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">BATCH</span> <span class="o">*</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">)</span>
+            <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">flash_attn_func</span><span class="p">(</span><span class="n">qkv</span><span class="p">,</span> <span class="n">cu_seqlens</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">causal</span><span class="o">=</span><span class="n">causal</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">FLASH_VER</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">flash_attn_func</span><span class="p">(</span><span class="n">qkv</span><span class="p">,</span> <span class="n">causal</span><span class="o">=</span><span class="n">causal</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;unknown </span><span class="si">{</span><span class="n">FLASH_VER</span><span class="w"> </span><span class="si">= }</span><span class="s1">&#39;</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s1">&#39;bwd&#39;</span><span class="p">:</span>
             <span class="n">o</span> <span class="o">=</span> <span class="n">fn</span><span class="p">()</span>
             <span class="n">do</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn_like</span><span class="p">(</span><span class="n">o</span><span class="p">)</span>
@@ -535,7 +546,7 @@ fused-attention-batch4-head48-d64-bwd:
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  14.141 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  14.274 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/54a35f6ec55f9746935b9566fb6bb1df/06-fused-attention.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">06-fused-attention.py</span></code></a></p>

@@ -28,7 +28,7 @@ Extra Credits:
 - Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 - Adam P. Goucher for simplified vector math
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-399
+.. GENERATED FROM PYTHON SOURCE LINES 13-410
 
 
 
@@ -70,32 +70,32 @@ Extra Credits:
 
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0  157.860784
-    1   2048.0  165.186092
-    2   4096.0  172.228558
-    3   8192.0  174.599752
-    4  16384.0  175.629769
+    0   1024.0  157.415728
+    1   2048.0  165.463052
+    2   4096.0  172.317023
+    3   8192.0  174.601620
+    4  16384.0  175.634550
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0  120.017170
-    1   2048.0  138.834658
-    2   4096.0  150.976069
-    3   8192.0  158.414006
-    4  16384.0  157.717652
+    0   1024.0  119.564145
+    1   2048.0  138.308878
+    2   4096.0  151.987187
+    3   8192.0  158.625495
+    4  16384.0  156.451804
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  77.793238
-    1   2048.0  87.920955
-    2   4096.0  92.952857
-    3   8192.0  95.529767
-    4  16384.0  97.845650
+    0   1024.0  77.903830
+    1   2048.0  87.986063
+    2   4096.0  94.078948
+    3   8192.0  95.667082
+    4  16384.0  97.981358
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  54.549761
-    1   2048.0  68.524681
-    2   4096.0  77.466501
-    3   8192.0  82.812960
-    4  16384.0  85.458609
+    0   1024.0  54.569915
+    1   2048.0  68.501546
+    2   4096.0  77.525315
+    3   8192.0  82.799340
+    4  16384.0  85.959859
 
 
 
@@ -434,10 +434,15 @@ Extra Credits:
 
 
     try:
-        from flash_attn.flash_attn_interface import flash_attn_func
-        HAS_FLASH = True
+        from flash_attn.flash_attn_interface import flash_attn_qkvpacked_func as flash_attn_func
+        FLASH_VER = 2
     except BaseException:
-        HAS_FLASH = False
+        try:
+            from flash_attn.flash_attn_interface import flash_attn_func
+            FLASH_VER = 1
+        except BaseException:
+            FLASH_VER = None
+    HAS_FLASH = FLASH_VER is not None
 
     BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
     # vary seq length for fixed head and batch=4
@@ -446,7 +451,7 @@ Extra Credits:
         x_vals=[2**i for i in range(10, 15)],
         line_arg='provider',
         line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
-        line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
+        line_names=['Triton'] + ([f'Flash-{FLASH_VER}'] if HAS_FLASH else []),
         styles=[('red', '-'), ('blue', '-')],
         ylabel='ms',
         plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
@@ -471,11 +476,17 @@ Extra Credits:
                 fn = lambda: o.backward(do, retain_graph=True)
             ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         if provider == "flash":
-            lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
-            cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
-            cu_seqlens[1:] = lengths.cumsum(0)
-            qkv = torch.randn((BATCH * N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
-            fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=causal)
+            qkv = torch.randn((BATCH, N_CTX, 3, H, D_HEAD), dtype=dtype, device=device, requires_grad=True)
+            if FLASH_VER == 1:
+                lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
+                cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
+                cu_seqlens[1:] = lengths.cumsum(0)
+                qkv = qkv.reshape(BATCH * N_CTX, 3, H, D_HEAD)
+                fn = lambda: flash_attn_func(qkv, cu_seqlens, 0., N_CTX, causal=causal)
+            elif FLASH_VER == 2:
+                fn = lambda: flash_attn_func(qkv, causal=causal)
+            else:
+                raise ValueError(f'unknown {FLASH_VER = }')
             if mode == 'bwd':
                 o = fn()
                 do = torch.randn_like(o)
@@ -496,7 +507,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  14.141 seconds)
+   **Total running time of the script:** ( 0 minutes  14.274 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
