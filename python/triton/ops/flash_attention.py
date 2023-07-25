@@ -66,8 +66,10 @@ def _fwd_kernel(
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
     if HAS_MASK:  # custom mask
+        off_z = off_hz // H
+        off_h = off_hz % H
         Mask_block_ptr = tl.make_block_ptr(
-            base=Mask + off_hz * stride_maskh,
+            base=Mask + off_z * stride_maskz + off_h * stride_maskh,
             shape=(N_CTX, N_CTX),
             strides=(stride_maskm, stride_maskn),
             offsets=(start_m * BLOCK_M, 0),
@@ -345,7 +347,7 @@ class _attention(torch.autograd.Function):
 
         has_mask = mask is not None
         if has_mask:
-            assert isinstance(mask, torch.Tensor) and 2 <= mask.dim() <= 4
+            assert isinstance(mask, torch.Tensor) and 1 <= mask.dim() <= 4
             extra_dims = 4 - mask.dim()
             mask = mask.reshape((1,) * extra_dims + mask.shape)
             mask = mask.expand(q.shape[0], q.shape[1], q.shape[2], k.shape[2])
