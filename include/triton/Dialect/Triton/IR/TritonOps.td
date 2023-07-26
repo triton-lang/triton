@@ -133,7 +133,6 @@ def TT_AdvanceOp : TT_Op<"advance",
 //
 def TT_LoadOp : TT_Op<"load",
                       [SameLoadStoreOperandsAndResultShape,
-                       SameLoadStoreOperandsAndResultEncoding,
                        AttrSizedOperandSegments,
                        MemoryEffects<[MemRead]>,
                        TypesMatchWith<"infer ptr type from result type",
@@ -141,10 +140,10 @@ def TT_LoadOp : TT_Op<"load",
                                       "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
                        TypesMatchWith<"infer mask type from result type or none",
                                       "result", "mask", "getI1SameShape($_self)",
-                                      "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
+                                      "($_op.getOperands().size() <= 1) || mlir::OpTrait::impl::verifyTensorSameSizeElemType">,
                        TypesMatchWith<"infer other type from result type or none",
                                       "result", "other", "$_self",
-                                      "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
+                                      "($_op.getOperands().size() <= 2) || mlir::OpTrait::impl::verifyTensorSameSizeElemType">]> {
     let summary = "Load from a tensor of pointers or from a tensor pointer";
 
     let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, Optional<TT_BoolLike>:$mask,
@@ -184,14 +183,13 @@ def TT_LoadOp : TT_Op<"load",
 
 def TT_StoreOp : TT_Op<"store",
                        [SameLoadStoreOperandsShape,
-                        SameLoadStoreOperandsEncoding,
                         MemoryEffects<[MemWrite]>,
                         TypesMatchWith<"infer ptr type from value type",
                                        "value", "ptr", "$_self",
                                        "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
                         TypesMatchWith<"infer mask type from value type",
                                        "value", "mask", "getI1SameShape($_self)",
-                                       "($_op.getOperands().size() <= 2) || std::equal_to<>()">]> {
+                                       "($_op.getOperands().size() <= 2) || mlir::OpTrait::impl::verifyTensorSameSizeElemType">]> {
     let summary = "Store by a tensor of pointers or by a tensor pointer";
 
     let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, TT_Type:$value, Optional<TT_BoolLike>:$mask,
@@ -544,7 +542,7 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
                                 SameVariadicOperandSize,
                                 TypesMatchWith<"infer pointer type from the result type",
                                                "result", "base",
-                                               "getPointerType(getElementTypeOfTensorPointerType($_self))">]> {
+                                                "getPointerType(getElementTypeOfTensorPointerType($_self), cast<PointerType>($_self).getPtrInfo())">]> {
   let summary = "Make a tensor pointer type with meta information of the parent tensor and the block specified";
 
   let description = [{
@@ -576,6 +574,23 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
         "ArrayRef<int32_t>":$order
     )>
   ];
+}
+
+//
+// Set Ptr Info Op
+//
+def SetPtrInfoOp : TT_Op<"set_ptr_info", [Pure]> {
+    let summary ="set_ptr_info";
+
+    let arguments = (ins TT_PtrLike:$ptr, DictionaryAttr:$ptrInfo);
+
+    let results = (outs TT_PtrLike:$result);
+
+    let builders = [
+        OpBuilder<(ins "Value":$ptr, "DictionaryAttr":$ptrInfo)>
+    ];
+
+    let hasCustomAssemblyFormat = 1;
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and modified from

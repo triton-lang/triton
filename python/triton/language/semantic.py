@@ -923,7 +923,7 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
     # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
     if elt_ty == tl.int1:
         elt_ty = tl.int8
-        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
+        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space, ptr_ty.ptr_info)
         ptr = cast(ptr, ptr_ty, builder)
 
     # Cast `other` into `ele_ty` type
@@ -1023,7 +1023,7 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
     # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
     if elt_ty == tl.int1:
         elt_ty = tl.int8
-        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
+        ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space, ptr_ty.ptr_info)
         ptr = cast(ptr, ptr_ty, builder)
 
     # Cast to target data type
@@ -1511,7 +1511,7 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
 
     # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
     if base.type.element_ty == tl.int1:
-        base = cast(base, tl.pointer_type(tl.int8, base.type.address_space), builder)
+        base = cast(base, tl.pointer_type(tl.int8, base.type.address_space, base.type.ptr_info), builder)
 
     # Check whether `block_shape` is static
     if not hasattr(block_shape, "__iter__"):
@@ -1534,7 +1534,8 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
     #   `pointer_type<blocked<shape, element_type>>` in Python
     #   `tt.ptr<tensor<shape, element_type>>` in MLIR
     handle = builder.create_make_block_ptr(base.handle, shape, strides, offsets, block_shape, order)
-    return tl.tensor(handle, tl.pointer_type(tl.block_type(base.type.element_ty, block_shape)))
+    return tl.tensor(handle, tl.pointer_type(tl.block_type(base.type.element_ty, block_shape),
+                                             ptr_info=base.type.ptr_info))
 
 
 def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
@@ -1543,3 +1544,9 @@ def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
 
     # Advanced block pointer type is the same as before
     return tl.tensor(builder.create_advance(base.handle, offsets), base.type)
+
+def set_ptr_info(ptr: tl.tensor, ptr_info: dict, builder: ir.builder) -> tl.tensor:
+    ptr_info_attr = builder.get_ptr_info_attr(ptr_info)
+    ret = tl.tensor(builder.create_set_ptr_info(ptr.handle, ptr_info_attr), ptr.type)
+    ptr.type.ptr_info = ptr_info
+    return ret

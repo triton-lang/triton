@@ -372,13 +372,14 @@ def compile(fn, **kwargs):
     extern_libs = kwargs.get("extern_libs", dict())
     if extern_libs is None:
         extern_libs = dict()
+    ptr_info = kwargs.get("ptr_info", list())
     debug = kwargs.get("debug", False)
 
     # build compilation stages
     stages = dict()
     stages["ast"] = (lambda path: fn, None)
     stages["ttir"] = (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, arch=arch), arch))
+                      lambda src: optimize_ttir(ast_to_ttir(src, signature, ptr_info, configs[0], constants, debug=debug, arch=arch), arch))
     stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
                        lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, arch))
     stages["llir"] = (lambda path: Path(path).read_text(),

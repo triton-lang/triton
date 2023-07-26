@@ -72,8 +72,24 @@ void LoadOp::print(OpAsmPrinter &printer) {
 
   // `type(ptr) -> type(result)`
   printer << " : ";
-  // `type(ptr)` is optional during parsing, we only print for tensor pointers
-  if (isTensorPointerType(getPtr().getType())) {
+  // `type(ptr)` is optional during parsing, we print type(ptr) when parser
+  // cannot decuce it:
+  // - ptr is a pointer of tensors: tt.ptr<tensor<...>>
+  // - ptr is a tensor of pointers with non-empty pointer info:
+  // tensor<tt.ptr<..., ptr_info>>
+  // - ptr is a scalar pointer with non-empty pointer info: tt.ptr<...,
+  // ptr_info>
+  auto ptrType = getPtr().getType();
+  auto rankedPtrType = ptrType.dyn_cast<RankedTensorType>();
+  PointerType elementPtrType;
+  if (rankedPtrType)
+    elementPtrType = rankedPtrType.getElementType().cast<PointerType>();
+  auto scalarPtrType = ptrType.dyn_cast<PointerType>();
+  if (isTensorPointerType(ptrType) ||
+      (rankedPtrType && elementPtrType.getPtrInfo() &&
+       !elementPtrType.getPtrInfo().empty()) ||
+      (scalarPtrType && scalarPtrType.getPtrInfo() &&
+       !scalarPtrType.getPtrInfo().empty())) {
     printer.printStrippedAttrOrType(getPtr().getType());
     printer << " -> ";
   }
@@ -125,12 +141,74 @@ void StoreOp::print(OpAsmPrinter &printer) {
 
   // `type(ptr), type(value)`
   printer << " : ";
-  // `type(ptr)` is optional during parsing, we only print for tensor pointers
-  if (isTensorPointerType(getPtr().getType())) {
+  // `type(ptr)` is optional during parsing, we print type(ptr) when parser
+  // cannot deduce it:
+  // - ptr is a pointer of tensors: tt.ptr<tensor<...>>
+  // - ptr is a tensor of pointers with non-empty pointer info:
+  // tensor<tt.ptr<..., ptr_info>>
+  // - ptr is a scalar pointer with non-empty pointer info: tt.ptr<...,
+  // ptr_info>
+  // - data tensor has non-empty encoding attribute
+  auto ptrType = getPtr().getType();
+  auto rankedPtrType = ptrType.dyn_cast<RankedTensorType>();
+  PointerType elementPtrType;
+  Attribute dataEncoding;
+  if (rankedPtrType) {
+    elementPtrType = rankedPtrType.getElementType().cast<PointerType>();
+    dataEncoding = getValue().getType().cast<RankedTensorType>().getEncoding();
+  }
+  auto scalarPtrType = ptrType.dyn_cast<PointerType>();
+  if (isTensorPointerType(ptrType) ||
+      (rankedPtrType && elementPtrType.getPtrInfo() &&
+       !elementPtrType.getPtrInfo().empty()) ||
+      (scalarPtrType && scalarPtrType.getPtrInfo() &&
+       !scalarPtrType.getPtrInfo().empty()) ||
+      dataEncoding) {
     printer.printStrippedAttrOrType(getPtr().getType());
     printer << ", ";
   }
   printer.printStrippedAttrOrType(getValue().getType());
+}
+
+ParseResult SetPtrInfoOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand ptr;
+
+  if (parser.parseOperand(ptr))
+    return failure();
+
+  if (parser.parseColon())
+    return failure();
+
+  Type ptrType;
+  if (parser.parseType(ptrType))
+    return failure();
+
+  if (parser.parseArrow())
+    return failure();
+
+  Type resType;
+  if (parser.parseType(resType))
+    return failure();
+  result.addTypes(resType);
+
+  Attribute attr = resType.cast<PointerType>().getPtrInfo();
+  result.addAttribute("ptrInfo", attr);
+
+  if (parser.resolveOperand(ptr, ptrType, result.operands))
+    return failure();
+
+  return success();
+}
+
+void SetPtrInfoOp::print(OpAsmPrinter &printer) {
+  printer << " ";
+  printer << getOperation()->getOperands();
+
+  // `type(ptr) -> type(result)`
+  printer << " : ";
+  printer.printStrippedAttrOrType(getPtr().getType());
+  printer << " -> ";
+  printer.printStrippedAttrOrType(getResult().getType());
 }
 
 } // namespace triton
@@ -148,12 +226,21 @@ namespace triton {
 //-- LoadOp --
 static Type getLoadOpResultType(::mlir::OpBuilder &builder, Type ptrType) {
   auto ptrTensorType = ptrType.dyn_cast<RankedTensorType>();
-  if (!ptrTensorType)
-    return ptrType.cast<PointerType>().getPointeeType();
+  if (!ptrTensorType) {
+    Attribute ptrInfo = ptrType.cast<PointerType>().getPtrInfo();
+    auto pointeeType = ptrType.cast<PointerType>().getPointeeType();
+    if (auto shapedPointeeType = pointeeType.dyn_cast<RankedTensorType>())
+      return RankedTensorType::get(shapedPointeeType.getShape(),
+                                   shapedPointeeType.getElementType(), ptrInfo);
+    else
+      return ptrType.cast<PointerType>().getPointeeType();
+  }
+
   auto shape = ptrTensorType.getShape();
-  Type elementType =
-      ptrTensorType.getElementType().cast<PointerType>().getPointeeType();
-  return RankedTensorType::get(shape, elementType);
+  auto ptrElementType = ptrTensorType.getElementType().cast<PointerType>();
+  Type elementType = ptrElementType.getPointeeType();
+  auto ptrInfo = ptrElementType.getPtrInfo();
+  return RankedTensorType::get(shape, elementType, ptrInfo);
 }
 
 void LoadOp::build(::mlir::OpBuilder &builder, ::mlir::OperationState &state,
@@ -764,10 +851,19 @@ void MakeTensorPtrOp::build(::mlir::OpBuilder &builder,
   auto tensorType = RankedTensorType::get(
       SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
       pointerType.getPointeeType());
-  auto result = PointerType::get(tensorType, 1);
+  auto result = PointerType::get(tensorType, 1, pointerType.getPtrInfo());
 
   return build(builder, state, result, base, shape, strides, offsets,
                builder.getDenseI32ArrayAttr(order));
+}
+
+//-- SetPtrInfoOp --
+void SetPtrInfoOp::build(::mlir::OpBuilder &builder,
+                         ::mlir::OperationState &state, ::mlir::Value ptr,
+                         ::mlir::DictionaryAttr ptrInfo) {
+  auto ptrType = ptr.getType().cast<PointerType>();
+  Type result = PointerType::get(ptrType.getPointeeType(), 1, ptrInfo);
+  build(builder, state, result, ptr, ptrInfo);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and

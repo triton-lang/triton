@@ -126,18 +126,35 @@ OpTrait::impl::verifySameLoadStoreOperandsAndResultShape(Operation *op) {
 
 bool OpTrait::impl::verifyLoadStorePointerAndValueType(Type valueType,
                                                        Type ptrType) {
+  auto valueRankedType = valueType.dyn_cast<RankedTensorType>();
+
   if (triton::isTensorPointerType(ptrType)) {
-    return ptrType.cast<triton::PointerType>().getPointeeType() == valueType;
-  } else if (auto rankedType = ptrType.dyn_cast<RankedTensorType>()) {
+    auto rankedPointeeType = ptrType.cast<triton::PointerType>()
+                                 .getPointeeType()
+                                 .cast<RankedTensorType>();
+    return rankedPointeeType.getShape() == valueRankedType.getShape() &&
+           rankedPointeeType.getElementType() ==
+               valueRankedType.getElementType();
+  } else if (auto rankedPtrType = ptrType.dyn_cast<RankedTensorType>()) {
     if (auto elementPtrType =
-            dyn_cast<triton::PointerType>(rankedType.getElementType())) {
-      auto inferValueType = RankedTensorType::get(
-          rankedType.getShape(), elementPtrType.getPointeeType(),
-          rankedType.getEncoding());
-      return inferValueType == valueType;
+            dyn_cast<triton::PointerType>(rankedPtrType.getElementType())) {
+      return rankedPtrType.getShape() == valueRankedType.getShape() &&
+             elementPtrType.getPointeeType() ==
+                 valueRankedType.getElementType();
     }
   } else if (auto scalarPtrType = ptrType.dyn_cast<triton::PointerType>()) {
     return scalarPtrType.getPointeeType() == valueType;
   }
   return false;
+}
+
+bool OpTrait::impl::verifyTensorSameSizeElemType(Type t1, Type t2) {
+  auto rankedType1 = t1.dyn_cast<RankedTensorType>();
+  auto rankedType2 = t2.dyn_cast<RankedTensorType>();
+  if (!rankedType1 && !rankedType2)
+    return t1 == t2;
+  if (!rankedType1 || !rankedType2)
+    return false;
+  return rankedType1.getShape() == rankedType2.getShape() &&
+         rankedType1.getElementType() == rankedType2.getElementType();
 }

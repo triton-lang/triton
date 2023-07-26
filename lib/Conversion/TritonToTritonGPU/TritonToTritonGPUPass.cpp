@@ -657,6 +657,21 @@ public:
   }
 };
 
+// Temporarily delete this op
+struct TritonSetPtrPattern : public OpConversionPattern<triton::SetPtrInfoOp> {
+  using OpConversionPattern<triton::SetPtrInfoOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::SetPtrInfoOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto src = adaptor.getPtr();
+    rewriter.replaceAllUsesWith(op.getResult(), src);
+    rewriter.eraseOp(op);
+
+    return success();
+  }
+};
+
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
@@ -676,8 +691,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
           TritonExternElementwisePattern<triton::PureExternElementwiseOp>,
           TritonExternElementwisePattern<triton::ImpureExternElementwiseOp>,
           TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern,
-          TritonFuncOpPattern, TritonReturnOpPattern, TritonCallOpPattern>(
-          typeConverter, context);
+          TritonFuncOpPattern, TritonReturnOpPattern, TritonCallOpPattern,
+          TritonSetPtrPattern>(typeConverter, context);
 }
 
 //

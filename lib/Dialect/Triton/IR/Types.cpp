@@ -27,15 +27,29 @@ Type PointerType::parse(AsmParser &parser) {
   if (parser.parseType(pointeeType))
     return Type();
 
+  Attribute ptrInfo;
+  if (parser.parseOptionalComma().succeeded())
+    if (parser.parseAttribute(ptrInfo))
+      return Type();
+
   if (parser.parseGreater())
     return Type();
 
-  // TODO: also print address space?
-  return PointerType::get(pointeeType, 1);
+  if (ptrInfo)
+    return PointerType::get(pointeeType, 1, ptrInfo.cast<DictionaryAttr>());
+  return PointerType::get(pointeeType, 1, {});
 }
 
 void PointerType::print(AsmPrinter &printer) const {
-  printer << "<" << getPointeeType() << ">";
+  // TODO: also print address space?
+  printer << "<" << getPointeeType();
+
+  if (getPtrInfo() && !getPtrInfo().empty()) {
+    printer << ", ";
+    printer << getPtrInfo();
+  }
+
+  printer << ">";
 }
 
 namespace mlir {
@@ -84,14 +98,16 @@ Type getPointerTypeSameShape(Type type) {
   if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
     Type elementType = tensorTy.getElementType();
     auto shape = tensorTy.getShape();
-    PointerType ptrType = PointerType::get(elementType, 1);
+    PointerType ptrType = PointerType::get(elementType, 1, nullptr);
     return RankedTensorType::get(shape, ptrType, tensorTy.getEncoding());
   } else {
-    return PointerType::get(type, 1);
+    return PointerType::get(type, 1, nullptr);
   }
 }
 
-Type getPointerType(Type type) { return PointerType::get(type, 1); }
+Type getPointerType(Type type, DictionaryAttr info) {
+  return PointerType::get(type, 1, info);
+}
 
 bool isTensorPointerType(Type type) {
   if (auto ptrType = type.dyn_cast<PointerType>())

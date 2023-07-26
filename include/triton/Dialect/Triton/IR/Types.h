@@ -1,6 +1,7 @@
 #ifndef TRITON_IR_TYPES_H_
 #define TRITON_IR_TYPES_H_
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeSupport.h"
 #include "mlir/IR/Types.h"
@@ -18,7 +19,7 @@ unsigned getPointeeBitWidth(Type type);
 
 Type getPointeeType(Type type);
 
-Type getPointerType(Type type);
+Type getPointerType(Type type, DictionaryAttr ptrInfo);
 
 Type getElementTypeOfTensorPointerType(Type type);
 

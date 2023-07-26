@@ -326,9 +326,16 @@ class JITFunction(KernelInterface[T]):
 
         src = f"""
 def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
+    import typing
     from ..compiler import compile, CompiledKernel
     sig_key =  {sig_keys},
-    constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
+    constexpr_key = []
+    for arg in ({constexpr_keys}):
+        if isinstance(arg, typing.Hashable):
+            constexpr_key.append(arg)
+        else:
+            constexpr_key.append(str(arg))
+    constexpr_key = tuple(constexpr_key)
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
     key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_stages, self.debug)
     if not extern_libs is None:
@@ -376,7 +383,7 @@ def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_stages=3, e
       args = [{args}]
       all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
       configs = self._get_config(*all_args),
-      constants = self._make_constants(constexpr_key)
+      constants = self._make_constants(({constexpr_keys}))
       constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})
       constants.update({{i: 1 for i in configs[0].equal_to_1}})
       # build kernel signature -- doesn't include specialized arguments

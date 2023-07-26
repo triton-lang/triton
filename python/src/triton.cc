@@ -272,6 +272,14 @@ void init_triton_ir(py::module &&m) {
         return os.str();
       });
 
+  py::class_<mlir::DictionaryAttr>(m, "dictionary_attr")
+      .def("__str__", [](mlir::DictionaryAttr &self) {
+        std::string str;
+        llvm::raw_string_ostream os(str);
+        self.print(os);
+        return os.str();
+      });
+
   py::class_<mlir::FunctionType>(m, "function_type", py::module_local())
       .def("param_types", [](mlir::FunctionType &self) {
         return std::vector<mlir::Type>(self.getInputs().begin(),
@@ -629,6 +637,16 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, int32_t value) {
              return self.getBuilder().getI32IntegerAttr(value);
            })
+      .def("get_ptr_info_attr",
+           [](TritonOpBuilder &self, std::map<std::string, std::string> &dict) {
+             llvm::SmallVector<mlir::NamedAttribute> attrs;
+             for (auto &kv : dict) {
+               auto key = self.getBuilder().getStringAttr(kv.first);
+               auto val = self.getBuilder().getStringAttr(kv.second);
+               attrs.push_back(mlir::NamedAttribute(key, val));
+             }
+             return mlir::DictionaryAttr::get(self.getBuilder().getContext(), attrs);
+           })
       // Use arith.ConstantOp to create constants
       // Constants
       .def("get_int1",
@@ -775,7 +793,12 @@ void init_triton_ir(py::module &&m) {
       .def("get_ptr_ty",
            [](TritonOpBuilder &self, mlir::Type &type,
               int addrSpace) -> mlir::Type {
-             return mlir::triton::PointerType::get(type, addrSpace);
+             return mlir::triton::PointerType::get(type, addrSpace, {});
+           })
+      .def("get_ptr_ty_w_info",
+           [](mlir::OpBuilder &self, mlir::Type &type, int addrSpace,
+              mlir::DictionaryAttr &ptr_info) -> mlir::Type {
+             return mlir::triton::PointerType::get(type, addrSpace, ptr_info);
            })
       .def("get_block_ty",
            [](TritonOpBuilder &self, mlir::Type &elementType,
@@ -1518,6 +1541,12 @@ void init_triton_ir(py::module &&m) {
               std::vector<mlir::Value> &offsets) -> mlir::Value {
              return self.create<mlir::triton::AdvanceOp>(ptr.getType(), ptr,
                                                          offsets);
+           })
+      // Set pointer info
+      .def("create_set_ptr_info",
+           [](TritonOpBuilder &self, mlir::Value &ptr,
+              mlir::DictionaryAttr &ptr_info) -> mlir::Value {
+             return self.create<mlir::triton::SetPtrInfoOp>(ptr, ptr_info);
            });
 
   py::class_<mlir::PassManager>(m, "pass_manager", py::module_local())

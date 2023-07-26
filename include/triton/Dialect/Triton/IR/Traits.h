@@ -38,6 +38,8 @@ LogicalResult verifySameLoadStoreOperandsAndResultShape(Operation *op);
 
 bool verifyLoadStorePointerAndValueType(Type valueType, Type ptrType);
 
+bool verifyTensorSameSizeElemType(Type t1, Type t2);
+
 } // namespace impl
 
 template <class ConcreteType>

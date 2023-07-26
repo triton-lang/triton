@@ -264,19 +264,24 @@ class dtype:
 
 
 class pointer_type(dtype):
-    def __init__(self, element_ty: dtype, address_space: int = 1):
+    def __init__(self, element_ty: dtype, address_space: int = 1, ptr_info: dict = {}):
         if not isinstance(element_ty, dtype):
             raise TypeError('element_ty is a {type(element_ty).__name__}.')
         self.element_ty = element_ty
         self.address_space = address_space
+        self.ptr_info = ptr_info
 
         self.name = self.__str__()
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
+        if self.ptr_info:
+            ptr_info_attr = builder.get_ptr_info_attr(self.ptr_info)
+            return builder.get_ptr_ty_w_info(self.element_ty.to_ir(builder), 1, ptr_info_attr)
+        else:
+            return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
-        return f'pointer<{self.element_ty}>'
+        return f'pointer<{self.element_ty}, {self.ptr_info}>'
 
     def __repr__(self):
         return self.__str__()
@@ -287,7 +292,9 @@ class pointer_type(dtype):
     def __eq__(self, other: pointer_type) -> bool:
         if not isinstance(other, pointer_type):
             return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space
+        return self.element_ty == other.element_ty and \
+               self.address_space == other.address_space and \
+               self.ptr_info == other.ptr_info
 
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
@@ -1683,6 +1690,18 @@ def max_constancy(input, values, _builder=None):
             raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
     return semantic.max_constancy(input, values)
+
+@builtin
+def set_ptr_info(ptr: tensor, ptr_info: dict, _builder=None):
+    """
+    Set pointer info attribute of a pointer
+
+    :param ptr: A pointer, tensor of pointers, or pointer of tensor
+    :param ptr_info: pointer info
+    """
+    return semantic.set_ptr_info(ptr, ptr_info, _builder)
+
+
 # -----------------------
 # Debugging functions
 # -----------------------

@@ -15,10 +15,17 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
                                                int numWarps, int threadsPerWarp)
     : context(context), numWarps(numWarps), threadsPerWarp(threadsPerWarp) {
   addConversion([](Type type) { return type; });
+  addConversion([](triton::PointerType type) {
+    // Temporarily strip pointer info
+    return triton::PointerType::get(type.getPointeeType(),
+                                    type.getAddressSpace());
+  });
   addConversion([this](RankedTensorType tensorType) -> RankedTensorType {
-    // types with encoding are already in the right format
+    // DictionaryAttr are used only by pointer annotaiton; temporarily
+    // remove them. Other types with encoding are already in the right format
     // TODO: check for layout encodings more specifically
-    if (tensorType.getEncoding())
+    Attribute enc = tensorType.getEncoding();
+    if (enc && !isa<DictionaryAttr>(enc))
       return tensorType;
     // pessimistic values for attributes:
     //   - 1 element per thread
@@ -31,7 +38,15 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     Attribute encoding = triton::gpu::BlockedEncodingAttr::get(
         this->context, shape, sizePerThread, order, this->numWarps,
         this->threadsPerWarp);
-    return RankedTensorType::get(shape, tensorType.getElementType(), encoding);
+
+    // Temporarily strip pointer info
+    Type elemType = tensorType.getElementType();
+    triton::PointerType ptrElemType = dyn_cast<triton::PointerType>(elemType);
+    if (ptrElemType) {
+      elemType = triton::PointerType::get(ptrElemType.getPointeeType(),
+                                          ptrElemType.getAddressSpace());
+    }
+    return RankedTensorType::get(shape, elemType, encoding);
   });
 
   //
@@ -107,4 +122,7 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
       return true;
     return false;
   });
+
+  // Remove SetPtrInfoOp
+  addIllegalOp<triton::SetPtrInfoOp>();
 }

@@ -179,7 +179,7 @@ tt.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 
   // CHECK-NOT: triton_gpu.convert_layout
   // CHECK: [[loaded_val:%.*]] = tt.load {{.*}}, {{%cst.*}}, {{%cst.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x64xf32, [[$row_layout]]>
   // CHECK: [[cvt_val:%.*]] = triton_gpu.convert_layout [[loaded_val]] : (tensor<64x64xf32, [[$row_layout]]>) -> tensor<64x64xf32, [[$col_layout]]>
-  // CHECK: tt.store {{.*}}, [[cvt_val]], {{%cst.*}} : tensor<64x64xf32, [[$col_layout]]>
+  // CHECK: tt.store {{.*}}, [[cvt_val]], {{%cst.*}} : tensor<64x64x!tt.ptr<f32>, [[$col_layout]]>, tensor<64x64xf32, [[$col_layout]]>
   // CHECK: tt.return
   %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked1>
   %cst_0 = arith.constant dense<true> : tensor<64x64xi1, #blocked1>

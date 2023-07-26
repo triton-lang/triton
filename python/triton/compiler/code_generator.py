@@ -344,7 +344,8 @@ class CodeGenerator(ast.NodeVisitor):
         for i, arg_name in enumerate(arg_names):
             if i in self.constants:
                 cst = self.constants[i]
-                if not _is_constexpr(cst):
+                # convert to constexpr if appropriate; pointer annotation is represented in dictionary and not converted
+                if not _is_constexpr(cst) and not isinstance(cst, dict):
                     cst = constexpr(self.constants[i])
                 arg_values.append(cst)
                 continue
@@ -1095,7 +1096,7 @@ def kernel_suffix(signature, specialization):
     return suffix
 
 
-def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
+def ast_to_ttir(fn, signature, ptr_info, specialization, constants, debug, arch):
     # canonicalize signature
     if isinstance(signature, str):
         signature = {k: v.strip() for k, v in enumerate(signature.split(","))}
@@ -1114,6 +1115,11 @@ def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]
     file_name, begin_line = _get_fn_file_line(fn)
+
+    if ptr_info:
+        for i, arg_type in enumerate(arg_types):
+            if isinstance(arg_type, language.pointer_type):
+                arg_types[i].ptr_info = ptr_info[i]
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants,
