@@ -329,8 +329,9 @@ def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_stages=3, e
     import typing
     from ..compiler import compile, CompiledKernel
     sig_key =  {sig_keys},
+    constexpr_key_args = ({f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()})
     constexpr_key = []
-    for arg in ({constexpr_keys}):
+    for arg in constexpr_key_args:
         if isinstance(arg, typing.Hashable):
             constexpr_key.append(arg)
         else:
@@ -383,7 +384,7 @@ def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_stages=3, e
       args = [{args}]
       all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
       configs = self._get_config(*all_args),
-      constants = self._make_constants(({constexpr_keys}))
+      constants = self._make_constants(constexpr_key_args)
       constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})
       constants.update({{i: 1 for i in configs[0].equal_to_1}})
       # build kernel signature -- doesn't include specialized arguments
