@@ -22,7 +22,7 @@ def test_legacy_pointer_explicit():
         tl.store(y_ptr + offsets, x)
 
     shape = (128, )
-    ptr_info = { "test_key" : "test_value" }
+    ptr_info = {"test_key": "test_value"}
     x = torch.zeros(shape, dtype=torch.int32, device='cuda')
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     run = legacy_pointer_explicit[(1,)]
@@ -63,7 +63,7 @@ def test_block_pointer_explicit():
         tl.store(y_block_ptr, x, boundary_check=(0))
 
     shape = (128, )
-    ptr_info = { "test_key" : "test_value" }
+    ptr_info = {"test_key": "test_value"}
     x = torch.zeros(shape, dtype=torch.float32, device='cuda')
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     block_pointer_explicit[(1,)](x, y, BLOCK_SIZE=shape[0], PTR_INFO=ptr_info)

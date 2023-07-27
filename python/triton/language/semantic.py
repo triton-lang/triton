@@ -1545,6 +1545,7 @@ def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
     # Advanced block pointer type is the same as before
     return tl.tensor(builder.create_advance(base.handle, offsets), base.type)
 
+
 def set_ptr_info(ptr: tl.tensor, ptr_info: dict, builder: ir.builder) -> tl.tensor:
     ptr_info_attr = builder.get_ptr_info_attr(ptr_info)
     ret = tl.tensor(builder.create_set_ptr_info(ptr.handle, ptr_info_attr), ptr.type)

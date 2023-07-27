@@ -645,7 +645,8 @@ void init_triton_ir(py::module &&m) {
                auto val = self.getBuilder().getStringAttr(kv.second);
                attrs.push_back(mlir::NamedAttribute(key, val));
              }
-             return mlir::DictionaryAttr::get(self.getBuilder().getContext(), attrs);
+             return mlir::DictionaryAttr::get(self.getBuilder().getContext(),
+                                              attrs);
            })
       // Use arith.ConstantOp to create constants
       // Constants

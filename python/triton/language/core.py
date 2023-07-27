@@ -293,8 +293,8 @@ class pointer_type(dtype):
         if not isinstance(other, pointer_type):
             return False
         return self.element_ty == other.element_ty and \
-               self.address_space == other.address_space and \
-               self.ptr_info == other.ptr_info
+            self.address_space == other.address_space and \
+            self.ptr_info == other.ptr_info
 
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
@@ -1690,6 +1690,7 @@ def max_constancy(input, values, _builder=None):
             raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
     return semantic.max_constancy(input, values)
+
 
 @builtin
 def set_ptr_info(ptr: tensor, ptr_info: dict, _builder=None):
