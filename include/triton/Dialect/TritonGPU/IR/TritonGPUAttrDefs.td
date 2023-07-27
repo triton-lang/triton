@@ -80,8 +80,9 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
                      "Type":$eltTy), [{
 
 #ifdef USE_ROCM
-        // ---- begin MI200 ----
+        // ---- begin GFX908/GFX90A ----
         auto mfmaEnc = dotOpEnc.getParent().dyn_cast<MfmaEncodingAttr>();
+
         if (mfmaEnc) {
           // Swizzling is currently disabled for MFMA
           return $_get(context, 1, 1, 1, order);
