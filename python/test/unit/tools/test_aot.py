@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
   // launch kernel
   int gX = 1, gY = 1, gZ = 1;
   cuStreamSynchronize(stream);
-  matmul_fp16xfp16_16x16x16(stream, M/BM, N/BN, 1, C, A, B, N, K, N);
+  matmul_fp16xfp16_16x16x16(stream, M/BM, N/BN, 1, C, A, B, N, 1, K, 1, N, 1);
   cuStreamSynchronize(stream);
 
   // read data
@@ -150,7 +150,7 @@ def test_compile_link_matmul():
         hints = [":16", ""]
         for ha in hints:
             for hb in hints:
-                sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, 1, i32{hb}, 1, i32:16, 1, {BM}, {BN}, {BK}'
+                sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}'
                 name = f"matmul_{dtype}x{dtype}_{BM}x{BN}x{BK}"
                 subprocess.run([sys.executable, compiler_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", name, "-w", "1", kernel_path], check=True, cwd=tmp_dir)
 
