@@ -338,7 +338,8 @@ def test_op(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
 
 
 try:
-    from flash_attn.flash_attn_interface import flash_attn_qkvpacked_func as flash_attn_func
+    from flash_attn.flash_attn_interface import \
+        flash_attn_qkvpacked_func as flash_attn_func
     FLASH_VER = 2
 except BaseException:
     try:

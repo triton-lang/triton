@@ -117,32 +117,32 @@ to download the full example code</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd:
      N_CTX      Triton
-0   1024.0  157.964560
-1   2048.0  165.030808
-2   4096.0  170.055496
-3   8192.0  174.063844
-4  16384.0  173.531687
+0   1024.0  156.582708
+1   2048.0  165.078492
+2   4096.0  168.435375
+3   8192.0  172.540382
+4  16384.0  173.552724
 fused-attention-batch4-head48-d64-fwd:
      N_CTX      Triton
-0   1024.0  119.611919
-1   2048.0  138.662705
-2   4096.0  151.839824
-3   8192.0  158.053000
-4  16384.0  155.402680
+0   1024.0  118.696313
+1   2048.0  137.118141
+2   4096.0  148.649480
+3   8192.0  156.567780
+4  16384.0  153.572680
 fused-attention-batch4-head48-d64-bwd:
      N_CTX     Triton
-0   1024.0  77.928560
-1   2048.0  87.877615
-2   4096.0  94.066855
-3   8192.0  96.228371
-4  16384.0  97.615552
+0   1024.0  77.258099
+1   2048.0  87.191667
+2   4096.0  91.985607
+3   8192.0  94.637271
+4  16384.0  96.547653
 fused-attention-batch4-head48-d64-bwd:
      N_CTX     Triton
-0   1024.0  54.560775
-1   2048.0  68.395053
-2   4096.0  76.964748
-3   8192.0  82.795934
-4  16384.0  85.292520
+0   1024.0  54.307570
+1   2048.0  67.925415
+2   4096.0  76.476092
+3   8192.0  81.528548
+4  16384.0  84.817752
 </pre></div>
 </div>
 <div class="line-block">
@@ -475,7 +475,8 @@ fused-attention-batch4-head48-d64-bwd:
 
 
 <span class="k">try</span><span class="p">:</span>
-    <span class="kn">from</span> <span class="nn">flash_attn.flash_attn_interface</span> <span class="kn">import</span> <span class="n">flash_attn_qkvpacked_func</span> <span class="k">as</span> <span class="n">flash_attn_func</span>
+    <span class="kn">from</span> <span class="nn">flash_attn.flash_attn_interface</span> <span class="kn">import</span> \
+        <span class="n">flash_attn_qkvpacked_func</span> <span class="k">as</span> <span class="n">flash_attn_func</span>
     <span class="n">FLASH_VER</span> <span class="o">=</span> <span class="mi">2</span>
 <span class="k">except</span> <span class="ne">BaseException</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
@@ -546,7 +547,7 @@ fused-attention-batch4-head48-d64-bwd:
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s1">&#39;.&#39;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  14.159 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  14.728 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/54a35f6ec55f9746935b9566fb6bb1df/06-fused-attention.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">06-fused-attention.py</span></code></a></p>

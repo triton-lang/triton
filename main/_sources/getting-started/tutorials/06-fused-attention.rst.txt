@@ -28,7 +28,7 @@ Extra Credits:
 - Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 - Adam P. Goucher for simplified vector math
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-410
+.. GENERATED FROM PYTHON SOURCE LINES 13-411
 
 
 
@@ -70,32 +70,32 @@ Extra Credits:
 
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0  157.964560
-    1   2048.0  165.030808
-    2   4096.0  170.055496
-    3   8192.0  174.063844
-    4  16384.0  173.531687
+    0   1024.0  156.582708
+    1   2048.0  165.078492
+    2   4096.0  168.435375
+    3   8192.0  172.540382
+    4  16384.0  173.552724
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0  119.611919
-    1   2048.0  138.662705
-    2   4096.0  151.839824
-    3   8192.0  158.053000
-    4  16384.0  155.402680
+    0   1024.0  118.696313
+    1   2048.0  137.118141
+    2   4096.0  148.649480
+    3   8192.0  156.567780
+    4  16384.0  153.572680
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  77.928560
-    1   2048.0  87.877615
-    2   4096.0  94.066855
-    3   8192.0  96.228371
-    4  16384.0  97.615552
+    0   1024.0  77.258099
+    1   2048.0  87.191667
+    2   4096.0  91.985607
+    3   8192.0  94.637271
+    4  16384.0  96.547653
     fused-attention-batch4-head48-d64-bwd:
          N_CTX     Triton
-    0   1024.0  54.560775
-    1   2048.0  68.395053
-    2   4096.0  76.964748
-    3   8192.0  82.795934
-    4  16384.0  85.292520
+    0   1024.0  54.307570
+    1   2048.0  67.925415
+    2   4096.0  76.476092
+    3   8192.0  81.528548
+    4  16384.0  84.817752
 
 
 
@@ -434,7 +434,8 @@ Extra Credits:
 
 
     try:
-        from flash_attn.flash_attn_interface import flash_attn_qkvpacked_func as flash_attn_func
+        from flash_attn.flash_attn_interface import \
+            flash_attn_qkvpacked_func as flash_attn_func
         FLASH_VER = 2
     except BaseException:
         try:
@@ -507,7 +508,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  14.159 seconds)
+   **Total running time of the script:** ( 0 minutes  14.728 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
