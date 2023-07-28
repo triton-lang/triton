@@ -26,6 +26,7 @@
 #include "ElementwiseOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
 #include "ReduceOpToLLVM.h"
+#include "ScanOpToLLVM.h"
 #include "TritonGPUToLLVM.h"
 #include "TypeConverter.h"
 #include "ViewOpToLLVM.h"
@@ -211,17 +212,23 @@ private:
     // of shared memory and append it to the operands of the callOp.
     auto loc = callOp.getLoc();
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
-    auto base = allocation.getFunctionSharedMemoryBase(caller);
-    auto *funcAllocation = allocation.getFuncData(caller);
-    auto bufferId = funcAllocation->getBufferId(callOp);
-    auto offset = funcAllocation->getOffset(bufferId);
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()),
         NVVM::kSharedMemorySpace);
-    auto offsetValue = gep(ptrTy, base, i32_val(offset));
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
+    auto base = allocation.getFunctionSharedMemoryBase(caller);
+    auto *funcAllocation = allocation.getFuncData(caller);
+    auto bufferId = funcAllocation->getBufferId(callOp);
+    // function doesn't have a shared mem buffer
+    if (bufferId == (size_t)-1) {
+      promotedOperands.push_back(base);
+      return promotedOperands;
+    }
+    // function has a shared mem buffer
+    auto offset = funcAllocation->getOffset(bufferId);
+    auto offsetValue = gep(ptrTy, base, i32_val(offset));
     promotedOperands.push_back(offsetValue);
     return promotedOperands;
   }
@@ -306,6 +313,7 @@ public:
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Preprocess
+    decomposeFp8e4b15Convert(mod);
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
@@ -372,6 +380,8 @@ public:
                                       /*benefit=*/1);
     populateReduceOpToLLVMPatterns(typeConverter, patterns, allocation,
                                    indexCacheInfo, /*benefit=*/1);
+    populateScanOpToLLVMPatterns(typeConverter, patterns, allocation,
+                                 indexCacheInfo, /*benefit=*/1);
     populateViewOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
 
     // Native lowering patterns
@@ -431,6 +441,33 @@ private:
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
                                         allocation.getSharedMemorySize()));
+  }
+
+  void decomposeFp8e4b15Convert(ModuleOp mod) const {
+    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      OpBuilder builder(cvtOp);
+      if (!getElementTypeOrSelf(cvtOp).isa<mlir::Float8E4M3B11FNUZType>())
+        return;
+      auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
+      auto argEncoding =
+          cvtOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
+      auto cvtEncoding = cvtOp.getType().cast<RankedTensorType>().getEncoding();
+      if (argEncoding.isa<triton::gpu::DotOperandEncodingAttr>() ||
+          cvtEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+        return;
+      auto F16Ty = builder.getF16Type();
+
+      auto newArgType = RankedTensorType::get(shape, F16Ty, argEncoding);
+      auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
+      auto newArg = builder.create<mlir::triton::FpToFpOp>(
+          cvtOp.getLoc(), newArgType, cvtOp.getOperand());
+      auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
+          cvtOp.getLoc(), newCvtType, newArg);
+      auto newRet = builder.create<mlir::triton::FpToFpOp>(
+          cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
+      cvtOp.replaceAllUsesWith(newRet.getResult());
+      cvtOp.erase();
+    });
   }
 
   void decomposeMmaToDotOperand(ModuleOp mod, int numWarps,
@@ -529,7 +566,9 @@ private:
         inVec =
             std::min<unsigned>(axisInfoAnalysis.getMaskAlignment(mask), inVec);
       unsigned outVec = resSharedLayout.getVec();
-      unsigned minVec = std::min(outVec, inVec);
+      unsigned minVec = inVec;
+      if (outVec > 1)
+        minVec = std::min(outVec, inVec);
       auto maxBitWidth =
           std::max<unsigned>(128, resElemTy.getIntOrFloatBitWidth());
       auto vecBitWidth = resElemTy.getIntOrFloatBitWidth() * minVec;
@@ -540,8 +579,9 @@ private:
       // capability does not support async copy, then we do decompose
       if (triton::gpu::InsertSliceAsyncOp::getEligibleLoadByteWidth(
               computeCapability)
-              .contains(byteWidth))
+              .contains(byteWidth)) {
         return;
+      }
 
       // load
       auto tmpTy =

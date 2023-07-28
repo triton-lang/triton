@@ -352,7 +352,18 @@ struct StoreOpConversion
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       auto &ptxStoreInstr =
-          ptxBuilder.create<>("st")->global().v(nWords).b(width);
+          ptxBuilder.create<>("st")
+              ->global()
+              .o("wb", op.getCache() == triton::CacheModifier::WB)
+              .o("cg", op.getCache() == triton::CacheModifier::CG)
+              .o("cs", op.getCache() == triton::CacheModifier::CS)
+              .o("wt", op.getCache() == triton::CacheModifier::WT)
+              .o("L1::evict_first",
+                 op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
+              .o("L1::evict_last",
+                 op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+              .v(nWords)
+              .b(width);
       ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
 
       Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
@@ -771,7 +782,9 @@ struct InsertSliceAsyncOpConversion
     // start of the vector and the other pointer moving to the next vector.
     unsigned inVec = getContiguity(src);
     unsigned outVec = resSharedLayout.getVec();
-    unsigned minVec = std::min(outVec, inVec);
+    unsigned minVec = inVec;
+    if (outVec > 1)
+      minVec = std::min(outVec, inVec);
     unsigned numElems = getTotalElemsPerThread(srcTy);
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();

@@ -398,6 +398,24 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
   return mlir::success();
 }
 
+LogicalResult mlir::triton::DotOp::verify() {
+  auto aTy = getOperand(0).getType().cast<RankedTensorType>();
+  auto bTy = getOperand(1).getType().cast<RankedTensorType>();
+  if (aTy.getElementType() != bTy.getElementType())
+    return emitError("element types of operands A and B must match");
+  auto aEncoding = aTy.getEncoding();
+  auto bEncoding = bTy.getEncoding();
+  if (!aEncoding && !bEncoding)
+    return mlir::success();
+  // Verify that the encodings are valid.
+  if (!aEncoding || !bEncoding)
+    return emitError("mismatching encoding between A and B operands");
+  Dialect &dialect = aEncoding.getDialect();
+  auto interface = cast<DialectInferLayoutInterface>(&dialect);
+  return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
+                                                     bEncoding);
+}
+
 //-- ReduceOp --
 static mlir::LogicalResult
 inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
@@ -539,6 +557,36 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
 
 unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 
+//-- ScanOp --
+void ScanOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                   mlir::ValueRange operands, int axis) {
+  SmallVector<Type> inferredReturnTypes;
+  for (auto arg : operands)
+    inferredReturnTypes.push_back(arg.getType());
+  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+}
+
+mlir::LogicalResult mlir::triton::ScanOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  for (auto arg : operands)
+    inferredReturnTypes.push_back(arg.getType());
+  return success();
+}
+
+mlir::LogicalResult mlir::triton::ScanOp::verify() {
+  if (this->getOperands().size() < 1) {
+    return this->emitOpError() << "must have at least 1 operand";
+  }
+  for (const auto &operand : this->getOperands()) {
+    if (!dyn_cast<RankedTensorType>(operand.getType())) {
+      return this->emitOpError() << "operands must be RankedTensorType";
+    }
+  }
+  return success();
+}
+
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   auto value = adaptor.getSrc();
@@ -591,6 +639,31 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
                                                  splat.getOperand());
     return mlir::success();
   }
+  // expand_dims(broadcast) -> broadcast(expand_dims)
+  //
+  // On it's own this doesn't do much, but consider
+  //    broadcast(expand_dims(broadcast))
+  // -> broadcast(broadcast(expand_dims))
+  // -> broadcast(expand_dims)
+  if (auto broadcast = dyn_cast<triton::BroadcastOp>(definingOp)) {
+    auto src = broadcast.getSrc();
+    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
+    auto elemTy = srcTy.getElementType();
+    auto srcShape = srcTy.getShape();
+
+    llvm::SmallVector<int64_t, 4> newExpandShape(srcShape.begin(),
+                                                 srcShape.end());
+    newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
+    auto newExpandTy = RankedTensorType::get(newExpandShape, elemTy);
+
+    auto newExpand = rewriter.create<triton::ExpandDimsOp>(
+        op.getLoc(), newExpandTy, src, op.getAxis());
+    auto newBroadcast = rewriter.create<triton::BroadcastOp>(
+        broadcast.getLoc(), op.getType(), newExpand.getResult());
+    rewriter.replaceOp(op, {newBroadcast.getResult()});
+    return mlir::success();
+  }
+
   return mlir::failure();
 }
 

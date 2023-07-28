@@ -111,9 +111,6 @@ class LoopPipeliner {
 
   /// Loads to be pipelined
   SetVector<Value> validLoads;
-  /// Smallest data-type for each load (used to optimize swizzle and
-  /// (create DotOpEncoding layout)
-  DenseMap<Value, Type> loadsSmallestType;
   /// The value that each load will be mapped to (after layout conversion)
   DenseMap<Value, Value> loadsMapping;
   /// load => buffer
@@ -485,21 +482,6 @@ Value LoopPipeliner::lookupOrDefault(Value origin, int stage) {
 }
 
 void LoopPipeliner::createBufferTypes() {
-  // We need to find the smallest common dtype since this determines the layout
-  // of `mma.sync` operands in mixed-precision mode
-  Type smallestType;
-  for (auto loadCvt : loadsMapping) {
-    auto loadOp = loadCvt.first;
-    auto ty = loadOp.getType().cast<RankedTensorType>();
-    Type eltTy = ty.getElementType();
-    if (!smallestType ||
-        (eltTy.getIntOrFloatBitWidth() < smallestType.getIntOrFloatBitWidth()))
-      smallestType = eltTy;
-  }
-
-  for (auto loadCvt : loadsMapping)
-    loadsSmallestType[loadCvt.first] = smallestType;
-
   for (auto loadCvt : loadsMapping) {
     auto loadOp = loadCvt.first;
     Value cvt = loadCvt.second;
@@ -511,9 +493,10 @@ void LoopPipeliner::createBufferTypes() {
     SmallVector<int64_t> bufferShape(ty.getShape().begin(),
                                      ty.getShape().end());
     bufferShape.insert(bufferShape.begin(), numStages);
-    auto sharedEnc = ttg::SharedEncodingAttr::get(
-        ty.getContext(), dotOpEnc, ty.getShape(),
-        ttg::getOrder(ty.getEncoding()), loadsSmallestType[loadOp]);
+    unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
+    auto sharedEnc =
+        ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
+                                     ttg::getOrder(ty.getEncoding()), bitWidth);
     loadsBufferType[loadOp] =
         RankedTensorType::get(bufferShape, ty.getElementType(), sharedEnc);
   }
@@ -776,34 +759,29 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
     mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
   mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
 
-  // Clone the loop body, replace original args with args of the new ForOp
-  // Insert async wait if necessary.
+  // Clone the loop body, replace original args with args of the new ForOp.
+  // We want to find cvt ops that match the following pattern:
+  // %0 = load %ptr
+  // %1 (dotOperand) = cvt %0
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    // is modified
-    auto it = std::find(validLoads.begin(), validLoads.end(), op.getOperand(0));
-    if (it == validLoads.end()) {
-      Operation *newOp = cloneWithInferType(builder, &op, mapping);
-      continue;
+    if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+      auto result = op.getResult(0);
+      auto cvtDstTy = result.getType().cast<RankedTensorType>();
+      if (cvtDstTy.getEncoding().isa<ttg::DotOperandEncodingAttr>()) {
+        auto it =
+            std::find(validLoads.begin(), validLoads.end(), op.getOperand(0));
+        if (it != validLoads.end()) {
+          // We replace the use new load use with a convert layout
+          auto loadArgIdx = std::distance(validLoads.begin(), it);
+          auto cvt = builder.create<ttg::ConvertLayoutOp>(
+              result.getLoc(), cvtDstTy,
+              newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
+          mapping.map(result, cvt.getResult());
+          continue;
+        }
+      }
     }
-
-    // we replace the use new load use with a convert layout
-    size_t i = std::distance(validLoads.begin(), it);
-    auto cvtDstTy = op.getResult(0).getType().cast<RankedTensorType>();
-    auto cvtDstEnc =
-        cvtDstTy.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
-    if (!cvtDstEnc) {
-      builder.clone(op, mapping);
-      continue;
-    }
-    auto newDstTy = RankedTensorType::get(
-        cvtDstTy.getShape(), cvtDstTy.getElementType(),
-        ttg::DotOperandEncodingAttr::get(
-            cvtDstEnc.getContext(), cvtDstEnc.getOpIdx(), cvtDstEnc.getParent(),
-            loadsSmallestType[op.getOperand(0)]));
-    auto cvt = builder.create<ttg::ConvertLayoutOp>(
-        op.getResult(0).getLoc(), newDstTy,
-        newForOp.getRegionIterArgs()[loadIdx + i]);
-    mapping.map(op.getResult(0), cvt.getResult());
+    cloneWithInferType(builder, &op, mapping);
   }
 
   return newForOp;
@@ -838,28 +816,49 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
       builder.create<arith::ConstantIntOp>(nextIV.getLoc(), numStages, 32));
 
   // Prefetch load deps
+  // If a load-dependent instruction that uses a block argument, we
+  // shouldn't update the new mapping of the block argument in the current
+  // iteration.
+  // For example.
+  // %a = add %arg0, %c
+  // %b = add %arg0, %d
+  //
+  // Update %arg0 will cause the value of %b to be incorrect.
+  // We do need to use the next iteration value of %arg0 because it could be a
+  // immediate arg of a load op.
+  // load %arg0
+  // %a = add %arg0, %c
+  // yield %a
+  //
+  // We reroder instructions so %a and yield are actually before load. load
+  // %arg0 should use the updated %arg0.
+  IRMapping curMapping = nextMapping;
   for (Operation *op : orderedDeps)
     if (!validLoads.contains(op->getResult(0))) {
       if (immediateOpStages[op].contains(numStages - 2))
         // A post load op that provides values for numStage - 2
-        nextMapping.map(forOp.getInductionVar(), curIV);
+        curMapping.map(forOp.getInductionVar(), curIV);
       else
-        nextMapping.map(forOp.getInductionVar(), nextIV);
+        curMapping.map(forOp.getInductionVar(), nextIV);
       Operation *nextOp;
       if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
         auto newMask =
-            getLoadMask(loadOp, nextMapping.lookupOrDefault(loadOp.getMask()),
+            getLoadMask(loadOp, curMapping.lookupOrDefault(loadOp.getMask()),
                         nextLoopCond, builder);
         nextOp = builder.create<triton::LoadOp>(
             loadOp.getLoc(), loadOp.getResult().getType(),
-            nextMapping.lookupOrDefault(loadOp.getPtr()), newMask,
-            nextMapping.lookupOrDefault(loadOp.getOther()),
+            curMapping.lookupOrDefault(loadOp.getPtr()), newMask,
+            curMapping.lookupOrDefault(loadOp.getOther()),
             loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
             loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
         addNamedAttrs(nextOp, op->getDiscardableAttrDictionary());
+        curMapping.map(loadOp.getResult(), nextOp->getResult(0));
         nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
-      } else
-        nextOp = builder.clone(*op, nextMapping);
+      } else {
+        nextOp = builder.clone(*op, curMapping);
+        for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults()))
+          nextMapping.map(op->getResult(dstIdx), nextOp->getResult(dstIdx));
+      }
 
       for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults()))
         setValueMappingYield(newForOp, op->getResult(dstIdx),

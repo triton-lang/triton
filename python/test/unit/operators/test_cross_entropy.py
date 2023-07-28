@@ -33,7 +33,8 @@ def test_op(M, N, dtype, mode):
         tt_y.backward(dy)
         tt_dx = x.grad.clone()
         # torch backward
-        x.grad.zero_()
+        x.grad = None
         th_y.backward(dy)
         th_dx = x.grad.clone()
+
         torch.testing.assert_allclose(th_dx, tt_dx)

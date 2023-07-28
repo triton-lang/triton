@@ -2,10 +2,10 @@ import heapq
 
 import torch
 
-import triton
-import triton._C.libtriton.triton as _triton
-from triton.runtime import driver
-from triton.testing import get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops
+from .. import cdiv
+from .._C.libtriton.triton import runtime
+from ..runtime import driver
+from ..testing import get_dram_gbps, get_max_simd_tflops, get_max_tensorcore_tflops
 
 
 def get_tensorcore_tflops(backend, device, num_ctas, num_warps, dtype):
@@ -41,13 +41,13 @@ def estimate_matmul_time(
 ):
     ''' return estimated running time in ms
           = max(compute, loading) + store '''
-    backend = _triton.runtime.backend.CUDA
+    backend = runtime.backend.CUDA
     device = torch.cuda.current_device()
     dtype = A.dtype
     dtsize = A.element_size()
 
-    num_cta_m = triton.cdiv(M, BLOCK_M)
-    num_cta_n = triton.cdiv(N, BLOCK_N)
+    num_cta_m = cdiv(M, BLOCK_M)
+    num_cta_n = cdiv(N, BLOCK_N)
     num_cta_k = SPLIT_K
     num_ctas = num_cta_m * num_cta_n * num_cta_k
 

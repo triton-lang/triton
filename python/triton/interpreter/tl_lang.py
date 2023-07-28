@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import triton
+from ..language import core as lcore
+from . import torch_wrapper
 from .core import ExecutionContext
 from .memory_map import MemoryMap
-from triton.debugger import torch_wrapper
 
 torch = torch_wrapper.torch
 
@@ -389,7 +389,7 @@ class TritonLangProxy:
             if not isinstance(d.value, int):
                 raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
         shape = [x.value for x in shape]
-        if isinstance(dtype, triton.language.core.dtype):
+        if isinstance(dtype, lcore.dtype):
             if dtype.is_fp32():
                 dtype = torch.float32
             elif dtype.is_fp16():
@@ -555,6 +555,10 @@ class TritonLangProxy:
         return input
 
     @_tensor_operation
+    def max_constancy(self, input, values):
+        return input
+
+    @_tensor_operation
     def abs(self, x):
         return torch.abs(x)
 
@@ -623,3 +627,15 @@ class TritonLangProxy:
     @_tensor_operation
     def xor_sum(self, input, axis):
         raise NotImplementedError()
+
+    @_tensor_operation
+    def cumsum(self, input, axis=None):
+        if axis is None:
+            return torch.cumsum(input)
+        return torch.cumsum(input, dim=axis)
+
+    @_tensor_operation
+    def cumprod(self, input, axis=None):
+        if axis is None:
+            return torch.cumprod(input)
+        return torch.cumprod(input, dim=axis)

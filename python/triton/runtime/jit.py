@@ -11,10 +11,10 @@ from collections import defaultdict, namedtuple
 from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast,
                     overload)
 
-import torch
+from ..common.backend import get_backend, path_to_ptxas
 
-import triton
-from triton.common.backend import get_backend
+TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TRITON_VERSION = "2.1.0"
 
 
 def get_cuda_stream(idx=None):
@@ -69,7 +69,7 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs = self.visit(node.value)
         while isinstance(lhs, ast.Attribute):
             lhs = self.visit(lhs.value)
-        if lhs is None or lhs is triton:
+        if lhs is None or (getattr(lhs, "__name__", "") == "triton" or getattr(lhs, "__name__", "").endswith(".triton")):
             return None
         return getattr(lhs, node.attr)
 
@@ -79,7 +79,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if inspect.isbuiltin(func):
             return
-        if func.__module__ and func.__module__.startswith('triton.'):
+        if func.__module__ and (func.__module__.startswith('triton.') or '.triton.' in func.__module__):
             return
         assert isinstance(func, JITFunction), f"Function \"{func.__name__}\" is being called from a Triton function but is not a Triton function itself. Decorate it with @triton.jit to fix this"
         if func.hash is None:
@@ -104,24 +104,30 @@ def version_key():
     with open(__file__, "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
     # compiler
-    compiler_path = os.path.join(*triton.__path__, 'compiler')
+    compiler_path = os.path.join(TRITON_PATH, 'compiler')
     for lib in pkgutil.iter_modules([compiler_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.md5(f.read()).hexdigest()]
     # backend
-    with open(triton._C.libtriton.__file__, "rb") as f:
+    with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
     # language
-    language_path = os.path.join(*triton.__path__, 'language')
+    language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.iter_modules([language_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.md5(f.read()).hexdigest()]
     # ptxas version
-    try:
-        ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
-    except Exception:
-        ptxas_version = ''
-    return '-'.join(triton.__version__) + '-' + ptxas_version + '-' + '-'.join(contents)
+    ptxas = path_to_ptxas()[0]
+    ptxas_version = hashlib.md5(subprocess.check_output([ptxas, "--version"])).hexdigest()
+    return '-'.join(TRITON_VERSION) + '-' + ptxas_version + '-' + '-'.join(contents)
+
+
+def _normalize_ty(ty) -> str:
+    if isinstance(ty, type):
+        return ty.__name__
+    elif isinstance(ty, str):
+        return ty
+    return repr(ty)
 
 
 class KernelInterface(Generic[T]):
@@ -208,8 +214,9 @@ class JITFunction(KernelInterface[T]):
         dtype_str = str(key).split(".")[-1]
         tys = {
             "bool": "i1",
-            "float8e5": "fp8e5",
             "float8e4": "fp8e4",
+            "float8e5": "fp8e5",
+            "float8e4b15": "fp8e4b15",
             "float16": "fp16",
             "bfloat16": "bf16",
             "float32": "fp32",
@@ -285,6 +292,7 @@ class JITFunction(KernelInterface[T]):
         device_types = [device_type for device_type in device_types if device_type != '']
         # Return cuda if one of the input tensors is cuda
         if 'cuda' in device_types:
+            import torch
             return 'hip' if torch.version.hip else 'cuda'
 
         is_cpu = all(device_type == 'cpu' for device_type in device_types)
@@ -314,9 +322,11 @@ class JITFunction(KernelInterface[T]):
 
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
+        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
 
         src = f"""
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
+def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
+    from ..compiler import compile, CompiledKernel
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
@@ -324,6 +334,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     if not extern_libs is None:
       key = (key, tuple(extern_libs.items()))
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
+    assert grid is not None
     if callable(grid):
         grid = grid({{{grid_args}}})
     grid_size = len(grid)
@@ -357,7 +368,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     bin = cache[device].get(key, None)
     if bin is not None:
       if not warmup:
-          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, {args})
+          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, {args})
       return bin
     # kernel not cached -- compile
     else:
@@ -375,9 +386,9 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         if callable(arg):
           raise TypeError(f"Callable constexpr at index {{i}} is not supported")
       if not self._call_hook(key, signature, device, constants, num_warps, num_stages, extern_libs, configs):
-        bin = triton.compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
+        bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_stages=num_stages, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
         if not warmup:
-            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, triton.compiler.CompiledKernel.launch_enter_hook, triton.compiler.CompiledKernel.launch_exit_hook, bin, *args)
+            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
         self.cache[device][key] = bin
         return bin
       return None
@@ -390,7 +401,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
                  "_device_of": self._device_of,
                  "_pinned_memory_of": self._pinned_memory_of,
                  "cache": self.cache,
-                 "triton": triton,
+                 "__spec__": __spec__,
                  "get_backend": get_backend,
                  "get_current_device": get_current_device,
                  "set_current_device": set_current_device}
@@ -404,7 +415,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         # function signature information
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
-        self.has_defaults = any(v.default != inspect._empty for v in signature.parameters.values())
+        self.arg_defaults = [v.default for v in signature.parameters.values()]
+        self.has_defaults = any(v != inspect._empty for v in self.arg_defaults)
         # specialization hints
         self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
         self.do_not_specialize = {self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize}
@@ -421,8 +433,7 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
         self.debug = True if os.environ.get("TRITON_DEBUG", "0") == "1" else debug
         self.noinline = noinline
         # annotations
-        normalize_ty = lambda ty: ty.__name__ if isinstance(ty, type) else ty
-        self.__annotations__ = {name: normalize_ty(ty) for name, ty in fn.__annotations__.items()}
+        self.__annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         # index of constexprs
         self.constexprs = [self.arg_names.index(name) for name, ty in self.__annotations__.items() if 'constexpr' in ty]
         # launcher
@@ -524,7 +535,7 @@ def jit(
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
         if interpret:
-            from ..debugger.debugger import GridSelector
+            from ..interpreter.interpreter import GridSelector
             return GridSelector(fn)
         else:
             return JITFunction(
@@ -571,9 +582,13 @@ class TensorWrapper:
         self.base = base
         self.is_cuda = base.is_cuda
         self.device = base.device
+        self.shape = self.base.shape
 
     def data_ptr(self):
         return self.base.data_ptr()
+
+    def stride(self, i):
+        return self.base.stride(i)
 
     def __str__(self) -> str:
         return f'TensorWrapper[{self.dtype}]({self.base})'

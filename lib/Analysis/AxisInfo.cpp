@@ -469,6 +469,36 @@ public:
   }
 };
 
+class LoadOpAxisInfoVisitor final : public AxisInfoVisitorImpl<triton::LoadOp> {
+public:
+  using AxisInfoVisitorImpl<triton::LoadOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::LoadOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    // If pointers and mask both have constancy properties, those properties
+    // will also extend to output.
+    AxisInfo ptrInfo = operands[0]->getValue();
+    std::optional<AxisInfo> maskInfo;
+    if (operands.size() > 1) {
+      maskInfo = operands[1]->getValue();
+    }
+    AxisInfo::DimVectorT contiguity;
+    AxisInfo::DimVectorT divisibility;
+    AxisInfo::DimVectorT constancy;
+
+    for (int d = 0; d < ptrInfo.getRank(); ++d) {
+      contiguity.push_back(1);
+      divisibility.push_back(1);
+      constancy.push_back(
+          gcd(ptrInfo.getConstancy(d),
+              maskInfo.has_value() ? maskInfo->getConstancy(d) : 0));
+    }
+
+    return AxisInfo(contiguity, divisibility, constancy);
+  }
+};
+
 class ExpandDimsOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::ExpandDimsOp> {
 public:
@@ -871,6 +901,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MaxUIOp>,
                   MaxMinOpAxisInfoVisitor<arith::MinSIOp>,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
+  visitors.append<LoadOpAxisInfoVisitor>();
 }
 
 void AxisInfoAnalysis::visitOperation(
@@ -918,7 +949,8 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
-  auto uniqueContigPerThread = triton::gpu::getUniqueContigPerThread(tensorTy);
+  auto uniqueContigPerThread =
+      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unxpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];

@@ -25,7 +25,7 @@ class OutOfResources(Exception):
 
 
 class Autotuner(KernelInterface):
-    def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None):
+    def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None, warmup=25, rep=100):
         '''
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -58,6 +58,8 @@ class Autotuner(KernelInterface):
         self.perf_model, self.configs_top_k = perf_model, top_k
         self.early_config_prune = early_config_prune
         self.fn = fn
+        self.warmup = warmup
+        self.rep = rep
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -70,14 +72,15 @@ class Autotuner(KernelInterface):
             )
         # augment meta-parameters with tunable ones
         current = dict(meta, **config.kwargs)
+        full_nargs = {**self.nargs, **current}
 
         def kernel_call():
             if config.pre_hook:
-                config.pre_hook(self.nargs)
+                config.pre_hook(full_nargs)
             self.hook(args)
             self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **current)
         try:
-            return do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+            return do_bench(kernel_call, warmup=self.warmup, rep=self.rep, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
             return [float('inf'), float('inf'), float('inf')]
 
@@ -106,8 +109,11 @@ class Autotuner(KernelInterface):
             config = self.configs[0]
         self.best_config = config
         if config.pre_hook is not None:
-            config.pre_hook(self.nargs)
-        return self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+            full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
+            config.pre_hook(full_nargs)
+        ret = self.fn.run(*args, num_warps=config.num_warps, num_stages=config.num_stages, **kwargs, **config.kwargs)
+        self.nargs = None
+        return ret
 
     def prune_configs(self, kwargs):
         pruned_configs = self.configs
@@ -171,7 +177,7 @@ class Config:
         return ', '.join(res)
 
 
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
+def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, warmup=25, rep=100):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -202,9 +208,13 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None):
         'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It takes configs:List[Config] as its input, and returns pruned configs.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
+    :param warmup: Warmup time (in ms) to pass to benchmarking, defaults to 25.
+    :type warmup: int
+    :param rep: Repetition time (in ms) to pass to benchmarking, defaults to 100.
+    :type rep: int
     """
     def decorator(fn):
-        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, prune_configs_by)
+        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, prune_configs_by, warmup, rep)
 
     return decorator
 

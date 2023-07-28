@@ -1,4 +1,4 @@
-from .compiler import CompiledKernel, compile
+from .compiler import CompiledKernel, compile, instance_descriptor
 from .errors import CompilationError
 
-__all__ = ["compile", "CompiledKernel", "CompilationError"]
+__all__ = ["compile", "instance_descriptor", "CompiledKernel", "CompilationError"]

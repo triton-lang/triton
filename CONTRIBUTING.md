@@ -51,3 +51,72 @@ A well-structured RFC should include:
 ## New backends
 
 Due to limited resources, we need to prioritize the number of targets we support. We are committed to providing upstream support for Nvidia and AMD GPUs. However, if you wish to contribute support for other backends, please start your project in a fork. If your backend proves to be useful and meets our performance requirements, we will discuss the possibility of upstreaming it.
+
+
+## Project Structure
+```
+triton
+├── lib : C++ code for python library
+│   ├──Analysis
+│   │	Memory barrier analysis
+│   │	class to extract axis information from MLIR ops
+│   │	implementation of the shared memory allocation analysis for Triton dialect
+│   │
+│   ├──Conversion
+│   │	├──TritonGPUToLLVM:  Transforms TritonGPU  to LLVM;
+│   │	│
+│   │	├──TritonToTritonGPU: Transforms ops to TritonGPU ops; loading, storing, arithmetic, casting, and tensor operations.
+│   │	│
+│   │	│
+│   │	│
+│   ├──Dialect
+│   │	├──Triton
+│   │	│	Defines core IR for Triton compiler
+│   │	├──TritonGPU
+│   │	    Defines TritonGPU operation for IR
+│   │
+│   ├──Target: contains Triton targets for converting to PTX, LLVMIR and HSACO IR targets
+│   │
+├── bin
+├── cmake
+├── docs ├── Documentation regarding using triton
+├── include
+│   CMakelists.txt
+│   ├──triton
+│   │   ├──
+├── python
+│   ├──
+│   ├── MANIFEST.in
+│   ├── README.md
+│   ├── build
+│   ├── examples
+│   ├── pyproject.toml
+│   ├── setup.py: pip install for python package
+│   ├── src
+│   ├── test
+│   ├── triton
+│   │	├── _C: Includes header files and compiled .so file for C library
+│   │	│
+│   │	├──common: Has interface for CUDA hardware backend
+│   │	│
+│   │	├──compiler: contains code for compiling source code to IR and lauching GPU kernels
+│   │	│
+│   │	├──interpreter: memory-map for tensors, converting primitives to tensors, and arethmetic ops for tensors
+│   │	│
+│   │	├──language: core of triton language, load tensors to SRAM, language logic, etc.
+│   │	│
+│   │	├──ops: contains functions for flash-attn, softmax, cross-entropy and other torch.nn.F functions
+│   │	├──runtime: contains impl jit compilation, autotuning, backend drivers, caching, error handles, etc.
+│   │	├──third_party
+│   │	├──tools
+│   ├── triton.egg-info
+│   ├── tutorials: contains tutorials for various use-cases
+├── test
+│   ├──Analysis
+│   ├──Conversion
+│   ├──Dialect
+│   ├──Target
+├── third_party
+├── unittest
+└── utils
+```

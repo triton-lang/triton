@@ -18,8 +18,17 @@ def is_hip():
 
 @functools.lru_cache()
 def libcuda_dirs():
-    locs = subprocess.check_output(["whereis", "libcuda.so"]).decode().strip().split()[1:]
-    return [os.path.dirname(loc) for loc in locs]
+    libs = subprocess.check_output(["ldconfig", "-p"]).decode()
+    # each line looks like the following:
+    # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
+    locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so" in line]
+    dirs = [os.path.dirname(loc) for loc in locs]
+    msg = 'libcuda.so cannot found!\n'
+    if locs:
+        msg += 'Possible files are located at %s.' % str(locs)
+        msg += 'Please create a symlink of libcuda.so to any of the file.'
+    assert any(os.path.exists(os.path.join(path, 'libcuda.so')) for path in dirs), msg
+    return dirs
 
 
 @functools.lru_cache()
@@ -37,21 +46,20 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
+@functools.lru_cache()
+def cuda_include_dir():
+    base_dir = os.path.join(os.path.dirname(__file__), os.path.pardir)
+    cuda_path = os.path.join(base_dir, "third_party", "cuda")
+    return os.path.join(cuda_path, "include")
+
+
 def _build(name, src, srcdir):
     if is_hip():
         hip_lib_dir = os.path.join(rocm_path_dir(), "lib")
         hip_include_dir = os.path.join(rocm_path_dir(), "include")
     else:
         cuda_lib_dirs = libcuda_dirs()
-        base_dir = os.path.join(os.path.dirname(__file__), os.path.pardir)
-        cuda_path = os.path.join(base_dir, "third_party", "cuda")
-
-        cu_include_dir = os.path.join(cuda_path, "include")
-        triton_include_dir = os.path.join(os.path.dirname(__file__), "include")
-        cuda_header = os.path.join(cu_include_dir, "cuda.h")
-        triton_cuda_header = os.path.join(triton_include_dir, "cuda.h")
-        if not os.path.exists(cuda_header) and os.path.exists(triton_cuda_header):
-            cu_include_dir = triton_include_dir
+        cu_include_dir = cuda_include_dir()
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible

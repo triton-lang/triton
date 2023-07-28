@@ -1,3 +1,4 @@
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -14,6 +15,7 @@ using triton::DotOp;
 using triton::gpu::ConvertLayoutOp;
 using triton::gpu::DotOperandEncodingAttr;
 using triton::gpu::MmaEncodingAttr;
+using triton::gpu::SharedEncodingAttr;
 using triton::gpu::SliceEncodingAttr;
 
 // convert(trans(convert(arg)))
@@ -72,120 +74,71 @@ public:
   }
 };
 
-//
-
+// convert(layout_preserving_op(x), dot_operand)
+// -> layout_preserving_op(convert(x, dot_operand))
 class MoveOpAfterLayoutConversion : public mlir::RewritePattern {
-
 public:
   MoveOpAfterLayoutConversion(mlir::MLIRContext *context)
       : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
                              1, context) {}
 
-  static mlir::LogicalResult
-  isBlockedToDotOperand(mlir::Operation *op,
-                        triton::gpu::DotOperandEncodingAttr &retEncoding,
-                        triton::gpu::BlockedEncodingAttr &srcEncoding) {
-    if (!op)
-      return failure();
-    auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
-    auto srcTy = cvt.getOperand().getType().cast<RankedTensorType>();
-    auto retTy = cvt.getResult().getType().dyn_cast<RankedTensorType>();
-    retEncoding =
-        retTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-    srcEncoding =
-        srcTy.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
-    if (!retTy)
-      return failure();
-    if (!retEncoding)
-      return failure();
-    auto retEncodingParent =
-        retEncoding.getParent().dyn_cast<triton::gpu::MmaEncodingAttr>();
-    if (!retEncodingParent || retEncodingParent.isVolta())
-      return failure();
-    if (!srcEncoding)
-      return failure();
-    return success();
-  }
-
-  static bool isTrans(const triton::gpu::DotOperandEncodingAttr &retEncoding,
-                      const triton::gpu::BlockedEncodingAttr &srcEncoding) {
-    int kOrder = retEncoding.getOpIdx() ^ 1;
-    return kOrder != srcEncoding.getOrder()[0];
-  }
-
-  static bool isDotNT(triton::DotOp dotOp) {
-    triton::gpu::DotOperandEncodingAttr aRetEncoding;
-    triton::gpu::DotOperandEncodingAttr bRetEncoding;
-    triton::gpu::BlockedEncodingAttr aSrcEncoding;
-    triton::gpu::BlockedEncodingAttr bSrcEncoding;
-    if (isBlockedToDotOperand(dotOp.getOperand(0).getDefiningOp(), aRetEncoding,
-                              aSrcEncoding)
-            .failed())
-      return false;
-    if (isBlockedToDotOperand(dotOp.getOperand(1).getDefiningOp(), bRetEncoding,
-                              bSrcEncoding)
-            .failed())
-      return false;
-    if (!aRetEncoding || !bRetEncoding || !aSrcEncoding || !bSrcEncoding)
-      return false;
-    return !isTrans(aRetEncoding, aSrcEncoding) &&
-           !isTrans(bRetEncoding, bSrcEncoding);
-  }
-
-  mlir::LogicalResult
+  LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto cvt = cast<triton::gpu::ConvertLayoutOp>(op);
-    triton::gpu::DotOperandEncodingAttr retEncoding;
-    triton::gpu::BlockedEncodingAttr srcEncoding;
-    if (isBlockedToDotOperand(op, retEncoding, srcEncoding).failed())
+    // conversion should be dependent on a load
+    // and all operations between the load and the conversion
+    // should be layout preserving
+    SetVector<Operation *> slice;
+    getBackwardSlice(op, &slice);
+    int loadIdx = -1;
+    bool checkOp = false;
+    for (int i = 0; i < slice.size(); i++) {
+      Operation *currOp = *(slice.begin() + i);
+      if (currOp->getParentRegion() != op->getParentRegion())
+        continue;
+      if (isa<triton::LoadOp>(currOp))
+        checkOp = true;
+      else if (checkOp) {
+        if (!isa<triton::FpToFpOp, triton::BitcastOp>(currOp) &&
+            currOp->getDialect()->getTypeID() !=
+                mlir::TypeID::get<arith::ArithDialect>())
+          return mlir::failure();
+      }
+    }
+    if (!checkOp)
       return mlir::failure();
 
-    // only supports dot NT
-    auto users = cvt->getUsers();
-    auto dotOp = dyn_cast_or_null<DotOp>(*users.begin());
-    if (!dotOp)
-      return failure();
-    if (!isDotNT(dotOp))
-      return failure();
-
-    // don't move things around when cvt operand is a block arg
-    Operation *argOp = cvt.getOperand().getDefiningOp();
-    if (!argOp)
-      return failure();
-    //
-    SetVector<Operation *> processed;
-    SetVector<Attribute> layout;
-    llvm::MapVector<Value, Attribute> toConvert;
-    int numCvts = simulateBackwardRematerialization(cvt, processed, layout,
-                                                    toConvert, retEncoding);
-    if (numCvts > 1 || toConvert.size() == 1)
-      return failure();
-    for (Operation *op : processed) {
-      if (op->getNumOperands() != 1)
-        continue;
-      auto srcTy = op->getOperand(0).getType().cast<RankedTensorType>();
-      auto dstTy = op->getResult(0).getType().cast<RankedTensorType>();
-      // we don't want to push conversions backward if there is a downcast
-      // since it would result in more shared memory traffic
-      if (srcTy.getElementType().getIntOrFloatBitWidth() >
-          dstTy.getElementType().getIntOrFloatBitWidth())
-        return failure();
-      // we only push back when the first op in the chain has a load operand
-      if ((op == processed.back()) &&
-          !isa<triton::LoadOp>(op->getOperand(0).getDefiningOp()))
-        return failure();
-      // we don't want to use ldmatrix for 8-bit data that requires trans
-      // since Nvidia GPUs can't do it efficiently
-      int kOrder = retEncoding.getOpIdx() ^ 1;
-      bool isTrans = kOrder != srcEncoding.getOrder()[0];
-      bool isInt8 = srcTy.getElementType().getIntOrFloatBitWidth() == 8;
-      if (isTrans && isInt8)
-        return failure();
-    }
-    IRMapping mapping;
-    rematerializeConversionChain(toConvert, rewriter, processed, mapping);
-    rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
+    auto cvtTy = cvt.getType().cast<RankedTensorType>();
+    auto cvtArgOp = cvt.getSrc().getDefiningOp();
+    if (!cvtArgOp || cvtArgOp->getNumOperands() == 0)
+      return mlir::failure();
+    // only consider custom conversions or arith ops
+    if (!isa<triton::FpToFpOp, triton::BitcastOp>(cvtArgOp) &&
+        cvtArgOp->getDialect()->getTypeID() !=
+            mlir::TypeID::get<arith::ArithDialect>())
+      return mlir::failure();
+    // only considers conversions to dot operand
+    if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
+      return mlir::failure();
+    auto argTy = cvtArgOp->getOperand(0).getType().cast<RankedTensorType>();
+    auto retTy = cvtArgOp->getResult(0).getType().cast<RankedTensorType>();
+    if (!argTy || !retTy)
+      return mlir::failure();
+    Type newRetTy = RankedTensorType::get(
+        retTy.getShape(), retTy.getElementType(), cvtTy.getEncoding());
+    Type newCvtTy = RankedTensorType::get(
+        retTy.getShape(), argTy.getElementType(), cvtTy.getEncoding());
+    int numArgs = cvtArgOp->getNumOperands();
+    SmallVector<triton::gpu::ConvertLayoutOp> newCvts(numArgs);
+    for (int i = 0; i < numArgs; i++)
+      newCvts[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          cvt.getLoc(), newCvtTy, cvtArgOp->getOperand(i));
+    auto newRet = rewriter.clone(*cvtArgOp);
+    for (int i = 0; i < numArgs; i++)
+      newRet->setOperand(i, newCvts[i]);
+    newRet->getResult(0).setType(newRetTy);
+    rewriter.replaceOp(op, newRet->getResults());
     return mlir::success();
   }
 };

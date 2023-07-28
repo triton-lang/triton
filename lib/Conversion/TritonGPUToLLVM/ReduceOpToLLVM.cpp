@@ -1,8 +1,11 @@
 #include "ReduceOpToLLVM.h"
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getOrder;
@@ -86,13 +89,14 @@ private:
   void getWriteIndexBasic(ConversionPatternRewriter &rewriter, Location loc,
                           Attribute layout, SmallVector<Value> &index,
                           SmallVector<Value> &writeIdx,
-                          std::map<int, Value> &ints, unsigned axis) const {
+                          std::map<int, Value> &ints, unsigned originalAxis,
+                          unsigned axis) const {
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      auto dim = sliceLayout.getDim();
-      assert(dim != axis && "Reduction axis cannot be sliced");
+      // Recover the axis in the parent layout
+      auto parentAxis = axis < sliceLayout.getDim() ? axis : axis + 1;
       auto parentLayout = sliceLayout.getParent();
       getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
-                         axis);
+                         originalAxis, parentAxis);
       return;
     }
 
@@ -107,21 +111,21 @@ private:
       // we would have a single accumulation every `axisSizePerThread`
       // contiguous values in the original tensor, so we would need
       // to map every `axisSizePerThread` to 1 value in smem as:
-      // writeIdx[axis] = index[axis] / axisSizePerThread
-      writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+      // writeIdx[originalAxis] = index[originalAxis] / axisSizePerThread
+      writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
     } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       if (!mmaLayout.isAmpere()) {
         llvm::report_fatal_error("Unsupported layout");
       }
-      if (axis == 0) {
+      if (originalAxis == 0) {
         // Because warpTileSize = [16, 8] and threadsPerWarp = [8, 4], each 8
         // rows in smem would correspond to a warp. The mapping
         // is: (warp_index) x 8 + (row index within warp)
-        writeIdx[axis] =
-            add(mul(udiv(index[axis], _16), _8), urem(index[axis], _8));
+        writeIdx[originalAxis] = add(mul(udiv(index[originalAxis], _16), _8),
+                                     urem(index[originalAxis], _8));
       } else {
         // Same as BlockedEncodingAttr case
-        writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+        writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
       }
     } else {
       llvm::report_fatal_error("Unsupported layout");
@@ -211,7 +215,7 @@ private:
       // get the writeIdx at which to write in smem
       SmallVector<Value> writeIdx;
       getWriteIndexBasic(rewriter, loc, srcLayout, indices[key], writeIdx, ints,
-                         axis);
+                         axis, axis);
 
       // calculate the offset in smem for that writeIdx
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
@@ -327,17 +331,21 @@ private:
     unsigned elems = product<unsigned>(smemShapes[0]);
     unsigned maxElems = std::max(elems, product<unsigned>(smemShapes[1]));
 
-    SmallVector<Value> smemBases(op.getNumOperands());
-    smemBases[0] = bitcast(
-        getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
-    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] =
-          bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems)),
-                  elemPtrTys[i]);
-    }
-
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
+
+    SmallVector<Value> smemBases(op.getNumOperands());
+    bool isWarpSync = helper.isWarpSynchronous();
+
+    if (!isWarpSync) {
+      smemBases[0] = bitcast(
+          getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
+      for (unsigned i = 1; i < op.getNumOperands(); ++i) {
+        smemBases[i] =
+            bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(maxElems)),
+                    elemPtrTys[i]);
+      }
+    }
 
     unsigned srcElems = getTotalElemsPerThread(srcTys[0]);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTys[0]);
@@ -367,8 +375,10 @@ private:
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
 
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcLayout);
+    auto threadsPerWarp =
+        triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
+    auto warpsPerCTA =
+        triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
     auto order = getOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
@@ -381,6 +391,7 @@ private:
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);
 
+    std::map<SmallVector<unsigned>, SmallVector<Value>> finalAccs;
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> acc = it.second;
@@ -394,14 +405,43 @@ private:
         accumulate(rewriter, *combineOp, acc, shfl, false);
       }
 
+      if (isWarpSync) {
+        finalAccs[key] = acc;
+        continue;
+      }
+
       SmallVector<Value> writeIdx = indices[key];
-      writeIdx[axis] = (sizeInterWarps == 1) ? zero : warpIdAxis;
+      writeIdx[axis] = warpIdAxis;
       Value writeOffset =
           linearize(rewriter, loc, writeIdx, smemShapes[0], order);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         Value writePtr = gep(elemPtrTys[i], smemBases[i], writeOffset);
         storeShared(rewriter, loc, writePtr, acc[i], laneZero);
       }
+    }
+
+    if (isWarpSync) {
+      SmallVector<Value> results(op.getNumOperands());
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        if (auto resultTy =
+                op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+          auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
+          unsigned resultElems = getTotalElemsPerThread(resultTy);
+          SmallVector<SmallVector<unsigned>> resultOffset =
+              emitOffsetForLayout(resultLayout, resultTy);
+          SmallVector<Value> resultVals;
+          for (int j = 0; j < resultElems; j++) {
+            auto key = resultOffset[j];
+            key.insert(key.begin() + axis, 0);
+            resultVals.push_back(finalAccs[key][i]);
+          }
+          results[i] = getTypeConverter()->packLLElements(loc, resultVals,
+                                                          rewriter, resultTy);
+        } else
+          results[i] = finalAccs.begin()->second[i];
+      }
+      rewriter.replaceOp(op, results);
+      return success();
     }
 
     barrier();
@@ -412,8 +452,11 @@ private:
     //
     // Each thread needs to process:
     //   elemsPerThread = sizeInterWarps * s1 * s2 .. Sn / numThreads
+
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     unsigned numThreads =
-        product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) * 32;
+        product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) *
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
     Value readOffset = threadId;
     for (unsigned round = 0; round < elemsPerThread; ++round) {
@@ -454,9 +497,6 @@ private:
       }
     }
 
-    // We could avoid this barrier in some of the layouts, however this is not
-    // the general case.
-    // TODO: optimize the barrier in case the layouts are accepted.
     barrier();
 
     // set output values

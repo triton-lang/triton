@@ -1,7 +1,8 @@
 import torch
 
-import triton
-import triton.language as tl
+from ... import jit
+from ... import language as tl
+from ... import next_power_of_2
 
 
 def num_warps(n):
@@ -16,7 +17,7 @@ def num_warps(n):
     return 16
 
 
-@triton.jit
+@jit
 def _blocksparse_softmax_fwd(
     Out, A, stride_xz, LUT,
     R, extent, stride_zr, stride_hr,  # relative attention
@@ -71,7 +72,7 @@ def _blocksparse_softmax_fwd(
     tl.store(Out + off_a + lane_n, out, mask=mask)
 
 
-@triton.jit
+@jit
 def _blocksparse_softmax_bwd(
     DA, stride_zdx,
     DOut, stride_zdout,
@@ -169,7 +170,7 @@ class _softmax(torch.autograd.Function):
             scale,
             is_causal,
             BLOCK_SIZE=block,
-            ROW_SIZE=triton.next_power_of_2(maxlut),
+            ROW_SIZE=next_power_of_2(maxlut),
             IS_DENSE=is_dense,
             num_warps=num_warps(maxlut)
         )
@@ -208,7 +209,7 @@ class _softmax(torch.autograd.Function):
             dr, ctx.rel_shape[-1], ctx.rel_strides[0], ctx.rel_strides[1], ctx.rel_strides[2],
             ctx.is_causal,
             BLOCK_SIZE=ctx.block,
-            ROW_SIZE=triton.next_power_of_2(ctx.maxlut),
+            ROW_SIZE=next_power_of_2(ctx.maxlut),
             IS_DENSE=ctx.is_dense,
             num_warps=num_warps(ctx.maxlut)
         )
