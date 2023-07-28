@@ -342,7 +342,6 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
     //   ret.push_back(values[i + 14]);
     //   ret.push_back(values[i + 15]);
     // }
-    return values;
   }
   llvm_unreachable("unimplemented code path");
 }
