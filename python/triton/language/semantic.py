@@ -25,10 +25,14 @@ class IncompatibleTypeErrorImpl(Exception):
 # ===----------------------------------------------------------------------===##
 
 def program_id(axis: int, builder: ir.builder) -> tl.tensor:
+    if axis not in (0, 1, 2):
+        raise ValueError(f"tl.program_id axis must be 0, 1, or 2 but got {axis}")
     return tl.tensor(builder.create_get_program_id(axis), tl.int32)
 
 
 def num_programs(axis: int, builder: ir.builder) -> tl.tensor:
+    if axis not in (0, 1, 2):
+        raise ValueError(f"tl.num_programs axis must be 0, 1, or 2 but got {axis}")
     return tl.tensor(builder.create_get_num_programs(axis), tl.int32)
 
 # ===----------------------------------------------------------------------===//
