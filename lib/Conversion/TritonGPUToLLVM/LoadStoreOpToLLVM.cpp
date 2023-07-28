@@ -782,7 +782,9 @@ struct InsertSliceAsyncOpConversion
     // start of the vector and the other pointer moving to the next vector.
     unsigned inVec = getContiguity(src);
     unsigned outVec = resSharedLayout.getVec();
-    unsigned minVec = std::min(outVec, inVec);
+    unsigned minVec = inVec;
+    if (outVec > 1)
+      minVec = std::min(outVec, inVec);
     unsigned numElems = getTotalElemsPerThread(srcTy);
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
