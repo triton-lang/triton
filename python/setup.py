@@ -68,7 +68,9 @@ def get_pybind11_package_info():
 def get_llvm_package_info():
     # added statement for Apple Silicon
     system = platform.system()
-    arch = 'x86_64'
+    arch = platform.machine()
+    if arch == 'aarch64':
+        arch = 'arm64'
     if system == "Darwin":
         system_suffix = "apple-darwin"
         cpu_type = os.popen('sysctl machdep.cpu.brand_string').read()
@@ -86,6 +88,9 @@ def get_llvm_package_info():
     name = f'llvm+mlir-17.0.0-{arch}-{system_suffix}-{release_suffix}'
     version = "llvm-17.0.0-c5dede880d17"
     url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
+    # FIXME: remove the following once github.com/ptillet/triton-llvm-releases has arm64 llvm releases
+    if arch == 'arm64' and 'linux' in system_suffix:
+        url = f"https://github.com/acollins3/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -126,7 +131,10 @@ def download_and_copy_ptxas():
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
     version = "12.1.105"
-    url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-64/cuda-nvcc-{version}-0.tar.bz2"
+    arch = platform.machine()
+    if arch == "x86_64":
+        arch = "64"
+    url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2"
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
