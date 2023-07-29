@@ -102,23 +102,23 @@ def version_key():
     contents = []
     # frontend
     with open(__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+        contents += [hashlib.sha256(f.read()).hexdigest()]
     # compiler
     compiler_path = os.path.join(TRITON_PATH, 'compiler')
     for lib in pkgutil.iter_modules([compiler_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
+            contents += [hashlib.sha256(f.read()).hexdigest()]
     # backend
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+        contents += [hashlib.sha256(f.read()).hexdigest()]
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.iter_modules([language_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
+            contents += [hashlib.sha256(f.read()).hexdigest()]
     # ptxas version
     ptxas = path_to_ptxas()[0]
-    ptxas_version = hashlib.md5(subprocess.check_output([ptxas, "--version"])).hexdigest()
+    ptxas_version = hashlib.sha256(subprocess.check_output([ptxas, "--version"])).hexdigest()
     return '-'.join(TRITON_VERSION) + '-' + ptxas_version + '-' + '-'.join(contents)
 
 
