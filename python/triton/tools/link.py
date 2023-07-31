@@ -148,6 +148,9 @@ def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
         src += f"  if ({conds})\n"
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
         src += f"    return {name}_{meta.sig_hash}_{meta.suffix}(stream, gX, gY, gZ, {', '.join(arg_names)});\n"
+    src += "\n"
+    src += "  fprintf(stderr, \"No kernel available\");\n"
+    src += "  assert(0 != 0);\n"
     src += "}\n"
 
     for mode in ["load", "unload"]:
@@ -206,6 +209,8 @@ if __name__ == "__main__":
         out = ""
         out += "#include <cuda.h>\n"
         out += "#include <stdint.h>\n"
+        out += "#include <stdio.h>\n"
+        out += "#include <assert.h>\n"
         out += "\n"
         out += "\n".join(defs)
         fp.write(out)
