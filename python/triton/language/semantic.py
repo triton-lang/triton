@@ -1236,7 +1236,7 @@ def gpu_has_mfma() -> bool:
     if gfx_arch_details is None:
         return False
     gfx_arch_details = gfx_arch_details.group(0).strip().split('--')
-    return gfx_arch_details[1].split(':')[0] in ['gfx908', 'gfx90a']
+    return gfx_arch_details[1].split(':')[0] in ['gfx908', 'gfx90a', 'gfx940', 'gfx941']
 
 def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
     if not gpu_has_mfma():
