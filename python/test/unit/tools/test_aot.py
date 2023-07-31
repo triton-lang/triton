@@ -221,7 +221,7 @@ def test_launcher_has_no_available_kernel():
         # run test case
         result = subprocess.run(["./test", a_path, b_path, c_path], cwd=tmp_dir, capture_output=True, text=True)
 
-        # It should fail since it require that all the strides should be 1 in the launcher while they are not.
+        # It should fail since the launcher requires all the strides be 1 while they are not.
         assert result.returncode == -6
         assert "kernel launch failed" in result.stderr
 
