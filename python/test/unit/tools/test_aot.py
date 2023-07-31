@@ -202,7 +202,7 @@ def test_compile_link_matmul():
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.)
 
 
-def test_launcher_hit_no_available_kernel():
+def test_launcher_has_no_available_kernel():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
