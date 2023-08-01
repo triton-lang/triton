@@ -6,22 +6,22 @@
 
 Computation times
 =================
-**02:15.423** total execution time for **getting-started_tutorials** files:
+**02:15.283** total execution time for **getting-started_tutorials** files:
 
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``)           | 00:40.849 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``03-matrix-multiplication.py``)           | 00:40.818 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                           | 00:38.195 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``02-fused-softmax.py``)                           | 00:38.174 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``05-layer-norm.py``)                                 | 00:29.269 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``05-layer-norm.py``)                                 | 00:29.110 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``06-fused-attention.py``)                       | 00:14.163 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``06-fused-attention.py``)                       | 00:14.212 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_08-experimental-block-pointer.py` (``08-experimental-block-pointer.py``) | 00:06.370 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_08-experimental-block-pointer.py` (``08-experimental-block-pointer.py``) | 00:06.393 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                                 | 00:05.722 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``01-vector-add.py``)                                 | 00:05.713 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
-| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)                 | 00:00.633 | 0.0 MB |
+| :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``04-low-memory-dropout.py``)                 | 00:00.641 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
 | :ref:`sphx_glr_getting-started_tutorials_07-math-functions.py` (``07-math-functions.py``)                         | 00:00.223 | 0.0 MB |
 +-------------------------------------------------------------------------------------------------------------------+-----------+--------+
