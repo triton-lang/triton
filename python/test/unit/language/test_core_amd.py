@@ -1511,7 +1511,8 @@ def test_gemm(SIZE_M, SIZE_N, SIZE_K, NUM_WARPS, BLOCK_SIZE_M, BLOCK_SIZE_N, BLO
                         stride_cm=c.stride(0), stride_cn=c.stride(1),
                         M=a.shape[0], N=b.shape[1], K=a.shape[1],
                         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
-                        num_warps=NUM_WARPS)
+                        num_warps=NUM_WARPS,
+                        num_stages=2)
     golden = torch.matmul(a, b)
 
     # It's not easy to get a proper error threshold in different size
