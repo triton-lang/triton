@@ -106,6 +106,13 @@ const std::string Fp8E4M3B15_to_Fp16 =
 const std::string Fp16_to_Fp8E4M3B15 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n"
+    ".reg .b32 min_val, max_val;            \n"
+    "mov.b32 min_val, 0xBF80BF80;           \n"
+    "mov.b32 max_val, 0x3F803F80;           \n"
+    "max.f16x2 $1, $1, min_val;             \n"
+    "min.f16x2 $1, $1, max_val;             \n"
+    "max.f16x2 $2, $2, min_val;             \n"
+    "min.f16x2 $2, $2, max_val;             \n"
     "shl.b32 a0, $1, 1;                     \n"
     "shl.b32 a1, $2, 1;                     \n"
     "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
