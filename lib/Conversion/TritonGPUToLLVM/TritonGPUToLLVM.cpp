@@ -533,7 +533,7 @@ struct ExtractSliceOpConversion
     // newShape = rank_reduce(shape)
     // Triton only supports static tensor sizes
     SmallVector<Value, 4> strideVals;
-    for (auto i = 0; i < op.static_sizes().size(); ++i) {
+    for (auto i = 0; i < op.getStaticSizes().size(); ++i) {
       if (op.getStaticSize(i) == 1) {
         offsetVals.erase(offsetVals.begin() + i);
       } else {
