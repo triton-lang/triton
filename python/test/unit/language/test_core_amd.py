@@ -1280,9 +1280,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, dtype, devi
     if capability[0] == 7:
         if (M, N, K, num_warps) == (128, 256, 32, 8):
             pytest.skip("shared memory out of resource")
-    if torch.version.hip is not None:
-        if (M, N, K) == (64, 128, 128):
-            pytest.skip("Not supported: memory out of resource.")
 
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
