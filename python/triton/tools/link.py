@@ -148,6 +148,8 @@ def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
         src += f"  if ({conds})\n"
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
         src += f"    return {name}_{meta.sig_hash}_{meta.suffix}(stream, gX, gY, gZ, {', '.join(arg_names)});\n"
+    src += "\n"
+    src += "  return CUDA_ERROR_INVALID_VALUE;\n"
     src += "}\n"
 
     for mode in ["load", "unload"]:
