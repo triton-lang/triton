@@ -1194,7 +1194,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
   tt.func @convert_dot_mfma(%A: tensor<32x32xf16, #blocked0>, %B: tensor<32x32xf16, #blocked0>) {
     %AA = triton_gpu.convert_layout %A : (tensor<32x32xf16, #blocked0>) -> tensor<32x32xf16, #shared0>
     %BB = triton_gpu.convert_layout %B : (tensor<32x32xf16, #blocked0>) -> tensor<32x32xf16, #shared0>
-    // GCN-COUNT-32:  llvm.load {{.*}} : !llvm.ptr<f16, 3>
+    // GCN-COUNT-4:  llvm.load {{.*}} : !llvm.ptr<vector<4xf16>, 3>
+    // GCN-COUNT-16:  llvm.load {{.*}} : !llvm.ptr<vector<1xf16>, 3>
     %AA_DOT = triton_gpu.convert_layout %AA : (tensor<32x32xf16, #shared0>) -> tensor<32x32xf16, #dot_operand_a>
     %BB_DOT = triton_gpu.convert_layout %BB : (tensor<32x32xf16, #shared0>) -> tensor<32x32xf16, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mfma0>
