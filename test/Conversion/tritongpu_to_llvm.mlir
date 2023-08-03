@@ -1367,7 +1367,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
   tt.func @matmul_kernel_dot_operand_layout_gcn(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
     %a:tensor<128x32xf16, #shared>, %b:tensor<32x256xf16, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mfma>
-    // GCN-COUNT-96: llvm.load {{.*}} : !llvm.ptr<f16, 3>
+    // GCN-COUNT-8: llvm.load {{.*}} : !llvm.ptr<vector<4xf16>, 3>
+    // GCN-COUNT-64: llvm.load {{.*}} : !llvm.ptr<vector<1xf16>, 3>
     %a_mat = triton_gpu.convert_layout %a : (tensor<128x32xf16, #shared>) -> tensor<128x32xf16, #dot_operand_a>
     %b_mat = triton_gpu.convert_layout %b : (tensor<32x256xf16, #shared>) -> tensor<32x256xf16, #dot_operand_b>
 

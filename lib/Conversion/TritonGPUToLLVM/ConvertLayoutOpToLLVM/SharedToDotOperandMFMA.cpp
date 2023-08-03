@@ -105,6 +105,7 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
  * @param numOfElems number of elements accessed by thread per repetition
  * @param reps number of instructions repretition to fully cover dot operand
  * @param smemStrides strides in LDS tensor
+ * @param loadVecSize number of elements loaded by one operation
  * @return vector (i-th element corresponds to i-th load instruction) of
  * 2-element vectors(tensor row and col).
  */
@@ -112,10 +113,13 @@ llvm::SmallVector<llvm::SmallVector<Value>>
 computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
                          const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
                          Value laneId, int warpsPerGroup, int numOfElems,
-                         ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets) {
+                         ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
+                         int loadVecSize) {
   auto numM = reps[0];
   auto numK = reps[1];
-  SmallVector<llvm::SmallVector<Value>> mapping(numM * numK * numOfElems);
+  const int loadsPerThread = numOfElems / loadVecSize;
+  llvm::SmallVector<llvm::SmallVector<Value>> mapping(numM * numK *
+                                                      loadsPerThread);
 
   Value _0 = i32_val(0);
   Value _32 = i32_val(32);
@@ -131,9 +135,9 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
 
       Value laneVOffset = urem(laneId, _32);
       Value laneHOffset = mul(udiv(laneId, _32), i32_val(numOfElems));
-      for (int elem = 0; elem < numOfElems; ++elem) {
+      for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
         Value elemVOffset = _0;
-        Value elemHOffset = i32_val(elem);
+        Value elemHOffset = i32_val(loadId * loadVecSize);
 
         Value sliceVOffset = add(
             add(add(add(blockVOffset, waveVOffset), tileVOffset), laneVOffset),
@@ -145,13 +149,15 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
         Value row = add(sliceVOffset, smemOffsets[0]);
         Value col = add(sliceHOffset, smemOffsets[1]);
 
-        mapping[numK * numOfElems * block + numOfElems * tile + elem] = {row,
-                                                                         col};
+        mapping[numK * loadsPerThread * block + loadsPerThread * tile +
+                loadId] = {row, col};
       }
     }
   }
   return mapping;
 }
+
+bool isSwizzled(SharedEncodingAttr layout) { return layout.getMaxPhase() != 1; }
 
 Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     Value row, Value col, SharedMemoryObject smemObj,
@@ -172,9 +178,18 @@ computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
                     SharedEncodingAttr srcLayout) {
   SmallVector<Value> strides{smemObj.strides[0], smemObj.strides[1]};
   SmallVector<Value> offsets{smemObj.offsets[0], smemObj.offsets[1]};
-  auto mapping =
-      computeTensorElemMapping(rewriter, loc, elemsPerInstr, waveId, laneId,
-                               warpsPerGroup, numOfElems, reps, offsets);
+
+  int vectorSize = 1;
+  if (srcLayout.getOrder()[0] == 1) {
+    if (isSwizzled(srcLayout))
+      vectorSize = std::min(static_cast<int>(srcLayout.getVec()), numOfElems);
+    else
+      vectorSize = numOfElems;
+  }
+
+  auto mapping = computeTensorElemMapping(rewriter, loc, elemsPerInstr, waveId,
+                                          laneId, warpsPerGroup, numOfElems,
+                                          reps, offsets, vectorSize);
   llvm::SmallVector<Value> aOffsets(mapping.size());
   for (int i = 0; i < mapping.size(); ++i) {
     Value row = mapping[i][0];
@@ -195,9 +210,18 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
   SmallVector<int64_t> tReps{reps[1], reps[0]};
   SmallVector<Value> toffsets{smemObj.offsets[1], smemObj.offsets[0]};
-  auto mapping =
-      computeTensorElemMapping(rewriter, loc, tElemsPerInstr, waveId, laneId,
-                               warpsPerGroup, numOfElems, tReps, toffsets);
+
+  int vectorSize = 1;
+  if (srcLayout.getOrder()[0] == 0) {
+    if (isSwizzled(srcLayout))
+      vectorSize = std::min(static_cast<int>(srcLayout.getVec()), numOfElems);
+    else
+      vectorSize = numOfElems;
+  }
+
+  auto mapping = computeTensorElemMapping(rewriter, loc, tElemsPerInstr, waveId,
+                                          laneId, warpsPerGroup, numOfElems,
+                                          tReps, toffsets, vectorSize);
   llvm::SmallVector<Value> bOffsets(mapping.size());
   for (int i = 0; i < mapping.size(); ++i) {
     // swap row and col, because operand B layout is a transposed operand A
@@ -222,16 +246,18 @@ Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
 
 /**
  * @brief try find if value is an integer constant
- * 
+ *
  * Trace def-use chain and return integer in case we can proof it is constant.
- * Current implementation can trace chains of insertValue->extractValue operations.
- * 
+ * Current implementation can trace chains of insertValue->extractValue
+ * operations.
+ *
  * @param val Value for that we want to get constant
  * @return std::optional on found integer value or empty std::optional
-*/
+ */
 std::optional<int> findConstValue(Value val) {
   while (val && !val.getDefiningOp<LLVM::ConstantOp>()) {
-    LLVM::ExtractValueOp extractValOp = val.getDefiningOp<LLVM::ExtractValueOp>();
+    LLVM::ExtractValueOp extractValOp =
+        val.getDefiningOp<LLVM::ExtractValueOp>();
     if (!extractValOp)
       return std::optional<int>();
     auto extractPosArr = extractValOp.getPosition();
@@ -251,7 +277,7 @@ std::optional<int> findConstValue(Value val) {
         return std::optional<int>();
       insertPos = insertPosArr[0];
       container = insertValOp.getContainer();
-    } while(insertPos != extractPos);
+    } while (insertPos != extractPos);
     val = insertValOp.getValue();
   }
   if (!val)
@@ -264,7 +290,9 @@ std::optional<int> findConstValue(Value val) {
   return intAttr.getInt();
 }
 
-bool fastPathAvailable(const SharedMemoryObject &smemObj, const SharedEncodingAttr &srcEncoding, const MfmaEncodingAttr &dstEncoding) {
+bool fastPathAvailable(const SharedMemoryObject &smemObj,
+                       const SharedEncodingAttr &srcEncoding,
+                       const MfmaEncodingAttr &dstEncoding) {
   if (dstEncoding.getNonKDim() != 32)
     return false;
   if (srcEncoding.getMaxPhase() > 1)
@@ -273,11 +301,8 @@ bool fastPathAvailable(const SharedMemoryObject &smemObj, const SharedEncodingAt
   auto stride1 = findConstValue(smemObj.strides[1]);
   auto offset0 = findConstValue(smemObj.offsets[0]);
   auto offset1 = findConstValue(smemObj.offsets[1]);
-  bool allValuesDefined =
-      stride0.has_value() &&
-      stride1.has_value() &&
-      offset0.has_value() &&
-      offset1.has_value();
+  bool allValuesDefined = stride0.has_value() && stride1.has_value() &&
+                          offset0.has_value() && offset1.has_value();
   if (!allValuesDefined)
     return false;
   if (offset0.value() != 0 || offset1.value() != 0)
@@ -297,9 +322,9 @@ bool fastPathAvailable(const SharedMemoryObject &smemObj, const SharedEncodingAt
 // @param cSwizzleOffset
 llvm::SmallVector<Value>
 fastPathComputeOffsetsTy1(ConversionPatternRewriter &rewriter, Location loc,
-                  const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
-                  Value laneId, int warpsPerGroup, int numOfElems,
-                  ArrayRef<int64_t> reps, Value cSwizzleOffset) {
+                          const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
+                          Value laneId, int warpsPerGroup, int numOfElems,
+                          ArrayRef<int64_t> reps, Value cSwizzleOffset) {
   auto numM = reps[0];
   auto numK = reps[1];
   SmallVector<Value> offsets(numM * numK * numOfElems);
@@ -341,9 +366,9 @@ fastPathComputeOffsetsTy1(ConversionPatternRewriter &rewriter, Location loc,
 // @param cSwizzleOffset
 llvm::SmallVector<Value>
 fastPathComputeOffsetsTy2(ConversionPatternRewriter &rewriter, Location loc,
-                  const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
-                  Value laneId, int warpsPerGroup, int numOfElems,
-                  ArrayRef<int64_t> reps, Value cSwizzleOffset) {
+                          const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
+                          Value laneId, int warpsPerGroup, int numOfElems,
+                          ArrayRef<int64_t> reps, Value cSwizzleOffset) {
   auto numK = reps[0];
   auto numN = reps[1];
   SmallVector<Value> offsets(numK * numN * numOfElems);
@@ -421,13 +446,13 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
     if (isTransposed(order)) {
       SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrM};
       SmallVector<int64_t> reps{numReps[1], numReps[0]};
-      offsets =
-          fastPathComputeOffsetsTy2(rewriter, loc, elemsPerInstr, waveM, lane,
-                            warpsPerGroupM, numOfElems, reps, cSwizzleOffset);
+      offsets = fastPathComputeOffsetsTy2(rewriter, loc, elemsPerInstr, waveM,
+                                          lane, warpsPerGroupM, numOfElems,
+                                          reps, cSwizzleOffset);
     } else {
-      offsets =
-          fastPathComputeOffsetsTy1(rewriter, loc, aElemsPerInstr, waveM, lane,
-                            warpsPerGroupM, numOfElems, numReps, cSwizzleOffset);
+      offsets = fastPathComputeOffsetsTy1(rewriter, loc, aElemsPerInstr, waveM,
+                                          lane, warpsPerGroupM, numOfElems,
+                                          numReps, cSwizzleOffset);
     }
     Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
 
@@ -451,27 +476,39 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
         ha.push_back(valVec);
       }
     }
-  } else { // general path
+  } else { // normal path
     SmallVector<Value> offsets = computeOffsetsAType(
-      rewriter, loc, aElemsPerInstr, waveM, lane, warpsPerGroupM, numOfElems,
-      numReps, smemObj, sharedLayout);
+        rewriter, loc, aElemsPerInstr, waveM, lane, warpsPerGroupM, numOfElems,
+        numReps, smemObj, sharedLayout);
 
     Value smemBase = computeBasePtr(rewriter, loc, smemObj);
 
     Type smemPtrTy = getShemPtrTy(aElemTy);
 
+    int loadsPerThread = offsets.size() / (numReps[0] * numReps[1]);
+    int elemsPerLoad = numOfElems / loadsPerThread;
+
     for (int m = 0; m < numRepM; ++m) {
       for (int k = 0; k < numRepK; ++k) {
         auto vecTy = vec_ty(aElemTy, numOfElems);
         Value valVec = undef(vecTy);
-        for (unsigned elem = 0; elem < numOfElems; ++elem) {
-          Value elemOffset =
-              offsets[m * numOfElems * numRepK + k * numOfElems + elem];
-          Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
-          if (numOfElems > 1)
-            valVec = insert_element(vecTy, valVec, elemValue, i32_val(elem));
-          else
-            valVec = elemValue;
+        for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
+          auto loadVecTy = vec_ty(aElemTy, elemsPerLoad);
+          Value loadOffset = offsets[m * loadsPerThread * numRepK +
+                                     k * loadsPerThread + loadId];
+          Value loadAddress = bitcast(gep(smemPtrTy, smemBase, loadOffset),
+                                      getShemPtrTy(loadVecTy));
+          Value vectorValue = load(loadAddress);
+          if (numOfElems > 1) {
+            for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
+              Value elemVal =
+                  extract_element(aElemTy, vectorValue, i32_val(elemId));
+              valVec = insert_element(vecTy, valVec, elemVal,
+                                      i32_val(loadId * elemsPerLoad + elemId));
+            }
+          } else {
+            valVec = extract_element(aElemTy, vectorValue, i32_val(0));
+          }
         }
         if (aElemTy == i8_ty)
           valVec = bitcast(valVec, i32_ty);
@@ -539,13 +576,13 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
     if (isTransposed(order)) {
       SmallVector<int64_t> elemsPerInstr{mfmaInstrN, mfmaInstrK};
       SmallVector<int64_t> reps{numReps[1], numReps[0]};
-      offsets =
-          fastPathComputeOffsetsTy1(rewriter, loc, elemsPerInstr, waveN, lane,
-                            warpsPerGroupN, numOfElems, reps, cSwizzleOffset);
+      offsets = fastPathComputeOffsetsTy1(rewriter, loc, elemsPerInstr, waveN,
+                                          lane, warpsPerGroupN, numOfElems,
+                                          reps, cSwizzleOffset);
     } else {
-      offsets =
-          fastPathComputeOffsetsTy2(rewriter, loc, bElemsPerInstr, waveN, lane,
-                            warpsPerGroupN, numOfElems, numReps, cSwizzleOffset);
+      offsets = fastPathComputeOffsetsTy2(rewriter, loc, bElemsPerInstr, waveN,
+                                          lane, warpsPerGroupN, numOfElems,
+                                          numReps, cSwizzleOffset);
     }
 
     Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
@@ -570,7 +607,7 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
         hb.push_back(valVec);
       }
     }
-  } else { // general path
+  } else { // normal path
     llvm::SmallVector<Value> offsets = computeOffsetsBType(
         rewriter, loc, bElemsPerInstr, waveN, lane, warpsPerGroupN, numOfElems,
         numReps, smemObj, sharedLayout);
@@ -579,18 +616,29 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
 
     Type smemPtrTy = getShemPtrTy(bElemTy);
 
+    int loadsPerThread = offsets.size() / (numReps[0] * numReps[1]);
+    int elemsPerLoad = numOfElems / loadsPerThread;
     for (int n = 0; n < numRepN; ++n) {
       for (int k = 0; k < numRepK; ++k) {
-        auto vecTy = vec_ty(bTensorTy.getElementType(), numOfElems);
+        auto vecTy = vec_ty(bElemTy, numOfElems);
         Value valVec = undef(vecTy);
-        for (unsigned elem = 0; elem < numOfElems; ++elem) {
-          Value elemOffset =
-              offsets[n * numOfElems * numRepK + k * numOfElems + elem];
-          Value elemValue = load(gep(smemPtrTy, smemBase, elemOffset));
-          if (numOfElems > 1)
-            valVec = insert_element(vecTy, valVec, elemValue, i32_val(elem));
-          else
-            valVec = elemValue;
+        for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
+          auto loadVecTy = vec_ty(bElemTy, elemsPerLoad);
+          Value loadOffset = offsets[n * loadsPerThread * numRepK +
+                                     k * loadsPerThread + loadId];
+          Value loadAddress = bitcast(gep(smemPtrTy, smemBase, loadOffset),
+                                      getShemPtrTy(loadVecTy));
+          Value vectorValue = load(loadAddress);
+          if (numOfElems > 1) {
+            for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
+              Value elemVal =
+                  extract_element(bElemTy, vectorValue, i32_val(elemId));
+              valVec = insert_element(vecTy, valVec, elemVal,
+                                      i32_val(loadId * elemsPerLoad + elemId));
+            }
+          } else {
+            valVec = extract_element(bElemTy, vectorValue, i32_val(0));
+          }
         }
         if (bElemTy == i8_ty)
           valVec = bitcast(valVec, i32_ty);

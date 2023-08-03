@@ -2201,6 +2201,117 @@ class BlockedLayout:
     def __str__(self):
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
+class SharedLayout:
+    def __init__(self, vec, per_phase, max_phase, order):
+        self.vec = str(vec)
+        self.per_phase = str(per_phase)
+        self.max_phase = str(max_phase)
+        self.order = str(order)
+
+    def __str__(self):
+        return f"#triton_gpu.shared<{{vec = {self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}}}>"
+
+
+@pytest.mark.parametrize("vec_size", [2, 4])
+@pytest.mark.parametrize("swizzle", [True])
+@pytest.mark.parametrize("transposeA", [True, False])
+@pytest.mark.parametrize("transposeB", [True, False])
+def test_dot_mfma_vector_load(vec_size, swizzle, transposeA, transposeB):
+    # we can not do vector loads in this case
+    if transposeA and not transposeB:
+        pytest.skip()
+
+    # source code for following ttgir:
+    # @triton.jit
+    # def kernel(X, Y, Z):
+    #     off_m = tl.arange(0, 32)
+    #     off_n = tl.arange(0, 32)
+    #     off_k = tl.arange(0, 32)
+    #     Xs = X + off_m[:, None] * 32 + off_k[None, :]
+    #     Ys = Y + off_k[:, None] * 32 + off_n[None, :]
+    #     Zs = Z + off_m[:, None] * 32 + off_n[None, :]
+    #     x = tl.load(Xs)
+    #     y = tl.load(Ys)
+    #     z = tl.dot(x, y, allow_tf32=False)
+    #     tl.store(Zs, z)
+
+    if swizzle:
+        max_phase = 2
+    else:
+        max_phase = 1
+
+    shared_a = SharedLayout(vec = vec_size, per_phase = 1, max_phase = max_phase, order = [0, 1] if transposeA else [1, 0])
+    shared_b = SharedLayout(vec = vec_size, per_phase = 1, max_phase = max_phase, order = [0, 1] if transposeB else [1, 0])
+
+    ir = f"""
+#blocked = #triton_gpu.blocked<{{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}}>
+#shared1 = {shared_a}
+#shared2 = {shared_b}
+""" + """
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel_0d1d2d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [4, 1], isTransposed = false}>>
+    %cst_0 = arith.constant dense<32> : tensor<32x1xi32, #blocked>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : (tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<32x1xi32, #blocked>
+    %2 = arith.muli %1, %cst_0 : tensor<32x1xi32, #blocked>
+    %3 = tt.splat %arg0 : (!tt.ptr<f16>) -> tensor<32x1x!tt.ptr<f16>, #blocked>
+    %4 = tt.addptr %3, %2 : tensor<32x1x!tt.ptr<f16>, #blocked>, tensor<32x1xi32, #blocked>
+    %5 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+    %6 = tt.expand_dims %5 {axis = 0 : i32} : (tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>) -> tensor<1x32xi32, #blocked>
+    %7 = tt.broadcast %4 : (tensor<32x1x!tt.ptr<f16>, #blocked>) -> tensor<32x32x!tt.ptr<f16>, #blocked>
+    %8 = tt.broadcast %6 : (tensor<1x32xi32, #blocked>) -> tensor<32x32xi32, #blocked>
+    %9 = tt.addptr %7, %8 : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
+    %10 = tt.splat %arg1 : (!tt.ptr<f16>) -> tensor<32x1x!tt.ptr<f16>, #blocked>
+    %11 = tt.addptr %10, %2 : tensor<32x1x!tt.ptr<f16>, #blocked>, tensor<32x1xi32, #blocked>
+    %12 = tt.broadcast %11 : (tensor<32x1x!tt.ptr<f16>, #blocked>) -> tensor<32x32x!tt.ptr<f16>, #blocked>
+    %13 = tt.addptr %12, %8 : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
+    %14 = tt.splat %arg2 : (!tt.ptr<f16>) -> tensor<32x1x!tt.ptr<f16>, #blocked>
+    %15 = tt.addptr %14, %2 : tensor<32x1x!tt.ptr<f16>, #blocked>, tensor<32x1xi32, #blocked>
+    %16 = tt.broadcast %15 : (tensor<32x1x!tt.ptr<f16>, #blocked>) -> tensor<32x32x!tt.ptr<f16>, #blocked>
+    %17 = tt.addptr %16, %8 : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
+    %18 = tt.load %9 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf16, #blocked>
+    %19 = triton_gpu.convert_layout %18 : (tensor<32x32xf16, #blocked>) -> tensor<32x32xf16, #shared1>
+    %20 = triton_gpu.convert_layout %19 : (tensor<32x32xf16, #shared1>) -> tensor<32x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [4, 1], isTransposed = false}>}>>
+    %21 = tt.load %13 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32xf16, #blocked>
+    %22 = triton_gpu.convert_layout %21 : (tensor<32x32xf16, #blocked>) -> tensor<32x32xf16, #shared2>
+    %23 = triton_gpu.convert_layout %22 : (tensor<32x32xf16, #shared2>) -> tensor<32x32xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [4, 1], isTransposed = false}>}>>
+    %24 = tt.dot %20, %23, %cst {allowTF32 = false} : tensor<32x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [4, 1], isTransposed = false}>}>> * tensor<32x32xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [4, 1], isTransposed = false}>}>> -> tensor<32x32xf32, #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [4, 1], isTransposed = false}>>
+    %25 = triton_gpu.convert_layout %24 : (tensor<32x32xf32, #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [4, 1], isTransposed = false}>>) -> tensor<32x32xf32, #blocked>
+    %26 = arith.truncf %25 : tensor<32x32xf32, #blocked> to tensor<32x32xf16, #blocked>
+    tt.store %17, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32x32xf16, #blocked>
+    tt.return
+  }
+}
+"""
+    shape = (32, 32)
+    dtype = 'float16'
+    x_np = numpy_random(shape, dtype_str=dtype)
+    y_np = numpy_random(shape, dtype_str=dtype)
+    z_np = np.dot(x_np, y_np)
+
+    x_tri = to_triton(x_np)
+    y_tri = to_triton(y_np)
+    z_tri = torch.empty_like(x_tri)
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
+        f.write(ir)
+        f.flush()
+        arch_triple = "amdgcn-amd-amdhsa"
+        arch_name = "gfx90a"
+        features = ""
+        warp_size = 64
+        capabilities = [arch_triple, arch_name, features, warp_size]
+        kernel = triton.compile(f.name, device_type="hip", cc=capabilities)
+
+    import triton.language.semantic as sem
+    if torch.version.hip is not None and sem.gpu_has_mfma():
+        kernel[(1, 1, 1)](x_tri, y_tri, z_tri)
+        np.testing.assert_allclose(z_np, to_numpy(z_tri), rtol=0.01, atol=1e-3)
+
+    assert(f"load <{vec_size} x half>, ptr addrspace(3)" in kernel.asm['llir'])
+
 
 def _get_warp_size():
     if torch.version.hip is None:
