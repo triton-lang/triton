@@ -272,7 +272,7 @@ private:
 };
 
 class AxisInfoAnalysis
-    : public dataflow::SparseDataFlowAnalysis<dataflow::Lattice<AxisInfo>> {
+    : public dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>> {
 private:
   AxisInfoVisitorList visitors;
 
@@ -284,7 +284,7 @@ private:
 
 public:
   AxisInfoAnalysis(DataFlowSolver &solver);
-  using dataflow::SparseDataFlowAnalysis<
+  using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
   using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
 
