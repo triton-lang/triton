@@ -1218,10 +1218,10 @@ LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
     auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), newType, extract_slice.getSource());
     rewriter.replaceOpWithNewOp<triton::gpu::ExtractSliceOp>(
-        op, resType, newArg.getResult(), extract_slice.offsets(),
-        extract_slice.sizes(), extract_slice.strides(),
-        extract_slice.static_offsets(), extract_slice.static_sizes(),
-        extract_slice.static_strides());
+        op, resType, newArg.getResult(), extract_slice.getOffsets(),
+        extract_slice.getSizes(), extract_slice.getStrides(),
+        extract_slice.getStaticOffsets(), extract_slice.getStaticSizes(),
+        extract_slice.getStaticStrides());
     return mlir::success();
   }
 
