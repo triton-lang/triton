@@ -29,7 +29,7 @@
 // CHECK:     .group_segment_fixed_size: 0
 // CHECK-NEXT:     .kernarg_segment_align: 8
 // CHECK-NEXT:     .kernarg_segment_size: 16
-// CHECK-NEXT:     .max_flat_workgroup_size: 1024
+// CHECK-NEXT:     .max_flat_workgroup_size: 256
 // CHECK-NEXT:     .name:           test_empty_kernel
 // CHECK-NEXT:     .private_segment_fixed_size: 0
 
