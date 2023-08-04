@@ -2,7 +2,11 @@
 #include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
+
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include <deque>
@@ -103,7 +107,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     return;
   }
 
-  if (isa<gpu::BarrierOp>(op)) {
+  // TODO(Keren): Don't expose LLVM Dialect ops here
+  if (isa<gpu::BarrierOp>(op) ||
+      (isa<LLVM::InlineAsmOp>(op) &&
+       (dyn_cast<LLVM::InlineAsmOp>(op).getAsmString().find("bar.sync") !=
+        std::string::npos))) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
     return;
@@ -169,7 +177,13 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   if (blockInfo->isIntersected(curBlockInfo)) {
     OpBuilder::InsertionGuard g(*builder);
     builder->setInsertionPoint(op);
-    builder->create<gpu::BarrierOp>(op->getLoc());
+    // TODO(Keren): Don't expose LLVM Dialect ops here
+    // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
+    // attr.
+    if (op->hasAttr("async_agent"))
+      barSync(*builder, op, getAgentIds(op).front(), 128);
+    else
+      builder->create<gpu::BarrierOp>(op->getLoc());
     blockInfo->sync();
   }
   // Update the region info, even if barrier is inserted, we have to maintain

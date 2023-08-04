@@ -195,7 +195,11 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
     if (arg.getDefiningOp() == cvt)
       mapping.map(arg, cvt.getOperand());
     else {
-      auto oldType = arg.getType().cast<RankedTensorType>();
+      auto oldType = arg.getType().dyn_cast<RankedTensorType>();
+      // TODO: we may be creating block pointer load/store with mismatching
+      // pointer type.
+      if (!oldType)
+        continue;
       auto newType = RankedTensorType::get(
           oldType.getShape(), oldType.getElementType(), srcEncoding);
       auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(arg.getLoc(),
@@ -207,7 +211,7 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
   }
   rewriter.setInsertionPoint(op);
   if (op->getNumResults() == 0) {
-    Operation *newOp = rewriter.clone(*op, mapping);
+    Operation *newOp = cloneWithInferType(rewriter, op, mapping);
     rewriter.eraseOp(op);
     return;
   }
@@ -299,7 +303,7 @@ public:
             mapping.map(op.getResult(0), mapping.lookup(op.getOperand(0)));
           continue;
         }
-        rewriter.clone(op, mapping);
+        cloneWithInferType(rewriter, &op, mapping);
       }
     };
     rewriter.setInsertionPointToEnd(newIfOp.thenBlock());
@@ -458,7 +462,7 @@ public:
                        size_t i, RankedTensorType newType,
                        triton::gpu::ConvertLayoutOp origConversion) const {
     // Rewrite init argument
-    Type origType = forOp.getInitArgs()[i].getType();
+    auto origType = forOp.getInitArgs()[i].getType().cast<RankedTensorType>();
     SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
     newInitArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newInitArgs[i].getLoc(), newType, newInitArgs[i]);
@@ -475,13 +479,51 @@ public:
 
     mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (&op == (Operation *)(&origConversion))
+      if (dyn_cast<triton::gpu::ConvertLayoutOp>(op) == origConversion)
         continue;
-      Operation *newOp = rewriter.clone(op, mapping);
+
+      bool convert = llvm::any_of(op.getOperands(), [&](auto operand) {
+        return operand == origConversion.getOperand();
+      });
+      auto convertLayout = [&](Value operand, Value value, Attribute encoding) {
+        auto tensorType = value.getType().cast<RankedTensorType>();
+        auto cvtType = RankedTensorType::get(
+            tensorType.getShape(), tensorType.getElementType(), encoding);
+        auto cvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+            op.getLoc(), cvtType, value);
+        mapping.map(operand, cvt);
+      };
+      DenseMap<Value, Value> cvtValues;
+      if (convert) {
+        for (auto operand : op.getOperands()) {
+          if (operand == origConversion.getOperand() ||
+              !isa<RankedTensorType>(operand.getType()))
+            continue;
+          auto value = mapping.lookupOrDefault(operand);
+          // Convert to the new type
+          convertLayout(operand, value, newType.getEncoding());
+          // Other ops don't use the converted value and we need to restore
+          cvtValues[operand] = value;
+        }
+      }
+      auto *newOp = cloneWithInferType(rewriter, &op, mapping);
+      if (convert) {
+        for (auto result : newOp->getResults()) {
+          if (!isa<RankedTensorType>(result.getType()))
+            continue;
+          auto value = mapping.lookupOrDefault(result);
+          // Convert to the original type
+          convertLayout(result, value, origType.getEncoding());
+        }
+        // Restore original values
+        for (auto [operand, value] : cvtValues)
+          mapping.map(operand, value);
+      }
     }
     // create yield, inserting conversions if necessary
     auto yieldOp = forOp.getBody()->getTerminator();
     SmallVector<Value, 4> newYieldArgs;
+    // We use the new type for the result of the conversion
     for (Value arg : yieldOp->getOperands())
       newYieldArgs.push_back(mapping.lookup(arg));
     if (newYieldArgs[i].getType() != newType)
@@ -494,6 +536,7 @@ public:
     newResults[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newForOp.getLoc(), origType, newForOp->getResult(i));
     newResults[i].getDefiningOp()->moveAfter(newForOp);
+
     return newResults;
   }
 

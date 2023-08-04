@@ -9,6 +9,8 @@ include "mlir/IR/OpBase.td"
 include "mlir/IR/FunctionInterfaces.td" // FunctionOpInterface
 include "mlir/IR/SymbolInterfaces.td" // SymbolUserOpInterface
 include "mlir/IR/OpAsmInterface.td" // OpAsmOpInterface
+include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
+include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -563,6 +565,7 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
 
   let results = (outs TT_TensorPtr:$result);
 
+  // TODO(Keren): define a custom assembly format for this op because the result type cannot be printed correctly
   // Add additional `[]` to increase readability and split variadic lists
   let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` `,` `[` $offsets `]` attr-dict `:` type($result)";
 

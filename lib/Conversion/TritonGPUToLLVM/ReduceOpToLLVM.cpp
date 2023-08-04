@@ -1,5 +1,6 @@
 #include "ReduceOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -114,7 +115,7 @@ private:
       // writeIdx[originalAxis] = index[originalAxis] / axisSizePerThread
       writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
     } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-      if (!mmaLayout.isAmpere()) {
+      if (!mmaLayout.isAmpere() && !mmaLayout.isHopper()) {
         llvm::report_fatal_error("Unsupported layout");
       }
       if (originalAxis == 0) {
@@ -249,7 +250,13 @@ private:
           readPtrs[i] = gep(elemPtrTys[i], writePtrs[i], readOffset);
         }
 
-        barrier();
+        // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
+        // attr.
+        if (op->hasAttr("async_agent")) {
+          barSync(rewriter, op, getAgentIds(op).front(), 128);
+        } else {
+          barrier();
+        }
         // Combine accumulator value from another thread
         SmallVector<Value> cur(op.getNumOperands());
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -257,7 +264,13 @@ private:
         }
         accumulate(rewriter, *combineOp, acc, cur, false);
 
-        barrier();
+        // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
+        // attr.
+        if (op->hasAttr("async_agent")) {
+          barSync(rewriter, op, getAgentIds(op).front(), 128);
+        } else {
+          barrier();
+        }
         // Publish our new accumulator value to shared memory
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
           store(acc[i], writePtrs[i]);
@@ -265,7 +278,13 @@ private:
       }
     }
 
-    barrier();
+    // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
+    // attr.
+    if (op->hasAttr("async_agent")) {
+      barSync(rewriter, op, getAgentIds(op).front(), 128);
+    } else {
+      barrier();
+    }
 
     // set output values
     SmallVector<Value> results(op.getNumOperands());
@@ -444,7 +463,13 @@ private:
       return success();
     }
 
-    barrier();
+    // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
+    // attr.
+    if (op->hasAttr("async_agent")) {
+      barSync(rewriter, op, getAgentIds(op).front(), 128);
+    } else {
+      barrier();
+    }
 
     // The second round of shuffle reduction
     //   now the problem size: sizeInterWarps, s1, s2, .. , sn
@@ -497,7 +522,16 @@ private:
       }
     }
 
-    barrier();
+    // We could avoid this barrier in some of the layouts, however this is not
+    // the general case.
+    // TODO: optimize the barrier in case the layouts are accepted.
+    // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
+    // attr.
+    if (op->hasAttr("async_agent")) {
+      barSync(rewriter, op, getAgentIds(op).front(), 128);
+    } else {
+      barrier();
+    }
 
     // set output values
     SmallVector<Value> results(op.getNumOperands());
@@ -535,6 +569,7 @@ private:
 
 void populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {

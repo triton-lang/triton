@@ -5,7 +5,6 @@ add_public_tablegen_target(TritonCombineIncGen)
 add_mlir_dialect_library(TritonTransforms
   Combine.cpp
   ReorderBroadcast.cpp
-  RewriteTensorPointer.cpp
 
   DEPENDS
   TritonTransformsIncGen

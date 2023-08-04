@@ -3,10 +3,12 @@ add_mlir_dialect_library(TritonGPUTransforms
   Coalesce.cpp
   DecomposeConversions.cpp
   OptimizeDotOperands.cpp
+  OptimizeEpilogue.cpp
   Pipeline.cpp
   Prefetch.cpp
   RemoveLayoutConversions.cpp
   ReorderInstructions.cpp
+  RewriteTensorPointer.cpp
   TritonGPUConversion.cpp
   Utility.cpp
 
@@ -19,4 +21,6 @@ add_mlir_dialect_library(TritonGPUTransforms
   TritonAnalysis
   TritonIR
   TritonGPUIR
+  TritonNvidiaGPUIR
+  MLIRTransformUtils
 )
