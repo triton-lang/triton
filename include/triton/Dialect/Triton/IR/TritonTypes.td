@@ -74,7 +74,7 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
 // Scalar Pointer Type: `ptr<>`
 def TT_Ptr : TT_PtrOf<[AnyType]>;
 
-// Tensor of Pointer Type
+// Tensor of Pointer Type: `tensor<ptr<>>`
 def TT_PtrTensor : TensorOf<[TT_Ptr]>;
 
 // Tensor of Pointer Type or Pointer type: `tensor<ptr<>>` or `ptr<>`

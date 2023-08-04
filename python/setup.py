@@ -71,9 +71,7 @@ def get_llvm_package_info():
     arch = 'x86_64'
     if system == "Darwin":
         system_suffix = "apple-darwin"
-        cpu_type = os.popen('sysctl machdep.cpu.brand_string').read()
-        if "apple" in cpu_type.lower():
-            arch = 'arm64'
+        arch = platform.machine()
     elif system == "Linux":
         vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
         vglibc = vglibc[0] * 100 + vglibc[1]
@@ -167,11 +165,15 @@ class CMakeExtension(Extension):
 
 class CMakeBuild(build_ext):
 
-    user_options = build_ext.user_options + [('base-dir=', None, 'base directory of Triton')]
+    user_options = build_ext.user_options + \
+        [('base-dir=', None, 'base directory of Triton')]
 
     def initialize_options(self):
         build_ext.initialize_options(self)
-        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        self.base_dir = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                os.pardir))
 
     def finalize_options(self):
         build_ext.finalize_options(self)
@@ -180,9 +182,7 @@ class CMakeBuild(build_ext):
         try:
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
-            raise RuntimeError(
-                "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
-            )
+            raise RuntimeError("CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions))
 
         match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
         cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
@@ -288,7 +288,7 @@ setup(
         "triton/tools",
     ],
     install_requires=[
-        "filelock",
+        "filelock"
     ],
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
@@ -311,7 +311,7 @@ setup(
     test_suite="tests",
     extras_require={
         "build": [
-            "cmake>=3.18",
+            "cmake>=3.20",
             "lit",
         ],
         "tests": [
@@ -321,6 +321,7 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
+            "torch",
         ],
         "tutorials": [
             "matplotlib",
