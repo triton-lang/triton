@@ -18,7 +18,7 @@ def is_hip():
 
 @functools.lru_cache()
 def libcuda_dirs():
-    libs = subprocess.check_output(["ldconfig", "-p"]).decode()
+    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
     # each line looks like the following:
     # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
     locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so" in line]
