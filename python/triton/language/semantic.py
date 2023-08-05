@@ -1250,7 +1250,7 @@ def dot(lhs: tl.tensor,
     assert len(rhs.shape) == 2, f"Second input shape ({rhs.shape}) is not two dimensional!"
     assert lhs.shape[1].value == rhs.shape[0].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[1].value}) must be equal to first index of second shape ({rhs.shape[0].value})"
     assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
-        and rhs.shape[1].value >= 16,\
+        and rhs.shape[1].value >= 16, \
         f"All values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"

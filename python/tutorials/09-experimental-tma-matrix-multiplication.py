@@ -102,11 +102,11 @@ def matmul(a, b, a_order, b_order):
 
 
 problem_list = [
-        [2048, 512, 512, False, True],
-        [2048, 1024, 1024, False, False],
-        [2048, 2048, 2048, True, False],
-        [2048, 4096, 4096, True, True],
-    ]
+    [2048, 512, 512, False, True],
+    [2048, 1024, 1024, False, False],
+    [2048, 2048, 2048, True, False],
+    [2048, 4096, 4096, True, True],
+]
 
 
 def test_matmul():

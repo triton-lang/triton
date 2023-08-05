@@ -508,12 +508,13 @@ public:
       }
       auto *newOp = cloneWithInferType(rewriter, &op, mapping);
       if (convert) {
-        for (auto result : newOp->getResults()) {
+        for (auto result : op.getResults()) {
           if (!isa<RankedTensorType>(result.getType()))
             continue;
           auto value = mapping.lookupOrDefault(result);
+          auto tensorType = result.getType().cast<RankedTensorType>();
           // Convert to the original type
-          convertLayout(result, value, origType.getEncoding());
+          convertLayout(result, value, tensorType.getEncoding());
         }
         // Restore original values
         for (auto [operand, value] : cvtValues)

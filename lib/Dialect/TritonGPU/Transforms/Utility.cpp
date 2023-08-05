@@ -497,8 +497,7 @@ LogicalResult simulateForwardRematerializationInLoop(Operation *startOp,
                                                      BlockArgument arg,
                                                      Attribute targetEncoding) {
   // heuristics for flash attention
-  if (targetEncoding.isa<triton::gpu::SharedEncodingAttr,
-                         triton::gpu::SliceEncodingAttr>())
+  if (targetEncoding.isa<triton::gpu::SharedEncodingAttr>())
     return failure();
   SetVector<Operation *> cvtSliceOps;
   SmallVector<OpUseInfo> cvtSliceOpUseInfo;
@@ -510,6 +509,9 @@ LogicalResult simulateForwardRematerializationInLoop(Operation *startOp,
       continue;
     // The first op doesn't push forward any conversion
     if (op != startOp) {
+      if (isa<triton::ReduceOp>(op) &&
+          !op->getResult(0).getType().isa<RankedTensorType>())
+        return failure();
       // don't rematerialize anything expensive
       if (isExpensiveToRemat(op, targetEncoding))
         return failure();
