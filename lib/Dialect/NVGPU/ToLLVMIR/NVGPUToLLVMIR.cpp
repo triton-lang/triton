@@ -705,26 +705,6 @@ void createSts64(llvm::IRBuilderBase &builder, llvm::Value *offset,
   return;
 }
 
-llvm::Value *createCvtPack(llvm::IRBuilderBase &builder, llvm::Value *d0,
-                           llvm::Value *d1) {
-  std::string funcName("__nv_cvt_pack");
-
-  llvm::Type *retTy = builder.getInt32Ty();
-  llvm::SmallVector<llvm::Value *> args;
-  llvm::SmallVector<llvm::Type *> argTys;
-  auto i16Ty = builder.getInt16Ty();
-
-  argTys.push_back(i16Ty);
-  args.push_back(builder.CreateBitCast(d0, i16Ty));
-  argTys.push_back(i16Ty);
-  args.push_back(builder.CreateBitCast(d1, i16Ty));
-
-  auto *module = builder.GetInsertBlock()->getModule();
-  auto *func = dyn_cast<llvm::Function>(
-      getExternalFuncOP(module, funcName, retTy, argTys).getCallee());
-  return builder.CreateCall(func, args);
-}
-
 static llvm::Value *getSRegValue(llvm::IRBuilderBase &builder,
                                  llvm::StringRef name) {
   std::string ptxStr;
