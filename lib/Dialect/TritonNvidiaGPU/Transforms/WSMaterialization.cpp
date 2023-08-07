@@ -380,8 +380,10 @@ void materializeTokenOperations(Operation *parentOp, int numCTAs) {
     Value bufferEmptyArray =
         builder.create<ttng::AllocMBarrierOp>(tokenLoc, mBarriersTy, numCTAs);
 
-    // Make sure that MBarriers are initialized in all CTAs
-    if (numCTAs > 1) {
+    if (numCTAs == 1) {
+      builder.create<mlir::gpu::BarrierOp>(tokenLoc);
+    } else {
+      // Make sure that MBarriers are initialized in all CTAs
       builder.create<triton::nvidia_gpu::ClusterArriveOp>(tokenLoc, false);
       builder.create<triton::nvidia_gpu::ClusterWaitOp>(tokenLoc);
     }

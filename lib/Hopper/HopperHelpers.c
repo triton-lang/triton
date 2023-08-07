@@ -104,38 +104,6 @@ __DEVICE__ __attribute__((__always_inline__)) void __nv_wgmma_wait_group() {
   asm volatile("wgmma.wait_group.sync.aligned 0;\n");
 }
 
-// GMMA expects data to be in TN format. if A is column major, transa should be
-// set GMMA expects data to be in TN format. if B is row major, transb should be
-// set
-__DEVICE__ __attribute__((__always_inline__)) float32
-__nv_wgmma_m64n64k16_f32_f16_f16_row_col(const uint64_t desc_a,
-                                         const uint64_t desc_b, float32 acc) {
-  const uint32_t scale_d = 1;
-  asm volatile("{\n"
-               ".reg .pred p;\n\t"
-               "setp.eq.u32 p, %34, 1;\n\t"
-               "wgmma.mma_async.sync.aligned.m64n64k16.f32.f16.f16\n"
-               "{%0, %1, %2, %3, %4, %5, %6, %7, \n"
-               " %8, %9, %10, %11, %12, %13, %14, %15,\n"
-               " %16, %17, %18, %19, %20, %21, %22, %23,\n"
-               " %24, %25, %26, %27, %28, %29, %30, %31},\n"
-               "%32, \n"
-               "%33, \n"
-               "p, 1, 1, 0, 0;\n"
-               "}"
-               : "+f"(acc.d0), "+f"(acc.d1), "+f"(acc.d2), "+f"(acc.d3),
-                 "+f"(acc.d4), "+f"(acc.d5), "+f"(acc.d6), "+f"(acc.d7),
-                 "+f"(acc.d8), "+f"(acc.d9), "+f"(acc.d10), "+f"(acc.d11),
-                 "+f"(acc.d12), "+f"(acc.d13), "+f"(acc.d14), "+f"(acc.d15),
-                 "+f"(acc.d16), "+f"(acc.d17), "+f"(acc.d18), "+f"(acc.d19),
-                 "+f"(acc.d20), "+f"(acc.d21), "+f"(acc.d22), "+f"(acc.d23),
-                 "+f"(acc.d24), "+f"(acc.d25), "+f"(acc.d26), "+f"(acc.d27),
-                 "+f"(acc.d28), "+f"(acc.d29), "+f"(acc.d30), "+f"(acc.d31)
-               : "l"(desc_a), "l"(desc_b), "r"(scale_d));
-
-  return acc;
-}
-
 __DEVICE__ __attribute__((__always_inline__)) void
 __nv_mbarrier_init(uint32_t bar, uint32_t expected, uint32_t pred) {
   if (pred) {
