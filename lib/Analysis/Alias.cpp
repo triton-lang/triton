@@ -2,6 +2,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -27,16 +28,20 @@ void SharedMemoryAliasAnalysis::visitOperation(
     // These ops may allocate a new shared memory buffer.
     auto result = op->getResult(0);
     // XXX(Keren): the following ops are always aliasing for now
-    if (isa<triton::gpu::ExtractSliceOp, triton::TransOp>(op)) {
+    if (isa<triton::gpu::ExtractSliceOp, triton::TransOp,
+            triton::nvidia_gpu::ExtractMBarrierOp>(op)) {
       // extract_slice %src
       // trans %src
       aliasInfo = AliasInfo(operands[0]->getValue());
       pessimistic = false;
-    } else if (isa<tensor::InsertSliceOp, triton::gpu::InsertSliceAsyncOp>(
-                   op)) {
+    } else if (isa<tensor::InsertSliceOp, triton::gpu::InsertSliceAsyncOp,
+                   triton::nvidia_gpu::InsertSliceAsyncV2Op>(op)) {
       // insert_slice_async %src, %dst, %index
       // insert_slice %src into %dst[%offsets]
       aliasInfo = AliasInfo(operands[1]->getValue());
+      pessimistic = false;
+    } else if (isa<triton::nvidia_gpu::StoreAsyncOp>(op)) {
+      aliasInfo = AliasInfo(operands[0]->getValue());
       pessimistic = false;
     } else if (triton::gpu::isSharedEncoding(result)) {
       aliasInfo.insert(result);

@@ -11,6 +11,8 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
+namespace {
+
 /// An additional struct to record the meta information of operations
 /// with tensor pointers
 struct RewritedInfo {
@@ -185,6 +187,8 @@ public:
     return builder.create<triton::SplatOp>(loc, otherTensorType, constant);
   }
 };
+
+} // namespace
 
 class RewriteTensorPointerPass
     : public TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
@@ -470,8 +474,8 @@ public:
 
   void runOnOperation() override {
     // Only rewrite if the hardware does not support
-    // if (computeCapability >= 90)
-    //   return;
+    if (computeCapability >= 90)
+      return;
 
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
     // MLIR does not support one-multiple value mapping. For example, if we use

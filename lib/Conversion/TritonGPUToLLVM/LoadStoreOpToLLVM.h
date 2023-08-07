@@ -8,8 +8,10 @@ using namespace mlir::triton;
 
 void populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit);
+    mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
+    const TensorPtrMapT *tensorPtrMap, PatternBenefit benefit);
 
 #endif
