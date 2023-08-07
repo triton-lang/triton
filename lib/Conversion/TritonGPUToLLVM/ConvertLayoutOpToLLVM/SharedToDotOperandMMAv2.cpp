@@ -504,7 +504,7 @@ std::function<void(int, int)> getLoadMatrixFn(
           .cast<RankedTensorType>()
           .getElementType()
           .isa<mlir::Float8E4M3B11FNUZType>()) {
-    bool noTrans = (isA ^ order[0] == 0);
+    bool noTrans = (isA ^ (order[0] == 0));
     assert(noTrans && "float8e4b15 must have row-col layout");
   }
 
