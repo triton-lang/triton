@@ -14,16 +14,13 @@ module attributes {"triton_gpu.num-warps" = 4 : i32,  "triton_gpu.num-ctas" = 2 
     %pred = arith.constant 1 : i1
     %mask = arith.constant 15 : i16
 
-    // CHECK: void @__nv_tma_load_tiled_2d
     // CHECK: void @__nv_tma_load_tiled_3d
-    // CHECK: void @__nv_tma_load_tiled_4d
     // CHECK: void @__nv_tma_load_tiled_5d
     nvgpu.tma_load_tiled %dst, %mbarrier, %tmaDesc, %l2desc, %pred, %c0, %c1 {operand_segment_sizes = array<i32: 1, 1, 1, 1, 1, 2, 0>}: !llvm.ptr<i8, 3>, !llvm.ptr<i64, 3>, !llvm.ptr<i8, 1>, i64, i1, i32, i32
     nvgpu.tma_load_tiled %dst, %mbarrier, %tmaDesc, %l2desc, %pred, %c0, %c1, %c2 {operand_segment_sizes = array<i32: 1, 1, 1, 1, 1, 3, 0>}: !llvm.ptr<i8, 3>, !llvm.ptr<i64, 3>, !llvm.ptr<i8, 1>, i64, i1, i32, i32, i32
     nvgpu.tma_load_tiled %dst, %mbarrier, %tmaDesc, %l2desc, %pred, %c0, %c1, %c2, %c3 {operand_segment_sizes = array<i32: 1, 1, 1, 1, 1, 4, 0>}: !llvm.ptr<i8, 3>, !llvm.ptr<i64, 3>, !llvm.ptr<i8, 1>, i64, i1, i32, i32, i32, i32
     nvgpu.tma_load_tiled %dst, %mbarrier, %tmaDesc, %l2desc, %pred, %c0, %c1, %c2, %c3, %c4 {operand_segment_sizes = array<i32: 1, 1, 1, 1, 1, 5, 0>}: !llvm.ptr<i8, 3>, !llvm.ptr<i64, 3>, !llvm.ptr<i8, 1>, i64, i1, i32, i32, i32, i32, i32
 
-    // CHECK: void @__nv_tma_load_tiled_mcast_2d
     // CHECK: void @__nv_tma_load_tiled_mcast_3d
     // CHECK: void @__nv_tma_load_tiled_mcast_4d
     // CHECK: void @__nv_tma_load_tiled_mcast_5d

@@ -390,32 +390,6 @@ llvm::Value *createWGMMA(llvm::IRBuilderBase &builder, uint32_t m, uint32_t n,
   return builder.CreateCall(inlineAsm, args);
 }
 
-void createWGMMAFence(llvm::IRBuilderBase &builder) {
-  std::string asmStr = "wgmma.fence.sync.aligned;";
-  llvm::InlineAsm *iasm =
-      llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), {}),
-                           asmStr, "", /*hasSideEffect*/ true);
-  builder.CreateCall(iasm, {});
-}
-
-void createWGMMACommitGroup(llvm::IRBuilderBase &builder) {
-  std::string asmStr = "wgmma.commit_group.sync.aligned;";
-  llvm::InlineAsm *iasm =
-      llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), {}),
-                           asmStr, "", /*hasSideEffect*/ true);
-  builder.CreateCall(iasm, {});
-}
-
-void createWGMMAWaitGroup(llvm::IRBuilderBase &builder, uint32_t pendings) {
-  std::string asmStr = (llvm::Twine("wgmma.wait_group.sync.aligned ") +
-                        llvm::Twine(pendings) + ";")
-                           .str();
-  llvm::InlineAsm *iasm =
-      llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), {}),
-                           asmStr, "", /*hasSideEffect*/ true);
-  builder.CreateCall(iasm, {});
-}
-
 llvm::Value *createLoadSharedCluster(llvm::IRBuilderBase &builder,
                                      llvm::Value *addr, llvm::Value *ctaId,
                                      unsigned bitwidth, unsigned vec) {
@@ -577,72 +551,6 @@ void createTMAStoreTiled(llvm::IRBuilderBase &builder, llvm::Value *tmaDesc,
   builder.CreateCall(func, args);
 
   return;
-}
-
-void createStoreMatrix(llvm::IRBuilderBase &builder, llvm::Value *addr,
-                       llvm::SmallVector<llvm::Value *> datas) {
-  auto size = datas.size();
-  assert((size == 1 || size == 2 || size == 4) &&
-         "not support size with stmatrix");
-
-  std::string funcName;
-  llvm::raw_string_ostream os(funcName);
-  os << "__nv_stmatrix_x" << size;
-
-  llvm::Type *retTy = builder.getVoidTy();
-  llvm::SmallVector<llvm::Value *> args;
-  llvm::SmallVector<llvm::Type *> argTys;
-
-  argTys.push_back(addr->getType());
-  args.push_back(addr);
-
-  for (size_t i = 0; i < datas.size(); ++i) {
-    argTys.push_back(datas[i]->getType());
-    args.push_back(datas[i]);
-  }
-
-  auto *module = builder.GetInsertBlock()->getModule();
-  auto *func = dyn_cast<llvm::Function>(
-      getExternalFuncOP(module, funcName, retTy, argTys).getCallee());
-  builder.CreateCall(func, args);
-}
-
-llvm::Value *createOffsetOfStmatrixV4(llvm::IRBuilderBase &builder,
-                                      llvm::Value *threadId,
-                                      llvm::Value *rowOfWarp,
-                                      llvm::Value *elemIdx,
-                                      uint32_t leadingDimOffset,
-                                      uint32_t rowStride, bool swizzleEnabled) {
-  if (swizzleEnabled) {
-    assert((rowStride == 16 || rowStride == 32 || rowStride == 64) &&
-           "wrong rowString for swizzleEnabled");
-  }
-  llvm::Type *retTy = builder.getInt32Ty();
-  llvm::SmallVector<llvm::Value *> args;
-  llvm::SmallVector<llvm::Type *> argTys;
-
-  argTys.push_back(threadId->getType());
-  args.push_back(threadId);
-
-  argTys.push_back(rowOfWarp->getType());
-  args.push_back(rowOfWarp);
-
-  argTys.push_back(elemIdx->getType());
-  args.push_back(elemIdx);
-
-  argTys.push_back(builder.getInt32Ty());
-  args.push_back(builder.getInt32(leadingDimOffset));
-
-  argTys.push_back(builder.getInt32Ty());
-  args.push_back(builder.getInt32(rowStride));
-
-  std::string funcName("__nv_offset_of_stmatrix_v4");
-  if (!swizzleEnabled)
-    funcName = "__nv_offset_of_stmatrix_v4_no_swizzle";
-  auto *module = builder.GetInsertBlock()->getModule();
-  auto *func = dyn_cast<llvm::Function>(
-      getExternalFuncOP(module, funcName, retTy, argTys).getCallee());
-  return builder.CreateCall(func, args);
 }
 
 llvm::Value *createOffsetOfSts64(llvm::IRBuilderBase &builder,
