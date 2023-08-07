@@ -326,8 +326,7 @@ llvm::Value *createWGMMA(llvm::IRBuilderBase &builder, uint32_t m, uint32_t n,
   uint32_t asmOpIdx = 0;
 
   // Operand C
-  uint32_t numCRegs = m * n / 128;
-  assert(numCRegs == structTypeC->getStructNumElements());
+  uint32_t numCRegs = structTypeC->getStructNumElements();
   asmOs << "{";
   for (uint32_t i = 0; i < numCRegs; ++i) {
     argTypes.push_back(structTypeC->getElementType(i));
@@ -335,7 +334,7 @@ llvm::Value *createWGMMA(llvm::IRBuilderBase &builder, uint32_t m, uint32_t n,
     asmOs << "$" << asmOpIdx++ << (i == numCRegs - 1 ? "" : ",");
     // LLVM does not support `+` semantic, we must repeat the arguments for both
     // input and outputs
-    if (structTypeC->getElementType(0)->isFloatTy())
+    if (structTypeC->getElementType(i)->isFloatTy())
       conOs << "=f,";
     else
       conOs << "=r,";
