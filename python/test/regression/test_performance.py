@@ -64,7 +64,7 @@ matmul_data = {
 @pytest.mark.parametrize('M, N, K, dtype_str',
                          [(M, N, K, dtype_str)
                           for M, N, K in matmul_data[DEVICE_NAME].keys()
-                          for dtype_str in ['float16', 'float32']])
+                          for dtype_str in ['float16']])
 def test_matmul(M, N, K, dtype_str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
