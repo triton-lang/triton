@@ -558,15 +558,15 @@ def compile(fn, **kwargs):
             asm[ir_name] = str(next_module)
         if ir_name == "llir" and "shared" not in metadata:
             metadata["shared"] = get_shared_memory_size(module)
-        if ir_name == "ttgir" and enable_warp_specialization:
-            metadata["num_warps"] = get_num_warps(module)
+        if ir_name == "ttgir":
+            metadata["enable_warp_specialization"] = _triton.ir.is_ws_supported(next_module)
+            if metadata["enable_warp_specialization"]:
+                metadata["num_warps"] = get_num_warps(module)
         if ir_name == "ptx":
             metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
         if ir_name == "amdgcn":
             metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
             asm["hsaco_path"] = next_module[1]
-        if ir_name == "ttgir":
-            metadata["enable_warp_specialization"] = _triton.ir.is_ws_supported(next_module)
         if not is_cuda and not is_hip:
             _device_backend.add_meta_info(ir_name, module, next_module, metadata, asm)
         module = next_module

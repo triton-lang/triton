@@ -1756,6 +1756,7 @@ void init_triton_translation(py::module &m) {
   });
   m.def("get_num_warps", [](mlir::ModuleOp mod) {
     auto shared = mod->getAttrOfType<mlir::IntegerAttr>("triton_gpu.num-warps");
+    assert(shared);
     return shared.getInt();
   });
 
