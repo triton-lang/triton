@@ -128,12 +128,10 @@ __nv_mbarrier_wait(uint32_t bar, uint32_t phase) {
                "}"
                :
                : "r"(bar), "r"(phase), "r"(large_val));
-  random_stateless_delay();
 }
 
 __DEVICE__ __attribute__((__always_inline__)) void
 __nv_mbarrier_arrive_normal(uint32_t bar, uint32_t pred) {
-  random_stateless_delay();
   if (pred) {
     asm volatile("{\n\t"
                  "mbarrier.arrive.shared.b64 _, [%0];\n\t"
@@ -145,7 +143,6 @@ __nv_mbarrier_arrive_normal(uint32_t bar, uint32_t pred) {
 
 __DEVICE__ __attribute__((__always_inline__)) void
 __nv_mbarrier_arrive_cp_async(uint32_t bar, uint32_t pred) {
-  random_stateless_delay();
   if (pred) {
     asm volatile("cp.async.mbarrier.arrive.noinc.shared.b64 [%0];"
                  :
@@ -155,7 +152,6 @@ __nv_mbarrier_arrive_cp_async(uint32_t bar, uint32_t pred) {
 
 __DEVICE__ __attribute__((__always_inline__)) void
 __nv_mbarrier_arrive_expect_tx(uint32_t bar, uint32_t txCount, uint32_t pred) {
-  random_stateless_delay();
   if (pred) {
     asm volatile("{\n\t"
                  "mbarrier.arrive.expect_tx.shared.b64 _, [%0], %1;\n\t"
@@ -168,7 +164,6 @@ __nv_mbarrier_arrive_expect_tx(uint32_t bar, uint32_t txCount, uint32_t pred) {
 // for warp special empty barrier.
 __DEVICE__ __attribute__((__always_inline__)) void
 __nv_mbarrier_arrive_remote(uint32_t bar, uint32_t ctaId, uint32_t pred) {
-  random_stateless_delay();
   if (pred) {
     asm volatile("{\n\t"
                  ".reg .b32 remAddr32;\n\t"
@@ -189,14 +184,12 @@ __DEVICE__ __attribute__((__always_inline__)) void __nv_fence_mbarrier_init() {
 
 __DEVICE__ __attribute__((__always_inline__)) void
 __nv_bar_arrive(uint32_t bar, uint32_t numThreads) {
-  random_stateless_delay();
   asm volatile("bar.arrive %0, %1;\n" ::"r"(bar), "r"(numThreads));
 }
 
 __DEVICE__ __attribute__((__always_inline__)) void
 __nv_bar_wait(uint32_t bar, uint32_t numThreads) {
   asm volatile("bar.sync %0, %1;\n" ::"r"(bar), "r"(numThreads));
-  random_stateless_delay();
 }
 
 __DEVICE__ __attribute__((__always_inline__)) void __nv_cga_barrier_sync() {

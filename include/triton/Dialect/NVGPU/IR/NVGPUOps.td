@@ -49,11 +49,6 @@ def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group", []> {
   let assemblyFormat = "attr-dict";
 }
 
-def NVGPU_BarSyncOP : NVGPU_Op<"bar_sync", []> {
-  let arguments = (ins I32:$bar, Optional<I32>:$numThreads);
-  let assemblyFormat = "attr-dict operands `:` type(operands)";
-}
-
 def NVGPU_MBarrierInitOp : NVGPU_Op<"mbarrier_init", [MemoryEffects<[MemWrite]>]> {
   let arguments = (ins I64Ptr_shared:$mbarrier, I1:$pred, I32Attr:$count);
   let assemblyFormat = "$mbarrier `,` $pred attr-dict `:` type($mbarrier)";
@@ -111,6 +106,15 @@ def NVGPU_TMALoadTiledOp : NVGPU_Op<"tma_load_tiled", [AttrSizedOperandSegments]
   let arguments = (ins I8Ptr_shared:$dst, I64Ptr_shared:$mbarrier, I8Ptr_global:$tmaDesc, I64:$l2Desc,
                        I1:$pred, Variadic<I32>:$coords, Optional<I16>:$mcastMask);
   let assemblyFormat = "operands attr-dict `:` type(operands)";
+  string llvmBuilder = [{
+    auto *i32Ty = builder.getInt32Ty();
+    auto *i64Ty = builder.getInt64Ty();
+    createTMALoadTiled(builder,
+      builder.CreatePtrToInt($dst, i32Ty),
+      builder.CreatePtrToInt($mbarrier, i32Ty),
+      builder.CreatePtrToInt($tmaDesc, i64Ty),
+      $l2Desc, $mcastMask, builder.CreateIntCast($pred, builder.getInt32Ty(), false), $coords);
+  }];
 }
 
 def NVGPU_TMALoadIm2colOp : NVGPU_Op<"tma_load_im2col", []> {
@@ -241,6 +245,9 @@ def NVGPU_Sts64Op : NVGPU_Op<"sts64", [MemoryEffects<[MemWrite]>]> {
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";
+  string llvmBuilder = [{
+    $result = createClusterId(builder);
+  }];
 }
 
 def NVGPU_RegAllocOp : NVGPU_Op<"reg_alloc", []> {
