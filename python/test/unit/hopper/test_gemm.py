@@ -335,9 +335,6 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
     ]:
         pytest.skip('Known legacy issue, ldmatrix can only support x4')
 
-    if NUM_CTAS > 1 and NUM_WARPS == 8:
-        pytest.skip('Tensor-likes are not close!')
-
     # with ENABLE_TMA=1 and ENABLE_MMA_V3=1
     if ENABLE_WS:
         # example:
