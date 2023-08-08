@@ -984,32 +984,6 @@ private:
     return ret;
   }
 
-  SmallVector<Value>
-  emitBaseIndexForMmaLayoutV2(Location loc, ConversionPatternRewriter &rewriter,
-                              const MmaEncodingAttr &mmaLayout,
-                              RankedTensorType type) const {
-    auto shape = type.getShape();
-    auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-    assert(warpsPerCTA.size() == 2);
-    auto order = triton::gpu::getOrder(mmaLayout);
-    Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
-    Value laneId = urem(threadId, warpSize);
-    Value warpId = udiv(threadId, warpSize);
-
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-    multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
-    multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
-    Value offWarp0 = mul(multiDimWarpId[0], i32_val(16));
-    Value offWarp1 = mul(multiDimWarpId[1], i32_val(8));
-
-    SmallVector<Value> multiDimBase(2);
-    multiDimBase[0] = add(udiv(laneId, i32_val(4)), offWarp0);
-    multiDimBase[1] = add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarp1);
-    return multiDimBase;
-  }
-
   SmallVector<SmallVector<unsigned>>
   emitOffsetForMmaLayoutV2(const MmaEncodingAttr &mmaLayout,
                            RankedTensorType type) const {
@@ -1062,8 +1036,18 @@ private:
     else
       warpsN = shape[1] / instrShape[1];
 
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, _warpsPerCTA, order);
+    SmallVector<Value> multiDimWarpId(2);
+    if (mmaLayout.isHopper()) {
+      // TODO[goostavz]: the tiling order from CTA->warp level is different for
+      // MMAv2/3. This is a workaround since we don't explicitly have warpGrp
+      // level in the layout definition, and the tiling order of warpGrp->warp
+      // must be fixed to meet the HW's needs. We may need to consider to
+      // explicitly define warpGrpPerCTA for MMAv3 layout.
+      multiDimWarpId[0] = urem(warpId, warpsPerCTA[0]);
+      multiDimWarpId[1] = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
+    } else {
+      multiDimWarpId = delinearize(rewriter, loc, warpId, _warpsPerCTA, order);
+    }
     Value warpId0 = urem(multiDimWarpId[0], i32_val(warpsM));
     Value warpId1 = urem(multiDimWarpId[1], i32_val(warpsN));
 
