@@ -735,7 +735,7 @@ std::optional<int> getWSAgentId(Operation *op) {
   int prevAgentId = -1;
   if (auto attr = op->getAttrOfType<DenseIntElementsAttr>("async_agent")) {
     for (auto agentId : attr.getValues<int>()) {
-      assert(prevAgentId == -1 && "support at most one agetn id");
+      assert(prevAgentId == -1 && "support at most one agent id");
       prevAgentId = agentId;
     }
   }
