@@ -352,11 +352,12 @@ class JITFunction(KernelInterface[T]):
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
         args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
+        args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
 
         src = f"""
-def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_ctas=1, num_stages=3, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
+def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_stages=3, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
     from ..compiler import compile, CompiledKernel
-    sig_key =  {sig_keys},
+    sig_key = {f'{sig_keys},' if len(sig_keys) > 0 else ()}
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
     key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, enable_warp_specialization, self.debug)
@@ -399,7 +400,7 @@ def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_ctas=1, num
     if bin is not None:
       # build dict of constant values
       args = [{args}]
-      all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
+      all_args = {', '.join([f'{arg}' for arg in self.arg_names]) + ', ' if len(self.arg_names) > 0 else ()}
       configs = self._get_config(*all_args),
       constants = self._make_constants(constexpr_key)
       constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})
@@ -413,7 +414,7 @@ def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_ctas=1, num
     else:
       # build dict of constant values
       args = [{args}]
-      all_args = {', '.join([f'{arg}' for arg in self.arg_names])},
+      all_args = {', '.join([f'{arg}' for arg in self.arg_names]) + ', ' if len(self.arg_names) > 0 else ()}
       configs = self._get_config(*all_args),
       constants = self._make_constants(constexpr_key)
       constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})

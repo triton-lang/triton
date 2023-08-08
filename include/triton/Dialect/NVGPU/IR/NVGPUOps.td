@@ -344,15 +344,6 @@ def NVGPU_Sts64Op : NVGPU_Op<"sts64", [MemoryEffects<[MemWrite]>]> {
   }];
 }
 
-def NVGPU_CvtPackOp : NVGPU_Op<"cvt_pack", []> {
-  let arguments = (ins AnyTypeOf<[F16, I16]>:$d0, AnyTypeOf<[F16, I16]>:$d1);
-  let results = (outs I32:$result);
-  let assemblyFormat = "operands attr-dict `:` type(operands) `->` type($result)";
-  string llvmBuilder = [{
-    $result = createCvtPack(builder, $d0, $d1);
-  }];
-}
-
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";
