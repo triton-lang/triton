@@ -26,15 +26,6 @@ from torch.testing import assert_close
 
 import triton
 import triton.language as tl
-from .utils import get_proper_err, get_variant_golden
-
-
-def isMMAV3OrTMAEnabled():
-    import os
-    for k in ('ENABLE_MMA_V3', 'ENABLE_TMA'):
-        if os.environ.get(k, '0').lower() in ['1', 'on', 'true']:
-            return True
-    return False
 
 
 @triton.jit
@@ -280,7 +271,11 @@ def tma_warp_specialized_matmul_kernel(
 ])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B):
-    pytest.skip('hang')
+    if '-'.join(map(str, [M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_CTAS, TRANS_A, TRANS_B])) in [
+        '4096-4096-256-128-256-16-1-False-True',
+        '4096-4096-256-128-256-64-1-False-True'
+    ]:
+        pytest.skip('Insufficient register resources')
 
     if (TRANS_A):
         a = .1 * torch.randn((K, M), device='cuda', dtype=torch.float16).T
@@ -607,8 +602,6 @@ def static_persistent_matmul_no_scf_kernel(
                              ]))
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE, USE_TMA_EPILOGUE, USE_TMA_LOAD):
-    if isMMAV3OrTMAEnabled():
-        pytest.skip("known failure")
     if (TRANS_A):
         a = torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
@@ -641,14 +634,12 @@ def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TR
     a_f32 = a.to(torch.float32)
     b_f32 = b.to(torch.float32)
     golden = torch.matmul(a_f32, b_f32)
-    golden_variant = get_variant_golden(a_f32, b_f32)
-    golden_abs_err, golden_rel_err = get_proper_err(golden, golden_variant)
     torch.set_printoptions(profile="full")
     assert_close(
         c,
         golden,
-        rtol=max(1e-2, 1.1 * golden_rel_err),
-        atol=max(1e-3, 1.1 * golden_abs_err),
+        rtol=1e-2,
+        atol=1e-3,
         check_dtype=False)
 
 

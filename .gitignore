@@ -24,3 +24,6 @@ venv.bak/
 # JetBrains project files
 .idea
 cmake-build-*
+
+# Third-party binaries
+ptxas
