@@ -708,32 +708,6 @@ struct WSMaterializationPass
     materializeMutexOperations(mod);
     tryRegisterRealloc(mod);
 
-    mod->walk([](Operation *op) {
-      bool hasTensor = 0;
-      auto results = op->getResults();
-      auto operands = op->getOperands();
-      for (auto i : results) {
-        if (isa<RankedTensorType>(i.getType())) {
-          hasTensor = 1;
-          break;
-        }
-      }
-      if (!hasTensor) {
-        for (auto i : operands) {
-          if (isa<RankedTensorType>(i.getType())) {
-            hasTensor = 1;
-            break;
-          }
-        }
-      }
-
-      if (!hasTensor && !isa<ttng::MBarrierWaitOp>(op) &&
-          !isa<ttng::ExtractMBarrierOp>(op) &&
-          !isa<ttng::MBarrierArriveOp>(op)) {
-        op->removeAttr("async_agent");
-      }
-    });
-
     // TODO: More flexible way to set num-warps
     // One dma, one math warp group, set num-warps = 8
     auto i32_ty = IntegerType::get(mod->getContext(), 32);

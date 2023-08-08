@@ -120,11 +120,13 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
+    pm.add_tritongpu_ws_fixup_missing_attrs_pass()
     pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
     if arch // 10 >= 9:
         pm.add_tritongpu_fence_insertion_pass()
+    pm.add_tritongpu_ws_fixup_missing_attrs_pass()
     pm.run(mod)
     return mod
 

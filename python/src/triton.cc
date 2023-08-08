@@ -1628,6 +1628,10 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::createTritonNvidiaGPUWSMaterializationPass(
                  computeCapability));
            })
+      .def("add_tritongpu_ws_fixup_missing_attrs_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonNvidiaGPUWSFixupMissingAttrs());
+           })
       .def(
           "add_convert_triton_to_tritongpu_pass",
           [](mlir::PassManager &self, int numWarps, int threadsPerWarp,

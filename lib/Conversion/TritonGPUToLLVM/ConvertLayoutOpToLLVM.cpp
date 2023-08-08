@@ -1,5 +1,7 @@
 #include "ConvertLayoutOpToLLVM.h"
 #include "Utility.h"
+
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
@@ -589,11 +591,10 @@ private:
       if (repId != 0) {
         // TODO[shuhaoj]: change hard code style of numThreads. Hide async
         // attr.  Better way to determine barId (number of agents are limited).
-        if (op->hasAttr("async_agent")) {
-          int agentId = getAgentIds(op).front(), roleId = 0;
-          if (op->hasAttr("agent.mutex_role"))
-            roleId =
-                op->getAttrOfType<IntegerAttr>("agent.mutex_role").getInt();
+        if (auto optionalAgentId = getWSAgentId(op)) {
+          int agentId = *optionalAgentId, roleId = 0;
+          if (auto optionalRoleId = getWSRoleId(op))
+            roleId = *optionalRoleId;
           int barId = agentId + roleId + nameBarrierIdBegin;
           assert(barId < nameBarrierIdEnd);
           auto bar = rewriter.create<LLVM::ConstantOp>(
@@ -624,10 +625,10 @@ private:
 
       // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
       // attr.  Better way to determine barId (number of agents are limited).
-      if (op->hasAttr("async_agent")) {
-        int agentId = getAgentIds(op).front(), roleId = 0;
-        if (op->hasAttr("agent.mutex_role"))
-          roleId = op->getAttrOfType<IntegerAttr>("agent.mutex_role").getInt();
+      if (auto optionalAgentId = getWSAgentId(op)) {
+        int agentId = *optionalAgentId, roleId = 0;
+        if (auto optionalRoleId = getWSRoleId(op))
+          roleId = *optionalRoleId;
         int barId = agentId + roleId + nameBarrierIdBegin;
         assert(barId < nameBarrierIdEnd);
         auto bar = rewriter.create<LLVM::ConstantOp>(
@@ -793,10 +794,10 @@ private:
       }
       // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
       // attr.  Better way to determine barId (number of agents are limited).
-      if (op->hasAttr("async_agent")) {
-        int agentId = getAgentIds(op).front(), roleId = 0;
-        if (op->hasAttr("agent.mutex_role"))
-          roleId = op->getAttrOfType<IntegerAttr>("agent.mutex_role").getInt();
+      if (auto optionalAgentId = getWSAgentId(op)) {
+        int agentId = *optionalAgentId, roleId = 0;
+        if (auto optionalRoleId = getWSRoleId(op))
+          roleId = *optionalRoleId;
         int barId = agentId + roleId + nameBarrierIdBegin;
         assert(barId < nameBarrierIdEnd);
         auto bar = rewriter.create<LLVM::ConstantOp>(
