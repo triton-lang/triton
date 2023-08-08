@@ -120,11 +120,13 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
+    pm.add_tritongpu_ws_fixup_missing_attrs_pass()
     pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
     if arch // 10 >= 9:
         pm.add_tritongpu_fence_insertion_pass()
+    pm.add_tritongpu_ws_fixup_missing_attrs_pass()
     pm.run(mod)
     return mod
 
@@ -556,15 +558,15 @@ def compile(fn, **kwargs):
             asm[ir_name] = str(next_module)
         if ir_name == "llir" and "shared" not in metadata:
             metadata["shared"] = get_shared_memory_size(module)
-        if ir_name == "ttgir" and enable_warp_specialization:
-            metadata["num_warps"] = get_num_warps(module)
+        if ir_name == "ttgir":
+            metadata["enable_warp_specialization"] = _triton.ir.is_ws_supported(next_module)
+            if metadata["enable_warp_specialization"]:
+                metadata["num_warps"] = get_num_warps(next_module)
         if ir_name == "ptx":
             metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
         if ir_name == "amdgcn":
             metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
             asm["hsaco_path"] = next_module[1]
-        if ir_name == "ttgir":
-            metadata["enable_warp_specialization"] = _triton.ir.is_ws_supported(next_module)
         if not is_cuda and not is_hip:
             _device_backend.add_meta_info(ir_name, module, next_module, metadata, asm)
         module = next_module
