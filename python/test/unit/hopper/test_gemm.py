@@ -29,7 +29,6 @@ from torch.testing import assert_close
 
 import triton
 import triton.language as tl
-from .utils import get_proper_err, get_variant_golden
 
 
 @triton.jit
@@ -127,14 +126,12 @@ def test_gemm_no_scf(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE
     a_f32 = a.to(torch.float32)
     b_f32 = b.to(torch.float32)
     golden = torch.matmul(a_f32, b_f32)
-    golden_variant = get_variant_golden(a_f32, b_f32)
-    golden_abs_err, golden_rel_err = get_proper_err(golden, golden_variant)
     torch.set_printoptions(profile="full")
     assert_close(
         c,
         golden,
-        rtol=max(1e-2, 1.1 * golden_rel_err),
-        atol=max(1e-3, 1.1 * golden_abs_err),
+        rtol=1e-2,
+        atol=1e-3,
         check_dtype=False)
 
 
@@ -443,12 +440,6 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
                               enable_warp_specialization=ENABLE_WS)
 
     torch.set_printoptions(profile="full")
-    # print("abs_err: {}, rel_err: {}".format(golden_abs_err, golden_rel_err))
-    # print("golden: ")
-    # print(golden)
-    # print("result: ")
-    # print(z)
-    # print("max_gap: {}".format(torch.max(torch.abs(z - golden))))
     golden = torch.nn.functional.normalize(golden)
     z = torch.nn.functional.normalize(z)
     assert_close(z, golden,
