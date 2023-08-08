@@ -1,5 +1,6 @@
 #ifndef TRITON_TARGET_LLVM_IR_LLVM_IR_TRANSLATION_H
 #define TRITON_TARGET_LLVM_IR_LLVM_IR_TRANSLATION_H
+#include "triton/Target/PTX/TmaMetadata.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>
 #include <string>
@@ -26,12 +27,16 @@ void addExternalLibs(mlir::ModuleOp &module,
 std::unique_ptr<llvm::Module>
 translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
                            mlir::ModuleOp module, int computeCapability,
+                           mlir::triton::gpu::TMAMetadataTy &tmaInfos,
                            bool isROCM);
 
 // Translate mlir LLVM dialect to LLVMIR, return null if failed.
 std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
                       bool isROCM);
+
+bool linkExternLib(llvm::Module &module, llvm::StringRef name,
+                   llvm::StringRef path, bool isROCM);
 
 } // namespace triton
 } // namespace mlir

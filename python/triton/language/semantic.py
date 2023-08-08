@@ -980,7 +980,7 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
         val = broadcast_impl_shape(val, block_shape, builder)
     assert val.type.is_block(), "Value argument must be block type or a scalar"
     assert block_shape == val.type.get_block_shapes(), "Block shape and value shape mismatch"
-    assert ptr.type.element_ty.element_ty == val.type.element_ty, "Block element type and value element type mismatch"
+    assert ptr.type.element_ty.element_ty == val.type.element_ty, f"Block element type({ptr.type.element_ty.element_ty}) and value element type({val.type.element_ty}) mismatch"
 
     elt_ty = ptr.type.element_ty.element_ty
     assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
@@ -1250,7 +1250,7 @@ def dot(lhs: tl.tensor,
     assert len(rhs.shape) == 2, f"Second input shape ({rhs.shape}) is not two dimensional!"
     assert lhs.shape[1].value == rhs.shape[0].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[1].value}) must be equal to first index of second shape ({rhs.shape[0].value})"
     assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
-        and rhs.shape[1].value >= 16,\
+        and rhs.shape[1].value >= 16, \
         f"All values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
