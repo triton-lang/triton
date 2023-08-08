@@ -106,15 +106,6 @@ def NVGPU_TMALoadTiledOp : NVGPU_Op<"tma_load_tiled", [AttrSizedOperandSegments]
   let arguments = (ins I8Ptr_shared:$dst, I64Ptr_shared:$mbarrier, I8Ptr_global:$tmaDesc, I64:$l2Desc,
                        I1:$pred, Variadic<I32>:$coords, Optional<I16>:$mcastMask);
   let assemblyFormat = "operands attr-dict `:` type(operands)";
-  string llvmBuilder = [{
-    auto *i32Ty = builder.getInt32Ty();
-    auto *i64Ty = builder.getInt64Ty();
-    createTMALoadTiled(builder,
-      builder.CreatePtrToInt($dst, i32Ty),
-      builder.CreatePtrToInt($mbarrier, i32Ty),
-      builder.CreatePtrToInt($tmaDesc, i64Ty),
-      $l2Desc, $mcastMask, builder.CreateIntCast($pred, builder.getInt32Ty(), false), $coords);
-  }];
 }
 
 def NVGPU_TMALoadIm2colOp : NVGPU_Op<"tma_load_im2col", []> {

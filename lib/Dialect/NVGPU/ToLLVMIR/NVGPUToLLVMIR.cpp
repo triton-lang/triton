@@ -69,70 +69,6 @@ llvm::Value *createExternalCall(llvm::IRBuilderBase &builder,
   return builder.CreateCall(func, args);
 }
 
-void createMBarrierArrive(llvm::IRBuilderBase &builder,
-                          mlir::triton::nvgpu::MBarriveType arriveType,
-                          llvm::Value *barrier, llvm::Value *pred,
-                          llvm::Value *ctaId, uint32_t txCount) {
-  auto *module = builder.GetInsertBlock()->getModule();
-
-  llvm::SmallVector<llvm::Type *> argTys;
-  argTys.push_back(barrier->getType());
-  llvm::Type *retTy = builder.getVoidTy();
-
-  if (arriveType == mlir::triton::nvgpu::MBarriveType::normal) {
-    argTys.push_back(pred->getType());
-    auto *func = dyn_cast<llvm::Function>(
-        getExternalFuncOP(module, "__nv_mbarrier_arrive_normal", retTy, argTys)
-            .getCallee());
-    builder.CreateCall(func, {barrier, pred});
-  } else if (arriveType == mlir::triton::nvgpu::MBarriveType::cp_async) {
-    argTys.push_back(pred->getType());
-    auto *func = dyn_cast<llvm::Function>(
-        getExternalFuncOP(module, "__nv_mbarrier_arrive_cp_async", retTy,
-                          argTys)
-            .getCallee());
-    builder.CreateCall(func, {barrier, pred});
-  } else if (arriveType == mlir::triton::nvgpu::MBarriveType::expect_tx) {
-    assert(txCount > 0 && "txCount should be valid");
-    argTys.push_back(builder.getInt32Ty());
-    argTys.push_back(pred->getType());
-
-    auto *func = dyn_cast<llvm::Function>(
-        getExternalFuncOP(module, "__nv_mbarrier_arrive_expect_tx", retTy,
-                          argTys)
-            .getCallee());
-    builder.CreateCall(func, {barrier, builder.getInt32(txCount), pred});
-  } else if (arriveType == mlir::triton::nvgpu::MBarriveType::remote) {
-    assert(ctaId && "ctaId should have a valid value");
-    argTys.push_back(ctaId->getType());
-    argTys.push_back(pred->getType());
-
-    auto *func = dyn_cast<llvm::Function>(
-        getExternalFuncOP(module, "__nv_mbarrier_arrive_remote", retTy, argTys)
-            .getCallee());
-    builder.CreateCall(func, {barrier, ctaId, pred});
-  }
-
-  return;
-}
-
-llvm::Value *createWGMMADesc(llvm::IRBuilderBase &builder, llvm::Value *buffer,
-                             mlir::triton::nvgpu::WGMMADescMode mode,
-                             llvm::Value *height) {
-  llvm::SmallVector<llvm::Type *> argTys;
-  argTys.push_back(buffer->getType());
-  argTys.push_back(builder.getInt32Ty());
-  argTys.push_back(height->getType());
-  llvm::Type *retTy = builder.getInt64Ty();
-
-  llvm::Value *mode_ = builder.getInt32((uint32_t)mode);
-  auto *module = builder.GetInsertBlock()->getModule();
-  auto *func = dyn_cast<llvm::Function>(
-      getExternalFuncOP(module, "__nv_get_wgmma_desc", retTy, argTys)
-          .getCallee());
-  return builder.CreateCall(func, {buffer, mode_, height});
-}
-
 static std::string getTMALoadFuncName(bool tiled, bool mcast,
                                       uint32_t dimSize) {
   std::string funcName;
@@ -149,48 +85,6 @@ static std::string getTMALoadFuncName(bool tiled, bool mcast,
   os << "_" << dimSize << "d";
 
   return funcName;
-}
-
-void createTMALoadTiled(llvm::IRBuilderBase &builder, llvm::Value *dst,
-                        llvm::Value *mbarrier, llvm::Value *tmaDesc,
-                        llvm::Value *l2Desc, llvm::Value *mcastMask,
-                        llvm::Value *pred,
-                        llvm::SmallVector<llvm::Value *> coords) {
-  assert(coords.size() >= 2 && coords.size() <= 5 && "invalid coords.size()");
-  auto funcName = getTMALoadFuncName(true, mcastMask != 0, coords.size());
-  llvm::Type *retTy = builder.getVoidTy();
-  llvm::SmallVector<llvm::Value *> args;
-  llvm::SmallVector<llvm::Type *> argTys;
-
-  argTys.push_back(tmaDesc->getType());
-  args.push_back(tmaDesc);
-
-  argTys.push_back(dst->getType());
-  args.push_back(dst);
-
-  argTys.push_back(mbarrier->getType());
-  args.push_back(mbarrier);
-  for (auto *c : coords) {
-    argTys.push_back(c->getType());
-    args.push_back(c);
-  }
-  argTys.push_back(l2Desc->getType());
-  args.push_back(l2Desc);
-
-  if (mcastMask != nullptr) {
-    argTys.push_back(builder.getInt16Ty());
-    args.push_back(mcastMask);
-  }
-
-  argTys.push_back(pred->getType());
-  args.push_back(pred);
-
-  auto *module = builder.GetInsertBlock()->getModule();
-  auto *func = dyn_cast<llvm::Function>(
-      getExternalFuncOP(module, funcName, retTy, argTys).getCallee());
-  builder.CreateCall(func, args);
-
-  return;
 }
 
 void createTMALoadIm2col(llvm::IRBuilderBase &builder, llvm::Value *dst,
@@ -390,64 +284,6 @@ llvm::Value *createWGMMA(llvm::IRBuilderBase &builder, uint32_t m, uint32_t n,
   return builder.CreateCall(inlineAsm, args);
 }
 
-llvm::Value *createLoadSharedCluster(llvm::IRBuilderBase &builder,
-                                     llvm::Value *addr, llvm::Value *ctaId,
-                                     unsigned bitwidth, unsigned vec) {
-  assert(
-      (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
-      "invalid bitwidth");
-  assert((vec == 1 || vec == 2 || vec == 4) && "invalid vec size");
-
-  // PTX string
-  std::string ptxStr;
-  llvm::raw_string_ostream asmOs(ptxStr);
-  unsigned addrArgId = vec, ctaIdArgId = vec + 1;
-  asmOs << "{\n\t"
-        << ".reg .u32 remoteAddr;\n\t"
-        << "mapa.shared::cluster.u32 remoteAddr, $" << addrArgId << ", $"
-        << ctaIdArgId << ";\n\t";
-  asmOs << "ld.shared::cluster";
-  if (vec > 1)
-    asmOs << ".v" << vec;
-  asmOs << ".u" << bitwidth << " ";
-  if (vec == 1)
-    asmOs << "$0";
-  else if (vec == 2)
-    asmOs << "{$0, $1}";
-  else
-    asmOs << "{$0, $1, $2, $3}";
-  asmOs << ", [remoteAddr];\n\t"
-        << "}\n";
-
-  // Constraints
-  std::string constraints;
-  llvm::raw_string_ostream conOs(constraints);
-  std::string c = bitwidth == 16 ? "h" : (bitwidth == 32 ? "r" : "l");
-  for (unsigned i = 0; i < vec; ++i)
-    conOs << "=" << c << ",";
-  conOs << "r,r";
-
-  // Arguments
-  llvm::SmallVector<llvm::Type *> argTypes;
-  llvm::SmallVector<llvm::Value *> args;
-  argTypes.push_back(addr->getType());
-  args.push_back(addr);
-  argTypes.push_back(ctaId->getType());
-  args.push_back(ctaId);
-
-  // Return type
-  llvm::Type *retTy = builder.getIntNTy(bitwidth);
-  llvm::SmallVector<llvm::Type *> retTys(vec, retTy);
-  if (vec > 1)
-    retTy = llvm::StructType::get(builder.getContext(), retTys);
-
-  // Call InlineAsm
-  llvm::InlineAsm *iasm =
-      llvm::InlineAsm::get(llvm::FunctionType::get(retTy, argTypes, false),
-                           ptxStr, constraints, /*hasSideEffect*/ false);
-  return builder.CreateCall(iasm, args);
-}
-
 void createStoreSharedCluster(llvm::IRBuilderBase &builder, llvm::Value *addr,
                               llvm::Value *ctaId,
                               llvm::SmallVector<llvm::Value *> values,
@@ -507,50 +343,6 @@ void createStoreSharedCluster(llvm::IRBuilderBase &builder, llvm::Value *addr,
       llvm::FunctionType::get(builder.getVoidTy(), argTypes, false), ptxStr,
       constraints, /*hasSideEffect*/ true);
   builder.CreateCall(iasm, args);
-}
-
-static std::string getTMAStoreFuncName(bool tiled, uint32_t dimSize) {
-  std::string funcName;
-  llvm::raw_string_ostream os(funcName);
-  os << "__nv_tma_store";
-  if (tiled)
-    os << "_tiled";
-  else
-    os << "_im2col";
-
-  os << "_" << dimSize << "d";
-
-  return funcName;
-}
-
-void createTMAStoreTiled(llvm::IRBuilderBase &builder, llvm::Value *tmaDesc,
-                         llvm::Value *src, llvm::Value *pred,
-                         llvm::SmallVector<llvm::Value *> coords) {
-  assert(coords.size() >= 2 && coords.size() <= 5 && "invalid coords.size()");
-  auto funcName = getTMAStoreFuncName(true, coords.size());
-  llvm::Type *retTy = builder.getVoidTy();
-  llvm::SmallVector<llvm::Value *> args;
-  llvm::SmallVector<llvm::Type *> argTys;
-
-  argTys.push_back(tmaDesc->getType());
-  args.push_back(tmaDesc);
-
-  argTys.push_back(src->getType());
-  args.push_back(src);
-
-  for (auto *c : coords) {
-    argTys.push_back(c->getType());
-    args.push_back(c);
-  }
-  argTys.push_back(pred->getType());
-  args.push_back(pred);
-
-  auto *module = builder.GetInsertBlock()->getModule();
-  auto *func = dyn_cast<llvm::Function>(
-      getExternalFuncOP(module, funcName, retTy, argTys).getCallee());
-  builder.CreateCall(func, args);
-
-  return;
 }
 
 llvm::Value *createOffsetOfSts64(llvm::IRBuilderBase &builder,

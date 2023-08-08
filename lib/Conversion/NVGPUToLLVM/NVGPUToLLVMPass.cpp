@@ -581,6 +581,239 @@ public:
   }
 };
 
+class TMALoadTiledOpPattern : public mlir::RewritePattern {
+public:
+  TMALoadTiledOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::TMALoadTiledOp::getOperationName(), 1,
+            context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto tmaLoadTiledOp =
+        llvm::dyn_cast<mlir::triton::nvgpu::TMALoadTiledOp>(op);
+    if (!tmaLoadTiledOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto dst = tmaLoadTiledOp.getDst();
+    auto mbarrier = tmaLoadTiledOp.getMbarrier();
+    auto tmaDesc = tmaLoadTiledOp.getTmaDesc();
+    auto l2Desc = tmaLoadTiledOp.getL2Desc();
+    auto pred = tmaLoadTiledOp.getPred();
+    auto coords = tmaLoadTiledOp.getCoords();
+    auto mcastMask = tmaLoadTiledOp.getMcastMask();
+
+    auto dimSize = coords.size();
+
+    PTXBuilder ptxBuilder;
+    if (dimSize == 2) {
+      if (mcastMask == nullptr) {
+        auto ptxAsm =
+            "@$6 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier:"
+            ":complete_tx"
+            "::bytes.L2::cache_hint [$0], [$1, {$2, $3}], "
+            "[$4], $5;";
+        auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+        auto *dstOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, dst), "r");
+        auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
+        auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
+        auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
+        auto *barOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, mbarrier), "r");
+        auto *l2DescOpr = ptxBuilder.newOperand(l2Desc, "l");
+        auto *predOpr = ptxBuilder.newOperand(pred, "b");
+
+        ptxInstr({dstOpr, descOpr, c0Opr, c1Opr, barOpr, l2DescOpr, predOpr},
+                 /*onlyAttachMLIRArgs=*/true);
+      } else {
+        auto ptxAsm =
+            "@$7 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::"
+            "complete_tx::bytes.multicast::cluster.L2::cache_hint"
+            " [$0], [$1, {$2, $3}], [$4], $5, $6;";
+        auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+        auto *dstOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, dst), "r");
+        auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
+        auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
+        auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
+        auto *barOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, mbarrier), "r");
+        auto *maskOpr = ptxBuilder.newOperand(mcastMask, "h");
+        auto *l2DescOpr = ptxBuilder.newOperand(l2Desc, "l");
+        auto *predOpr = ptxBuilder.newOperand(pred, "b");
+        ptxInstr({dstOpr, descOpr, c0Opr, c1Opr, barOpr, maskOpr, l2DescOpr,
+                  predOpr},
+                 /*onlyAttachMLIRArgs=*/true);
+      }
+    } else if (dimSize == 4) {
+      assert(mcastMask == nullptr && "Does not support multicast");
+      auto ptxAsm =
+          "@$8 "
+          "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier::complete_tx"
+          "::bytes.L2::cache_hint [$0], [$1, {$2, $3, $4, $5}], "
+          "[$6], $7;";
+      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+      auto *dstOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, dst), "r");
+      auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
+      auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
+      auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
+      auto *c2Opr = ptxBuilder.newOperand(coords[2], "r");
+      auto *c3Opr = ptxBuilder.newOperand(coords[3], "r");
+      auto *barOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, mbarrier), "r");
+      auto *l2DescOpr = ptxBuilder.newOperand(l2Desc, "l");
+      auto *predOpr = ptxBuilder.newOperand(pred, "b");
+      ptxInstr({dstOpr, descOpr, c0Opr, c1Opr, c2Opr, c3Opr, barOpr, l2DescOpr,
+                predOpr},
+               /*onlyAttachMLIRArgs=*/true);
+    } else {
+      assert(false && "invalid dim size");
+    }
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class TMAStoreTiledOpPattern : public mlir::RewritePattern {
+public:
+  TMAStoreTiledOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::TMAStoreTiledOp::getOperationName(), 1,
+            context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto tmaStoreTiledOp =
+        llvm::dyn_cast<mlir::triton::nvgpu::TMAStoreTiledOp>(op);
+    if (!tmaStoreTiledOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto src = tmaStoreTiledOp.getSrc();
+    auto tmaDesc = tmaStoreTiledOp.getTmaDesc();
+    auto pred = tmaStoreTiledOp.getPred();
+    auto coords = tmaStoreTiledOp.getCoords();
+
+    auto dimSize = coords.size();
+
+    PTXBuilder ptxBuilder;
+    if (dimSize == 2) {
+      auto ptxAsm = "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group"
+                    "[$0, {$2, $3}], [$1];";
+      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+
+      auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
+      auto *srcOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, src), "r");
+      auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
+      auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
+      auto *predOpr = ptxBuilder.newOperand(pred, "b");
+      ptxInstr({descOpr, srcOpr, c0Opr, c1Opr, predOpr},
+               /*onlyAttachMLIRArgs=*/true);
+    } else if (dimSize == 3) {
+      auto ptxAsm = "@$5 cp.async.bulk.tensor.3d.global.shared::cta.bulk_group"
+                    "[$0, {$2, $3, $4}], [$1];";
+      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+
+      auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
+      auto *srcOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, src), "r");
+      auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
+      auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
+      auto *c2Opr = ptxBuilder.newOperand(coords[2], "r");
+      auto *predOpr = ptxBuilder.newOperand(pred, "b");
+      ptxInstr({descOpr, srcOpr, c0Opr, c1Opr, c2Opr, predOpr},
+               /*onlyAttachMLIRArgs=*/true);
+    } else if (dimSize == 4) {
+      auto ptxAsm = "@$6 cp.async.bulk.tensor.4d.global.shared::cta.bulk_group"
+                    "[$0, {$2, $3, $4, $5}], [$1];";
+      auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+      auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
+      auto *srcOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, src), "r");
+      auto *c0Opr = ptxBuilder.newOperand(coords[0], "r");
+      auto *c1Opr = ptxBuilder.newOperand(coords[1], "r");
+      auto *c2Opr = ptxBuilder.newOperand(coords[2], "r");
+      auto *c3Opr = ptxBuilder.newOperand(coords[3], "r");
+      auto *predOpr = ptxBuilder.newOperand(pred, "b");
+      ptxInstr({descOpr, srcOpr, c0Opr, c1Opr, c2Opr, c3Opr, predOpr},
+               /*onlyAttachMLIRArgs=*/true);
+    } else {
+      assert(false && "invalid dim size");
+    }
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class LoadDSmemOpPattern : public mlir::RewritePattern {
+public:
+  LoadDSmemOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::LoadDSmemOp::getOperationName(), 1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto loadDSmemOp = llvm::dyn_cast<mlir::triton::nvgpu::LoadDSmemOp>(op);
+    if (!loadDSmemOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto addr = loadDSmemOp.getAddr();
+    auto ctaId = loadDSmemOp.getCtaId();
+    auto bitwidth = loadDSmemOp.getBitwidth();
+    auto vec = loadDSmemOp.getVec();
+
+    assert(
+        (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
+        "invalid bitwidth");
+    assert((vec == 1 || vec == 2 || vec == 4) && "invalid vec size");
+    PTXBuilder ptxBuilder;
+
+    std::string o1 = vec > 1 ? ".v.u" : ".u";
+    std::string vecStr = vec == 1   ? "$0"
+                         : vec == 2 ? "{$0, $1}"
+                                    : "{$0, $1, $2, $3}";
+    unsigned argNum = vec == 1 ? 1 : vec == 2 ? 2 : 4;
+    auto ptxAsm = "{\n"
+                  ".reg .u32 remoteAddr;\n"
+                  "mapa.shared::cluster.u32 remoteAddr, $" +
+                  std::to_string(argNum) + " , $" + std::to_string(argNum + 1) +
+                  " ; \n"
+                  "ld.shared::cluster" +
+                  o1 + std::to_string(bitwidth) + " " + vecStr +
+                  ", [remoteAddr];\n"
+                  "}\n";
+
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+    std::string c = bitwidth == 16 ? "=h" : (bitwidth == 32 ? "=r" : "=l");
+    SmallVector<PTXBuilder::Operand *> oprs;
+    for (unsigned i = 0; i < vec; ++i) {
+      auto *ret = ptxBuilder.newOperand(c);
+      oprs.push_back(ret);
+    }
+    auto *addrOpr = ptxBuilder.newOperand(addr, "r");
+    auto *ctaIdOpr = ptxBuilder.newOperand(ctaId, "r");
+    oprs.push_back(addrOpr);
+    oprs.push_back(ctaIdOpr);
+
+    Type retTy = IntegerType::get(rewriter.getContext(), bitwidth);
+    SmallVector<Type> retTys(vec, retTy);
+    if (vec > 1)
+      retTy = struct_ty(retTys);
+
+    ptxInstr(oprs,
+             /*onlyAttachMLIRArgs=*/true);
+
+    auto res = ptxBuilder.launch(rewriter, loc, retTy);
+    rewriter.replaceOp(op, {res});
+    return mlir::success();
+  }
+};
+
 class ConvertNVGPUToLLVM : public ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
 
 public:
@@ -605,6 +838,9 @@ public:
     patterns.add<MBarrierWaitOpPattern>(context);
     patterns.add<ClusterArriveOpPattern>(context);
     patterns.add<ClusterWaitOpPattern>(context);
+    patterns.add<TMALoadTiledOpPattern>(context);
+    patterns.add<TMAStoreTiledOpPattern>(context);
+    patterns.add<LoadDSmemOpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
