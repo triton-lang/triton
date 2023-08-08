@@ -104,6 +104,7 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
 
   explicit CatOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+
                            PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
 
@@ -138,6 +139,7 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
 struct ViewOpConversion : public ConvertTritonGPUOpToLLVMPattern<ViewOp> {
   using OpAdaptor = typename ViewOp::Adaptor;
   explicit ViewOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+
                             PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<ViewOp>(typeConverter, benefit) {}
 
@@ -159,6 +161,7 @@ struct ExpandDimsOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp> {
   using OpAdaptor = typename ExpandDimsOp::Adaptor;
   explicit ExpandDimsOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+
                                   PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
 
@@ -221,7 +224,9 @@ struct TransOpConversion
 };
 
 void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
+                                  RewritePatternSet &patterns, int numWarps,
+                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                  ModuleAllocation &allocation,
                                   PatternBenefit benefit) {
   patterns.add<ViewOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);

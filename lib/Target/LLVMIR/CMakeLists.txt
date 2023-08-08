@@ -23,5 +23,11 @@ add_mlir_translation_library(TritonLLVMIR
         MLIRSCFToControlFlow
         MLIRSupport
         MLIRTargetLLVMIRExport
+        NVGPUToLLVMIR
         TritonGPUToLLVM
         )
+
+set_source_files_properties(
+        LLVMIRTranslation.cpp
+        PROPERTIES
+        COMPILE_FLAGS "-D__BUILD_DIR__=\\\"${CMAKE_BINARY_DIR}\\\"")
