@@ -405,50 +405,6 @@ void createSts64(llvm::IRBuilderBase &builder, llvm::Value *offset,
   return;
 }
 
-static llvm::Value *getSRegValue(llvm::IRBuilderBase &builder,
-                                 llvm::StringRef name) {
-  std::string ptxStr;
-  llvm::raw_string_ostream asmOs(ptxStr);
-  asmOs << "mov.u32 $0, " << name << ";";
-  std::string constraints = "=r";
-  llvm::InlineAsm *inlineAsm =
-      llvm::InlineAsm::get(llvm::FunctionType::get(builder.getInt32Ty(), false),
-                           ptxStr, constraints, /*hasSideEffect*/ false);
-  return builder.CreateCall(inlineAsm);
-}
-
-static llvm::Value *createClusterId(llvm::IRBuilderBase &builder) {
-  llvm::Value *x = getSRegValue(builder, "%cluster_ctaid.x");
-  llvm::Value *y = getSRegValue(builder, "%cluster_ctaid.y");
-  llvm::Value *z = getSRegValue(builder, "%cluster_ctaid.z");
-  llvm::Value *nx = getSRegValue(builder, "%cluster_nctaid.x");
-  llvm::Value *ny = getSRegValue(builder, "%cluster_nctaid.y");
-  llvm::Value *clusterCTAId = builder.CreateAdd(
-      x, builder.CreateMul(builder.CreateAdd(y, builder.CreateMul(z, ny)), nx));
-  return clusterCTAId;
-}
-void createRegAlloc(llvm::IRBuilderBase &builder, const uint32_t regCount) {
-  std::string ptxStr;
-  llvm::raw_string_ostream asmOs(ptxStr);
-  asmOs << "setmaxnreg.inc.sync.aligned.u32 " << regCount << ";\n";
-  // Call InlineAsm
-  llvm::InlineAsm *iasm =
-      llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), {}),
-                           ptxStr, "", /*hasSideEffect*/ true);
-  builder.CreateCall(iasm, {});
-}
-
-void createRegDealloc(llvm::IRBuilderBase &builder, const uint32_t regCount) {
-  std::string ptxStr;
-  llvm::raw_string_ostream asmOs(ptxStr);
-  asmOs << "setmaxnreg.dec.sync.aligned.u32 " << regCount << ";\n";
-  // Call InlineAsm
-  llvm::InlineAsm *iasm =
-      llvm::InlineAsm::get(llvm::FunctionType::get(builder.getVoidTy(), {}),
-                           ptxStr, "", /*hasSideEffect*/ true);
-  builder.CreateCall(iasm, {});
-}
-
 class NVGPUDialectLLVMIRTranslationInterface
     : public LLVMTranslationDialectInterface {
 public:

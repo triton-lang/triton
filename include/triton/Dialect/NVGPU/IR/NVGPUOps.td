@@ -236,25 +236,16 @@ def NVGPU_Sts64Op : NVGPU_Op<"sts64", [MemoryEffects<[MemWrite]>]> {
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";
-  string llvmBuilder = [{
-    $result = createClusterId(builder);
-  }];
 }
 
 def NVGPU_RegAllocOp : NVGPU_Op<"reg_alloc", []> {
   let arguments = (ins I32Attr: $regCount);
   let assemblyFormat = "operands attr-dict `:` type(operands)";
-  string llvmBuilder = [{
-      createRegAlloc(builder, $regCount);
-  }];
 }
 
 def NVGPU_RegDeallocOp : NVGPU_Op<"reg_dealloc", []> {
   let arguments = (ins I32Attr: $regCount);
   let assemblyFormat = "operands attr-dict `:` type(operands)";
-  string llvmBuilder = [{
-      createRegDealloc(builder, $regCount);
-  }];
 }
 
 #endif
