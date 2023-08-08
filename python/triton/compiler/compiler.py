@@ -561,7 +561,7 @@ def compile(fn, **kwargs):
         if ir_name == "ttgir":
             metadata["enable_warp_specialization"] = _triton.ir.is_ws_supported(next_module)
             if metadata["enable_warp_specialization"]:
-                metadata["num_warps"] = get_num_warps(module)
+                metadata["num_warps"] = get_num_warps(next_module)
         if ir_name == "ptx":
             metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
         if ir_name == "amdgcn":
