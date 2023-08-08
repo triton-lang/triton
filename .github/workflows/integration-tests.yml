@@ -95,24 +95,6 @@ jobs:
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
 
-      - name: Disable MMAV3 and TMA
-        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'H100')}}
-        run: |
-          echo "ENABLE_TMA=0" >> "${GITHUB_ENV}"
-          echo "ENABLE_MMA_V3=0" >> "${GITHUB_ENV}"
-
-      - name: Clear cache
-        run: |
-          rm -rf ~/.triton
-
-      - name: Run python tests on CUDA with ENABLE_TMA=0 and ENABLE_MMA_V3=0
-        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
-        run: |
-          cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime
-          # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest runtime/
-
       - name: Create artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
