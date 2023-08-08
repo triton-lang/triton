@@ -1,6 +1,7 @@
 #include "ReduceOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -289,7 +290,7 @@ private:
             triton::ReduceOp op) const {
     // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
     // attr.
-    if (op->hasAttr("async_agent")) {
+    if (getWSAgentId(op)) {
       barSync(rewriter, op, getAgentIds(op).front(), 128);
     } else {
       barrier();

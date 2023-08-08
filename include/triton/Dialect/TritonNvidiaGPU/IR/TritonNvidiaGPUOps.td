@@ -372,7 +372,7 @@ def TTNG_RegAllocOp : TTNG_Op<"reg_alloc", []> {
 
   let arguments = (ins I32Attr: $regCount);
 
-  let assemblyFormat = "$regCount attr-dict `:` type(operands)";
+  let assemblyFormat = "$regCount attr-dict";
 }
 
 def TTNG_RegDeallocOp : TTNG_Op<"reg_dealloc", []> {
@@ -380,7 +380,7 @@ def TTNG_RegDeallocOp : TTNG_Op<"reg_dealloc", []> {
 
   let arguments = (ins I32Attr: $regCount);
 
-  let assemblyFormat = "$regCount attr-dict `:` type(operands)";
+  let assemblyFormat = "$regCount attr-dict";
 }
 
 #endif

@@ -5,6 +5,7 @@
 #include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -117,15 +118,28 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     return;
   }
 
-  if (isa<triton::gpu::AsyncWaitOp>(op) &&
-      !isa<gpu::BarrierOp>(op->getNextNode())) {
+  if (isa<triton::gpu::AsyncWaitOp, triton::gpu::AsyncBulkWaitOp>(op) &&
+      !isa<gpu::BarrierOp>(op->getNextNode()) &&
+      !(isa<LLVM::InlineAsmOp>(op->getNextNode()) &&
+        (dyn_cast<LLVM::InlineAsmOp>(op->getNextNode())
+             .getAsmString()
+             .find("bar.sync") != std::string::npos))) {
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     blockInfo->sync();
     OpBuilder::InsertionGuard g(*builder);
     builder->setInsertionPointAfter(op);
-    builder->create<gpu::BarrierOp>(op->getLoc());
-    blockInfo->sync();
+    if (auto optionalAgentId = getWSAgentId(op)) {
+      int agentId = *optionalAgentId, roleId = 0;
+      if (auto optionalRoleId = getWSRoleId(op))
+        roleId = *optionalRoleId;
+      int barId = agentId + roleId + nameBarrierIdBegin;
+      assert(barId < nameBarrierIdEnd);
+      barSync(*builder, op, barId, 128);
+    } else {
+      builder->create<gpu::BarrierOp>(op->getLoc());
+      blockInfo->sync();
+    }
     return;
   }
 
@@ -180,10 +194,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // TODO(Keren): Don't expose LLVM Dialect ops here
     // TODO[shuhaoj]: Change hard code style of numThreads. Hide async_agent
     // attr. Better way to determine barId (number of agents are limited).
-    if (op->hasAttr("async_agent")) {
-      int agentId = getAgentIds(op).front(), roleId = 0;
-      if (op->hasAttr("agent.mutex_role"))
-        roleId = op->getAttrOfType<IntegerAttr>("agent.mutex_role").getInt();
+    if (auto optionalAgentId = getWSAgentId(op)) {
+      int agentId = *optionalAgentId, roleId = 0;
+      if (auto optionalRoleId = getWSRoleId(op))
+        roleId = *optionalRoleId;
       int barId = agentId + roleId + nameBarrierIdBegin;
       assert(barId < nameBarrierIdEnd);
       barSync(*builder, op, barId, 128);
