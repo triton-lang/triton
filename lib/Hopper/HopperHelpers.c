@@ -501,12 +501,3 @@ __nv_offset_of_sts64(uint32_t threadIdx, uint32_t rowOfWarp, int32_t elemIdx,
 
   return offset;
 }
-
-__DEVICE__ __attribute__((__always_inline__)) uint32_t
-__nv_cvt_pack(uint16_t d0, uint16_t d1) {
-  uint32_t ret;
-  asm volatile("cvt.pack.sat.u16.s32 %0, %1, %2;\n"
-               : "=r"(ret)
-               : "r"(d0), "r"(d1));
-  return ret;
-}

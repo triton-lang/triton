@@ -216,6 +216,50 @@ DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
           loc};
 }
 
+// Return a vector of Value of the accumulator start at startIndex and pack the
+// values into 32bits in case the accumulator is fp16.
+llvm::SmallVector<Value> loadC(ConversionPatternRewriter &rewriter,
+                               Location loc, const SmallVector<Value> &elements,
+                               int startIndex, int numElements) {
+  if (!elements[0].getType().isF16()) {
+    llvm::SmallVector<Value> mmaOut(numElements);
+    for (int i = 0; i < numElements; ++i)
+      mmaOut[i] = elements[startIndex + i];
+    return mmaOut;
+  }
+  // For FP16 we need to pack accumulator into 32-bit integers.
+  llvm::SmallVector<Value> mmaOut(numElements / 2);
+  for (int i = 0; i < numElements / 2; ++i) {
+    Value a0 = elements[startIndex + 2 * i];
+    Value a1 = elements[startIndex + 2 * i + 1];
+    Type cPackTy = vec_ty(rewriter.getF16Type(), 2);
+    Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
+    pack = insert_element(cPackTy, pack, a0, i32_val(0));
+    pack = insert_element(cPackTy, pack, a1, i32_val(1));
+    pack = bitcast(pack, rewriter.getIntegerType(32));
+    mmaOut[i] = pack;
+  }
+  return mmaOut;
+}
+
+// If the accumulator is fp16 unpack it from 32-bit integers.
+SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
+                                     Location loc,
+                                     const SmallVector<Value> &packed,
+                                     RankedTensorType tensorTy) {
+  if (!tensorTy.getElementType().isF16())
+    return packed;
+  // For fp16 the accumualtor is pack into 32-bit integers so we need to unpack
+  // it.
+  SmallVector<Value> results;
+  for (Value elem : packed) {
+    elem = bitcast(elem, vec_ty(rewriter.getF16Type(), 2));
+    results.push_back(extract_element(rewriter.getF16Type(), elem, i32_val(0)));
+    results.push_back(extract_element(rewriter.getF16Type(), elem, i32_val(1)));
+  }
+  return results;
+}
+
 LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
@@ -236,11 +280,6 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto dShapePerCTA = getShapePerCTA(dTensorTy);
   auto instrShape = mmaEncoding.getInstrShape();
   auto accSize = 2 * (instrShape[1] / 4);
-  Type resElemTy = dTensorTy.getElementType();
-  llvm::SmallVector<Type> elemTypes(accSize, resElemTy);
-  auto accTy =
-      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
-
   int M = 4 * instrShape[0];
   int N = instrShape[1];
   int K = instrShape[2];
@@ -258,9 +297,6 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter, dTensorTy);
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
-  assert(eltTypeC != triton::nvgpu::WGMMAEltType::f16 &&
-         "TODO support f16 return type. This requires packing C into "
-         "vector<2xf16> type.");
   triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
   triton::nvgpu::WGMMAEltType eltTypeB = eltTypeA;
 
@@ -276,13 +312,16 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
     rewriter.create<triton::nvgpu::FenceAsyncSharedOp>(loc, 0);
   rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
 
-  llvm::SmallVector<Value> mmaOut(accSize);
+  SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
-      // reuse the same mmaOut
-      for (int i = 0; i < accSize; ++i) {
-        mmaOut[i] = fc[(m * numRepN + n) * accSize + i];
-      }
+      llvm::SmallVector<Value> mmaOut =
+          loadC(rewriter, loc, fc, (m * numRepN + n) * accSize, accSize);
+      llvm::SmallVector<Type> elemTypes;
+      for (Value accEl : mmaOut)
+        elemTypes.push_back(accEl.getType());
+      auto accTy =
+          LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
       Value d = typeConverter->packLLElements(loc, mmaOut, rewriter, accTy);
       for (int k = 0; k < numRepK; ++k) {
         auto a = aLoader.smemLoad(m, k);
@@ -294,7 +333,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
       }
       auto acc = typeConverter->unpackLLElements(loc, d, rewriter, accTy);
       for (int i = 0; i < acc.size(); ++i) {
-        fc[(m * numRepN + n) * accSize + i] = acc[i];
+        mmaResults.push_back(acc[i]);
       }
     }
   }
@@ -303,13 +342,14 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   if (sync)
     rewriter.create<triton::nvgpu::WGMMAWaitOp>(loc, 0);
 
-  for (auto &elem : fc) {
-    elem = bitcast(elem, resElemTy);
-  }
+  SmallVector<Value> results =
+      unpackAccumulator(rewriter, loc, mmaResults, dTensorTy);
+
   // replace with new packed result
   Type structTy = LLVM::LLVMStructType::getLiteral(
-      mmaEncoding.getContext(), SmallVector<Type>(fc.size(), resElemTy));
-  auto res = typeConverter->packLLElements(loc, fc, rewriter, structTy);
+      mmaEncoding.getContext(),
+      SmallVector<Type>(results.size(), dTensorTy.getElementType()));
+  auto res = typeConverter->packLLElements(loc, results, rewriter, structTy);
   rewriter.replaceOp(op, res);
   return success();
 }
