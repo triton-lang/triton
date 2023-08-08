@@ -2201,6 +2201,7 @@ class BlockedLayout:
     def __str__(self):
         return f"#triton_gpu.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
+
 class SharedLayout:
     def __init__(self, vec, per_phase, max_phase, order):
         self.vec = str(vec)
@@ -2213,7 +2214,7 @@ class SharedLayout:
 
 
 @pytest.mark.parametrize("vec_size", [2, 4])
-@pytest.mark.parametrize("swizzle", [True])
+@pytest.mark.parametrize("swizzle", [True, False])
 @pytest.mark.parametrize("transposeA", [True, False])
 @pytest.mark.parametrize("transposeB", [True, False])
 def test_dot_mfma_vector_load(vec_size, swizzle, transposeA, transposeB):
@@ -2239,9 +2240,11 @@ def test_dot_mfma_vector_load(vec_size, swizzle, transposeA, transposeB):
         max_phase = 2
     else:
         max_phase = 1
+        if vec_size != 4:
+            pytest.skip()
 
-    shared_a = SharedLayout(vec = vec_size, per_phase = 1, max_phase = max_phase, order = [0, 1] if transposeA else [1, 0])
-    shared_b = SharedLayout(vec = vec_size, per_phase = 1, max_phase = max_phase, order = [0, 1] if transposeB else [1, 0])
+    shared_a = SharedLayout(vec=vec_size, per_phase=1, max_phase=max_phase, order=[0, 1] if transposeA else [1, 0])
+    shared_b = SharedLayout(vec=vec_size, per_phase=1, max_phase=max_phase, order=[0, 1] if transposeB else [1, 0])
 
     ir = f"""
 #blocked = #triton_gpu.blocked<{{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}}>
@@ -2402,7 +2405,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     assert torch.equal(z, x)
 
 
-if _get_warp_size() == 64:
+if torch.version.hip is not None and _get_warp_size() == 64:
     layouts = [
         MfmaLayout(non_k_dim=32, warps_per_cta=[4, 1], isTransposed=True),
         MfmaLayout(non_k_dim=32, warps_per_cta=[2, 2], isTransposed=False),
@@ -2421,7 +2424,7 @@ else:
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_reduce_layouts(M, N, src_layout, axis, device='cuda'):
-    if torch.version.hip is not None:
+    if torch.version.hip is not None and _get_warp_size() == 64:
         if src_layout.isTransposed and axis == 0:
             pytest.skip("Reduce along axis 0 is not supported in transposed mfma layout")
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"

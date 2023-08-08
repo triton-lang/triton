@@ -617,7 +617,7 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             if stream is None:
-                if self.device_type in ["cuda", "rocm"]:
+                if self.device_type in ["cuda", "hip"]:
                     stream = get_cuda_stream()
                 else:
                     stream = get_backend(self.device_type).get_stream(None)
