@@ -14,4 +14,5 @@ add_mlir_library(TritonAnalysis
   MLIRLLVMDialect
   TritonIR
   TritonGPUIR
+  TritonNvidiaGPUIR
 )

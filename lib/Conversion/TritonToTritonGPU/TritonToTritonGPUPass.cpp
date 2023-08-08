@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "triton/Target/PTX/TmaMetadata.h"
 #include "llvm/ADT/APSInt.h"
 #include <numeric>
 
@@ -240,10 +241,19 @@ struct TritonExpandDimsPattern
     retWarpsPerCTA.insert(retWarpsPerCTA.begin() + op.getAxis(), 1);
     SmallVector<unsigned, 4> retOrder(retShape.size());
     std::iota(retOrder.begin(), retOrder.end(), 0);
+
+    auto argCTALayout = argEncoding.getCTALayout();
+    auto retCTAsPerCGA = insertOne(argCTALayout.getCTAsPerCGA(), op.getAxis());
+    auto retCTASplitNum =
+        insertOne(argCTALayout.getCTASplitNum(), op.getAxis());
+    auto retCTAOrder = insertOrder(argCTALayout.getCTAOrder(), op.getAxis());
+    auto retCTALayout = triton::gpu::CTALayoutAttr::get(
+        getContext(), retCTAsPerCGA, retCTASplitNum, retCTAOrder);
+
     triton::gpu::BlockedEncodingAttr retEncoding =
         triton::gpu::BlockedEncodingAttr::get(getContext(), retSizePerThread,
                                               retThreadsPerWarp, retWarpsPerCTA,
-                                              retOrder);
+                                              retOrder, retCTALayout);
     // convert operand to slice of return type
     Attribute newArgEncoding = triton::gpu::SliceEncodingAttr::get(
         getContext(), op.getAxis(), retEncoding);
@@ -256,6 +266,26 @@ struct TritonExpandDimsPattern
                       op, newSrc, adaptor.getAxis()),
                   adaptor.getAttributes());
     return success();
+  }
+
+private:
+  template <typename T>
+  SmallVector<T> insertOne(ArrayRef<T> vec, unsigned axis) const {
+    SmallVector<T> res(vec.begin(), vec.end());
+    res.insert(res.begin() + axis, 1);
+    return res;
+  }
+
+  // Example:    order = [   0, 2, 1, 3], dim = 2
+  //          resOrder = [2, 0, 3, 1, 4]
+  SmallVector<unsigned> insertOrder(ArrayRef<unsigned> order,
+                                    unsigned axis) const {
+    SmallVector<unsigned> resOrder(order.begin(), order.end());
+    for (unsigned i = 0; i < resOrder.size(); ++i)
+      if (resOrder[i] >= axis)
+        ++resOrder[i];
+    resOrder.insert(resOrder.begin(), axis);
+    return resOrder;
   }
 };
 
@@ -270,6 +300,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
     int numWarps = typeConverter->getNumWarps();
     int threadsPerWarp = typeConverter->getThreadsPerWarp();
+    int numCTAs = typeConverter->getNumCTAs();
 
     SmallVector<unsigned> retSizePerThread = {1, 1};
     if (origShape[0] * origShape[1] / (numWarps * threadsPerWarp) >= 4)
@@ -279,7 +310,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     SmallVector<unsigned> retOrder = {1, 0};
     Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
         getContext(), origShape, retSizePerThread, retOrder, numWarps,
-        threadsPerWarp);
+        threadsPerWarp, numCTAs);
     RankedTensorType retType =
         RankedTensorType::get(origShape, origType.getElementType(), dEncoding);
     // a & b must be of smem layout
@@ -354,9 +385,9 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     newRetSizePerThread[retOrder[0]] *=
         newRetTotalElemsPerThread / retTotalElemsPerThread;
     triton::gpu::BlockedEncodingAttr newRetEncoding =
-        triton::gpu::BlockedEncodingAttr::get(getContext(), newRetSizePerThread,
-                                              retThreadsPerWarp, retWarpsPerCTA,
-                                              retOrder);
+        triton::gpu::BlockedEncodingAttr::get(
+            getContext(), newRetSizePerThread, retThreadsPerWarp,
+            retWarpsPerCTA, retOrder, retEncoding.getCTALayout());
     auto newRetType = RankedTensorType::get(retShape, retType.getElementType(),
                                             newRetEncoding);
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::CatOp>(
@@ -386,8 +417,12 @@ struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
       if (auto srcBlockedEncoding =
               srcEncoding.dyn_cast<triton::gpu::BlockedEncodingAttr>())
         llvm::copy(srcBlockedEncoding.getOrder(), order.begin());
-      srcEncoding =
-          triton::gpu::SharedEncodingAttr::get(getContext(), 1, 1, 1, order);
+      // TODO(Qingyi): need to check whether the CTALayout of srcEncoding should
+      // be used here. For tests where numCTAs = 1, this is not a problem since
+      // all CTALayouts are the same.
+      auto CTALayout = triton::gpu::getCTALayout(srcEncoding);
+      srcEncoding = triton::gpu::SharedEncodingAttr::get(getContext(), 1, 1, 1,
+                                                         order, CTALayout);
       srcType = RankedTensorType::get(srcType.getShape(),
                                       srcType.getElementType(), srcEncoding);
       src = rewriter.create<triton::gpu::ConvertLayoutOp>(src.getLoc(), srcType,
@@ -658,10 +693,12 @@ public:
 };
 
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
-                            RewritePatternSet &patterns) {
+                            RewritePatternSet &patterns, unsigned numCTAs) {
   MLIRContext *context = patterns.getContext();
   patterns
       .insert< // TODO: view should have custom pattern that views the layout
+          TritonGenericPattern<triton::AdvanceOp>,
+          TritonGenericPattern<triton::MakeTensorPtrOp>,
           TritonGenericPattern<triton::ViewOp>,
           TritonGenericPattern<triton::BitcastOp>,
           TritonGenericPattern<triton::FpToFpOp>,
@@ -889,16 +926,20 @@ class ConvertTritonToTritonGPU
 public:
   ConvertTritonToTritonGPU() = default;
   // constructor with some parameters set explicitly.
-  ConvertTritonToTritonGPU(int numWarps, int threadsPerWarp) {
+  ConvertTritonToTritonGPU(int numWarps, int threadsPerWarp, int numCTAs,
+                           int computeCapability) {
     this->numWarps = numWarps;
     this->threadsPerWarp = threadsPerWarp;
+    this->numCTAs = numCTAs;
+    this->computeCapability = computeCapability;
   }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     // type converter
-    TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp);
+    TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp,
+                                         numCTAs);
     TritonGPUConversionTarget target(*context, typeConverter);
     // rewrite patterns
     RewritePatternSet patterns(context);
@@ -906,7 +947,7 @@ public:
     populateStdPatternsAndLegality(typeConverter, patterns, target);
     populateArithPatternsAndLegality(typeConverter, patterns, target);
     populateMathPatternsAndLegality(typeConverter, patterns, target);
-    populateTritonPatterns(typeConverter, patterns);
+    populateTritonPatterns(typeConverter, patterns, numCTAs);
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);
@@ -925,6 +966,13 @@ public:
         AttrNumThreadsPerWarp,
         IntegerAttr::get(i32_ty, llvm::APInt(32, threadsPerWarp.getValue())));
 
+    mod->setAttr(AttrNumCTAsName,
+                 IntegerAttr::get(i32_ty, llvm::APInt(32, numCTAs.getValue())));
+
+    mod->setAttr(AttrComputeCapabilityName,
+                 IntegerAttr::get(
+                     i32_ty, llvm::APInt(32, computeCapability.getValue())));
+
     // update layouts
     //  broadcast src => multicast, dst => broadcasted
     // if (failed(target.refineLayouts(mod, numWarps)))
@@ -936,8 +984,11 @@ public:
 
 std::unique_ptr<OperationPass<ModuleOp>>
 mlir::triton::createConvertTritonToTritonGPUPass(int numWarps,
-                                                 int threadsPerWarp) {
-  return std::make_unique<::ConvertTritonToTritonGPU>(numWarps, threadsPerWarp);
+                                                 int threadsPerWarp,
+                                                 int numCTAs,
+                                                 int computeCapability) {
+  return std::make_unique<::ConvertTritonToTritonGPU>(
+      numWarps, threadsPerWarp, numCTAs, computeCapability);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

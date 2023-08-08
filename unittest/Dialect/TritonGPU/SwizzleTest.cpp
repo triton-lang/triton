@@ -27,15 +27,20 @@ TEST_P(SwizzleDotOperandTestFixture, DotOperands) {
   // init context
   MLIRContext ctx;
   ctx.loadDialect<triton::gpu::TritonGPUDialect>();
+
+  auto CTALayout =
+      triton::gpu::CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {0, 1});
+
   // create encoding
-  auto parent = triton::gpu::MmaEncodingAttr::get(&ctx, 2, 0, {1, 1});
+  auto parent = triton::gpu::MmaEncodingAttr::get(&ctx, 2, 0, {1, 1}, CTALayout,
+                                                  {16, 64, 16});
   auto encoding = triton::gpu::DotOperandEncodingAttr::get(
       &ctx, params.opIdx, parent, 32 / params.typeWidth);
 
   // create element type
   Type eltType = IntegerType::get(&ctx, params.typeWidth);
-  auto layout =
-      SharedEncodingAttr::get(&ctx, encoding, params.shape, {1, 0}, eltType);
+  auto layout = SharedEncodingAttr::get(&ctx, encoding, params.shape, {1, 0},
+                                        CTALayout, eltType);
 
   ASSERT_EQ(layout.getVec(), params.refSwizzle.vec);
   ASSERT_EQ(layout.getPerPhase(), params.refSwizzle.perPhase);
