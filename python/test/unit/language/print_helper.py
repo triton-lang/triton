@@ -28,6 +28,11 @@ def kernel_static_print(X, Y, BLOCK: tl.constexpr):
     tl.store(Y + tl.arange(0, BLOCK), x)
 
 
+@triton.jit
+def kernel_no_arg_print():
+    print("", tl.program_id(0))
+
+
 def test_print(func: str, data_type: str):
     shape = (128, )
     # limit the range of integers so that the sum does not overflow
@@ -39,7 +44,11 @@ def test_print(func: str, data_type: str):
         kernel_print[(1,)](x, y, BLOCK=shape[0])
     elif func == "static_print":
         kernel_static_print[(1,)](x, y, BLOCK=shape[0])
-    assert_close(y, x)
+    elif func == "no_arg_print":
+        kernel_no_arg_print[(1,)](num_warps=4)
+
+    if func != "no_arg_print":
+        assert_close(y, x)
 
 
 if __name__ == "__main__":
