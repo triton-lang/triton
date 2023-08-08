@@ -11,6 +11,7 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include <set>
 
@@ -31,6 +32,7 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::TMAMetadataTy;
+namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
@@ -238,10 +240,24 @@ public:
     return llvmStruct;
   }
 
-  Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
-    auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
+  // Returns CTA level thread idx
+  Value getThreadIdInCTA(ConversionPatternRewriter &rewriter,
+                         Location loc) const {
+    Value tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
         loc, ::mlir::gpu::Dimension::x);
     return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+  }
+
+  // Returns CTA level thread idx for not ws mode.
+  // Returns agent level thread idx for ws mode.
+  Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
+    Value tid = getThreadIdInCTA(rewriter, loc);
+    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    if (ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod)) {
+      Value _128 = rewriter.create<arith::ConstantIntOp>(loc, 128, 32);
+      tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
+    }
+    return tid;
   }
 
   static Value getSRegValue(OpBuilder &b, Location loc,

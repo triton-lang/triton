@@ -28,14 +28,6 @@ import triton
 import triton.language as tl
 
 
-def isMMAV3OrTMAEnabled():
-    import os
-    for k in ('ENABLE_MMA_V3', 'ENABLE_TMA'):
-        if os.environ.get(k, '0').lower() in ['1', 'on', 'true']:
-            return True
-    return False
-
-
 @triton.jit
 def static_persistent_matmul_kernel(
     a_ptr, b_ptr, c_ptr,
@@ -610,8 +602,6 @@ def static_persistent_matmul_no_scf_kernel(
                              ]))
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_static_persistent_matmul_no_scf_kernel(M, N, K, NUM_CTAS, NUM_WARPS, TRANS_A, TRANS_B, OUTPUT_TYPE, USE_TMA_EPILOGUE, USE_TMA_LOAD):
-    if isMMAV3OrTMAEnabled():
-        pytest.skip("known failure")
     if (TRANS_A):
         a = torch.randn((K, M), device='cuda', dtype=torch.float16).T
     else:
