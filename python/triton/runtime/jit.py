@@ -110,8 +110,14 @@ def version_key():
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha1(f.read()).hexdigest()]
     # backend
+    libtriton_hash = hashlib.sha1()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
-        contents += [hashlib.sha1(f.read()).hexdigest()]
+        while True:
+            chunk = f.read(1024 ** 2)
+            if not chunk:
+                break
+            libtriton_hash.update(chunk)
+    contents.append(libtriton_hash.hexdigest())
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.iter_modules([language_path]):
