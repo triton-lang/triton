@@ -401,7 +401,6 @@ public:
 
       ptxInstr(barOpr).predicate(pred, "b");
     } else if (arriveType == mlir::triton::nvgpu::MBarriveType::cp_async) {
-      assert(txCount > 0 && "txCount should be valid");
       auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
           "cp.async.mbarrier.arrive.noinc.shared.b64");
       auto *barOpr =
@@ -409,6 +408,7 @@ public:
 
       ptxInstr(barOpr).predicate(pred, "b");
     } else if (arriveType == mlir::triton::nvgpu::MBarriveType::expect_tx) {
+      assert(txCount > 0 && "txCount should be valid");
       auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
           "mbarrier.arrive.expect_tx.shared.b64 _,");
       auto *barOpr =
@@ -417,6 +417,7 @@ public:
 
       ptxInstr(barOpr, expectedOpr).predicate(pred, "b");
     } else if (arriveType == mlir::triton::nvgpu::MBarriveType::remote) {
+      assert(ctaId && "ctaId should have a valid value");
       auto ptxAsm =
           " { .reg .b32 remAddr32;                                       \n"
           "  @$2 mapa.shared::cluster.u32  remAddr32, $0, $1;            \n"
@@ -1401,7 +1402,7 @@ public:
     // patterns.add<CGABarrierWaitOpPattern>(context);
     // patterns.add<CGABarrierArriveOpPattern>(context);
     patterns.add<NamedBarrierWaitOpPattern>(context);
-    // patterns.add<NamedBarrierArriveOpPattern>(context);
+    patterns.add<NamedBarrierArriveOpPattern>(context);
     // patterns.add<FenceMBarrierInitOpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
