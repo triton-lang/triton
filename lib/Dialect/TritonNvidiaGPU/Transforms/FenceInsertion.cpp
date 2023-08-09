@@ -3,6 +3,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 
 //===----------------------------------------------------------------------===//
@@ -32,16 +33,20 @@ public:
   FenceInsertionPass(int computeCapability) {
     this->computeCapability = computeCapability;
   }
-  // TODO: support more patterns to insert fences
-  // only support insertion between convert layout ops and dot ops to protect
-  // flashattention
+  // TODO: support more general patterns to insert fences. eg. any op(generic)
+  // to shared in use-def chain which refers by async proxy. We have generic(
+  // convertlayout with sts/stmatix) + fence + async(wgmma/tma store) up to now
   void runOnOperation() override {
     // Only insert fences for compute capability 9.0
     if (computeCapability < 90)
       return;
+    // ENABLE_MMA_V3
+    if (!::triton::tools::getBoolEnv("ENABLE_MMA_V3"))
+      return;
     ModuleOp mod = getOperation();
     mod.walk([&](Operation *op) {
-      if (isa<tt::DotOp>(op)) {
+      if (isa<tt::DotOp, ttng::DotAsyncOp>(op)) {
+        OpBuilder builder(op);
         auto a = op->getOperand(0);
         auto b = op->getOperand(1);
         auto mmaEncoding = op->getResult(0)
@@ -50,18 +55,38 @@ public:
                                .getEncoding()
                                .dyn_cast<ttg::MmaEncodingAttr>();
         auto isHopperEncoding = mmaEncoding && mmaEncoding.isHopper();
-        if (isHopperEncoding && (a.getDefiningOp<ttg::ConvertLayoutOp>() &&
-                                 ttg::isSharedEncoding(a)) ||
-            (b.getDefiningOp<ttg::ConvertLayoutOp>() &&
-             ttg::isSharedEncoding(b))) {
-
-          // TODO: check whether cluster fence is needed
-          OpBuilder builder(op);
+        if (isHopperEncoding && (canReachGeneric(a) || canReachGeneric(b))) {
           builder.create<ttng::FenceAsyncSharedOp>(op->getLoc(),
                                                    false /*bCluster*/);
         }
       }
     });
+  }
+
+private:
+  bool canReachGeneric(Value operand) {
+    auto op = operand.getDefiningOp();
+
+    if (BlockArgument arg = dyn_cast<BlockArgument>(operand)) {
+      unsigned argNum = arg.getArgNumber();
+      Operation *argOwner = arg.getOwner()->getParentOp();
+      // suport ForOp
+      if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
+        Value v = forOp.getBody()->getTerminator()->getOperand(argNum - 1);
+        if (canReachGeneric(v))
+          return true;
+      }
+    }
+
+    if (!op)
+      return false;
+    if (isa<ttg::ConvertLayoutOp>(op) && ttg::isSharedEncoding(operand))
+      return true;
+    for (auto v : op->getOperands()) {
+      if (canReachGeneric(v))
+        return true;
+    }
+    return false;
   }
 };
 
