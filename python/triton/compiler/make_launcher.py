@@ -271,6 +271,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
   void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
   if(gridX*gridY*gridZ > 0){{
     if (num_ctas == 1) {{
+      fprintf(stderr, "CUDA VERSION %d\n", CUDA_VERSION);
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
     }} else {{
       CUlaunchAttribute launchAttr[2];
