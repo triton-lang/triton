@@ -195,7 +195,7 @@ public:
     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
         "stmatrix.sync.aligned.m8n8.x" + std::to_string(datas.size()) +
         ".shared.b16");
-    auto *addrOpr = ptxBuilder.newAddrOperand(addr, "r", 0);
+    auto *addrOpr = ptxBuilder.newAddrOperand(ptrtoint(i32_ty, addr), "r");
 
     SmallVector<std::pair<Value, std::string>> args;
     for (unsigned i = 0; i < datas.size(); ++i) {
@@ -208,38 +208,6 @@ public:
     auto asmReturnTy = void_ty(ctx);
     ptxBuilder.launch(rewriter, loc, asmReturnTy);
     rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
-class CvtPackOpPattern : public mlir::RewritePattern {
-public:
-  CvtPackOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::triton::nvgpu::CvtPackOp::getOperationName(),
-                             1, context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto cvtPackOp = llvm::dyn_cast<mlir::triton::nvgpu::CvtPackOp>(op);
-    if (!cvtPackOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto d0 = cvtPackOp.getD0();
-    auto d1 = cvtPackOp.getD1();
-
-    PTXBuilder ptxBuilder;
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("cvt.pack.sat.u16.s32");
-    auto *ret = ptxBuilder.newOperand("=r");
-    auto *d0Opr = ptxBuilder.newOperand(d0, "r");
-    auto *d1Opr = ptxBuilder.newOperand(d1, "r");
-
-    ptxInstr(ret, d0Opr, d1Opr);
-
-    auto asmReturnTy = rewriter.getIntegerType(32);
-    auto res = ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.replaceOp(op, {res});
     return mlir::success();
   }
 };
@@ -489,24 +457,22 @@ public:
     auto loc = op->getLoc();
     Value mbarrier = mBarrierWaitOp.getMbarrier();
     Value phase = mBarrierWaitOp.getPhase();
-    Value largeVal = i32_val(0x989680);
     PTXBuilder ptxBuilder;
 
-    auto ptxAsm = "{\n"
-                  ".reg .pred                P1; \n"
-                  "LAB_WAIT: \n"
-                  "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, $2; \n"
-                  "@P1                       bra.uni DONE; \n"
-                  "bra.uni                   LAB_WAIT; \n"
-                  "DONE: \n"
-                  "}";
+    auto ptxAsm =
+        "{\n"
+        ".reg .pred                P1; \n"
+        "LAB_WAIT: \n"
+        "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, 0x989680; \n"
+        "@P1                       bra.uni DONE; \n"
+        "bra.uni                   LAB_WAIT; \n"
+        "DONE: \n"
+        "}";
     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    auto *barOpr =
-        ptxBuilder.newAddrOperand(ptrtoint(i32_ty, mbarrier), "r", 0);
+    auto *barOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, mbarrier), "r");
     auto *phaseOpr = ptxBuilder.newOperand(zext(i32_ty, phase), "r");
-    auto *largeValOpr = ptxBuilder.newOperand(largeVal, "r");
 
-    ptxInstr({barOpr, phaseOpr, largeValOpr},
+    ptxInstr({barOpr, phaseOpr},
              /*onlyAttachMLIRArgs=*/true);
 
     auto asmReturnTy = void_ty(ctx);
@@ -613,8 +579,7 @@ public:
         auto ptxAsm =
             "@$6 cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier:"
             ":complete_tx"
-            "::bytes.L2::cache_hint [$0], [$1, {$2, $3}], "
-            "[$4], $5;";
+            "::bytes.L2::cache_hint [$0], [$1, {$2, $3}], [$4], $5;";
         auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
         auto *dstOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, dst), "r");
         auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
@@ -646,11 +611,11 @@ public:
       }
     } else if (dimSize == 4) {
       assert(mcastMask == nullptr && "Does not support multicast");
-      auto ptxAsm =
-          "@$8 "
-          "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier::complete_tx"
-          "::bytes.L2::cache_hint [$0], [$1, {$2, $3, $4, $5}], "
-          "[$6], $7;";
+      auto ptxAsm = "@$8 "
+                    "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier:"
+                    ":complete_tx"
+                    "::bytes.L2::cache_hint [$0], [$1, {$2, $3, $4, $5}], "
+                    "[$6], $7;";
       auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
       auto *dstOpr = ptxBuilder.newOperand(ptrtoint(i32_ty, dst), "r");
       auto *descOpr = ptxBuilder.newOperand(ptrtoint(i64_ty, tmaDesc), "l");
@@ -1416,7 +1381,6 @@ public:
     patterns.add<WGMMACommitGroupOpPattern>(context);
     patterns.add<WGMMAWaitGroupOpPattern>(context);
     patterns.add<StoreMatrixOpPattern>(context);
-    patterns.add<CvtPackOpPattern>(context);
     patterns.add<OffsetOfStmatrixV4OpPattern>(context);
     patterns.add<WGMMADescCreateOpPattern>(context);
     patterns.add<MBarrierInitOpPattern>(context);
