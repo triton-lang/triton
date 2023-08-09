@@ -855,18 +855,10 @@ def full_static_persistent_matmul_kernel(
 @pytest.mark.skipif(torch.cuda.get_device_capability()
                     [0] < 9, reason="Requires compute capability >= 9")
 def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B, epilogue, out_dtype, USE_TMA_STORE, NUM_STAGES, ENABLE_WS):
-    pytest.skip("known failure, will fix it later!!!")
     if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, epilogue, out_dtype, USE_TMA_STORE, NUM_STAGES, ENABLE_WS])) in [
         '128-128-128-4-1-256-256-192-none-float32-True-3-True',
     ]:
         pytest.skip('out of resource: shared memory, Required: 263168')
-
-    if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, USE_TMA_STORE, ENABLE_WS])) in ([
-        '64-16-16-4-1-512-256-256-True-True',
-    ] + [
-        f'128-128-64-4-1-{m}-{n}-{k}-True-True' for m in range(512, 4096, 360) for n in range(512, 4096, 360) for k in [512, 1024]
-    ]):
-        pytest.skip('known kernel hang problem when tma store is enabled')
 
     if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, TRANS_B])) in [
         '16-32-64-4-4-512-256-64-True-False',
@@ -875,6 +867,16 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
         '16-32-64-4-4-512-256-64-False-True',
     ]:
         pytest.skip('shapePerCTA[1] < 16 not supported')
+
+    # with ENABLE_TMA=0 and ENABLE_MMA_V3=0
+    if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_B])) in [
+        '16-32-64-4-1-256-256-256-False',
+        '16-32-64-4-2-256-256-256-False',
+        '16-32-64-4-2-256-256-256-True',
+        '16-32-64-8-2-256-256-256-False',
+        '16-32-64-8-2-256-256-256-True',
+    ]:
+        pytest.skip('Known legacy issue, ldmatrix can only support x4')
 
     if epilogue == 'chain-dot':
         pytest.skip('known failure: Assertion !region.empty() && unexpected empty region.')

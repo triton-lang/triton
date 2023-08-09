@@ -49,6 +49,14 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
+// pass ws related named attrs.
+static void addWSNamedAttrs(Operation *op,
+                            ArrayRef<mlir::NamedAttribute> attrs) {
+  for (const NamedAttribute attr : attrs)
+    if (attr.getName() == "async_agent" || attr.getName() == "agent.mutex_role")
+      op->setAttr(attr.getName(), attr.getValue());
+}
+
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, bool isROCM)
@@ -617,10 +625,13 @@ private:
       auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
       auto newArg = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), newArgType, cvtOp.getOperand());
+      addWSNamedAttrs(newArg, cvtOp->getAttrs());
       auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), newCvtType, newArg);
+      addWSNamedAttrs(newCvt, cvtOp->getAttrs());
       auto newRet = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
+      addWSNamedAttrs(newRet, cvtOp->getAttrs());
       cvtOp.replaceAllUsesWith(newRet.getResult());
       cvtOp.erase();
     });
@@ -646,8 +657,10 @@ private:
                 getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+        addWSNamedAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
+        addWSNamedAttrs(newConvert, cvtOp->getAttrs());
         cvtOp.replaceAllUsesWith(newConvert.getResult());
         cvtOp.erase();
       }
@@ -674,8 +687,10 @@ private:
                 srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+        addWSNamedAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
+        addWSNamedAttrs(newConvert, cvtOp->getAttrs());
         cvtOp.replaceAllUsesWith(newConvert.getResult());
         cvtOp.erase();
       }
@@ -750,6 +765,7 @@ private:
           /*boundaryCheck=*/nullptr, /*padding=*/nullptr,
           insertSliceAsyncOp.getCache(), insertSliceAsyncOp.getEvict(),
           insertSliceAsyncOp.getIsVolatile());
+      addWSNamedAttrs(loadOp, insertSliceAsyncOp->getAttrs());
 
       // insert_slice
       auto axis = insertSliceAsyncOp.getAxis();
@@ -765,6 +781,7 @@ private:
       auto insertSliceOp = builder.create<tensor::InsertSliceOp>(
           insertSliceAsyncOp.getLoc(), loadOp, insertSliceAsyncOp.getDst(),
           offsets, sizes, strides);
+      addWSNamedAttrs(insertSliceOp, insertSliceAsyncOp->getAttrs());
 
       // Replace
       insertSliceAsyncOp.replaceAllUsesWith(insertSliceOp.getResult());
@@ -784,7 +801,9 @@ private:
       } else if (decomposed) {
         // Wait for all previous async ops
         OpBuilder builder(asyncWaitOp);
-        builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
+        auto newWaitOp =
+            builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
+        addWSNamedAttrs(newWaitOp, asyncWaitOp->getAttrs());
         asyncWaitOp.erase();
       }
     });
