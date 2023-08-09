@@ -138,8 +138,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       barSync(*builder, op, barId, 128);
     } else {
       builder->create<gpu::BarrierOp>(op->getLoc());
-      blockInfo->sync();
     }
+    blockInfo->sync();
     return;
   }
 
@@ -203,8 +203,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       barSync(*builder, op, barId, 128);
     } else {
       builder->create<gpu::BarrierOp>(op->getLoc());
-      blockInfo->sync();
     }
+    blockInfo->sync();
   }
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers.
