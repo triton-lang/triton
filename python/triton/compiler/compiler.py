@@ -691,7 +691,7 @@ class CompiledKernel:
         def runner(*args, stream=None):
             args_expand = self.assemble_tensormap_to_arg(args, self.constants)
             if stream is None:
-                if self.device_type in ["cuda", "rocm"]:
+                if self.device_type in ["cuda", "hip"]:
                     stream = get_cuda_stream()
                 else:
                     stream = get_backend(self.device_type).get_stream(None)
