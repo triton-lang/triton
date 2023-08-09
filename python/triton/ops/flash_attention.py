@@ -300,6 +300,13 @@ class _attention(torch.autograd.Function):
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
+
+        if capability[0] > 8:
+            import os
+            enable_mmav3 = os.environ.get('ENABLE_MMA_V3')
+            if Lk == 128 and enable_mmav3:
+                BLOCK_N = 128
+
         o = torch.empty_like(q)
         grid = (cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
