@@ -60,7 +60,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def __init__(self, globals, src) -> None:
         super().__init__()
-        self.ret = hashlib.md5(src.encode("utf-8")).hexdigest()
+        self.ret = hashlib.sha1(src.encode("utf-8")).hexdigest()
         self.globals = globals
 
     def visit_Name(self, node):
@@ -90,7 +90,7 @@ class DependenciesFinder(ast.NodeVisitor):
             func.hash = finder.ret
         noinline = str(getattr(func, 'noinline', False))
         self.ret = (self.ret + func.hash + noinline).encode("utf-8")
-        self.ret = hashlib.md5(self.ret).hexdigest()
+        self.ret = hashlib.sha1(self.ret).hexdigest()
 
 # -----------------------------------------------------------------------------
 # JITFunction
@@ -103,23 +103,23 @@ def version_key():
     contents = []
     # frontend
     with open(__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+        contents += [hashlib.sha1(f.read()).hexdigest()]
     # compiler
     compiler_path = os.path.join(TRITON_PATH, 'compiler')
     for lib in pkgutil.iter_modules([compiler_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
+            contents += [hashlib.sha1(f.read()).hexdigest()]
     # backend
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+        contents += [hashlib.sha1(f.read()).hexdigest()]
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.iter_modules([language_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
+            contents += [hashlib.sha1(f.read()).hexdigest()]
     # ptxas version
     ptxas = path_to_ptxas()[0]
-    ptxas_version = hashlib.md5(subprocess.check_output([ptxas, "--version"])).hexdigest()
+    ptxas_version = hashlib.sha1(subprocess.check_output([ptxas, "--version"])).hexdigest()
     return '-'.join(TRITON_VERSION) + '-' + ptxas_version + '-' + '-'.join(contents)
 
 
