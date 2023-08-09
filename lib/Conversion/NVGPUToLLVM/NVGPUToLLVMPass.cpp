@@ -1016,6 +1016,326 @@ public:
   }
 };
 
+class FenceMBarrierInitOpPattern : public mlir::RewritePattern {
+public:
+  FenceMBarrierInitOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::FenceMBarrierInitOp::getOperationName(), 1,
+            context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto fenceMBarrierInitOp =
+        llvm::dyn_cast<mlir::triton::nvgpu::FenceMBarrierInitOp>(op);
+    if (!fenceMBarrierInitOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    PTXBuilder ptxBuilder;
+
+    auto &ptxInstr =
+        *ptxBuilder.create<PTXInstr>("fence.mbarrier_init.release.cluster");
+
+    ptxInstr();
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+class NamedBarrierArriveOpPattern : public mlir::RewritePattern {
+public:
+  NamedBarrierArriveOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::NamedBarrierArriveOp::getOperationName(), 1,
+            context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto namedBarrierArriveOp =
+        llvm::dyn_cast<mlir::triton::nvgpu::NamedBarrierArriveOp>(op);
+    if (!namedBarrierArriveOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto bar = namedBarrierArriveOp.getBar();
+    auto numThreads = namedBarrierArriveOp.getNumThreads();
+    PTXBuilder ptxBuilder;
+
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("bar.arrive $0, $1;");
+    auto *barOpr = ptxBuilder.newOperand(bar, "r");
+    auto *numThreadsOpr = ptxBuilder.newOperand(numThreads, "r");
+    ptxInstr({barOpr, numThreadsOpr}, /*onlyAttachMLIRArgs=*/true);
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class NamedBarrierWaitOpPattern : public mlir::RewritePattern {
+public:
+  NamedBarrierWaitOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::NamedBarrierWaitOp::getOperationName(), 1,
+            context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto namedBarrierWaitOp =
+        llvm::dyn_cast<mlir::triton::nvgpu::NamedBarrierWaitOp>(op);
+    if (!namedBarrierWaitOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto bar = namedBarrierWaitOp.getBar();
+    auto numThreads = namedBarrierWaitOp.getNumThreads();
+    PTXBuilder ptxBuilder;
+
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("bar.sync $0, $1;");
+    auto *barOpr = ptxBuilder.newOperand(bar, "r");
+    auto *numThreadsOpr = ptxBuilder.newOperand(numThreads, "r");
+    ptxInstr({barOpr, numThreadsOpr}, /*onlyAttachMLIRArgs=*/true);
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class CGABarrierArriveOpPattern : public mlir::RewritePattern {
+public:
+  CGABarrierArriveOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::CGABarrierArriveOp::getOperationName(), 1,
+            context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto cgaBarrierArriveOp =
+        llvm::dyn_cast<mlir::triton::nvgpu::CGABarrierArriveOp>(op);
+    if (!cgaBarrierArriveOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    PTXBuilder ptxBuilder;
+
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("barrier.cluster.arrive");
+    ptxInstr();
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class CGABarrierWaitOpPattern : public mlir::RewritePattern {
+public:
+  CGABarrierWaitOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::CGABarrierWaitOp::getOperationName(), 1,
+            context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto cgaBarrierWaitOp =
+        llvm::dyn_cast<mlir::triton::nvgpu::CGABarrierWaitOp>(op);
+    if (!cgaBarrierWaitOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    PTXBuilder ptxBuilder;
+
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("barrier.cluster.wait");
+    ptxInstr();
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class StoreDSmemOpPattern : public mlir::RewritePattern {
+public:
+  StoreDSmemOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::StoreDSmemOp::getOperationName(), 1, context) {
+  }
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto storeDSmemOp = llvm::dyn_cast<mlir::triton::nvgpu::StoreDSmemOp>(op);
+    if (!storeDSmemOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto addr = storeDSmemOp.getAddr();
+    auto ctaId = storeDSmemOp.getCtaId();
+    auto values = storeDSmemOp.getValues();
+    auto pred = storeDSmemOp.getPred();
+
+    auto bitwidth = storeDSmemOp.getBitwidth();
+    auto vec = storeDSmemOp.getVec();
+    assert(
+        (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
+        "invalid bitwidth");
+    assert((vec == 1 || vec == 2 || vec == 4) && vec == values.size() &&
+           "invalid vec size");
+
+    PTXBuilder ptxBuilder;
+
+    std::string ptxAsm = "{\n\t"
+                         ".reg .u32 remoteAddr;\n\t"
+                         "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n\t"
+                         ".reg .pred p;\n\t"
+                         "mov.pred p, $2;\n\t"
+                         "@p st.shared::cluster";
+    if (vec > 1)
+      ptxAsm += ".v" + std::to_string(vec);
+    ptxAsm += ".u" + std::to_string(bitwidth) + " [remoteAddr], ";
+    if (vec == 1)
+      ptxAsm += "$3";
+    else if (vec == 2)
+      ptxAsm += "{$3, $4}";
+    else if (vec == 4)
+      ptxAsm += "{$3, $4, $5, $6}";
+    ptxAsm += ";\n\t";
+    ptxAsm += "}\n";
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+
+    std::string c = bitwidth == 16 ? "h" : (bitwidth == 32 ? "r" : "l");
+    SmallVector<PTXBuilder::Operand *> oprs;
+    auto *addrOpr = ptxBuilder.newOperand(addr, "r");
+    oprs.push_back(addrOpr);
+    auto *ctaIdOpr = ptxBuilder.newOperand(ctaId, "r");
+    oprs.push_back(ctaIdOpr);
+    auto *predOpr = ptxBuilder.newOperand(pred, "b");
+    oprs.push_back(predOpr);
+    for (unsigned i = 0; i < values.size(); i++) {
+      auto *valueOpr = ptxBuilder.newOperand(values[i], c);
+      oprs.push_back(valueOpr);
+    }
+    ptxInstr(oprs,
+             /*onlyAttachMLIRArgs=*/true);
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class OffsetOfSts64OpPattern : public mlir::RewritePattern {
+public:
+  OffsetOfSts64OpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            mlir::triton::nvgpu::OffsetOfSts64Op::getOperationName(), 1,
+            context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto offsetOfSts64Op =
+        llvm::dyn_cast<mlir::triton::nvgpu::OffsetOfSts64Op>(op);
+    if (!offsetOfSts64Op)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto threadId = offsetOfSts64Op.getThreadId();
+    auto rowOfWarp = offsetOfSts64Op.getRowOfWarp();
+    auto elemIdx = offsetOfSts64Op.getElemIdx();
+    auto leadingDimOffset = offsetOfSts64Op.getLeadingDimOffset();
+    auto rowStride = offsetOfSts64Op.getRowStride();
+    auto swizzleEnabled = offsetOfSts64Op.getSwizzleEnabled();
+
+    if (swizzleEnabled) {
+      assert((rowStride == 32 || rowStride == 64 || rowStride == 128) &&
+             "wrong rowString for swizzleEnabled");
+    }
+
+    uint32_t perPhase = 0;
+    uint32_t maxPhase = 0;
+    if (rowStride == 128) {
+      perPhase = 1;
+      maxPhase = 8;
+    } else if (rowStride == 64) {
+      perPhase = 2;
+      maxPhase = 4;
+    } else if (rowStride == 32) {
+      perPhase = 4;
+      maxPhase = 2;
+    }
+
+    auto laneId = and_(threadId, i32_val(0x1f));
+    auto myRow =
+        add(mul(and_(lshr(elemIdx, i32_val(1)), i32_val(0x1)), i32_val(8)),
+            udiv(laneId, i32_val(4)));
+    auto myCol = add(mul(udiv(elemIdx, i32_val(4)), i32_val(8)),
+                     mul(urem(laneId, i32_val(4)), i32_val(2)));
+    myRow = add(myRow, rowOfWarp);
+    auto phase = urem(udiv(myRow, i32_val(perPhase)), i32_val(maxPhase));
+    auto lineOffset =
+        add(mul(urem(myRow, i32_val(perPhase)), i32_val(rowStride)),
+            mul(myCol, i32_val(4)));
+    auto colOffset =
+        add(mul(xor_(udiv(lineOffset, i32_val(16)), phase), i32_val(16)),
+            urem(lineOffset, i32_val(16)));
+    auto offset =
+        add(mul(udiv(myRow, i32_val(perPhase)), i32_val(128)), colOffset);
+
+    rewriter.replaceOp(op, {offset});
+    return mlir::success();
+  }
+};
+
+class Sts64OpPattern : public mlir::RewritePattern {
+public:
+  Sts64OpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(mlir::triton::nvgpu::Sts64Op::getOperationName(),
+                             1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto sts64Op = llvm::dyn_cast<mlir::triton::nvgpu::Sts64Op>(op);
+    if (!sts64Op)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto offset = sts64Op.getOffset();
+    auto d0 = sts64Op.getD0();
+    auto d1 = sts64Op.getD1();
+
+    PTXBuilder ptxBuilder;
+
+    std::string ptxAsm = "st.shared.v2.b32 [$0], {$1, $2}";
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+
+    SmallVector<PTXBuilder::Operand *> oprs;
+    auto *addrOpr = ptxBuilder.newOperand(offset, "r");
+    auto *d0Opr = ptxBuilder.newOperand(d0, "r");
+    auto *d1Opr = ptxBuilder.newOperand(d1, "r");
+
+    ptxInstr({addrOpr, d0Opr, d1Opr},
+             /*onlyAttachMLIRArgs=*/true);
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
 class RegAllocOpPattern : public mlir::RewritePattern {
 public:
   RegAllocOpPattern(mlir::MLIRContext *context)
@@ -1112,6 +1432,14 @@ public:
     patterns.add<RegAllocOpPattern>(context);
     patterns.add<RegDeallocOpPattern>(context);
     patterns.add<WGMMAOpPattern>(context);
+    // patterns.add<StoreDSmemOpPattern>(context);
+    // patterns.add<Sts64OpPattern>(context);
+    // patterns.add<OffsetOfSts64OpPattern>(context);
+    // patterns.add<CGABarrierWaitOpPattern>(context);
+    // patterns.add<CGABarrierArriveOpPattern>(context);
+    // patterns.add<NamedBarrierWaitOpPattern>(context);
+    // patterns.add<NamedBarrierArriveOpPattern>(context);
+    // patterns.add<FenceMBarrierInitOpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
