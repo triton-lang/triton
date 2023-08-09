@@ -146,9 +146,6 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
                    WGMMA_LayoutAttr:$layoutA, WGMMA_LayoutAttr:$layoutB);
   let results = (outs LLVM_AnyStruct:$res);
   let assemblyFormat = "$opA `,` $opB `,` $opC attr-dict `:` functional-type(operands, $res)";
-  string llvmBuilder = [{
-    $res = createWGMMA(builder, $m, $n, $k, $eltTypeC, $eltTypeA, $eltTypeB, $layoutA, $layoutB, $opA, $opB, $opC);
-  }];
 }
 
 def NVGPU_CGABarrierSyncOp : NVGPU_Op<"cga_barrier_sync", []> {

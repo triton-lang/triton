@@ -854,6 +854,168 @@ public:
   }
 };
 
+class WGMMAOpPattern : public mlir::RewritePattern {
+public:
+  WGMMAOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(mlir::triton::nvgpu::WGMMAOp::getOperationName(),
+                             1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    using namespace mlir::triton::nvgpu;
+    auto ctx = rewriter.getContext();
+    auto wgmmaOp = llvm::dyn_cast<mlir::triton::nvgpu::WGMMAOp>(op);
+    if (!wgmmaOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto opA = wgmmaOp.getOpA();
+    auto opB = wgmmaOp.getOpB();
+    auto opC = wgmmaOp.getOpC();
+    auto m = wgmmaOp.getM();
+    auto n = wgmmaOp.getN();
+    auto k = wgmmaOp.getK();
+    auto eltTypeC = wgmmaOp.getEltTypeC();
+    auto eltTypeA = wgmmaOp.getEltTypeA();
+    auto eltTypeB = wgmmaOp.getEltTypeB();
+    auto layoutA = wgmmaOp.getLayoutA();
+    auto layoutB = wgmmaOp.getLayoutB();
+
+    // Register checks
+    auto typeA = opA.getType();
+    auto typeB = opB.getType();
+    auto typeC = opC.getType();
+    auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
+    auto structTypeB = typeB.dyn_cast<LLVM::LLVMStructType>();
+    auto structTypeC = typeC.dyn_cast<LLVM::LLVMStructType>();
+    assert(!structTypeB && "Operand B can not be registers");
+    assert(structTypeC && "Operand C must be registers");
+
+    // Element type, MNK shape and transposing support check
+    // Reference:
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-instructions-wgmma-mma
+    bool transA = layoutA == WGMMALayout::col;
+    bool transB = layoutB == WGMMALayout::row;
+    bool supported = false, needTransArgs = false, floatTypeWGMMA = false;
+    assert(m % 8 == 0 && n % 8 == 0 && k % 8 == 0);
+    // Below instructions do support transposing, must pass `trans` arguments
+    supported |=
+        (eltTypeA == WGMMAEltType::f16) && (eltTypeB == WGMMAEltType::f16) &&
+        (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
+        (m == 64 && 8 <= n && n <= 256 && k == 16);
+    supported |= (eltTypeA == WGMMAEltType::bf16) &&
+                 (eltTypeB == WGMMAEltType::bf16) &&
+                 (eltTypeC == WGMMAEltType::f32) &&
+                 (m == 64 && 8 <= n && n <= 256 && k == 16);
+    needTransArgs = supported;
+    floatTypeWGMMA = supported;
+    // Below instructions do not support transposing
+    if (!supported && !transA && !transB) {
+      supported |= (eltTypeA == WGMMAEltType::tf32) &&
+                   (eltTypeB == WGMMAEltType::tf32) &&
+                   (eltTypeC == WGMMAEltType::f32) &&
+                   (m == 64 && 8 <= n && n <= 256 && k == 8);
+      supported |=
+          (eltTypeA == WGMMAEltType::e4m3 || eltTypeA == WGMMAEltType::e5m2) &&
+          (eltTypeB == WGMMAEltType::e4m3 || eltTypeB == WGMMAEltType::e5m2) &&
+          (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
+          (m == 64 && 8 <= n && n <= 256 && k == 32);
+      floatTypeWGMMA = supported;
+      // Below instructions are integer-based
+      supported |= (eltTypeA == WGMMAEltType::s8) &&
+                   (eltTypeB == WGMMAEltType::s8) &&
+                   (eltTypeC == WGMMAEltType::s32) &&
+                   (m == 64 && 8 <= n && n <= 224 && k == 32);
+    }
+    assert(supported && "WGMMA type or shape is not supported");
+    PTXBuilder ptxBuilder;
+    SmallVector<PTXBuilder::Operand *> oprs;
+
+    // Operands
+    uint32_t asmOpIdx = 0;
+
+    // Operand C
+    uint32_t numCRegs = m * n / 128;
+    assert(numCRegs == structTypeC.getBody().size());
+    std::string args = "";
+
+    args += "{";
+    for (uint32_t i = 0; i < numCRegs; ++i) {
+      args += "$" + std::to_string(asmOpIdx++) + (i == numCRegs - 1 ? "" : ",");
+      // LLVM does not support `+` semantic, we must repeat the arguments for
+      // both input and outputs
+      PTXBuilder::Operand *opr;
+      if (structTypeC.getBody().front().isF32())
+        opr = ptxBuilder.newOperand(
+            extract_val(structTypeC.getBody()[i], opC, i), "=f");
+      else
+        opr = ptxBuilder.newOperand(
+            extract_val(structTypeC.getBody()[i], opC, i), "=r");
+      oprs.push_back(opr);
+    }
+    args += "}, ";
+
+    for (uint32_t i = asmOpIdx - numCRegs; i < asmOpIdx; ++i) {
+      auto *opr = ptxBuilder.newOperand(std::to_string(i));
+      oprs.push_back(opr);
+    }
+
+    // Note that LLVM will not skip the indexed repeating placeholders
+    asmOpIdx += numCRegs;
+    // Operand A
+    if (structTypeA) {
+      uint32_t numARegs = m * k / 128;
+      assert(numARegs == structTypeA.getBody().size());
+      args += "{";
+      for (uint32_t i = 0; i < numARegs; ++i) {
+        args +=
+            "$" + std::to_string(asmOpIdx++) + (i == numARegs - 1 ? "" : ",");
+        auto *opr = ptxBuilder.newOperand(
+            extract_val(structTypeA.getBody()[i], opA, i), "f");
+        oprs.push_back(opr);
+      }
+      args += "}, ";
+    } else {
+      args += "$" + std::to_string(asmOpIdx++) + ", ";
+      auto *opr = ptxBuilder.newOperand(opA, "l");
+      oprs.push_back(opr);
+    }
+
+    // Operand B (must be `desc`)
+    args += "$" + std::to_string(asmOpIdx++) + ", ";
+    auto *opr = ptxBuilder.newOperand(opB, "l");
+    oprs.push_back(opr);
+
+    // `scale-d` is 1 by default
+    args += "1";
+
+    // `imm-scale-a`, and `imm-scale-b` are 1 by default only for float-based
+    // WGMMA
+    if (floatTypeWGMMA)
+      args += ", 1, 1";
+
+    // Push `trans-a` and `trans-b` args if needed (determined as constant)
+    if (needTransArgs)
+      args += ", " + std::to_string(transA) + ", " + std::to_string(transB);
+
+    auto ptxAsm = "wgmma.mma_async.sync.aligned"
+                  ".m" +
+                  std::to_string(m) + "n" + std::to_string(n) + "k" +
+                  std::to_string(k) + "." + stringifyEnum(eltTypeC).str() +
+                  "." + stringifyEnum(eltTypeA).str() + "." +
+                  stringifyEnum(eltTypeB).str() + " " + args + ";";
+
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+    ptxInstr(oprs,
+             /*onlyAttachMLIRArgs=*/true);
+
+    auto res =
+        ptxBuilder.launch(rewriter, loc, structTypeC, /*hasSideEffect*/ true);
+    rewriter.replaceOp(op, {res});
+    return mlir::success();
+  }
+};
+
 class RegAllocOpPattern : public mlir::RewritePattern {
 public:
   RegAllocOpPattern(mlir::MLIRContext *context)
@@ -949,6 +1111,7 @@ public:
     patterns.add<ClusterCTAIdOpPattern>(context);
     patterns.add<RegAllocOpPattern>(context);
     patterns.add<RegDeallocOpPattern>(context);
+    patterns.add<WGMMAOpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
