@@ -489,8 +489,6 @@ bool isWSCandidateLoad(Operation *op) {
       cvtOp.getResult().getType().cast<RankedTensorType>().getEncoding();
   if (!encoding || !encoding.dyn_cast<ttg::SharedEncodingAttr>())
     return false;
-  if (ttg::getNumCTAs(encoding) > 1)
-    return false;
 
   DenseSet<Value> depSet;
   if (failed(getDependentValues(op->getResult(0), depSet)))
