@@ -23,137 +23,105 @@ using namespace mlir::triton;
 #define GEN_PASS_CLASSES
 #include "triton/Conversion/NVGPUToLLVM/Passes.h.inc"
 
+namespace ttn = mlir::triton::nvgpu;
 namespace {
-class CGABarrierSyncOpPattern : public mlir::RewritePattern {
-public:
-  CGABarrierSyncOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::CGABarrierSyncOp::getOperationName(), 1,
-            context) {}
 
-  mlir::LogicalResult
+template <typename SourceOp, typename ConcreteT>
+class NVGPUOpPatternBase : public mlir::RewritePattern {
+public:
+  explicit NVGPUOpPatternBase(mlir::MLIRContext *context)
+      : mlir::RewritePattern(SourceOp::getOperationName(), 1, context) {}
+
+  LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto cgaBarrierSyncOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::CGABarrierSyncOp>(op);
-    if (!cgaBarrierSyncOp)
-      return mlir::failure();
     auto loc = op->getLoc();
+    auto sourceOp = llvm::dyn_cast<SourceOp>(op);
+    if (!sourceOp)
+      return mlir::failure();
+    auto ptxAsm = static_cast<const ConcreteT *>(this)->getPtxAsm(sourceOp);
+    auto hasSideEffects =
+        static_cast<const ConcreteT *>(this)->hasSideEffects();
     PTXBuilder ptxBuilder;
-    auto &ptxInstr =
-        *ptxBuilder.create<PTXInstr>("barrier.cluster.sync.aligned");
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
     ptxInstr();
     auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy,
+                      /*hasSideEffects*/ hasSideEffects);
     rewriter.eraseOp(op);
     return mlir::success();
   }
 };
 
-class FenceAsyncSharedOpPattern : public mlir::RewritePattern {
+class CGABarrierSyncOpPattern
+    : public NVGPUOpPatternBase<ttn::CGABarrierSyncOp,
+                                CGABarrierSyncOpPattern> {
 public:
-  FenceAsyncSharedOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::FenceAsyncSharedOp::getOperationName(), 1,
-            context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto fenceAsyncSharedOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::FenceAsyncSharedOp>(op);
-    if (!fenceAsyncSharedOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto bCluster = fenceAsyncSharedOp.getBCluster();
-    PTXBuilder ptxBuilder;
-    if (bCluster) {
-      auto &ptxInstr =
-          *ptxBuilder.create<PTXInstr>("fence.proxy.async.shared::cluster");
-      ptxInstr();
-    } else {
-      auto &ptxInstr =
-          *ptxBuilder.create<PTXInstr>("fence.proxy.async.shared::cta");
-      ptxInstr();
-    }
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  using Base =
+      NVGPUOpPatternBase<ttn::CGABarrierSyncOp, CGABarrierSyncOpPattern>;
+  using Base::Base;
+  bool hasSideEffects() const { return false; }
+  std::string getPtxAsm(ttn::CGABarrierSyncOp op) const {
+    return "barrier.cluster.sync.aligned";
   }
 };
 
-class WGMMAFenceOpPattern : public mlir::RewritePattern {
+class FenceAsyncSharedOpPattern
+    : public NVGPUOpPatternBase<ttn::FenceAsyncSharedOp,
+                                FenceAsyncSharedOpPattern> {
 public:
-  WGMMAFenceOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::WGMMAFenceOp::getOperationName(), 1, context) {
-  }
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto wgmmaFenceOp = llvm::dyn_cast<mlir::triton::nvgpu::WGMMAFenceOp>(op);
-    if (!wgmmaFenceOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    PTXBuilder ptxBuilder;
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("wgmma.fence.sync.aligned");
-    ptxInstr();
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  using Base =
+      NVGPUOpPatternBase<ttn::FenceAsyncSharedOp, FenceAsyncSharedOpPattern>;
+  using Base::Base;
+  bool hasSideEffects() const { return false; }
+  std::string getPtxAsm(ttn::FenceAsyncSharedOp op) const {
+    auto bCluster = op.getBCluster();
+    if (bCluster)
+      return "fence.proxy.async.shared::cluster";
+    else
+      return "fence.proxy.async.shared::cta";
   }
 };
 
-class WGMMACommitGroupOpPattern : public mlir::RewritePattern {
+class WGMMAFenceOpPattern
+    : public NVGPUOpPatternBase<ttn::WGMMAFenceOp, WGMMAFenceOpPattern> {
 public:
-  WGMMACommitGroupOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::WGMMACommitGroupOp::getOperationName(), 1,
-            context) {}
+  using Base = NVGPUOpPatternBase<ttn::WGMMAFenceOp, WGMMAFenceOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto wgmmaCommitGroupOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::WGMMACommitGroupOp>(op);
-    if (!wgmmaCommitGroupOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    PTXBuilder ptxBuilder;
+  bool hasSideEffects() const { return true; }
+  std::string getPtxAsm(ttn::WGMMAFenceOp op) const {
+    return "wgmma.fence.sync.aligned";
+  }
+};
 
-    auto &ptxInstr =
-        *ptxBuilder.create<PTXInstr>("wgmma.commit_group.sync.aligned");
-    ptxInstr();
+class WGMMACommitGroupOpPattern
+    : public NVGPUOpPatternBase<ttn::WGMMACommitGroupOp,
+                                WGMMACommitGroupOpPattern> {
+public:
+  using Base =
+      NVGPUOpPatternBase<ttn::WGMMACommitGroupOp, WGMMACommitGroupOpPattern>;
+  using Base::Base;
 
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  bool hasSideEffects() const { return true; }
+
+  std::string getPtxAsm(ttn::WGMMACommitGroupOp op) const {
+    return "wgmma.commit_group.sync.aligned";
   }
 };
 
 class WGMMAWaitGroupOpPattern : public mlir::RewritePattern {
 public:
   WGMMAWaitGroupOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::WGMMAWaitGroupOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::WGMMAWaitGroupOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto wgmmaWaitGroupOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::WGMMAWaitGroupOp>(op);
+    auto wgmmaWaitGroupOp = llvm::dyn_cast<ttn::WGMMAWaitGroupOp>(op);
     if (!wgmmaWaitGroupOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -174,15 +142,14 @@ public:
 class StoreMatrixOpPattern : public mlir::RewritePattern {
 public:
   StoreMatrixOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::StoreMatrixOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::StoreMatrixOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto storeMatrixOp = llvm::dyn_cast<mlir::triton::nvgpu::StoreMatrixOp>(op);
+    auto storeMatrixOp = llvm::dyn_cast<ttn::StoreMatrixOp>(op);
     if (!storeMatrixOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -212,142 +179,17 @@ public:
   }
 };
 
-class OffsetOfStmatrixV4OpPattern : public mlir::RewritePattern {
-public:
-  OffsetOfStmatrixV4OpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::OffsetOfStmatrixV4Op::getOperationName(), 1,
-            context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto offsetOfStmatrixV4Op =
-        llvm::dyn_cast<mlir::triton::nvgpu::OffsetOfStmatrixV4Op>(op);
-    if (!offsetOfStmatrixV4Op)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto threadId = offsetOfStmatrixV4Op.getThreadId();
-    auto rowOfWarp = offsetOfStmatrixV4Op.getRowOfWarp();
-    auto elemIdx = offsetOfStmatrixV4Op.getElemIdx();
-    auto leadingDimOffset = offsetOfStmatrixV4Op.getLeadingDimOffset();
-    auto rowStride = offsetOfStmatrixV4Op.getRowStride();
-    auto swizzleEnabled = offsetOfStmatrixV4Op.getSwizzleEnabled();
-
-    if (swizzleEnabled) {
-      uint32_t perPhase = 0;
-      uint32_t maxPhase = 0;
-      if (rowStride == 64) {
-        perPhase = 1;
-        maxPhase = 8;
-      } else if (rowStride == 32) {
-        perPhase = 2;
-        maxPhase = 4;
-      } else if (rowStride == 16) {
-        perPhase = 4;
-        maxPhase = 2;
-      }
-
-      Value iterOfCol = udiv(elemIdx, i32_val(8));
-      Value myRow = add(rowOfWarp, and_(threadId, i32_val(0xf)));
-      Value myCol =
-          mul(and_(lshr(threadId, i32_val(4)), i32_val(0x1)), i32_val(8));
-      myCol = add(myCol, mul(iterOfCol, i32_val(16)));
-
-      Value offset0 =
-          mul(udiv(myCol, i32_val(rowStride)), i32_val(leadingDimOffset));
-      myCol = urem(myCol, i32_val(rowStride));
-
-      Value phase = urem(udiv(myRow, i32_val(perPhase)), i32_val(maxPhase));
-
-      Value lineOffset =
-          add(mul(urem(myRow, i32_val(perPhase)), i32_val(rowStride)), myCol);
-      Value colOffset =
-          add(mul(xor_(udiv(lineOffset, i32_val(8)), phase), i32_val(8)),
-              urem(lineOffset, i32_val(8)));
-      Value offset1 =
-          add(mul(udiv(myRow, i32_val(perPhase)), i32_val(64)), colOffset);
-
-      Value res = add(offset1, offset0);
-
-      rewriter.replaceOp(op, {res});
-    } else {
-      Value iterOfCol = udiv(elemIdx, i32_val(4));
-      Value myRow = add(rowOfWarp, and_(threadId, i32_val(0xf)));
-      Value myCol =
-          mul(and_(lshr(threadId, i32_val(4)), i32_val(0x1)), i32_val(8));
-      myCol = add(myCol, mul(iterOfCol, i32_val(16)));
-
-      Value offset =
-          add(mul(myRow, i32_val(rowStride)), mul(myCol, i32_val(2)));
-      rewriter.replaceOp(op, {offset});
-    }
-    return mlir::success();
-  }
-};
-
-class WGMMADescCreateOpPattern : public mlir::RewritePattern {
-public:
-  WGMMADescCreateOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::WGMMADescCreateOp::getOperationName(), 1,
-            context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto wgmmaDescCreateOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::WGMMADescCreateOp>(op);
-    if (!wgmmaDescCreateOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto buffer = wgmmaDescCreateOp.getBuffer();
-    auto height = wgmmaDescCreateOp.getHeight();
-    uint32_t mode = static_cast<uint32_t>(wgmmaDescCreateOp.getMode());
-
-    auto smem_nvvm_pointer = ptrtoint(i64_ty, buffer);
-
-    Value desc = int_val(64, 0);
-    uint64_t swizzling = (mode == 1 ? 128 : mode == 2 ? 64 : 32);
-    Value swizzling_ = int_val(64, swizzling);
-    Value smem_address_bit = smem_nvvm_pointer;
-
-    Value strideDimension =
-        lshr(shl(swizzling_, int_val(64, 3)), int_val(64, 4));
-    Value height64 = zext(i64_ty, height);
-    Value leadingDimension = lshr(mul(height64, swizzling_), int_val(64, 4));
-
-    // Value baseOffset = int_val(64, 0);
-    Value startAddr =
-        lshr(shl(smem_address_bit, int_val(64, 46)), int_val(64, 50));
-
-    Value mode_ = int_val(64, mode);
-    desc = or_(desc, shl(mode_, int_val(64, 62)));
-    desc = or_(desc, shl(strideDimension, int_val(64, 32)));
-    desc = or_(desc, shl(leadingDimension, int_val(64, 16)));
-    // desc = or_(desc, shl(baseOffset, int_val(64, 49)));
-    desc = or_(desc, startAddr);
-
-    rewriter.replaceOp(op, {desc});
-    return mlir::success();
-  }
-};
-
 class MBarrierInitOpPattern : public mlir::RewritePattern {
 public:
   MBarrierInitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::MBarrierInitOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::MBarrierInitOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto mBarrierInitOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::MBarrierInitOp>(op);
+    auto mBarrierInitOp = llvm::dyn_cast<ttn::MBarrierInitOp>(op);
     if (!mBarrierInitOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -373,16 +215,14 @@ public:
 class MBarrierArriveOpPattern : public mlir::RewritePattern {
 public:
   MBarrierArriveOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::MBarrierArriveOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::MBarrierArriveOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto mbarrierArriveOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::MBarrierArriveOp>(op);
+    auto mbarrierArriveOp = llvm::dyn_cast<ttn::MBarrierArriveOp>(op);
     if (!mbarrierArriveOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -393,21 +233,21 @@ public:
     uint32_t txCount = mbarrierArriveOp.getTxCount();
 
     PTXBuilder ptxBuilder;
-    if (arriveType == mlir::triton::nvgpu::MBarriveType::normal) {
+    if (arriveType == ttn::MBarriveType::normal) {
       auto &ptxInstr =
           *ptxBuilder.create<PTXInstr>("mbarrier.arrive.shared.b64 _,");
       auto *barOpr =
           ptxBuilder.newAddrOperand(ptrtoint(i32_ty, mbarrier), "r", 0);
 
       ptxInstr(barOpr).predicate(pred, "b");
-    } else if (arriveType == mlir::triton::nvgpu::MBarriveType::cp_async) {
+    } else if (arriveType == ttn::MBarriveType::cp_async) {
       auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
           "cp.async.mbarrier.arrive.noinc.shared.b64");
       auto *barOpr =
           ptxBuilder.newAddrOperand(ptrtoint(i32_ty, mbarrier), "r", 0);
 
       ptxInstr(barOpr).predicate(pred, "b");
-    } else if (arriveType == mlir::triton::nvgpu::MBarriveType::expect_tx) {
+    } else if (arriveType == ttn::MBarriveType::expect_tx) {
       assert(txCount > 0 && "txCount should be valid");
       auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
           "mbarrier.arrive.expect_tx.shared.b64 _,");
@@ -416,7 +256,7 @@ public:
       auto *expectedOpr = ptxBuilder.newConstantOperand(txCount);
 
       ptxInstr(barOpr, expectedOpr).predicate(pred, "b");
-    } else if (arriveType == mlir::triton::nvgpu::MBarriveType::remote) {
+    } else if (arriveType == ttn::MBarriveType::remote) {
       assert(ctaId && "ctaId should have a valid value");
       auto ptxAsm =
           " { .reg .b32 remAddr32;                                       \n"
@@ -443,16 +283,14 @@ public:
 class MBarrierWaitOpPattern : public mlir::RewritePattern {
 public:
   MBarrierWaitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::MBarrierWaitOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::MBarrierWaitOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto mBarrierWaitOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::MBarrierWaitOp>(op);
+    auto mBarrierWaitOp = llvm::dyn_cast<ttn::MBarrierWaitOp>(op);
     if (!mBarrierWaitOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -483,84 +321,44 @@ public:
   }
 };
 
-class ClusterArriveOpPattern : public mlir::RewritePattern {
+class ClusterArriveOpPattern
+    : public NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern> {
 public:
-  ClusterArriveOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::ClusterArriveOp::getOperationName(), 1,
-            context) {}
+  using Base = NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto clusterArriveOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::ClusterArriveOp>(op);
-    if (!clusterArriveOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto relaxed = clusterArriveOp.getRelaxed();
-
-    PTXBuilder ptxBuilder;
-    std::string ptxAsm;
-    if (relaxed) {
-      ptxAsm = "barrier.cluster.arrive.relaxed.aligned";
-    } else {
-      ptxAsm = "barrier.cluster.arrive.aligned";
-    }
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    ptxInstr();
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  bool hasSideEffects() const { return false; }
+  std::string getPtxAsm(ttn::ClusterArriveOp op) const {
+    auto relaxed = op.getRelaxed();
+    if (relaxed)
+      return "barrier.cluster.arrive.relaxed.aligned";
+    else
+      return "barrier.cluster.arrive.aligned";
   }
 };
 
-class ClusterWaitOpPattern : public mlir::RewritePattern {
+class ClusterWaitOpPattern
+    : public NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern> {
 public:
-  ClusterWaitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::ClusterWaitOp::getOperationName(), 1,
-            context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto clusterWaitOp = llvm::dyn_cast<mlir::triton::nvgpu::ClusterWaitOp>(op);
-    if (!clusterWaitOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-
-    PTXBuilder ptxBuilder;
-    auto ptxAsm = "barrier.cluster.wait.aligned";
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    ptxInstr();
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  using Base = NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern>;
+  using Base::Base;
+  bool hasSideEffects() const { return false; }
+  std::string getPtxAsm(ttn::ClusterWaitOp op) const {
+    return "barrier.cluster.wait.aligned";
   }
 };
 
 class TMALoadTiledOpPattern : public mlir::RewritePattern {
 public:
   TMALoadTiledOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::TMALoadTiledOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::TMALoadTiledOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto tmaLoadTiledOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::TMALoadTiledOp>(op);
+    auto tmaLoadTiledOp = llvm::dyn_cast<ttn::TMALoadTiledOp>(op);
     if (!tmaLoadTiledOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -644,16 +442,14 @@ public:
 class TMAStoreTiledOpPattern : public mlir::RewritePattern {
 public:
   TMAStoreTiledOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::TMAStoreTiledOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::TMAStoreTiledOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto tmaStoreTiledOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::TMAStoreTiledOp>(op);
+    auto tmaStoreTiledOp = llvm::dyn_cast<ttn::TMAStoreTiledOp>(op);
     if (!tmaStoreTiledOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -717,14 +513,14 @@ public:
 class LoadDSmemOpPattern : public mlir::RewritePattern {
 public:
   LoadDSmemOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::LoadDSmemOp::getOperationName(), 1, context) {}
+      : mlir::RewritePattern(ttn::LoadDSmemOp::getOperationName(), 1, context) {
+  }
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto loadDSmemOp = llvm::dyn_cast<mlir::triton::nvgpu::LoadDSmemOp>(op);
+    auto loadDSmemOp = llvm::dyn_cast<ttn::LoadDSmemOp>(op);
     if (!loadDSmemOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -783,9 +579,8 @@ public:
 class ClusterCTAIdOpPattern : public mlir::RewritePattern {
 public:
   ClusterCTAIdOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::ClusterCTAIdOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::ClusterCTAIdOp::getOperationName(), 1,
+                             context) {}
 
   mlir::Value getSRegValue(std::string name, Location loc,
                            mlir::PatternRewriter &rewriter) const {
@@ -803,8 +598,7 @@ public:
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto clusterCTAIdOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::ClusterCTAIdOp>(op);
+    auto clusterCTAIdOp = llvm::dyn_cast<ttn::ClusterCTAIdOp>(op);
     if (!clusterCTAIdOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -823,15 +617,14 @@ public:
 class WGMMAOpPattern : public mlir::RewritePattern {
 public:
   WGMMAOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::triton::nvgpu::WGMMAOp::getOperationName(),
-                             1, context) {}
+      : mlir::RewritePattern(ttn::WGMMAOp::getOperationName(), 1, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    using namespace mlir::triton::nvgpu;
+    using namespace ttn;
     auto ctx = rewriter.getContext();
-    auto wgmmaOp = llvm::dyn_cast<mlir::triton::nvgpu::WGMMAOp>(op);
+    auto wgmmaOp = llvm::dyn_cast<ttn::WGMMAOp>(op);
     if (!wgmmaOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -981,48 +774,32 @@ public:
   }
 };
 
-class FenceMBarrierInitOpPattern : public mlir::RewritePattern {
+class FenceMBarrierInitOpPattern
+    : public NVGPUOpPatternBase<ttn::FenceMBarrierInitOp,
+                                FenceMBarrierInitOpPattern> {
 public:
-  FenceMBarrierInitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::FenceMBarrierInitOp::getOperationName(), 1,
-            context) {}
+  using Base =
+      NVGPUOpPatternBase<ttn::FenceMBarrierInitOp, FenceMBarrierInitOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto fenceMBarrierInitOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::FenceMBarrierInitOp>(op);
-    if (!fenceMBarrierInitOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    PTXBuilder ptxBuilder;
+  bool hasSideEffects() const { return true; }
 
-    auto &ptxInstr =
-        *ptxBuilder.create<PTXInstr>("fence.mbarrier_init.release.cluster");
-
-    ptxInstr();
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  std::string getPtxAsm(ttn::FenceMBarrierInitOp op) const {
+    return "fence.mbarrier_init.release.cluster";
   }
 };
+
 class NamedBarrierArriveOpPattern : public mlir::RewritePattern {
 public:
   NamedBarrierArriveOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::NamedBarrierArriveOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::NamedBarrierArriveOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto namedBarrierArriveOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::NamedBarrierArriveOp>(op);
+    auto namedBarrierArriveOp = llvm::dyn_cast<ttn::NamedBarrierArriveOp>(op);
     if (!namedBarrierArriveOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -1045,16 +822,14 @@ public:
 class NamedBarrierWaitOpPattern : public mlir::RewritePattern {
 public:
   NamedBarrierWaitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::NamedBarrierWaitOp::getOperationName(), 1,
-            context) {}
+      : mlir::RewritePattern(ttn::NamedBarrierWaitOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto namedBarrierWaitOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::NamedBarrierWaitOp>(op);
+    auto namedBarrierWaitOp = llvm::dyn_cast<ttn::NamedBarrierWaitOp>(op);
     if (!namedBarrierWaitOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -1074,74 +849,43 @@ public:
   }
 };
 
-class CGABarrierArriveOpPattern : public mlir::RewritePattern {
+class CGABarrierArriveOpPattern
+    : public NVGPUOpPatternBase<ttn::CGABarrierArriveOp,
+                                CGABarrierArriveOpPattern> {
 public:
-  CGABarrierArriveOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::CGABarrierArriveOp::getOperationName(), 1,
-            context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto cgaBarrierArriveOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::CGABarrierArriveOp>(op);
-    if (!cgaBarrierArriveOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    PTXBuilder ptxBuilder;
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("barrier.cluster.arrive");
-    ptxInstr();
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  using Base =
+      NVGPUOpPatternBase<ttn::CGABarrierArriveOp, CGABarrierArriveOpPattern>;
+  using Base::Base;
+  bool hasSideEffects() const { return false; }
+  std::string getPtxAsm(ttn::CGABarrierArriveOp op) const {
+    return "barrier.cluster.arrive";
   }
 };
 
-class CGABarrierWaitOpPattern : public mlir::RewritePattern {
+class CGABarrierWaitOpPattern
+    : public NVGPUOpPatternBase<ttn::CGABarrierWaitOp,
+                                CGABarrierWaitOpPattern> {
 public:
-  CGABarrierWaitOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::CGABarrierWaitOp::getOperationName(), 1,
-            context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto cgaBarrierWaitOp =
-        llvm::dyn_cast<mlir::triton::nvgpu::CGABarrierWaitOp>(op);
-    if (!cgaBarrierWaitOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    PTXBuilder ptxBuilder;
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>("barrier.cluster.wait");
-    ptxInstr();
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  using Base =
+      NVGPUOpPatternBase<ttn::CGABarrierWaitOp, CGABarrierWaitOpPattern>;
+  using Base::Base;
+  bool hasSideEffects() const { return false; }
+  std::string getPtxAsm(ttn::CGABarrierWaitOp op) const {
+    return "barrier.cluster.wait";
   }
 };
 
 class StoreDSmemOpPattern : public mlir::RewritePattern {
 public:
   StoreDSmemOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::StoreDSmemOp::getOperationName(), 1, context) {
-  }
+      : mlir::RewritePattern(ttn::StoreDSmemOp::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto storeDSmemOp = llvm::dyn_cast<mlir::triton::nvgpu::StoreDSmemOp>(op);
+    auto storeDSmemOp = llvm::dyn_cast<ttn::StoreDSmemOp>(op);
     if (!storeDSmemOp)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -1201,19 +945,161 @@ public:
   }
 };
 
-class OffsetOfSts64OpPattern : public mlir::RewritePattern {
+class Sts64OpPattern : public mlir::RewritePattern {
 public:
-  OffsetOfSts64OpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::OffsetOfSts64Op::getOperationName(), 1,
-            context) {}
+  Sts64OpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(ttn::Sts64Op::getOperationName(), 1, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto offsetOfSts64Op =
-        llvm::dyn_cast<mlir::triton::nvgpu::OffsetOfSts64Op>(op);
+    auto sts64Op = llvm::dyn_cast<ttn::Sts64Op>(op);
+    if (!sts64Op)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto offset = sts64Op.getOffset();
+    auto d0 = sts64Op.getD0();
+    auto d1 = sts64Op.getD1();
+
+    PTXBuilder ptxBuilder;
+
+    std::string ptxAsm = "st.shared.v2.b32 [$0], {$1, $2}";
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+
+    SmallVector<PTXBuilder::Operand *> oprs;
+    auto *addrOpr = ptxBuilder.newOperand(offset, "r");
+    auto *d0Opr = ptxBuilder.newOperand(d0, "r");
+    auto *d1Opr = ptxBuilder.newOperand(d1, "r");
+
+    ptxInstr({addrOpr, d0Opr, d1Opr},
+             /*onlyAttachMLIRArgs=*/true);
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+class RegAllocOpPattern : public mlir::RewritePattern {
+public:
+  RegAllocOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(ttn::RegAllocOp::getOperationName(), 1, context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto regAllocOp = llvm::dyn_cast<ttn::RegAllocOp>(op);
+    if (!regAllocOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto regCount = regAllocOp.getRegCount();
+
+    PTXBuilder ptxBuilder;
+
+    auto ptxAsm =
+        "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+
+    ptxInstr({},
+             /*onlyAttachMLIRArgs=*/true);
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class RegDeallocOpPattern : public mlir::RewritePattern {
+public:
+  RegDeallocOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(ttn::RegDeallocOp::getOperationName(), 1,
+                             context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto regDeallocOp = llvm::dyn_cast<ttn::RegDeallocOp>(op);
+    if (!regDeallocOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto regCount = regDeallocOp.getRegCount();
+
+    PTXBuilder ptxBuilder;
+
+    auto ptxAsm =
+        "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+
+    ptxInstr({},
+             /*onlyAttachMLIRArgs=*/true);
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+class WGMMADescCreateOpPattern : public mlir::RewritePattern {
+public:
+  WGMMADescCreateOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(ttn::WGMMADescCreateOp::getOperationName(), 1,
+                             context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto wgmmaDescCreateOp = llvm::dyn_cast<ttn::WGMMADescCreateOp>(op);
+    if (!wgmmaDescCreateOp)
+      return mlir::failure();
+    auto loc = op->getLoc();
+    auto buffer = wgmmaDescCreateOp.getBuffer();
+    auto height = wgmmaDescCreateOp.getHeight();
+    uint32_t mode = static_cast<uint32_t>(wgmmaDescCreateOp.getMode());
+
+    auto smem_nvvm_pointer = ptrtoint(i64_ty, buffer);
+
+    Value desc = int_val(64, 0);
+    uint64_t swizzling = (mode == 1 ? 128 : mode == 2 ? 64 : 32);
+    Value swizzling_ = int_val(64, swizzling);
+    Value smem_address_bit = smem_nvvm_pointer;
+
+    Value strideDimension =
+        lshr(shl(swizzling_, int_val(64, 3)), int_val(64, 4));
+    Value height64 = zext(i64_ty, height);
+    Value leadingDimension = lshr(mul(height64, swizzling_), int_val(64, 4));
+
+    // Value baseOffset = int_val(64, 0);
+    Value startAddr =
+        lshr(shl(smem_address_bit, int_val(64, 46)), int_val(64, 50));
+
+    Value mode_ = int_val(64, mode);
+    desc = or_(desc, shl(mode_, int_val(64, 62)));
+    desc = or_(desc, shl(strideDimension, int_val(64, 32)));
+    desc = or_(desc, shl(leadingDimension, int_val(64, 16)));
+    // desc = or_(desc, shl(baseOffset, int_val(64, 49)));
+    desc = or_(desc, startAddr);
+
+    rewriter.replaceOp(op, {desc});
+    return mlir::success();
+  }
+};
+
+class OffsetOfSts64OpPattern : public mlir::RewritePattern {
+public:
+  OffsetOfSts64OpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(ttn::OffsetOfSts64Op::getOperationName(), 1,
+                             context) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto offsetOfSts64Op = llvm::dyn_cast<ttn::OffsetOfSts64Op>(op);
     if (!offsetOfSts64Op)
       return mlir::failure();
     auto loc = op->getLoc();
@@ -1264,104 +1150,75 @@ public:
   }
 };
 
-class Sts64OpPattern : public mlir::RewritePattern {
+class OffsetOfStmatrixV4OpPattern : public mlir::RewritePattern {
 public:
-  Sts64OpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(mlir::triton::nvgpu::Sts64Op::getOperationName(),
-                             1, context) {}
+  OffsetOfStmatrixV4OpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(ttn::OffsetOfStmatrixV4Op::getOperationName(), 1,
+                             context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto sts64Op = llvm::dyn_cast<mlir::triton::nvgpu::Sts64Op>(op);
-    if (!sts64Op)
+    auto offsetOfStmatrixV4Op = llvm::dyn_cast<ttn::OffsetOfStmatrixV4Op>(op);
+    if (!offsetOfStmatrixV4Op)
       return mlir::failure();
     auto loc = op->getLoc();
-    auto offset = sts64Op.getOffset();
-    auto d0 = sts64Op.getD0();
-    auto d1 = sts64Op.getD1();
+    auto threadId = offsetOfStmatrixV4Op.getThreadId();
+    auto rowOfWarp = offsetOfStmatrixV4Op.getRowOfWarp();
+    auto elemIdx = offsetOfStmatrixV4Op.getElemIdx();
+    auto leadingDimOffset = offsetOfStmatrixV4Op.getLeadingDimOffset();
+    auto rowStride = offsetOfStmatrixV4Op.getRowStride();
+    auto swizzleEnabled = offsetOfStmatrixV4Op.getSwizzleEnabled();
 
-    PTXBuilder ptxBuilder;
+    if (swizzleEnabled) {
+      uint32_t perPhase = 0;
+      uint32_t maxPhase = 0;
+      if (rowStride == 64) {
+        perPhase = 1;
+        maxPhase = 8;
+      } else if (rowStride == 32) {
+        perPhase = 2;
+        maxPhase = 4;
+      } else if (rowStride == 16) {
+        perPhase = 4;
+        maxPhase = 2;
+      }
 
-    std::string ptxAsm = "st.shared.v2.b32 [$0], {$1, $2}";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+      Value iterOfCol = udiv(elemIdx, i32_val(8));
+      Value myRow = add(rowOfWarp, and_(threadId, i32_val(0xf)));
+      Value myCol =
+          mul(and_(lshr(threadId, i32_val(4)), i32_val(0x1)), i32_val(8));
+      myCol = add(myCol, mul(iterOfCol, i32_val(16)));
 
-    SmallVector<PTXBuilder::Operand *> oprs;
-    auto *addrOpr = ptxBuilder.newOperand(offset, "r");
-    auto *d0Opr = ptxBuilder.newOperand(d0, "r");
-    auto *d1Opr = ptxBuilder.newOperand(d1, "r");
+      Value offset0 =
+          mul(udiv(myCol, i32_val(rowStride)), i32_val(leadingDimOffset));
+      myCol = urem(myCol, i32_val(rowStride));
 
-    ptxInstr({addrOpr, d0Opr, d1Opr},
-             /*onlyAttachMLIRArgs=*/true);
+      Value phase = urem(udiv(myRow, i32_val(perPhase)), i32_val(maxPhase));
 
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-class RegAllocOpPattern : public mlir::RewritePattern {
-public:
-  RegAllocOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::RegAllocOp::getOperationName(), 1, context) {}
+      Value lineOffset =
+          add(mul(urem(myRow, i32_val(perPhase)), i32_val(rowStride)), myCol);
+      Value colOffset =
+          add(mul(xor_(udiv(lineOffset, i32_val(8)), phase), i32_val(8)),
+              urem(lineOffset, i32_val(8)));
+      Value offset1 =
+          add(mul(udiv(myRow, i32_val(perPhase)), i32_val(64)), colOffset);
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto regAllocOp = llvm::dyn_cast<mlir::triton::nvgpu::RegAllocOp>(op);
-    if (!regAllocOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto regCount = regAllocOp.getRegCount();
+      Value res = add(offset1, offset0);
 
-    PTXBuilder ptxBuilder;
+      rewriter.replaceOp(op, {res});
+    } else {
+      Value iterOfCol = udiv(elemIdx, i32_val(4));
+      Value myRow = add(rowOfWarp, and_(threadId, i32_val(0xf)));
+      Value myCol =
+          mul(and_(lshr(threadId, i32_val(4)), i32_val(0x1)), i32_val(8));
+      myCol = add(myCol, mul(iterOfCol, i32_val(16)));
 
-    auto ptxAsm =
-        "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-
-    ptxInstr({},
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  }
-};
-
-class RegDeallocOpPattern : public mlir::RewritePattern {
-public:
-  RegDeallocOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(
-            mlir::triton::nvgpu::RegDeallocOp::getOperationName(), 1, context) {
-  }
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto regDeallocOp = llvm::dyn_cast<mlir::triton::nvgpu::RegDeallocOp>(op);
-    if (!regDeallocOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto regCount = regDeallocOp.getRegCount();
-
-    PTXBuilder ptxBuilder;
-
-    auto ptxAsm =
-        "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-
-    ptxInstr({},
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
+      Value offset =
+          add(mul(myRow, i32_val(rowStride)), mul(myCol, i32_val(2)));
+      rewriter.replaceOp(op, {offset});
+    }
     return mlir::success();
   }
 };
