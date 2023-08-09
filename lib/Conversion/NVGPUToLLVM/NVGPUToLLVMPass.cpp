@@ -935,10 +935,9 @@ public:
     uint32_t asmOpIdx = 0;
 
     // Operand C
-    uint32_t numCRegs = m * n / 128;
-    assert(numCRegs == structTypeC.getBody().size());
-    std::string args = "";
+    uint32_t numCRegs = structTypeC.getBody().size();
 
+    std::string args = "";
     args += "{";
     for (uint32_t i = 0; i < numCRegs; ++i) {
       args += "$" + std::to_string(asmOpIdx++) + (i == numCRegs - 1 ? "" : ",");
@@ -1437,7 +1436,7 @@ public:
     // patterns.add<OffsetOfSts64OpPattern>(context);
     // patterns.add<CGABarrierWaitOpPattern>(context);
     // patterns.add<CGABarrierArriveOpPattern>(context);
-    // patterns.add<NamedBarrierWaitOpPattern>(context);
+    patterns.add<NamedBarrierWaitOpPattern>(context);
     // patterns.add<NamedBarrierArriveOpPattern>(context);
     // patterns.add<FenceMBarrierInitOpPattern>(context);
 
