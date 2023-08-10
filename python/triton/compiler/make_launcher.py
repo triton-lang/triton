@@ -250,6 +250,7 @@ def generate_launcher(constants, signature, ids):
 #include \"cuda.h\"
 #include <stdbool.h>
 #include <Python.h>
+#include <dlfcn.h>
 
 static inline void gpuAssert(CUresult code, const char *file, int line)
 {{
