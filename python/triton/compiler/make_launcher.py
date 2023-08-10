@@ -295,9 +295,6 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
     if (num_ctas == 1) {{
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
     }} else {{
-    #if CUDA_VERSION < 12000
-      PyErr_SetString(PyExc_RuntimeError, "Multi-CTA kernels are only supported on CUDA 12.0 and above");
-    #else
       CUlaunchAttribute launchAttr[2];
       launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
       launchAttr[0].value.clusterDim.x = clusterDimX;
@@ -321,7 +318,6 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
         cuLaunchKernelExHandle = getLaunchKernelExHandle();
       }}
       CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
-    #endif
     }}
   }}
 }}

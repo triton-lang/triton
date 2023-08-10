@@ -370,11 +370,6 @@ static cuTensorMapEncodeTiled_t getcuTensorMapEncodeTiledHandle() {
 }
 
 static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
-#if CUDA_VERSION < 12000
-  PyErr_SetString(PyExc_RuntimeError,
-                  "Failed to encode tensor map: CUDA version must be >= 12.0");
-  return NULL;
-#else
   CUtensorMap *tensorMap = (CUtensorMap *)malloc(sizeof(CUtensorMap));
   CUtensorMapDataType tensorDataType;
   cuuint32_t tensorRank;
@@ -417,7 +412,6 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   free(elementStrides);
   // Return the tensor map as a normal pointer
   return PyLong_FromUnsignedLongLong((unsigned long long)tensorMap);
-#endif
 }
 
 static PyMethodDef ModuleMethods[] = {
