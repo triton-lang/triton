@@ -6,6 +6,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::getSRegValue;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 

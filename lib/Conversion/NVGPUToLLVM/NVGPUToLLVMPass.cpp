@@ -24,6 +24,8 @@ using namespace mlir::triton;
 #include "triton/Conversion/NVGPUToLLVM/Passes.h.inc"
 
 namespace ttn = mlir::triton::nvgpu;
+using ::mlir::LLVM::getSRegValue;
+
 namespace {
 
 template <typename SourceOp, typename ConcreteT>
@@ -576,44 +578,6 @@ public:
   }
 };
 
-class ClusterCTAIdOpPattern : public mlir::RewritePattern {
-public:
-  ClusterCTAIdOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::ClusterCTAIdOp::getOperationName(), 1,
-                             context) {}
-
-  mlir::Value getSRegValue(std::string name, Location loc,
-                           mlir::PatternRewriter &rewriter) const {
-    PTXBuilder ptxBuilder;
-    std::string ptxAsm = "mov.u32 $0, " + name + ";";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    auto *ret = ptxBuilder.newOperand("=r");
-    ptxInstr({ret}, /*onlyAttachMLIRArgs=*/true);
-    auto res =
-        ptxBuilder.launch(rewriter, loc, i32_ty, /*hasSideEffect*/ false);
-    return res;
-  }
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto clusterCTAIdOp = llvm::dyn_cast<ttn::ClusterCTAIdOp>(op);
-    if (!clusterCTAIdOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-
-    auto x = getSRegValue("%cluster_ctaid.x", loc, rewriter);
-    auto y = getSRegValue("%cluster_ctaid.y", loc, rewriter);
-    auto z = getSRegValue("%cluster_ctaid.z", loc, rewriter);
-    auto nx = getSRegValue("%cluster_nctaid.x", loc, rewriter);
-    auto ny = getSRegValue("%cluster_nctaid.y", loc, rewriter);
-    auto res = add(x, mul(add(y, mul(z, ny)), nx));
-    rewriter.replaceOp(op, {res});
-    return mlir::success();
-  }
-};
-
 class WGMMAOpPattern : public mlir::RewritePattern {
 public:
   WGMMAOpPattern(mlir::MLIRContext *context)
@@ -981,68 +945,57 @@ public:
     return mlir::success();
   }
 };
-class RegAllocOpPattern : public mlir::RewritePattern {
+
+class RegAllocOpPattern
+    : public NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern> {
 public:
-  RegAllocOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::RegAllocOp::getOperationName(), 1, context) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto regAllocOp = llvm::dyn_cast<ttn::RegAllocOp>(op);
-    if (!regAllocOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto regCount = regAllocOp.getRegCount();
-
-    PTXBuilder ptxBuilder;
-
-    auto ptxAsm =
-        "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-
-    ptxInstr({},
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  using Base = NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern>;
+  using Base::Base;
+  bool hasSideEffects() const { return true; }
+  std::string getPtxAsm(ttn::RegAllocOp op) const {
+    auto regCount = op.getRegCount();
+    return "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
   }
 };
 
-class RegDeallocOpPattern : public mlir::RewritePattern {
+class RegDeallocOpPattern
+    : public NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern> {
 public:
-  RegDeallocOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::RegDeallocOp::getOperationName(), 1,
+  using Base = NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern>;
+  using Base::Base;
+  bool hasSideEffects() const { return true; }
+  std::string getPtxAsm(ttn::RegDeallocOp op) const {
+    auto regCount = op.getRegCount();
+    return "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
+  }
+};
+
+class ClusterCTAIdOpPattern : public mlir::RewritePattern {
+public:
+  ClusterCTAIdOpPattern(mlir::MLIRContext *context)
+      : mlir::RewritePattern(ttn::ClusterCTAIdOp::getOperationName(), 1,
                              context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto ctx = rewriter.getContext();
-    auto regDeallocOp = llvm::dyn_cast<ttn::RegDeallocOp>(op);
-    if (!regDeallocOp)
+    auto clusterCTAIdOp = llvm::dyn_cast<ttn::ClusterCTAIdOp>(op);
+    if (!clusterCTAIdOp)
       return mlir::failure();
     auto loc = op->getLoc();
-    auto regCount = regDeallocOp.getRegCount();
 
-    PTXBuilder ptxBuilder;
-
-    auto ptxAsm =
-        "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-
-    ptxInstr({},
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
+    auto x = getSRegValue(rewriter, loc, "%cluster_ctaid.x");
+    auto y = getSRegValue(rewriter, loc, "%cluster_ctaid.y");
+    auto z = getSRegValue(rewriter, loc, "%cluster_ctaid.z");
+    auto nx = getSRegValue(rewriter, loc, "%cluster_nctaid.x");
+    auto ny = getSRegValue(rewriter, loc, "%cluster_nctaid.y");
+    auto res = add(x, mul(add(y, mul(z, ny)), nx));
+    rewriter.replaceOp(op, {res});
     return mlir::success();
   }
 };
+
 class WGMMADescCreateOpPattern : public mlir::RewritePattern {
 public:
   WGMMADescCreateOpPattern(mlir::MLIRContext *context)
@@ -1253,15 +1206,15 @@ public:
     patterns.add<RegAllocOpPattern>(context);
     patterns.add<RegDeallocOpPattern>(context);
     patterns.add<WGMMAOpPattern>(context);
-    // patterns.add<StoreDSmemOpPattern>(context);
-    // patterns.add<Sts64OpPattern>(context);
-    // patterns.add<OffsetOfSts64OpPattern>(context);
-    // patterns.add<CGABarrierWaitOpPattern>(context);
-    // patterns.add<CGABarrierArriveOpPattern>(context);
     patterns.add<NamedBarrierWaitOpPattern>(context);
     patterns.add<NamedBarrierArriveOpPattern>(context);
-    // patterns.add<FenceMBarrierInitOpPattern>(context);
 
+    patterns.add<FenceMBarrierInitOpPattern>(context);
+    patterns.add<StoreDSmemOpPattern>(context);
+    patterns.add<Sts64OpPattern>(context);
+    patterns.add<OffsetOfSts64OpPattern>(context);
+    patterns.add<CGABarrierWaitOpPattern>(context);
+    patterns.add<CGABarrierArriveOpPattern>(context);
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
