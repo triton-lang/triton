@@ -34,8 +34,6 @@ public:
   explicit NVGPUOpPatternBase(mlir::MLIRContext *context)
       : mlir::RewritePattern(SourceOp::getOperationName(), 1, context) {}
 
-  virtual bool hasSideEffects() const { return false; }
-
   LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -45,8 +43,7 @@ public:
     if (!sourceOp)
       return mlir::failure();
     auto ptxAsm = static_cast<const ConcreteT *>(this)->getPtxAsm(sourceOp);
-    auto hasSideEffects =
-        static_cast<const ConcreteT *>(this)->hasSideEffects();
+    auto hasSideEffects = !isMemoryEffectFree(sourceOp);
     PTXBuilder ptxBuilder;
     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
     ptxInstr({}, /*onlyAttachMLIRArgs=*/true);
@@ -94,7 +91,6 @@ public:
   using Base = NVGPUOpPatternBase<ttn::WGMMAFenceOp, WGMMAFenceOpPattern>;
   using Base::Base;
 
-  bool hasSideEffects() const override { return true; }
   std::string getPtxAsm(ttn::WGMMAFenceOp op) const {
     return "wgmma.fence.sync.aligned;";
   }
@@ -108,8 +104,6 @@ public:
       NVGPUOpPatternBase<ttn::WGMMACommitGroupOp, WGMMACommitGroupOpPattern>;
   using Base::Base;
 
-  bool hasSideEffects() const override { return true; }
-
   std::string getPtxAsm(ttn::WGMMACommitGroupOp op) const {
     return "wgmma.commit_group.sync.aligned;";
   }
@@ -122,8 +116,6 @@ public:
   using Base =
       NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp, WGMMAWaitGroupOpPattern>;
   using Base::Base;
-
-  bool hasSideEffects() const override { return true; }
 
   std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
     auto pendings = op.getPendings();
@@ -333,7 +325,6 @@ class ClusterWaitOpPattern
 public:
   using Base = NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern>;
   using Base::Base;
-
   std::string getPtxAsm(ttn::ClusterWaitOp op) const {
     return "barrier.cluster.wait.aligned;";
   }
@@ -735,8 +726,6 @@ public:
       NVGPUOpPatternBase<ttn::FenceMBarrierInitOp, FenceMBarrierInitOpPattern>;
   using Base::Base;
 
-  bool hasSideEffects() const override { return true; }
-
   std::string getPtxAsm(ttn::FenceMBarrierInitOp op) const {
     return "fence.mbarrier_init.release.cluster;";
   }
@@ -809,7 +798,6 @@ public:
   using Base =
       NVGPUOpPatternBase<ttn::CGABarrierArriveOp, CGABarrierArriveOpPattern>;
   using Base::Base;
-
   std::string getPtxAsm(ttn::CGABarrierArriveOp op) const {
     return "barrier.cluster.arrive;";
   }
@@ -822,7 +810,6 @@ public:
   using Base =
       NVGPUOpPatternBase<ttn::CGABarrierWaitOp, CGABarrierWaitOpPattern>;
   using Base::Base;
-
   std::string getPtxAsm(ttn::CGABarrierWaitOp op) const {
     return "barrier.cluster.wait;";
   }
@@ -940,7 +927,7 @@ class RegAllocOpPattern
 public:
   using Base = NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern>;
   using Base::Base;
-  bool hasSideEffects() const override { return true; }
+
   std::string getPtxAsm(ttn::RegAllocOp op) const {
     auto regCount = op.getRegCount();
     return "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
@@ -952,7 +939,7 @@ class RegDeallocOpPattern
 public:
   using Base = NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern>;
   using Base::Base;
-  bool hasSideEffects() const override { return true; }
+
   std::string getPtxAsm(ttn::RegDeallocOp op) const {
     auto regCount = op.getRegCount();
     return "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
