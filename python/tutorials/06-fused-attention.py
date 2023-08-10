@@ -172,7 +172,7 @@ def _bwd_kernel(
             lo = 0
         # initialize row/col offsets
         offs_qm = lo + tl.arange(0, BLOCK_M)
-        offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M) 
+        offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M)
         offs_m = tl.arange(0, BLOCK_N)
         offs_k = tl.arange(0, BLOCK_DMODEL)
         # initialize pointers to value-like data
