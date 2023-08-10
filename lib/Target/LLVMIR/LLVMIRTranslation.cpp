@@ -17,7 +17,6 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
-#include "triton/Dialect/NVGPU/ToLLVMIR/NVGPUToLLVMIR.h"
 #include "triton/Target/LLVMIR/Passes.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -279,7 +278,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerROCDLDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
-  mlir::registerNVGPUDialectTranslation(registry);
 
   module->getContext()->appendDialectRegistry(registry);
 
