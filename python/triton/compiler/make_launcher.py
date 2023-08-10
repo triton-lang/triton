@@ -275,6 +275,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   void* handle = dlopen("libcuda.so", RTLD_LAZY);
   if (!handle) {{
     PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");
+    return NULL;
   }}
   // Clear any existing error
   dlerror();
@@ -283,6 +284,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   const char *dlsym_error = dlerror();
   if (dlsym_error) {{
     PyErr_SetString(PyExc_RuntimeError, "Failed to retrieve cuLaunchKernelEx from libcuda.so");
+    return NULL;
   }}
   return cuLaunchKernelExHandle;
 }}

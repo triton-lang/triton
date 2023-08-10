@@ -57,7 +57,7 @@ class CudaUtils(object):
         self.CUtensorMapSwizzle = mod.CUtensorMapSwizzle
         self.CUtensorMapL2promotion = mod.CUtensorMapL2promotion
         self.CUtensorMapFloatOOBfill = mod.CUtensorMapFloatOOBfill
-        #self.cuTensorMapEncodeTiled = mod.cuTensorMapEncodeTiled
+        self.cuTensorMapEncodeTiled = mod.cuTensorMapEncodeTiled
         self.cuMemAlloc = mod.cuMemAlloc
         self.cuMemcpyHtoD = mod.cuMemcpyHtoD
         self.cuMemFree = mod.cuMemFree

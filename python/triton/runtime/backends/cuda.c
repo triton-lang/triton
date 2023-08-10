@@ -338,7 +338,42 @@ static cuuint32_t *list_to_cuuint32_array(PyObject *listObj) {
   return array;
 }
 
+typedef CUresult (*cuTensorMapEncodeTiled_t)(
+    CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
+    cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
+    const cuuint64_t *globalStrides, const cuuint32_t *boxDim,
+    const cuuint32_t *elementStrides, CUtensorMapInterleave interleave,
+    CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
+    CUtensorMapFloatOOBfill oobFill);
+
+static cuTensorMapEncodeTiled_t getcuTensorMapEncodeTiledHandle() {
+  // Open the shared library
+  void *handle = dlopen("libcuda.so", RTLD_LAZY);
+  if (!handle) {
+    PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");
+    return NULL;
+  }
+  // Clear any existing error
+  dlerror();
+  cuTensorMapEncodeTiled_t cuTensorMapEncodeTiledHandle =
+      (cuTensorMapEncodeTiled_t)dlsym(handle, "cuTensorMapEncodeTiled");
+  // Check for errors
+  const char *dlsym_error = dlerror();
+  if (dlsym_error) {
+    PyErr_SetString(
+        PyExc_RuntimeError,
+        "Failed to retrieve cuTensorMapEncodeTiled from libcuda.so");
+    return NULL;
+  }
+  return cuTensorMapEncodeTiledHandle;
+}
+
 static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
+#if CUDA_VERSION < 12000
+  PyErr_SetString(PyExc_RuntimeError,
+                  "Failed to encode tensor map: CUDA version must be >= 12.0");
+  return NULL;
+#else
   CUtensorMap *tensorMap = (CUtensorMap *)malloc(sizeof(CUtensorMap));
   CUtensorMapDataType tensorDataType;
   cuuint32_t tensorRank;
@@ -364,20 +399,24 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   cuuint32_t *boxDim = list_to_cuuint32_array(boxDimObj);
   cuuint32_t *elementStrides = list_to_cuuint32_array(elementStridesObj);
 
-  //// Call the function
-  //CUDA_CHECK(cuTensorMapEncodeTiled(tensorMap, tensorDataType, tensorRank,
-  //                                  globalAddress, globalDim, globalStrides,
-  //                                  boxDim, elementStrides, interleave, swizzle,
-  //                                  l2Promotion, oobFill));
+  static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiledHandle = NULL;
+  if (cuTensorMapEncodeTiledHandle == NULL) {
+    cuTensorMapEncodeTiledHandle = getcuTensorMapEncodeTiledHandle();
+  }
+  // Call the function
+  CUDA_CHECK(cuTensorMapEncodeTiledHandle(
+      tensorMap, tensorDataType, tensorRank, globalAddress, globalDim,
+      globalStrides, boxDim, elementStrides, interleave, swizzle, l2Promotion,
+      oobFill));
 
   // Clean up
   free(globalDim);
   free(globalStrides);
   free(boxDim);
   free(elementStrides);
-
   // Return the tensor map as a normal pointer
   return PyLong_FromUnsignedLongLong((unsigned long long)tensorMap);
+#endif
 }
 
 static PyMethodDef ModuleMethods[] = {
@@ -388,7 +427,7 @@ static PyMethodDef ModuleMethods[] = {
     {"cuMemAlloc", memAlloc, METH_VARARGS},
     {"cuMemcpyHtoD", memcpyHtoD, METH_VARARGS},
     {"cuMemFree", memFree, METH_VARARGS},
-    //{"cuTensorMapEncodeTiled", tensorMapEncodeTiled, METH_VARARGS},
+    {"cuTensorMapEncodeTiled", tensorMapEncodeTiled, METH_VARARGS},
     {NULL, NULL, 0, NULL} // sentinel
 };
 
