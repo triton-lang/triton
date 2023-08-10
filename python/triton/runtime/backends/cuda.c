@@ -347,7 +347,7 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
     CUtensorMapFloatOOBfill oobFill);
 
-static cuTensorMapEncodeTiled_t getcuTensorMapEncodeTiledHandle() {
+static cuTensorMapEncodeTiled_t getCuTensorMapEncodeTiledHandle() {
   // Open the shared library
   void *handle = dlopen("libcuda.so", RTLD_LAZY);
   if (!handle) {
@@ -397,7 +397,7 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
 
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiledHandle = NULL;
   if (cuTensorMapEncodeTiledHandle == NULL) {
-    cuTensorMapEncodeTiledHandle = getcuTensorMapEncodeTiledHandle();
+    cuTensorMapEncodeTiledHandle = getCuTensorMapEncodeTiledHandle();
   }
   // Call the function
   CUDA_CHECK(cuTensorMapEncodeTiledHandle(
