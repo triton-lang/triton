@@ -172,7 +172,7 @@ def _bwd_kernel(
             lo = 0
         # initialize row/col offsets
         offs_qm = lo + tl.arange(0, BLOCK_M)
-        offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M) 
+        offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M)
         offs_m = tl.arange(0, BLOCK_N)
         offs_k = tl.arange(0, BLOCK_DMODEL)
         # initialize pointers to value-like data
@@ -243,11 +243,12 @@ class _attention(torch.autograd.Function):
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
         BLOCK_M = 128
-        BLOCK_N = 64
+        BLOCK_N = 64 if Lk <= 64 else 32
+        num_stages = 4 if Lk <= 64 else 3
+        num_warps = 4
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         P_SEQ = 0 if q.shape[-2] == k.shape[-2] else k.shape[-2] - q.shape[-2]
-        num_warps = 4 if Lk <= 64 else 8
         _fwd_kernel[grid](
             q, k, v, sm_scale,
             L,
@@ -260,7 +261,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
             IS_CAUSAL=causal,
             num_warps=num_warps,
-            num_stages=4)
+            num_stages=num_stages)
 
         ctx.save_for_backward(q, k, v, o, L)
         ctx.grid = grid
