@@ -97,9 +97,13 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
             int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeBitWidth;
 
             int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
-            int maxPhase = outerDimGranularity / perPhase;
-            int vecSize = innerDimLength / maxPhase;
-            assert(vecSize > 0);
+            // Note: the following settings is customized for mfma_32x32x8f16
+            // to avoid **load** bank conflicts
+            // vecSize is set to k_base, which is 4
+            // maxPhase is set to BLOCK_K/4 so that every 16 workitems will access
+            // difference banks
+            int vecSize = 4;
+            int maxPhase = innerDimLength / 4;
 
             return $_get(context, vecSize, perPhase, maxPhase, order);
           } else {

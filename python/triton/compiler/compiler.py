@@ -77,7 +77,7 @@ def optimize_ttgir(mod, num_stages, arch):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
-    pm.add_tritongpu_remove_layout_conversions_pass()
+    #pm.add_tritongpu_remove_layout_conversions_pass()
     if _is_cuda(arch):
         pm.add_tritongpu_accelerate_matmul_pass(arch)
     # TODO change interface of accelerate_matmul_pass
