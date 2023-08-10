@@ -40,13 +40,21 @@ void PTXBuilder::initOperand(Operand *opr) {
 
 PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint, bool init) {
   // Constraint should be something like "=r"
-  // assert(constraint.size() == 2 && constraint[0] == '=');
+  assert(constraint.size() == 2 && constraint[0] == '=');
   auto *opr = newOperand();
   opr->idx = oprCounter++;
   opr->constraint = constraint;
   if (init) {
     initOperand(opr);
   }
+  return opr;
+}
+
+PTXBuilder::Operand *PTXBuilder::newOperand(unsigned operandIndex) {
+  assert(operandIndex < oprCounter && "operand index out of range");
+  auto *opr = newOperand();
+  opr->idx = oprCounter++;
+  opr->constraint = std::to_string(operandIndex);
   return opr;
 }
 

@@ -651,7 +651,7 @@ public:
     args += "}, ";
 
     for (uint32_t i = asmOpIdx - numCRegs; i < asmOpIdx; ++i) {
-      auto *opr = ptxBuilder.newOperand(std::to_string(i));
+      auto *opr = ptxBuilder.newOperand(i);
       oprs.push_back(opr);
     }
 
