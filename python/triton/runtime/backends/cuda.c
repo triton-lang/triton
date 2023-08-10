@@ -364,11 +364,11 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   cuuint32_t *boxDim = list_to_cuuint32_array(boxDimObj);
   cuuint32_t *elementStrides = list_to_cuuint32_array(elementStridesObj);
 
-  // Call the function
-  CUDA_CHECK(cuTensorMapEncodeTiled(tensorMap, tensorDataType, tensorRank,
-                                    globalAddress, globalDim, globalStrides,
-                                    boxDim, elementStrides, interleave, swizzle,
-                                    l2Promotion, oobFill));
+  //// Call the function
+  //CUDA_CHECK(cuTensorMapEncodeTiled(tensorMap, tensorDataType, tensorRank,
+  //                                  globalAddress, globalDim, globalStrides,
+  //                                  boxDim, elementStrides, interleave, swizzle,
+  //                                  l2Promotion, oobFill));
 
   // Clean up
   free(globalDim);
@@ -388,7 +388,7 @@ static PyMethodDef ModuleMethods[] = {
     {"cuMemAlloc", memAlloc, METH_VARARGS},
     {"cuMemcpyHtoD", memcpyHtoD, METH_VARARGS},
     {"cuMemFree", memFree, METH_VARARGS},
-    {"cuTensorMapEncodeTiled", tensorMapEncodeTiled, METH_VARARGS},
+    //{"cuTensorMapEncodeTiled", tensorMapEncodeTiled, METH_VARARGS},
     {NULL, NULL, 0, NULL} // sentinel
 };
 
