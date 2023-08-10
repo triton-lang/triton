@@ -295,10 +295,7 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   auto *sRegOpr = builder.newConstantOperand(sRegStr);
   mov(destOpr, sRegOpr);
   Value val = builder.launch(b, loc, b.getIntegerType(32), false);
-
-  auto cast = b.create<UnrealizedConversionCastOp>(
-      loc, TypeRange{b.getIntegerType(32)}, ValueRange{val});
-  return cast.getResult(0);
+  return val;
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
