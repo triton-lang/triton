@@ -1,4 +1,5 @@
 #include "cuda.h"
+#include <dlfcn.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
