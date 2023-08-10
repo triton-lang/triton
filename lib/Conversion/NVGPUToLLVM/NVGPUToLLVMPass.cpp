@@ -47,7 +47,7 @@ public:
         static_cast<const ConcreteT *>(this)->hasSideEffects();
     PTXBuilder ptxBuilder;
     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    ptxInstr();
+    ptxInstr({}, /*onlyAttachMLIRArgs=*/true);
     auto asmReturnTy = void_ty(ctx);
     ptxBuilder.launch(rewriter, loc, asmReturnTy,
                       /*hasSideEffects*/ hasSideEffects);
@@ -65,7 +65,7 @@ public:
   using Base::Base;
   bool hasSideEffects() const { return false; }
   std::string getPtxAsm(ttn::CGABarrierSyncOp op) const {
-    return "barrier.cluster.sync.aligned";
+    return "barrier.cluster.sync.aligned;";
   }
 };
 
@@ -80,9 +80,9 @@ public:
   std::string getPtxAsm(ttn::FenceAsyncSharedOp op) const {
     auto bCluster = op.getBCluster();
     if (bCluster)
-      return "fence.proxy.async.shared::cluster";
+      return "fence.proxy.async.shared::cluster;";
     else
-      return "fence.proxy.async.shared::cta";
+      return "fence.proxy.async.shared::cta;";
   }
 };
 
@@ -94,7 +94,7 @@ public:
 
   bool hasSideEffects() const { return true; }
   std::string getPtxAsm(ttn::WGMMAFenceOp op) const {
-    return "wgmma.fence.sync.aligned";
+    return "wgmma.fence.sync.aligned;";
   }
 };
 
@@ -109,35 +109,23 @@ public:
   bool hasSideEffects() const { return true; }
 
   std::string getPtxAsm(ttn::WGMMACommitGroupOp op) const {
-    return "wgmma.commit_group.sync.aligned";
+    return "wgmma.commit_group.sync.aligned;";
   }
 };
 
-class WGMMAWaitGroupOpPattern : public mlir::RewritePattern {
+class WGMMAWaitGroupOpPattern
+    : public NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp,
+                                WGMMAWaitGroupOpPattern> {
 public:
-  WGMMAWaitGroupOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::WGMMAWaitGroupOp::getOperationName(), 1,
-                             context) {}
+  using Base =
+      NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp, WGMMAWaitGroupOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto wgmmaWaitGroupOp = llvm::dyn_cast<ttn::WGMMAWaitGroupOp>(op);
-    if (!wgmmaWaitGroupOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto pendings = wgmmaWaitGroupOp.getPendings();
-    PTXBuilder ptxBuilder;
+  bool hasSideEffects() const { return true; }
 
-    auto &ptxInstr =
-        *ptxBuilder.create<PTXInstr>("wgmma.wait_group.sync.aligned");
-    ptxInstr(ptxBuilder.newConstantOperand(pendings));
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy, /*hasSideEffect*/ true);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
+    auto pendings = op.getPendings();
+    return "wgmma.wait_group.sync.aligned " + std::to_string(pendings) + ";";
   }
 };
 
@@ -333,9 +321,9 @@ public:
   std::string getPtxAsm(ttn::ClusterArriveOp op) const {
     auto relaxed = op.getRelaxed();
     if (relaxed)
-      return "barrier.cluster.arrive.relaxed.aligned";
+      return "barrier.cluster.arrive.relaxed.aligned;";
     else
-      return "barrier.cluster.arrive.aligned";
+      return "barrier.cluster.arrive.aligned;";
   }
 };
 
@@ -346,7 +334,7 @@ public:
   using Base::Base;
   bool hasSideEffects() const { return false; }
   std::string getPtxAsm(ttn::ClusterWaitOp op) const {
-    return "barrier.cluster.wait.aligned";
+    return "barrier.cluster.wait.aligned;";
   }
 };
 
@@ -749,7 +737,7 @@ public:
   bool hasSideEffects() const { return true; }
 
   std::string getPtxAsm(ttn::FenceMBarrierInitOp op) const {
-    return "fence.mbarrier_init.release.cluster";
+    return "fence.mbarrier_init.release.cluster;";
   }
 };
 
@@ -822,7 +810,7 @@ public:
   using Base::Base;
   bool hasSideEffects() const { return false; }
   std::string getPtxAsm(ttn::CGABarrierArriveOp op) const {
-    return "barrier.cluster.arrive";
+    return "barrier.cluster.arrive;";
   }
 };
 
@@ -835,7 +823,7 @@ public:
   using Base::Base;
   bool hasSideEffects() const { return false; }
   std::string getPtxAsm(ttn::CGABarrierWaitOp op) const {
-    return "barrier.cluster.wait";
+    return "barrier.cluster.wait;";
   }
 };
 
