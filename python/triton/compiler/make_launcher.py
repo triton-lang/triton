@@ -267,13 +267,34 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
+typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra);
+
+static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
+  // Open the shared library
+  void* handle = dlopen("libcuda.so", RTLD_LAZY);
+  if (!handle) {{
+    PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");
+  }}
+  // Clear any existing error
+  dlerror();
+  cuLaunchKernelEx_t cuLaunchKernelExHandle = (cuLaunchKernelEx_t)dlsym(handle, "cuLaunchKernelEx");
+  // Check for errors
+  const char *dlsym_error = dlerror();
+  if (dlsym_error) {{
+    PyErr_SetString(PyExc_RuntimeError, "Failed to retrieve cuLaunchKernelEx from libcuda.so");
+  }}
+  return cuLaunchKernelExHandle;
+}}
+
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
-  if(gridX*gridY*gridZ > 0){{
+  if (gridX*gridY*gridZ > 0) {{
     if (num_ctas == 1) {{
-      fprintf(stderr, "CUDA VERSION %d", CUDA_VERSION);
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
     }} else {{
+    #if CUDA_VERSION < 12000
+      PyErr_SetString(PyExc_RuntimeError, "Multi-CTA kernels are only supported on CUDA 12.0 and above");
+    #else
       CUlaunchAttribute launchAttr[2];
       launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
       launchAttr[0].value.clusterDim.x = clusterDimX;
@@ -292,7 +313,12 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
       config.hStream = stream;
       config.attrs = launchAttr;
       config.numAttrs = 2;
-      CUDA_CHECK(cuLaunchKernelEx(&config, function, params, 0));
+      static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
+      if (cuLaunchKernelExHandle == NULL) {{
+        cuLaunchKernelExHandle = getLaunchKernelExHandle();
+      }}
+      CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
+    #endif
     }}
   }}
 }}
