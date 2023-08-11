@@ -1916,6 +1916,16 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
 
 
+def binary_op_type_legalization(lhs, rhs, builder):
+    '''
+        Convert both operands to a single common type
+        :param lhs: the left operand
+        :param rhs: the right operand
+        :param builder: the builder
+    '''
+    return semantic.binary_op_type_checking_impl(lhs, rhs, builder)
+
+
 def extern(fn):
     """A decorator for external functions."""
     return builtin(fn)
