@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include "triton/Conversion/NVGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 
@@ -32,6 +33,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestMembarPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
+  mlir::triton::registerConvertNVGPUToLLVMPass();
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
