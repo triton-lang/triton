@@ -103,7 +103,10 @@ def f8_to_f16(x, dtype):
                 (128, 128, 32, 1, 4, 2, None, None, None, False, True, ADTYPE, BDTYPE),
             ] for ADTYPE, BDTYPE in [("float8e4b15", "float8e5"),
                                      ("float8e4b15", "float16"),
-                                     ("float16", "float8e4b15")]
+                                     ("float16", "float8e4b15"),
+                                     ("float8e5", "float8e5"),
+                                     ("float8e4", "float8e4"),
+                                     ("int8", "int8")]
         ]
     ),
 )
@@ -141,6 +144,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             return init_input(m, n, False, dtype, is_float8).t()
         if is_float8:
             return torch.randint(20, 50, (n, m), device="cuda", dtype=torch.int8)
+        if dtype == "int8":
+            return torch.randint(-128, 127, (n, m), device="cuda", dtype=torch.int8)
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dtype]
         return .1 * torch.randn((n, m), device="cuda", dtype=dtype)
 
@@ -155,6 +160,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     if BT and b_fp8:
         th_b = th_b.view(th_b.shape[::-1]).T
     th_c = torch.matmul(th_a, th_b)
+    if ADTYPE == "int8" or BDTYPE == "int8":
+        th_c = th_c.to(torch.int8)
     try:
         if a_fp8:
             a = triton.reinterpret(a, getattr(tl, ADTYPE))

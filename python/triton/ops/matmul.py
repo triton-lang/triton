@@ -114,8 +114,9 @@ def _kernel(A, B, C, M, N, K,
             _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
             a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
             b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
-        a = a.to(C.dtype.element_ty)
-        b = b.to(C.dtype.element_ty)
+        if a.dtype != b.dtype:
+            a = a.to(C.dtype.element_ty)
+            b = b.to(C.dtype.element_ty)
         acc += tl.dot(a, b, out_dtype=dot_out_dtype)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk

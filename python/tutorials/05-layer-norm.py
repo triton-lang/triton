@@ -251,7 +251,7 @@ class LayerNorm(torch.autograd.Function):
         # enqueue kernel
         _layer_norm_fwd_fused[(M,)](x_arg, y, weight, bias, mean, rstd,
                                     x_arg.stride(0), N, eps,
-                                    BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps)
+                                    BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps, num_ctas=1)
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
@@ -287,7 +287,7 @@ class LayerNorm(torch.autograd.Function):
         # accumulate partial sums in separate kernel
         _layer_norm_bwd_dwdb[grid](_dw, _db, dw, db, GROUP_SIZE_M, N,
                                    BLOCK_SIZE_M=32,
-                                   BLOCK_SIZE_N=128)
+                                   BLOCK_SIZE_N=128, num_ctas=1)
         return dx, None, dw, db, None
 
 
@@ -345,19 +345,21 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='c
     quantiles = [0.5, 0.2, 0.8]
     # utility functions
     if provider == 'triton':
-        y_fwd = lambda: layer_norm(x, w_shape, weight, bias, eps)
+        def y_fwd(): return layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
     if provider == 'torch':
-        y_fwd = lambda: torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)
+        def y_fwd(): return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
     if provider == 'apex':
-        apex_layer_norm = apex.normalization.FusedLayerNorm(w_shape).to(x.device).to(x.dtype)
-        y_fwd = lambda: apex_layer_norm(x)
+        apex_layer_norm = apex.normalization.FusedLayerNorm(
+            w_shape).to(x.device).to(x.dtype)
+
+        def y_fwd(): return apex_layer_norm(x)  # noqa: F811, E704
     # forward pass
     if mode == 'forward':
         gbps = lambda ms: 2 * x.numel() * x.element_size() / ms * 1e-6
         ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles, rep=500)
     # backward pass
     if mode == 'backward':
-        gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6
+        def gbps(ms): return 3 * x.numel() * x.element_size() / ms * 1e-6  # noqa: F811, E704
         y = y_fwd()
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True),
                                                      quantiles=quantiles, grad_to_none=[x], rep=500)
