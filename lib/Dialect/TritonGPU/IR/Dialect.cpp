@@ -1460,9 +1460,10 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
-                                   Attribute retEncoding,
-                                   Optional<Location> location) const override {
+  LogicalResult
+  inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
+                     Attribute retEncoding,
+                     std::optional<Location> location) const override {
     auto mmaRetEncoding = retEncoding.dyn_cast<MmaEncodingAttr>();
     if (mmaRetEncoding && mmaRetEncoding.isHopper()) {
       // TODO: support gmma when A/B does not reside in shared memory
