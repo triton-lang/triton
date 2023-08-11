@@ -78,7 +78,8 @@ public:
 
 private:
   Value getMockSmemBase() {
-    Value mockSmemBase = base.getSRegValue(rewriter, loc, "%mock_smem_base");
+    Value mockSmemBase =
+        mlir::LLVM::getSRegValue(rewriter, loc, "%mock_smem_base");
     auto llPtrTy = LLVM::LLVMPointerType::get(
         typeConverter.convertType(rewriter.getI8Type()), 3);
     auto cast = rewriter.create<UnrealizedConversionCastOp>(

@@ -151,6 +151,12 @@ struct PTXBuilder {
   // aggressive optimizations that may lead to incorrect results.
   Operand *newOperand(StringRef constraint, bool init = false);
 
+  // Create a new operand that is tied to a previous operand. In this case the
+  // asm would be permitted to write to an input register. Instead of providing
+  // constraint code for this operand, the constraint code of the tied operand
+  // is used.
+  Operand *newOperand(unsigned operandIndex);
+
   // Create a constant integer operand.
   Operand *newConstantOperand(int64_t v);
   // Create a constant operand with explicit code specified.

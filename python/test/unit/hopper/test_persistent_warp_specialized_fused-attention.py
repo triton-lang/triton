@@ -297,9 +297,6 @@ attention = _attention.apply
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 64)])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="Requires compute capability >= 9")
 def test_op(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
-    # with ENABLE_TMA=0 and ENABLE_MMA_V3=0
-    pytest.skip('unspecified launch failure')
-
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
