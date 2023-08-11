@@ -283,7 +283,7 @@ class TensorMapManager:
         if key in self.tensormaps_device:
             return int(self.tensormaps_device[key])
         else:
-            (cache_key, e, args) = key
+            (e, args) = key
             t_tensormap = e.tensormap(args)
             TENSORMAP_SIZE_IN_BYTES = 128
             t_tensormap_device = driver.utils.cuMemAlloc(TENSORMAP_SIZE_IN_BYTES)

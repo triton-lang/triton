@@ -23,7 +23,6 @@ add_mlir_translation_library(TritonLLVMIR
         MLIRSCFToControlFlow
         MLIRSupport
         MLIRTargetLLVMIRExport
-        NVGPUToLLVMIR
         TritonGPUToLLVM
         )
 

@@ -17,8 +17,8 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Conversion/NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
-#include "triton/Dialect/NVGPU/ToLLVMIR/NVGPUToLLVMIR.h"
 #include "triton/Target/LLVMIR/Passes.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -280,7 +280,6 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerROCDLDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
-  mlir::registerNVGPUDialectTranslation(registry);
 
   module->getContext()->appendDialectRegistry(registry);
 
@@ -353,6 +352,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   pm.addPass(mlir::createConvertIndexToLLVMPass());
   pm.addPass(
       createConvertTritonGPUToLLVMPass(computeCapability, &tmaInfos, isROCM));
+  pm.addPass(createConvertNVGPUToLLVMPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createCanonicalizerPass());
   // Simplify the IR
