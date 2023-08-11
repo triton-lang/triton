@@ -150,28 +150,12 @@ void MaterializeLoadStorePass::materializeStoreTilePtr(
     return;
   auto loc = store.getLoc();
   OpBuilder builder(store);
-  auto *ctx = store.getContext();
   auto value = store.getValue();
+  auto cvtOp = llvm::dyn_cast_or_null<mlir::triton::gpu::ConvertLayoutOp>(
+      value.getDefiningOp());
+  auto mmaVal = cvtOp.getOperand();
   auto dst = store.getPtr();
-  auto storeTy = value.getType().dyn_cast<RankedTensorType>();
-  assert(storeTy);
-  auto storeElemTy = storeTy.getElementType();
-  auto ctaLayout = getCTALayout(storeTy.getEncoding());
-  auto storeShape = storeTy.getShape();
-  SmallVector<int64_t> bufferShape(storeShape.begin(), storeShape.end());
-  auto rank = storeShape.size();
-  // The order of smem should be consistent with gmem.
-  auto makeTensorPtrOp = getMakeTensorPtrOp(dst);
-  SmallVector<unsigned> sharedOrder;
-  for (auto o : makeTensorPtrOp.getOrder()) {
-    sharedOrder.emplace_back(o);
-  }
-  auto sharedEncoding = SharedEncodingAttr::get(ctx, storeShape, sharedOrder,
-                                                ctaLayout, storeElemTy);
-  auto bufferTy =
-      RankedTensorType::get(bufferShape, storeElemTy, sharedEncoding);
-  Value cvt = builder.create<ttg::ConvertLayoutOp>(loc, bufferTy, value);
-  builder.create<ttng::StoreAsyncOp>(loc, dst, cvt);
+  builder.create<ttng::StoreAsyncOp>(loc, dst, mmaVal);
   builder.create<mlir::triton::gpu::AsyncBulkCommitGroupOp>(loc);
   builder.create<mlir::triton::gpu::AsyncBulkWaitOp>(loc, 0);
   store->erase();
