@@ -1,14 +1,14 @@
 // RUN: triton-opt %s -split-input-file --mlir-disable-threading --convert-scf-to-cf -test-print-membar 2>&1 | FileCheck %s
 
-#AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#AL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #sliceAd0 = #triton_gpu.slice<{dim = 0, parent = #AL}>
-#BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#A_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
-#B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#C = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
-#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
-#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+#BL = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#A_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#C = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [4, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
+#B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
@@ -447,58 +447,58 @@ tt.func @for_if_for(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
 
 // CHECK-LABEL: cf_if
 tt.func @cf_if(%i1 : i1) {
-  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
-  %cst_0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   cf.cond_br %i1, ^bb1, ^bb2
 ^bb1:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>, tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>) -> tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
+  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
   cf.br ^bb2
 ^bb2:  // 2 preds: ^bb0, ^bb1
   // CHECK: gpu.barrier
   // CHECK-NEXT: triton_gpu.convert_layout
-  %1 = triton_gpu.convert_layout %cst : (tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>) -> tensor<16x16xf16, #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+  %1 = triton_gpu.convert_layout %cst : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
   tt.return
 }
 
 tt.func @cf_if_else(%i1 : i1) {
-  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
-  %cst_0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   cf.cond_br %i1, ^bb1, ^bb2
 ^bb1:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>, tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>) -> tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
-  cf.br ^bb3(%0 : tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>)
+  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  cf.br ^bb3(%0 : tensor<32x16xf16, #A_SHARED>)
 ^bb2:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %1 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>, tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>) -> tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
-  cf.br ^bb3(%1 : tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>)
-^bb3(%2: tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>):  // 2 preds: ^bb1, ^bb2
+  %1 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
+  cf.br ^bb3(%1 : tensor<32x16xf16, #A_SHARED>)
+^bb3(%2: tensor<32x16xf16, #A_SHARED>):  // 2 preds: ^bb1, ^bb2
   cf.br ^bb4
 ^bb4:  // pred: ^bb3
-  %3 = triton_gpu.convert_layout %cst : (tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>) -> tensor<16x16xf16, #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>>
+  %3 = triton_gpu.convert_layout %cst : (tensor<16x16xf16, #A_SHARED>) -> tensor<16x16xf16, #AL>
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %4 = tt.cat %2, %2 {axis = 0 : i64} : (tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>, tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>) -> tensor<64x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
+  %4 = tt.cat %2, %2 {axis = 0 : i64} : (tensor<32x16xf16, #A_SHARED>, tensor<32x16xf16, #A_SHARED>) -> tensor<64x16xf16, #A_SHARED>
   tt.return
 }
 
 tt.func @cf_if_else_return(%i1 : i1) {
-  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
-  %cst_0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   cf.cond_br %i1, ^bb1, ^bb2
 ^bb1:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>, tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>) -> tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
+  %0 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
   tt.return
 ^bb2:  // pred: ^bb0
   // CHECK: gpu.barrier
   // CHECK-NEXT: tt.cat
-  %1 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>, tensor<16x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>) -> tensor<32x16xf16, #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>>
+  %1 = tt.cat %cst, %cst_0 {axis = 0 : i64} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
   tt.return
 }
 

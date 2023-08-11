@@ -52,6 +52,15 @@ class CudaUtils(object):
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
+        self.CUtensorMapDataType = mod.CUtensorMapDataType
+        self.CUtensorMapInterleave = mod.CUtensorMapInterleave
+        self.CUtensorMapSwizzle = mod.CUtensorMapSwizzle
+        self.CUtensorMapL2promotion = mod.CUtensorMapL2promotion
+        self.CUtensorMapFloatOOBfill = mod.CUtensorMapFloatOOBfill
+        self.cuTensorMapEncodeTiled = mod.cuTensorMapEncodeTiled
+        self.cuMemAlloc = mod.cuMemAlloc
+        self.cuMemcpyHtoD = mod.cuMemcpyHtoD
+        self.cuMemFree = mod.cuMemFree
 
 
 class CudaDriver(DriverBase):

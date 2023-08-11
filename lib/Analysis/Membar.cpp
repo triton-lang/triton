@@ -2,7 +2,12 @@
 #include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
+
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include <deque>
@@ -103,20 +108,37 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     return;
   }
 
-  if (isa<gpu::BarrierOp>(op)) {
+  // TODO(Keren): Don't expose LLVM Dialect ops here
+  if (isa<gpu::BarrierOp>(op) ||
+      (isa<LLVM::InlineAsmOp>(op) &&
+       (dyn_cast<LLVM::InlineAsmOp>(op).getAsmString().find("bar.sync") !=
+        std::string::npos))) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
     return;
   }
 
-  if (isa<triton::gpu::AsyncWaitOp>(op) &&
-      !isa<gpu::BarrierOp>(op->getNextNode())) {
+  if (isa<triton::gpu::AsyncWaitOp, triton::gpu::AsyncBulkWaitOp>(op) &&
+      !isa<gpu::BarrierOp>(op->getNextNode()) &&
+      !(isa<LLVM::InlineAsmOp>(op->getNextNode()) &&
+        (dyn_cast<LLVM::InlineAsmOp>(op->getNextNode())
+             .getAsmString()
+             .find("bar.sync") != std::string::npos))) {
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     blockInfo->sync();
     OpBuilder::InsertionGuard g(*builder);
     builder->setInsertionPointAfter(op);
-    builder->create<gpu::BarrierOp>(op->getLoc());
+    if (auto optionalAgentId = getWSAgentId(op)) {
+      int agentId = *optionalAgentId, roleId = 0;
+      if (auto optionalRoleId = getWSRoleId(op))
+        roleId = *optionalRoleId;
+      int barId = agentId + roleId + nameBarrierIdBegin;
+      assert(barId < nameBarrierIdEnd);
+      barSync(*builder, op, barId, 128);
+    } else {
+      builder->create<gpu::BarrierOp>(op->getLoc());
+    }
     blockInfo->sync();
     return;
   }
@@ -169,12 +191,23 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   if (blockInfo->isIntersected(curBlockInfo)) {
     OpBuilder::InsertionGuard g(*builder);
     builder->setInsertionPoint(op);
-    builder->create<gpu::BarrierOp>(op->getLoc());
+    // TODO(Keren): Don't expose LLVM Dialect ops here
+    // TODO[shuhaoj]: Change hard code style of numThreads. Hide async_agent
+    // attr. Better way to determine barId (number of agents are limited).
+    if (auto optionalAgentId = getWSAgentId(op)) {
+      int agentId = *optionalAgentId, roleId = 0;
+      if (auto optionalRoleId = getWSRoleId(op))
+        roleId = *optionalRoleId;
+      int barId = agentId + roleId + nameBarrierIdBegin;
+      assert(barId < nameBarrierIdEnd);
+      barSync(*builder, op, barId, 128);
+    } else {
+      builder->create<gpu::BarrierOp>(op->getLoc());
+    }
     blockInfo->sync();
   }
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers.
   blockInfo->join(curBlockInfo);
 }
-
 } // namespace mlir
