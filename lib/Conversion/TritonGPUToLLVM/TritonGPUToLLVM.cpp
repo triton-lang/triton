@@ -404,7 +404,7 @@ struct GetProgramIdOpConversion
     sreg.append(1, 'x' + op.getAxisAsInt()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
     Value programId = getSRegValue(rewriter, loc, sreg);
-    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, programId);
+    rewriter.replaceOp(op, programId);
     return success();
   }
 };
@@ -431,7 +431,7 @@ struct GetNumProgramsOpConversion
     sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
     Value numPrograms = getSRegValue(rewriter, loc, sreg);
-    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, numPrograms);
+    rewriter.replaceOp(op, numPrograms);
     return success();
   }
 };
