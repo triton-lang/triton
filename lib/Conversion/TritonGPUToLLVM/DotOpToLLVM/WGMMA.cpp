@@ -340,7 +340,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   rewriter.create<triton::nvgpu::WGMMACommitGroupOp>(loc);
 
   if (sync)
-    rewriter.create<triton::nvgpu::WGMMAWaitOp>(loc, 0);
+    rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, 0);
 
   SmallVector<Value> results =
       unpackAccumulator(rewriter, loc, mmaResults, dTensorTy);

@@ -14,7 +14,6 @@ add_mlir_conversion_library(TritonGPUToLLVM
     TritonGPUToLLVM.cpp
     GCNAsmFormat.cpp
     PTXAsmFormat.cpp
-    TritonGPUToLLVMPass.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
