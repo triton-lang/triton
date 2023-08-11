@@ -610,7 +610,8 @@ private:
   void decomposeFp8e4b15Convert(ModuleOp mod) const {
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      if (!getElementTypeOrSelf(cvtOp).isa<mlir::Float8E4M3B11FNUZType>())
+      if (!getElementTypeOrSelf(cvtOp).isa<mlir::Float8E4M3B11FNUZType>() &&
+          !getElementTypeOrSelf(cvtOp).isa<mlir::Float8E4M3FNType>())
         return;
       auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
       auto argEncoding =
