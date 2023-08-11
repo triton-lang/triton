@@ -40,6 +40,8 @@ def byte_perm(arg0, arg1, arg2, _builder=None):
 
 @core.extern
 def min(arg0, arg1, _builder=None):
+    arg0 = core._to_tensor(arg0, _builder)
+    arg1 = core._to_tensor(arg1, _builder)
     dtype = arg0.dtype
     if dtype.is_floating():
         return core.tensor(_builder.create_minf(arg0.handle, arg1.handle), arg0.type)
@@ -53,6 +55,8 @@ def min(arg0, arg1, _builder=None):
 
 @core.extern
 def max(arg0, arg1, _builder=None):
+    arg0 = core._to_tensor(arg0, _builder)
+    arg1 = core._to_tensor(arg1, _builder)
     dtype = arg0.dtype
     if dtype.is_floating():
         return core.tensor(_builder.create_maxf(arg0.handle, arg1.handle), arg0.type)
