@@ -765,6 +765,12 @@ void init_triton_ir(py::module &&m) {
              // have a float-like type compatible with float only native ops
              return self.getBuilder().getType<mlir::Float8E4M3B11FNUZType>();
            })
+      .def("get_fp8e4b15x4_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
+             // have a float-like type compatible with float only native ops
+             return self.getBuilder().getType<mlir::Float8E4M3FNType>();
+           })
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getType<mlir::Float8E5M2Type>();
