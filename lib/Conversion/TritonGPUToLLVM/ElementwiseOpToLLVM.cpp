@@ -1181,7 +1181,11 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)  // >>
   POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)  // >>
   POPULATE_BINARY_OP(arith::MinFOp, LLVM::MinNumOp) // fmin
+  POPULATE_BINARY_OP(arith::MaxFOp, LLVM::MaxNumOp) // fmax
   POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)  // smin
+  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp)  // smax
+  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp)  // umin
+  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp)  // umax
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
