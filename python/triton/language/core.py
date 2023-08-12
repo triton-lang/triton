@@ -1382,7 +1382,7 @@ def minimum(x, y):
     :param other: the second input tensor
     :type other: Block
     """
-    return where(x < y, x, y)
+    return math.min(x, y)
 
 
 @jit
@@ -1395,7 +1395,7 @@ def maximum(x, y):
     :param other: the second input tensor
     :type other: Block
     """
-    return where(x > y, x, y)
+    return math.max(x, y)
 
 # max and argmax
 
@@ -1423,11 +1423,6 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
-def _fast_max(x, y):
-    return math.max(x, y)
-
-
-@jit
 @_add_reduction_docstr("maximum",
                        return_indices_arg="return_indices",
                        tie_break_arg="return_indices_tie_break_left")
@@ -1445,7 +1440,7 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(int32)
-        return reduce(input, axis, _fast_max)
+        return reduce(input, axis, maximum)
 
 
 @jit
@@ -1480,11 +1475,6 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
-def _fast_min(x, y):
-    return math.min(x, y)
-
-
-@jit
 @_add_reduction_docstr("minimum",
                        return_indices_arg="return_indices",
                        tie_break_arg="return_indices_tie_break_left")
@@ -1502,7 +1492,7 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(int32)
-        return reduce(input, axis, _fast_min)
+        return reduce(input, axis, minimum)
 
 
 @jit
@@ -1924,6 +1914,16 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
+
+
+def binary_op_type_legalization(lhs, rhs, builder):
+    '''
+        Convert both operands to a single common type
+        :param lhs: the left operand
+        :param rhs: the right operand
+        :param builder: the builder
+    '''
+    return semantic.binary_op_type_checking_impl(lhs, rhs, builder)
 
 
 def extern(fn):
