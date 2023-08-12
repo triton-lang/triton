@@ -52,6 +52,7 @@ jobs:
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
           echo "ENABLE_TMA=0" >> "${GITHUB_ENV}"
           echo "ENABLE_MMA_V3=0" >> "${GITHUB_ENV}"
+          echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
 
       - name: Clear cache
         run: |
