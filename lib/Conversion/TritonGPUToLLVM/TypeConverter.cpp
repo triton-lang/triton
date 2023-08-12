@@ -27,6 +27,9 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](mlir::Float8E4M3B11FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
+  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
   addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
