@@ -23,6 +23,7 @@
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Conversion/NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
@@ -764,6 +765,12 @@ void init_triton_ir(py::module &&m) {
              // have a float-like type compatible with float only native ops
              return self.getBuilder().getType<mlir::Float8E4M3B11FNUZType>();
            })
+      .def("get_fp8e4b15x4_ty",
+           [](TritonOpBuilder &self) -> mlir::Type {
+             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
+             // have a float-like type compatible with float only native ops
+             return self.getBuilder().getType<mlir::Float8E4M3FNType>();
+           })
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getType<mlir::Float8E5M2Type>();
@@ -1064,6 +1071,36 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
              return mlir::Value(self.create<mlir::arith::ShRSIOp>(lhs, rhs));
+           })
+      .def("create_minsi",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             return mlir::Value(self.create<mlir::arith::MinSIOp>(lhs, rhs));
+           })
+      .def("create_minui",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             return mlir::Value(self.create<mlir::arith::MinUIOp>(lhs, rhs));
+           })
+      .def("create_minf",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             return mlir::Value(self.create<mlir::arith::MinFOp>(lhs, rhs));
+           })
+      .def("create_maxsi",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             return mlir::Value(self.create<mlir::arith::MaxSIOp>(lhs, rhs));
+           })
+      .def("create_maxui",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             return mlir::Value(self.create<mlir::arith::MaxUIOp>(lhs, rhs));
+           })
+      .def("create_maxf",
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              mlir::Value &rhs) -> mlir::Value {
+             return mlir::Value(self.create<mlir::arith::MaxFOp>(lhs, rhs));
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",
@@ -1689,6 +1726,10 @@ void init_triton_ir(py::module &&m) {
       .def("add_triton_gpu_to_llvm",
            [](mlir::PassManager &self) {
              self.addPass(mlir::triton::createConvertTritonGPUToLLVMPass());
+           })
+      .def("add_nv_gpu_to_llvm",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::triton::createConvertNVGPUToLLVMPass());
            })
       .def("add_scf_to_cfg", [](mlir::PassManager &self) {
         self.addPass(mlir::createConvertSCFToCFPass());
