@@ -674,7 +674,7 @@ class CompiledKernel:
         return super().__getattribute__(name)
 
     # capture args and expand args with cutensormap*
-    def assemble_tensormap_to_arg(self, args, constants):
+    def assemble_tensormap_to_arg(self, args):
         args_with_tma = list(args)
         if hasattr(self, 'tensormaps_info'):
             # tuple for hashable
@@ -687,7 +687,7 @@ class CompiledKernel:
         self._init_handles()
 
         def runner(*args, stream=None):
-            args_expand = self.assemble_tensormap_to_arg(args, self.constants)
+            args_expand = self.assemble_tensormap_to_arg(args)
             if stream is None:
                 if self.device_type in ["cuda", "hip"]:
                     stream = get_cuda_stream()
