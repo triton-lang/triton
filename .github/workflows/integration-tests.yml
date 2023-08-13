@@ -99,7 +99,7 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime
+          python3 -m pytest -n 8 --ignore=runtime --ignore=hopper
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
 
