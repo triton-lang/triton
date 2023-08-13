@@ -132,7 +132,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     def init_input(m, n, dtype):
         if 'float8' in dtype:
             ewidth = {'float8e4b15': 4, 'float8e4': 4, 'float8e5': 5}[dtype]
-            return torch.randint(2**ewidth - 1, size=(m, n), device="cuda", dtype=torch.int8) << 7 - ewidth
+            return torch.randint(2**(ewidth - 1) - 1, size=(m, n), device="cuda", dtype=torch.int8) << 7 - ewidth
         if dtype == "int8":
             return torch.randint(-128, 127, (m, n), device="cuda", dtype=torch.int8)
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dtype]
