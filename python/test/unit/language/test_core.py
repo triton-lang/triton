@@ -3155,7 +3155,7 @@ def test_if_call(call_type, device):
                 a = o
                 a = add_fn_return(a, pid)
                 o = a
-        elif call_type == "jit_ifexp":
+        elif call_type == "jit_if_exp":
             # ifexp expression
             if pid == 0:
                 a = o
