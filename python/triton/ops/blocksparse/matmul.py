@@ -395,8 +395,8 @@ class _matmul(torch.autograd.Function):
                 a, dc, not ctx.trans_a, ctx.trans_c, ctx.trans_b, ctx.spdims, ctx.block, ctx.db_lut, ctx.db_width,
             )
         dout = dc if ctx.has_out else None
-        return da, db, None, None, None,\
-            None, None, None, None,\
+        return da, db, None, None, None, \
+            None, None, None, None, \
             None, None, None, None, None, dout
 
 

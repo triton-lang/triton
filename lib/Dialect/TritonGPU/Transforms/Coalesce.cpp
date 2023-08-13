@@ -3,6 +3,8 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "llvm/Support/Debug.h"
+#include <iterator>
 #include <numeric>
 
 using namespace mlir;
@@ -24,20 +26,64 @@ typedef DenseMap<Value, std::function<Type(Type)>> LayoutMap;
 struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   Attribute getCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  Value ptr, int numWarps, int threadsPerWarp) {
-    auto origType = ptr.getType().cast<RankedTensorType>();
-    // Get the shape of the tensor.
-    size_t rank = origType.getRank();
+    auto refType = ptr.getType();
+    if (refType.isa<PointerType>())
+      refType = refType.cast<PointerType>().getPointeeType();
+    auto refTensorType = refType.cast<RankedTensorType>();
+
+    // TODO(Keren): integrate it into AxisInfoAnalysis
+    // Get axis info
+    auto queryAxisInfo = [&](const Value &val) -> AxisInfo {
+      auto valType = val.getType();
+      // Tensor pointer
+      // TODO(Chenggang): encoding for tensor pointers is meaningless, remove
+      // these later while merging into the GitHub main
+      if (auto ptrType = valType.dyn_cast<PointerType>()) {
+        auto tensorTy = ptrType.getPointeeType().dyn_cast<RankedTensorType>();
+        assert(tensorTy);
+        auto makeTensorPtr = getMakeTensorPtrOp(val);
+        auto order = makeTensorPtr.getOrder();
+        auto tileShape = triton::gpu::getShapePerCTA(tensorTy);
+        size_t rank = order.size();
+        auto elemSizeInBytes =
+            tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
+        SmallVector<int64_t> contiguity(rank, 1);
+        SmallVector<int64_t> divisibility(rank, 1);
+        SmallVector<int64_t> constancy(rank, 1);
+        // The contiguity in `order[0]` is `tileShape[order[0]]`
+        // The divisibility in `order[0]` is 16
+        // TODO[goostavz]: confirm the legality of it
+        contiguity[order[0]] = tileShape[order[0]];
+        divisibility[order[0]] = 16 * 8 / elemSizeInBytes;
+        return AxisInfo(contiguity, divisibility, constancy);
+      }
+      // Normal cases
+      assert(valType.isa<RankedTensorType>());
+      return *axisInfoAnalysis.getAxisInfo(val);
+    };
+
     // Get the contiguity order of `ptr`
-    auto order = argSort(axisInfoAnalysis.getAxisInfo(ptr)->getContiguity());
+    SmallVector<unsigned> order;
+    if (auto ptrType = ptr.getType().dyn_cast<PointerType>()) {
+      // Tensor pointer
+      auto makeTensorPtr = getMakeTensorPtrOp(ptr);
+      std::copy(makeTensorPtr.getOrder().begin(),
+                makeTensorPtr.getOrder().end(), std::back_inserter(order));
+    } else {
+      // Normal cases
+      order = argSort(queryAxisInfo(ptr).getContiguity());
+    }
+
     // The desired divisibility is the maximum divisibility
     // among all dependent pointers who have the same order as
-    // `ptr`
+    // `ptr`.
+    // We only do it for normal tensors of pointers, not tensor pointers.
     SetVector<Value> withSameOrder;
     withSameOrder.insert(ptr);
-    if (ptr.getDefiningOp())
+    if (refType.isa<RankedTensorType>() && ptr.getDefiningOp()) {
       for (Operation *op : mlir::multiRootGetSlice(ptr.getDefiningOp())) {
         for (Value val : op->getResults()) {
-          if (val.getType() != origType)
+          if (val.getType() != refTensorType)
             continue;
           auto currOrder =
               argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
@@ -45,32 +91,43 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
             withSameOrder.insert(val);
         }
       }
-    int numElems = product(origType.getShape());
+    }
+
+    auto shapePerCTA = triton::gpu::getShapePerCTA(refTensorType);
+    int numElems = product<int64_t>(shapePerCTA);
     int numThreads = numWarps * threadsPerWarp;
     int numElemsPerThread = std::max(numElems / numThreads, 1);
+
+    // For tensor of pointers, the element to access is the pointee type;
+    // while for tensor pointer type (`refType` is directly the final shape),
+    // the element to access is itself.
+    auto typeForMem = refTensorType.getElementType().isa<PointerType>()
+                          ? refTensorType.getElementType()
+                                .cast<PointerType>()
+                                .getPointeeType()
+                          : refTensorType.getElementType();
+
     // Thread tile size depends on memory alignment
-    SmallVector<unsigned, 4> sizePerThread(rank, 1);
-    unsigned elemNumBits = triton::getPointeeBitWidth(origType);
+    SmallVector<unsigned, 4> sizePerThread(refTensorType.getRank(), 1);
+    unsigned elemNumBits = typeForMem.getIntOrFloatBitWidth();
     unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
     unsigned perThread = 1;
     for (Value val : withSameOrder) {
-      unsigned maxMultipleBytes =
-          axisInfoAnalysis.getAxisInfo(val)->getDivisibility(order[0]);
+      auto valInfo = queryAxisInfo(val);
+      unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
       unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
       unsigned maxContig =
-          axisInfoAnalysis.getAxisInfo(val)->getContiguity(order[0]);
+          std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
       unsigned alignment = std::min(maxMultiple, maxContig);
       unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
       perThread = std::max(perThread, currPerThread);
     }
     sizePerThread[order[0]] = std::min<int>(perThread, numElemsPerThread);
-    SmallVector<unsigned> dims(rank);
-    std::iota(dims.begin(), dims.end(), 0);
-    // create encoding
-    Attribute encoding = triton::gpu::BlockedEncodingAttr::get(
-        &getContext(), origType.getShape(), sizePerThread, order, numWarps,
-        threadsPerWarp);
-    return encoding;
+
+    auto CTALayout = triton::gpu::getCTALayout(refTensorType.getEncoding());
+    return triton::gpu::BlockedEncodingAttr::get(
+        &getContext(), refTensorType.getShape(), sizePerThread, order, numWarps,
+        threadsPerWarp, CTALayout);
   }
 
   std::function<Type(Type)>
@@ -78,40 +135,47 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
                    int numWarps, int threadsPerWarp) {
     Attribute encoding =
         getCoalescedEncoding(axisInfoAnalysis, ptr, numWarps, threadsPerWarp);
-    return [encoding](Type _type) {
-      RankedTensorType type = _type.cast<RankedTensorType>();
-      return RankedTensorType::get(type.getShape(), type.getElementType(),
-                                   encoding);
+    return [encoding](Type type) {
+      RankedTensorType tensorType = type.cast<RankedTensorType>();
+      return RankedTensorType::get(tensorType.getShape(),
+                                   tensorType.getElementType(), encoding);
     };
   }
 
   template <class T>
   void coalesceOp(LayoutMap &layoutMap, Operation *op, Value ptr,
                   OpBuilder builder) {
-    RankedTensorType ty = ptr.getType().template dyn_cast<RankedTensorType>();
-    if (!ty)
+    if (!layoutMap.count(ptr))
       return;
+
+    // Convert operands
+    // For load/store with tensor pointers, we don't have to change the
+    // operands' type, we do this by changing the outputs' type of
+    // `make_tensor_ptr`
     auto convertType = layoutMap.lookup(ptr);
-    // convert operands
     SmallVector<Value, 4> newArgs;
-    for (auto v : op->getOperands()) {
-      auto vTy = v.getType().dyn_cast<RankedTensorType>();
-      if (vTy && !vTy.getEncoding().isa<triton::gpu::SharedEncodingAttr>())
+    for (auto operand : op->getOperands()) {
+      auto tensorType = operand.getType().dyn_cast<RankedTensorType>();
+      if (tensorType &&
+          !tensorType.getEncoding().isa<triton::gpu::SharedEncodingAttr>())
         newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
-            op->getLoc(), convertType(v.getType()), v));
+            op->getLoc(), convertType(tensorType), operand));
       else
-        newArgs.push_back(v);
+        newArgs.push_back(operand);
     }
-    // convert output types
+
+    // Convert output types
     SmallVector<Type, 4> newTypes;
     for (auto t : op->getResultTypes()) {
-      bool is_async = std::is_same<T, triton::gpu::InsertSliceAsyncOp>::value;
-      newTypes.push_back(is_async ? t : convertType(t));
+      bool isAsync = std::is_same<T, triton::gpu::InsertSliceAsyncOp>::value;
+      newTypes.push_back(isAsync ? t : convertType(t));
     }
-    // construct new op with the new encoding
+
+    // Construct new op with the new encoding
     Operation *newOp =
         builder.create<T>(op->getLoc(), newTypes, newArgs, op->getAttrs());
-    // cast the results back to the original layout
+
+    // Cast the results back to the original layout
     for (size_t i = 0; i < op->getNumResults(); i++) {
       Value newResult = newOp->getResult(i);
       if (newTypes[i] != op->getResultTypes()[i]) {
@@ -120,6 +184,25 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       }
       op->getResult(i).replaceAllUsesWith(newResult);
     }
+    op->erase();
+  }
+
+  void coalesceMakeTensorPtrOpResult(LayoutMap &layoutMap, Operation *op,
+                                     Value ptr, OpBuilder builder) {
+    if (!layoutMap.count(ptr))
+      return;
+
+    // Convert result type
+    auto convertType = layoutMap.lookup(ptr);
+    auto ptrType = ptr.getType().cast<PointerType>();
+    auto resultTensorType = convertType(ptrType.getPointeeType());
+    auto newResultType =
+        PointerType::get(resultTensorType, ptrType.getAddressSpace());
+
+    // Build new operation and replace
+    Operation *newOp = builder.create<MakeTensorPtrOp>(
+        op->getLoc(), newResultType, op->getOperands(), op->getAttrs());
+    op->getResult(0).replaceAllUsesWith(newOp->getResult(0));
     op->erase();
   }
 
@@ -145,8 +228,13 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
         ptr = op.getPtr();
       if (!ptr)
         return;
-      RankedTensorType ty = ptr.getType().template dyn_cast<RankedTensorType>();
-      if (!ty || !ty.getElementType().isa<PointerType>())
+      // We only convert `tensor<tt.ptr<>>` or `tt.ptr<tensor<>>` load/store
+      bool isPtrTensor = false, isTensorPointer = false;
+      if (auto tensorType = ptr.getType().dyn_cast<RankedTensorType>())
+        isPtrTensor = tensorType.getElementType().isa<PointerType>();
+      if (auto ptrType = ptr.getType().dyn_cast<PointerType>())
+        isTensorPointer = ptrType.getPointeeType().isa<RankedTensorType>();
+      if (!isPtrTensor && !isTensorPointer)
         return;
       auto mod = curr->getParentOfType<ModuleOp>();
       int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);

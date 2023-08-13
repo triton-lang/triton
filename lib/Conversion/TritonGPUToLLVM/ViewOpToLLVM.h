@@ -7,7 +7,9 @@ using namespace mlir;
 using namespace mlir::triton;
 
 void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
+                                  RewritePatternSet &patterns, int numWarps,
+                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                  ModuleAllocation &allocation,
                                   PatternBenefit benefit);
 
 #endif

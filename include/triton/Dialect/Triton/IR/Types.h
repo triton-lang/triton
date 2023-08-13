@@ -14,6 +14,8 @@ namespace triton {
 
 bool isTensorPointerType(Type type);
 
+bool isTensorOrTensorPointerType(Type type);
+
 unsigned getPointeeBitWidth(Type type);
 
 Type getPointeeType(Type type);
