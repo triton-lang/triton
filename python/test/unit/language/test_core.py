@@ -2864,10 +2864,8 @@ def test_call(type, num_ctas, device):
 # test if
 # -------------
 
-# TODO(Keren): if_exp support
-
-
-@pytest.mark.parametrize("if_type", ["if", "if_and_dynamic", "if_and_static"])
+# TODO(Keren): if_exp_dynamic
+@pytest.mark.parametrize("if_type", ["if", "if_and_dynamic", "if_exp_static", "if_and_static"])
 def test_if(if_type, device):
 
     @triton.jit
@@ -2879,8 +2877,10 @@ def test_if(if_type, device):
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))
-        elif IfType == "if_exp":
+        elif IfType == "if_exp_dynamic":
             tl.store(Ret, tl.load(XTrue)) if pid % 2 == 0 else tl.store(Ret, tl.load(XFalse))
+        elif IfType == "if_exp_static":
+            tl.store(Ret, tl.load(XTrue)) if BoolVar else tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_and_dynamic":
             if BoolVar and pid % 2 == 0:
                 tl.store(Ret, tl.load(XTrue))
