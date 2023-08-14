@@ -833,9 +833,9 @@ private:
                                       .dyn_cast<MmaEncodingAttr>();
       if (mmaLayout) {
         bool isNativeHopperFP8 =
-            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FN();
+            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
         bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
-                     AElType.isFloat8E4M3FNUZ();
+                     AElType.isFloat8E4M3FN();
         if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
           return;
         promoteType = builder.getF16Type();
