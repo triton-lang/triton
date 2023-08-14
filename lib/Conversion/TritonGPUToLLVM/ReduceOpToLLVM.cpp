@@ -321,17 +321,14 @@ private:
       return NVVM::ReduxKind::OR;
     if (isa<arith::XOrIOp>(reduceOp))
       return NVVM::ReduxKind::XOR;
-    if (auto externalCall =
-            dyn_cast<triton::PureExternElementwiseOp>(reduceOp)) {
-      if (externalCall.getSymbol() == "__nv_min")
-        return NVVM::ReduxKind::MIN;
-      if (externalCall.getSymbol() == "__nv_umin")
-        return NVVM::ReduxKind::UMIN;
-      if (externalCall.getSymbol() == "__nv_max")
-        return NVVM::ReduxKind::MAX;
-      if (externalCall.getSymbol() == "__nv_umax")
-        return NVVM::ReduxKind::UMAX;
-    }
+    if (isa<arith::MinSIOp>(reduceOp))
+      return NVVM::ReduxKind::MIN;
+    if (isa<arith::MinUIOp>(reduceOp))
+      return NVVM::ReduxKind::UMIN;
+    if (isa<arith::MaxSIOp>(reduceOp))
+      return NVVM::ReduxKind::MAX;
+    if (isa<arith::MaxUIOp>(reduceOp))
+      return NVVM::ReduxKind::UMAX;
     return std::nullopt;
   }
 
