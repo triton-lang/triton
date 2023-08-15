@@ -516,6 +516,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     "unsigned":$versionMinor,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout,
+    StringRefParameter<"">:$inputType,
     ArrayRefParameter<"unsigned">:$instrShape
   );
 
@@ -562,7 +563,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
           wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
       } while (wpt_nm1 != wpt);
 
-      return $_get(context, versionMajor, versionMinor, wpt, CTALayout, instrShape);
+      return $_get(context, versionMajor, versionMinor, wpt, CTALayout, "", instrShape);
     }]>,
 
 

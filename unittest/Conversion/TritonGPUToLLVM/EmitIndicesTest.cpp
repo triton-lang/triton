@@ -122,7 +122,7 @@ protected:
                        const std::string &refStr) {
     auto layout =
         MmaEncodingAttr::get(&context, versionMajor, versionMinor, warpsPerCTA,
-                             getSingleCTALayout2d(), instrShape);
+                             getSingleCTALayout2d(), "", instrShape);
     runDistributed2d(row, col, layout, /*multiCTA=*/false, refStr);
   }
 
@@ -133,7 +133,7 @@ protected:
                          const std::string &refStr) {
     auto parent =
         MmaEncodingAttr::get(&context, versionMajor, versionMinor, warpsPerCTA,
-                             getSingleCTALayout2d(), instrShape);
+                             getSingleCTALayout2d(), "", instrShape);
     auto layout = DotOperandEncodingAttr::get(&context, opIdx, parent, 0);
     runDistributed2d(row, col, layout, /*multiCTA=*/false, refStr);
   }
@@ -638,7 +638,8 @@ TEST_F(EmitIndicesTest, LayoutVisualizer_Mma) {
 
   Attribute mmaLayout = MmaEncodingAttr::get(
       /*context=*/&context, /*versionMajor=*/2, /*versionMinor=*/1,
-      /*warpsPerCTA=*/{1, 1}, /*CTALayout=*/CTALayout, /*instrShape=*/{16, 8});
+      /*warpsPerCTA=*/{1, 1}, /*CTALayout=*/CTALayout, "",
+      /*instrShape=*/{16, 8});
 
   llvm::SmallVector<int64_t> shape = {/*row=*/16, /*col=*/8};
 

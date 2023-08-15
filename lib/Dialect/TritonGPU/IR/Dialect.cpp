@@ -663,6 +663,17 @@ static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
   return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
+static LogicalResult parseStrAttr(AsmParser &parser, const NamedAttribute &attr,
+                                  StringRef &res, StringRef desc) {
+  auto strAttr = attr.getValue().dyn_cast<StringAttr>();
+  if (!strAttr) {
+    parser.emitError(parser.getNameLoc(), "expected an string for ") << desc;
+    return failure();
+  }
+  res = strAttr.strref();
+  return success();
+};
+
 //===----------------------------------------------------------------------===//
 // Attribute methods
 //===----------------------------------------------------------------------===//
@@ -762,7 +773,8 @@ MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
     elemsPerThread[1] = elemsCol;
   } else if (isHopper()) {
     auto wpt = getWarpsPerCTA();
-    auto instrMNK = getInstrShape();
+    auto instrMNK =
+        mmaVersionToInstrShape(getVersionMajor(), shape, getInputType());
     int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * wpt[0]);
     int repN = ceil<unsigned>(shapePerCTA[1], instrMNK[1] * wpt[1]);
     elemsPerThread[0] = 2 * repM;
@@ -789,12 +801,12 @@ MmaEncodingAttr::getElemsPerThreadOfOperand(int opIdx,
         "getElemsPerThreadOfOperand() not supported for version 2");
   } else if (isHopper()) {
     auto wpt = getWarpsPerCTA();
-    auto instrMNK = getInstrShape();
+    auto instrMNK = mmaVersionToInstrShape(getVersionMajor(), shapePerCTA,
+                                           getInputType(), opIdx);
     if (opIdx == 0) {
       int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * wpt[0]);
       int repK = ceil<unsigned>(shapePerCTA[1], instrMNK[2]);
       return 8 * repM * repK;
-
     } else if (opIdx == 1) {
       int repK = ceil<unsigned>(shapePerCTA[0], instrMNK[2]);
       int repN = ceil<unsigned>(shapePerCTA[1], instrMNK[1] * wpt[1]);
@@ -1044,6 +1056,7 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> CTAsPerCGA;
   SmallVector<unsigned> CTASplitNum;
   SmallVector<unsigned> CTAOrder;
+  StringRef inputType;
   SmallVector<unsigned> instrShape;
 
   for (const NamedAttribute &attr : dict) {
@@ -1071,8 +1084,8 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, CTAOrder, "CTAOrder").failed())
         return {};
     }
-    if (attr.getName() == "instrShape") {
-      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed()) {
+    if (attr.getName() == "inputType") {
+      if (parseStrAttr(parser, attr, inputType, "inputType").failed()) {
         return {};
       }
     }
@@ -1083,7 +1096,7 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<MmaEncodingAttr>(parser.getContext(), versionMajor,
                                             versionMinor, warpsPerCTA,
-                                            CTALayout, instrShape);
+                                            CTALayout, inputType, instrShape);
 }
 
 void MmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1093,8 +1106,7 @@ void MmaEncodingAttr::print(AsmPrinter &printer) const {
           << "warpsPerCTA = [" << getWarpsPerCTA() << "], "
           << "CTAsPerCGA = [" << getCTALayout().getCTAsPerCGA() << "], "
           << "CTASplitNum = [" << getCTALayout().getCTASplitNum() << "], "
-          << "CTAOrder = [" << getCTALayout().getCTAOrder() << "], "
-          << "instrShape = [" << getInstrShape() << "]"
+          << "CTAOrder = [" << getCTALayout().getCTAOrder() << "]"
           << "}>";
 }
 

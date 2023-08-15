@@ -64,49 +64,6 @@ LogicalResult fixupLoops(ModuleOp mod) {
   return success();
 }
 
-SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
-                                                const ArrayRef<int64_t> &shape,
-                                                RankedTensorType type) {
-  if (version == 1)
-    return {16, 16};
-  else if (version == 2)
-    return {16, 8};
-  else if (version == 3) {
-    unsigned k = 256 / type.getElementTypeBitWidth();
-    if (shape[0] % 64 != 0 || shape[1] % 8 != 0) {
-      assert(false && "type not supported");
-      return {0, 0, 0};
-    }
-    auto eltType = type.getElementType();
-    SmallVector<unsigned> validN;
-
-    // MMAv3 with larger instruction shape is preferred.
-    if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FN() || eltType.isF16() ||
-        eltType.isBF16() || eltType.isF32()) {
-      validN.assign({256, 248, 240, 232, 224, 216, 208, 200, 192, 184, 176,
-                     168, 160, 152, 144, 136, 128, 120, 112, 104, 96,  88,
-                     80,  72,  64,  56,  48,  40,  32,  24,  16,  8});
-    }
-
-    if (eltType.isInteger(8)) {
-      validN.assign({224, 208, 192, 176, 160, 144, 128, 112, 96, 80, 64, 48, 32,
-                     24, 16, 8});
-    }
-
-    for (auto n : validN) {
-      if (shape[1] % n == 0) {
-        return {16, n, k};
-      }
-    }
-
-    assert(false && "type not supported");
-    return {0, 0, 0};
-  } else {
-    assert(false && "version not supported");
-    return {0, 0};
-  }
-}
-
 bool isLoadFromTensorPtr(triton::LoadOp op) {
   return mlir::triton::isTensorPointerType(op.getPtr().getType());
 }

@@ -21,10 +21,6 @@ class SharedEncodingAttr;
 
 LogicalResult fixupLoops(ModuleOp mod);
 
-SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
-                                                const ArrayRef<int64_t> &shape,
-                                                RankedTensorType type);
-
 /// Returns true if the Load is for TMA
 bool isLoadFromTensorPtr(triton::LoadOp op);
 
