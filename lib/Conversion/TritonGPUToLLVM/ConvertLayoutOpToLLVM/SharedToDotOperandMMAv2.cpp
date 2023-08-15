@@ -527,11 +527,11 @@ std::function<void(int, int)> getLoadMatrixFn(
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int a, int b) {
-    MMA16816SmemLoader loader(
-        nPerWarp, warpsPerTile, sharedLayout.getOrder(),
-        mmaLayout.getWarpsPerCTA(), kOrder, kWidth, smemObj.strides,
-        tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
-        maxPhase, elemBytes, rewriter, typeConverter, loc);
+    MMA16816SmemLoader loader(nPerWarp, warpsPerTile, sharedLayout.getOrder(),
+                              mmaLayout.getWarpsPerCTA(), kOrder, kWidth,
+                              smemObj.strides, shapePerCTA /*tileShape*/,
+                              instrShape, matShape, perPhase, maxPhase,
+                              elemBytes, rewriter, typeConverter, loc);
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs =
@@ -573,17 +573,15 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
               TritonGPUToLLVMTypeConverter *typeConverter, Value thread,
               bool isA) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  auto shapePerCTA = getShapePerCTA(tensorTy);
   int bitwidth = tensorTy.getElementTypeBitWidth();
   auto mmaLayout = encoding.getParent().cast<MmaEncodingAttr>();
-
-  SmallVector<int64_t> shape(tensorTy.getShape().begin(),
-                             tensorTy.getShape().end());
 
   ValueTable vals;
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
 
-  auto numRep = encoding.getMMAv2Rep(tensorTy.getShape(), bitwidth);
+  auto numRep = encoding.getMMAv2Rep(shapePerCTA, bitwidth);
   int kWidth = encoding.getMMAv2kWidth();
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
@@ -593,14 +591,14 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
 
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warp, warpsPerCTA, order);
-  Value warpM = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
-  Value warpN = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
+  Value warpM = urem(multiDimWarpId[0], i32_val(shapePerCTA[0] / 16));
+  Value warpN = urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / 8));
 
   int warpsPerTile;
   if (isA)
-    warpsPerTile = std::min<int>(warpsPerCTA[0], shape[0] / 16);
+    warpsPerTile = std::min<int>(warpsPerCTA[0], shapePerCTA[0] / 16);
   else
-    warpsPerTile = std::min<int>(warpsPerCTA[1], shape[1] / 16);
+    warpsPerTile = std::min<int>(warpsPerCTA[1], shapePerCTA[1] / 16);
 
   std::function<void(int, int)> loadFn;
   if (isA)
