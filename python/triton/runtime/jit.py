@@ -11,7 +11,7 @@ from collections import defaultdict, namedtuple
 from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast,
                     overload)
 
-import triton
+from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -481,7 +481,7 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_s
         # index of constexprs
         self.constexprs = [self.arg_names.index(name) for name, ty in self.__annotations__.items() if 'constexpr' in ty]
         # tma info
-        self.tensormaps_info = triton._C.libtriton.triton.TMAInfos()
+        self.tensormaps_info = TMAInfos()
         # launcher
         self.run = self._make_launcher()
         # re-use docs of wrapped function
