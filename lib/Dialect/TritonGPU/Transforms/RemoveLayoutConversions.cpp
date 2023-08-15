@@ -77,6 +77,39 @@ public:
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(op, dstType,
                                                                 tmp);
       return mlir::success();
+    } else if (srcType.getEncoding().isa<triton::gpu::BlockedEncodingAttr>() &&
+               dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
+      auto result = convert.getResult();
+      if (!result.hasOneUse())
+        return mlir::failure();
+
+      if (!llvm::isa<triton::DotOp>(*(result.user_begin())))
+        return mlir::failure();
+
+      if (result.use_begin()->getOperandNumber() != 0)
+        return mlir::failure();
+
+      SetVector<Operation *> bwdSlices;
+      mlir::getBackwardSlice(result, &bwdSlices);
+      auto firstDotOp = llvm::find_if(
+          bwdSlices, [](Operation *op) { return isa<triton::DotOp>(op); });
+      if (firstDotOp == bwdSlices.end())
+        return mlir::failure();
+
+      auto firstDotType =
+          (*firstDotOp)->getResult(0).getType().cast<RankedTensorType>();
+      auto firstMma =
+          firstDotType.getEncoding().cast<triton::gpu::MmaEncodingAttr>();
+      if (!firstMma.isHopper()) {
+        return mlir::failure();
+      }
+
+      auto tmpType = RankedTensorType::get(dstType.getShape(),
+                                           dstType.getElementType(), firstMma);
+      auto tmp = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          convert.getLoc(), tmpType, convert.getOperand());
+      rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(op, dstType,
+                                                                tmp);
     }
     return mlir::failure();
   }
