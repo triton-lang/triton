@@ -296,11 +296,8 @@ def get_architecture_descriptor(capability):
     return capability
 
 
-def add_cuda_stages(arch, context, num_warps, num_stages, extern_libs, stages):
-    stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                       lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, arch))
-    stages["llir"] = (lambda path: Path(path).read_text(),
-                      lambda src: ttgir_to_llir(src, extern_libs, arch))
+def add_cuda_stages(arch, extern_libs, stages):
+
     stages["ptx"] = (lambda path: Path(path).read_text(),
                      lambda src: llir_to_ptx(src, arch))
     stages["cubin"] = (lambda path: Path(path).read_bytes(),
@@ -354,12 +351,18 @@ def compile(fn, **kwargs):
     stages["ttir"] = (lambda path: parse_mlir_module(path, context),
                       lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, arch=arch), arch))
     if is_cuda:
-        add_cuda_stages(arch, context, num_warps, num_stages, extern_libs, stages)
-    elif is_hip():
+        stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
+                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
+        stages["llir"] = (lambda path: Path(path).read_text(),
+                          lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
+        add_cuda_stages(arch, extern_libs, stages)
+    elif device_type == "hip":
         _device_backend.add_stages(arch, extern_libs, stages, context=context, num_warps=num_warps, num_stages=num_stages)
     elif device_type == "xpu":
         stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps), num_stages, arch))
+                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
+        stages["llir"] = (lambda path: Path(path).read_text(),
+                          lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
         _device_backend.add_stages(arch, extern_libs, stages)
     else:
         _device_backend.add_stages(arch, extern_libs, stages)
@@ -479,7 +482,7 @@ def compile(fn, **kwargs):
         if ir_name == "ttgir":
             metadata["enable_warp_specialization"] = ir.is_ws_supported(next_module)
             if metadata["enable_warp_specialization"]:
-                metadata["num_warps"] = get_num_warps(next_module)  
+                metadata["num_warps"] = get_num_warps(next_module)
         if ir_name == "ptx":
             metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
         if ir_name == "amdgcn":

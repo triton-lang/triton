@@ -170,7 +170,7 @@ class SharedLayout:
         self.cta_split_num = str(cta_split_num)
         self.cta_order = str(cta_order)
 
-    def __str__(self):        
+    def __str__(self):
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
@@ -1916,7 +1916,7 @@ layouts = [
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
     if is_hip():
         pytest.skip("test_convert1d is not supported in HIP")
-      
+
     ir = f"""
     #dst = {dst_layout}
     #src = {src_layout}
@@ -1978,7 +1978,6 @@ layouts = [
 def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     if is_hip():
         pytest.skip("test_chain_reduce is not supported in HIP")
-
 
     op_str = ""
     if op == "sum":
@@ -2646,7 +2645,7 @@ def test_vectorization(N, num_ctas, device):
 
     if is_hip():
         return
-    
+
     ptx = pgm.asm["ptx"]
     if N % 16 == 0:
         assert "ld.global.v4.b32" in ptx
@@ -3465,7 +3464,7 @@ intermediate_layouts = [
 def test_convert2d(dtype, shape, src_layout, interm_layout, dst_layout, device):
     if is_hip():
         pytest.skip("test_convert2d is not supported in HIP")
-  
+
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
