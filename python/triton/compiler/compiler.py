@@ -316,10 +316,6 @@ def compile(fn, **kwargs):
     if device_type == "cuda":
         _device_backend = get_backend(device_type)
         arch = get_architecture_descriptor(kwargs.get("cc", None))
-    elif device_type == "hip":
-        _device_backend = get_backend(device_type)
-        assert _device_backend
-        arch = _device_backend.get_architecture_descriptor(**kwargs)
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
