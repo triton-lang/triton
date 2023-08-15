@@ -366,6 +366,22 @@ public:
       : computeCapability(computeCapability) {}
 
   static bool needRewrite(Operation *op, const DenseSet<Value> &valueToRemove) {
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      if (op->getNumResults() == 0)
+        return false;
+      Operation *thenYield = ifOp.thenYield().getOperation();
+      if (!ifOp.getElseRegion().empty()) {
+        Operation *elseYield = ifOp.elseYield().getOperation();
+        for (unsigned i = 0; i < thenYield->getNumOperands(); ++i) {
+          bool thenNeedRewrite = valueToRemove.count(thenYield->getOperand(i));
+          bool elseNeedRewrite = valueToRemove.count(elseYield->getOperand(i));
+          assert(!(thenNeedRewrite ^ elseNeedRewrite) &&
+                 "For IfOp, operand(i) of thenYield and operand(i) of "
+                 "elseYield should be either all need rewrite or all not");
+        }
+      }
+      op = thenYield;
+    }
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
                        [&valueToRemove](Value operand) {
                          return tt::isTensorPointerType(operand.getType()) &&
@@ -615,6 +631,77 @@ public:
     return nullptr;
   }
 
+  Operation *rewriteIfOp(OpBuilder &builder, scf::IfOp op,
+                         std::stack<Operation *> &eraser,
+                         DenseSet<Value> &valueToRemove) {
+    auto thenYieldOp = op.thenYield();
+    assert(op.getNumResults() == thenYieldOp.getNumOperands());
+    SmallVector<Value> results = thenYieldOp.getOperands();
+
+    // get new result types
+    SmallVector<Type> newRetTypes;
+    for (unsigned i = 0; i < results.size(); ++i) {
+      if (!tt::isTensorPointerType(results[i].getType()) ||
+          !valueToRemove.count(results[i])) {
+        newRetTypes.push_back(results[i].getType());
+        continue;
+      }
+      auto makeTensorPtrOp = getMakeTensorPtrOp(results[i]);
+      assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
+      auto info = rewritedInfo[makeTensorPtrOp.getResult()];
+      for (unsigned j = 0; j < info.length(); ++j) {
+        newRetTypes.push_back(builder.getI64Type());
+      }
+    }
+
+    // create and clone new IfOp
+    bool hasElse = !op.getElseRegion().empty();
+    scf::IfOp newOp = builder.create<scf::IfOp>(op.getLoc(), newRetTypes,
+                                                op.getCondition(), hasElse);
+    IRMapping mapping;
+    for (unsigned i = 0; i < op->getNumOperands(); ++i) {
+      mapping.map(op->getOperand(i), newOp->getOperand(i));
+    }
+    auto rematerialize = [&](Block *block) {
+      for (Operation &opInIf : block->getOperations()) {
+        auto newOp = builder.clone(opInIf, mapping);
+      }
+    };
+    builder.setInsertionPointToStart(newOp.thenBlock());
+    rematerialize(op.thenBlock());
+    if (hasElse) {
+      builder.setInsertionPointToStart(newOp.elseBlock());
+      rematerialize(op.elseBlock());
+    }
+
+    // supported nested ops
+    for (auto &[k, v] : mapping.getValueMap())
+      if (valueToRemove.find(k) != valueToRemove.end())
+        valueToRemove.insert(v);
+
+    // update rewritedInfo
+    unsigned oldResIdx = 0, newResIdx = 0;
+    while (oldResIdx < results.size()) {
+      if (!tt::isTensorPointerType(results[oldResIdx].getType()) ||
+          !valueToRemove.count(results[oldResIdx])) {
+        oldResIdx++;
+        newResIdx++;
+      } else {
+        auto makeTensorPtrOp = getMakeTensorPtrOp(results[oldResIdx]);
+        assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
+        auto info = rewritedInfo[makeTensorPtrOp.getResult()];
+        for (unsigned j = 0; j < info.length(); ++j) {
+          info.setOffset(j, newOp->getResult(newResIdx++));
+        }
+        rewritedInfo[op.getResult(oldResIdx)] = info;
+        oldResIdx++;
+      }
+    }
+
+    eraser.push(op);
+    return newOp;
+  }
+
   Operation *rewriteOp(Operation *op, std::stack<Operation *> &eraser,
                        DenseSet<Value> &valueToRemove) {
     OpBuilder builder(op);
@@ -630,8 +717,6 @@ public:
       return rewriteAdvanceOp(builder, advanceOp, eraser, valueToRemove);
     } else if (isa<tt::LoadOp>(op) || isa<tt::StoreOp>(op)) {
       return rewriteLoadStoreOp(builder, op, eraser, valueToRemove);
-    } else if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
-      return rewriteLoadStoreOp(builder, op, eraser, valueToRemove);
     } else if (op->getDialect()->getNamespace() == "scf" ||
                op->getDialect()->getNamespace() == "cf") {
       if (!needRewrite(op, valueToRemove))
@@ -641,9 +726,11 @@ public:
         return rewriteForOp(builder, forOp, eraser, valueToRemove);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         return rewriteYieldOp(builder, yieldOp, eraser, valueToRemove);
+      } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+        return rewriteIfOp(builder, ifOp, eraser, valueToRemove);
       } else {
         llvm_unreachable("Currently we only support tensor pointer usages "
-                         "inside a `scf::ForOp`, others such as `scf::IfOp`,"
+                         "inside a `scf::ForOp` or `scf::IfOp`, others such as "
                          "`scf::WhileOp`, `cf::BranchOp` or `cf::CondBranchOp` "
                          "are not supported yet");
       }

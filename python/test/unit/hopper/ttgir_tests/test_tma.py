@@ -23,7 +23,6 @@ import os
 
 import pytest
 import torch
-from test_util import get_proper_err
 from torch.testing import assert_close
 
 import triton
@@ -63,13 +62,9 @@ def test_tma_wgmma_64_64_16_f16(TTGIR, TRANS_A, TRANS_B):
 
     golden = torch.matmul(a, b)
     torch.set_printoptions(profile="full", sci_mode=False)
-    golden_abs_err, golden_rel_err = get_proper_err(a, b, golden)
     assert_close(
         c,
         golden,
-        rtol=max(1e-4,
-                 1.5 * golden_rel_err),
-        atol=max(
-            1e-4,
-            1.5 * golden_abs_err),
+        rtol=1e-2,
+        atol=1e-3,
         check_dtype=False)

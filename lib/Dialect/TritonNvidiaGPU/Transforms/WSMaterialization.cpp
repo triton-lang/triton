@@ -380,8 +380,10 @@ void materializeTokenOperations(Operation *parentOp, int numCTAs) {
     Value bufferEmptyArray =
         builder.create<ttng::AllocMBarrierOp>(tokenLoc, mBarriersTy, numCTAs);
 
-    // Make sure that MBarriers are initialized in all CTAs
-    if (numCTAs > 1) {
+    if (numCTAs == 1) {
+      builder.create<mlir::gpu::BarrierOp>(tokenLoc);
+    } else {
+      // Make sure that MBarriers are initialized in all CTAs
       builder.create<triton::nvidia_gpu::ClusterArriveOp>(tokenLoc, false);
       builder.create<triton::nvidia_gpu::ClusterWaitOp>(tokenLoc);
     }
@@ -705,32 +707,6 @@ struct WSMaterializationPass
     materializeTokenOperations(mod, numCTAs);
     materializeMutexOperations(mod);
     tryRegisterRealloc(mod);
-
-    mod->walk([](Operation *op) {
-      bool hasTensor = 0;
-      auto results = op->getResults();
-      auto operands = op->getOperands();
-      for (auto i : results) {
-        if (isa<RankedTensorType>(i.getType())) {
-          hasTensor = 1;
-          break;
-        }
-      }
-      if (!hasTensor) {
-        for (auto i : operands) {
-          if (isa<RankedTensorType>(i.getType())) {
-            hasTensor = 1;
-            break;
-          }
-        }
-      }
-
-      if (!hasTensor && !isa<ttng::MBarrierWaitOp>(op) &&
-          !isa<ttng::ExtractMBarrierOp>(op) &&
-          !isa<ttng::MBarrierArriveOp>(op)) {
-        op->removeAttr("async_agent");
-      }
-    });
 
     // TODO: More flexible way to set num-warps
     // One dma, one math warp group, set num-warps = 8

@@ -39,6 +39,10 @@ namespace ttg = triton::gpu;
 
 namespace {
 
+bool knownSafeToIgnoreRegion(Operation *op) {
+  return isa<triton::ReduceOp>(op);
+}
+
 // Suppose the kernel has following structure:
 // ```
 // scf.for(...) {
@@ -128,7 +132,8 @@ LogicalResult getDependentPointers(Value ptr, DenseSet<Value> &dependentSet,
       return failure();
     return getDependentPointers(ifOp.thenYield()->getOperand(idx), dependentSet,
                                 processedSet);
-  } else if (!definingOp->getNumRegions()) {
+  } else if (!definingOp->getNumRegions() ||
+             knownSafeToIgnoreRegion(definingOp)) {
     for (Value operand : definingOp->getOperands())
       if (failed(getDependentPointers(operand, dependentSet, processedSet)))
         return failure();
@@ -417,7 +422,8 @@ LogicalResult getDependentValues(Value val, DenseSet<Value> &depSet,
         failed(tryInsertAndPropagate(ifOp.elseYield()->getOperand(idx))))
       return failure();
     return tryInsertAndPropagate(ifOp.thenYield()->getOperand(idx));
-  } else if (!definingOp->getNumRegions()) {
+  } else if (!definingOp->getNumRegions() ||
+             knownSafeToIgnoreRegion(definingOp)) {
     for (Value operand : definingOp->getOperands())
       if (failed(tryInsertAndPropagate(operand)))
         return failure();
@@ -488,8 +494,6 @@ bool isWSCandidateLoad(Operation *op) {
   auto encoding =
       cvtOp.getResult().getType().cast<RankedTensorType>().getEncoding();
   if (!encoding || !encoding.dyn_cast<ttg::SharedEncodingAttr>())
-    return false;
-  if (ttg::getNumCTAs(encoding) > 1)
     return false;
 
   DenseSet<Value> depSet;
