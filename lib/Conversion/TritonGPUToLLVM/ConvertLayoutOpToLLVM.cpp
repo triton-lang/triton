@@ -7,6 +7,7 @@
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::linearize;
+using ::mlir::LLVM::pack16bitsTo32;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -699,15 +700,6 @@ private:
     return success();
   }
 
-  // Pack two 16-bit values into a 32-bit register.
-  static Value pack16bitsTo32(ConversionPatternRewriter &rewriter, Location loc,
-                              Value hb, Value lb) {
-    hb = zext(i32_ty, bitcast(hb, i16_ty));
-    lb = zext(i32_ty, bitcast(lb, i16_ty));
-    Value pack = or_(lb, shl(hb, i32_val(16)));
-    return pack;
-  }
-
   // blocked -> shared.
   // Swizzling in shared memory to avoid bank conflict. Normally used for
   // A/B operands of dots.
@@ -779,13 +771,13 @@ private:
               numElemsPerSwizzlingRow, true);
 
           Value addr = gep(elemPtrTy, smemBase, offset);
-          Value data0 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 1],
+          Value data0 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 1],
                                        inVals[elemIdx + 0]);
-          Value data1 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 3],
+          Value data1 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 3],
                                        inVals[elemIdx + 2]);
-          Value data2 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 5],
+          Value data2 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 5],
                                        inVals[elemIdx + 4]);
-          Value data3 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 7],
+          Value data3 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 7],
                                        inVals[elemIdx + 6]);
 
           rewriter.create<triton::nvgpu::StoreMatrixOp>(

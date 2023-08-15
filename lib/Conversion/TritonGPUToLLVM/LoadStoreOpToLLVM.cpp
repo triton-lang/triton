@@ -3,6 +3,10 @@
 
 #include "ConvertLayoutOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
+#include "Utility.h"
+
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 #include <numeric>
 
@@ -12,6 +16,8 @@ using namespace mlir::triton;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::linearize;
+using ::mlir::LLVM::pack16bitsTo32;
+using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
@@ -410,7 +416,16 @@ struct StoreAsyncOpConversion
     auto dst = op.getDst();
     auto src = op.getSrc();
     auto srcTy = src.getType().cast<RankedTensorType>();
-    auto elemTy = srcTy.getElementType();
+    auto srcElemTy = srcTy.getElementType();
+    auto makeTensorPtr = tensorPtrMap->lookup(op.getOperation());
+    auto dstTensorTy = makeTensorPtr.getResult()
+                           .getType()
+                           .cast<triton::PointerType>()
+                           .getPointeeType()
+                           .cast<RankedTensorType>();
+    auto tensorShape = dstTensorTy.getShape();
+    auto dstOrder = makeTensorPtr.getOrder();
+    auto dstElemTy = dstTensorTy.getElementType();
 
     auto rank = srcTy.getRank();
     assert(rank > 0 && rank <= 5);
@@ -424,20 +439,23 @@ struct StoreAsyncOpConversion
     int numTMADescs = getNumTMADescs(llFuncOp);
     assert(numTMADescs > 0);
 
-    auto sharedLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    assert(sharedLayout && "expected shared encoding");
+    auto ctaLayout = getCTALayout(dstTensorTy.getEncoding());
+    // The order of smem should be consistent with gmem.
+    SmallVector<unsigned> sharedOrder;
+    for (auto o : makeTensorPtr.getOrder()) {
+      sharedOrder.emplace_back(o);
+    }
+    auto sharedLayout = SharedEncodingAttr::get(ctx, tensorShape, sharedOrder,
+                                                ctaLayout, dstElemTy);
 
     mlir::triton::gpu::TMAInfo tmaInfo;
 
-    tmaInfo.tensorDataType = getCUtensorMapDataType(elemTy);
+    tmaInfo.tensorDataType = getCUtensorMapDataType(dstElemTy);
     tmaInfo.tensorRank = rank;
     assert(tmaMetadata);
 
-    auto inOrder = sharedLayout.getOrder();
     unsigned TMADescIdx = tmaMetadata->size();
     unsigned numFuncArgs = llFuncOp.getBody().front().getNumArguments();
-    auto makeTensorPtr = tensorPtrMap->lookup(op.getOperation());
-    auto dstOrder = makeTensorPtr.getOrder();
 
     unsigned globalAddressArgIdx = getArgIdx(makeTensorPtr.getBase());
     tmaInfo.globalAddressArgIdx = globalAddressArgIdx;
@@ -468,15 +486,9 @@ struct StoreAsyncOpConversion
     auto CTAsPerCGA = sharedLayout.getCTALayout().getCTAsPerCGA();
     auto CTAOrder = sharedLayout.getCTALayout().getCTAOrder();
     auto CTASplitNum = sharedLayout.getCTALayout().getCTASplitNum();
-    auto tensorShape = makeTensorPtr.getResult()
-                           .getType()
-                           .cast<triton::PointerType>()
-                           .getPointeeType()
-                           .cast<RankedTensorType>()
-                           .getShape();
     auto shapePerCTA = getShapePerCTA(CTASplitNum, tensorShape);
     // magic 128 bytes
-    uint32_t bytesPerElem = elemTy.getIntOrFloatBitWidth() / 8;
+    uint32_t bytesPerElem = dstElemTy.getIntOrFloatBitWidth() / 8;
     uint32_t numBox{1};
     for (int i = 0; i < rank; ++i) {
       auto dim = getDimOfOrder(dstOrder, i);
@@ -492,11 +504,11 @@ struct StoreAsyncOpConversion
     tmaInfo.elementStrides = elementStrides;
 
     CUtensorMapSwizzle swizzle = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_NONE;
-    assert(
-        ((elemTy.getIntOrFloatBitWidth() == 16 && sharedLayout.getVec() == 8) or
-         (elemTy.getIntOrFloatBitWidth() == 32 &&
-          sharedLayout.getVec() == 4)) &&
-        "Unexpected shared layout for StoreAsyncOp");
+    assert(((dstElemTy.getIntOrFloatBitWidth() == 16 &&
+             sharedLayout.getVec() == 8) or
+            (dstElemTy.getIntOrFloatBitWidth() == 32 &&
+             sharedLayout.getVec() == 4)) &&
+           "Unexpected shared layout for StoreAsyncOp");
     if (sharedLayout.getPerPhase() == 4 && sharedLayout.getMaxPhase() == 2)
       swizzle = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_32B;
     else if (sharedLayout.getPerPhase() == 2 && sharedLayout.getMaxPhase() == 4)
@@ -517,7 +529,9 @@ struct StoreAsyncOpConversion
     Value llDst = adaptor.getDst();
     Value llSrc = adaptor.getSrc();
     auto srcShape = srcTy.getShape();
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, llSrc, rewriter);
+    auto dstElemPtrTy = ptr_ty(getTypeConverter()->convertType(dstElemTy), 3);
+    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
+    smemBase = bitcast(smemBase, dstElemPtrTy);
 
     SmallVector<Value> offsetVals;
     for (auto i = 0; i < srcShape.size(); ++i) {
@@ -541,6 +555,80 @@ struct StoreAsyncOpConversion
     SmallVector<Value> multiDimClusterCTAId =
         delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
+    auto srcLayout = srcTy.getEncoding();
+    auto mmaLayout = srcLayout.dyn_cast<MmaEncodingAttr>();
+
+    unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
+
+    auto instrShape = mmaLayout.getInstrShape();
+    auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
+    uint32_t repM =
+        ceil<unsigned>(shapePerCTA[0], instrShape[0] * warpsPerCTA[0]);
+    uint32_t numElemsPerRep = numElems / repM;
+
+    // rowStride in bytes
+    uint32_t rowStrideInBytes = shapePerCTA[dstOrder[0]] * bytesPerElem;
+    uint32_t swizzlingByteWidth = std::min<uint32_t>(rowStrideInBytes, 128);
+
+    unsigned numElemsPerSwizzlingRow = swizzlingByteWidth / bytesPerElem;
+    unsigned leadingDimOffset =
+        numElemsPerSwizzlingRow * shapePerCTA[dstOrder[1]];
+
+    uint32_t rowsPerRep = getShapePerCTATile(mmaLayout)[0];
+
+    Value warpId = udiv(threadId, i32_val(32));
+    Value warpId0 = urem(urem(warpId, i32_val(warpsPerCTA[0])),
+                         i32_val(srcShape[0] / instrShape[0]));
+
+    if (mmaLayout && mmaLayout.isHopper() && bytesPerElem == 2 &&
+        numElems >= 16) {
+      auto inVals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                         rewriter, srcTy);
+      for (int rep = 0; rep < repM; ++rep) {
+        Value rowOfWarp = add(mul(warpId0, i32_val(instrShape[0])),
+                              i32_val(rep * rowsPerRep));
+        uint32_t elemIdxOffset = rep * numElemsPerRep;
+
+        for (unsigned idx = 0; idx < numElemsPerRep; idx += 8) {
+          uint32_t elemIdx = elemIdxOffset + idx;
+
+          Value offset = rewriter.create<triton::nvgpu::OffsetOfStmatrixV4Op>(
+              loc, i32_ty, threadId, rowOfWarp, i32_val(idx), leadingDimOffset,
+              numElemsPerSwizzlingRow, true);
+
+          Value addr = gep(dstElemPtrTy, smemBase, offset);
+          Value data0 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 1],
+                                       inVals[elemIdx + 0]);
+          Value data1 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 3],
+                                       inVals[elemIdx + 2]);
+          Value data2 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 5],
+                                       inVals[elemIdx + 4]);
+          Value data3 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 7],
+                                       inVals[elemIdx + 6]);
+
+          rewriter.create<triton::nvgpu::StoreMatrixOp>(
+              loc, bitcast(addr, ptrI8SharedTy),
+              ValueRange{data0, data1, data2, data3});
+        }
+      }
+      // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
+      // attr.  Better way to determine barId (number of agents are limited).
+      if (auto optionalAgentId = getWSAgentId(op)) {
+        int agentId = *optionalAgentId, roleId = 0;
+        if (auto optionalRoleId = getWSRoleId(op))
+          roleId = *optionalRoleId;
+        int barId = agentId + roleId + nameBarrierIdBegin;
+        assert(barId < nameBarrierIdEnd);
+        auto bar = rewriter.create<LLVM::ConstantOp>(
+            loc, i32_ty, rewriter.getI32IntegerAttr(barId));
+        auto kNumThreads = rewriter.create<LLVM::ConstantOp>(
+            loc, i32_ty, rewriter.getI32IntegerAttr(128));
+        rewriter.create<triton::nvgpu::NamedBarrierWaitOp>(loc, bar,
+                                                           kNumThreads);
+      } else {
+        barrier();
+      }
+    }
     rewriter.create<triton::nvgpu::FenceAsyncSharedOp>(loc, 0);
 
     for (uint32_t b = 0; b < numBox; ++b) {
@@ -564,8 +652,8 @@ struct StoreAsyncOpConversion
         }
       }
       Value srcOffset = i32_val(b * boxStride);
-      auto srcPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), 3);
-      Value srcPtrBase = gep(srcPtrTy, smemObj.base, srcOffset);
+      auto srcPtrTy = ptr_ty(getTypeConverter()->convertType(dstElemTy), 3);
+      Value srcPtrBase = gep(srcPtrTy, smemBase, srcOffset);
       auto addr = bitcast(srcPtrBase, ptrI8SharedTy);
       rewriter.create<triton::nvgpu::TMAStoreTiledOp>(loc, tmaDesc, addr, pred,
                                                       coord);
