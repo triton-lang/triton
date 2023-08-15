@@ -160,11 +160,11 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   assert(aSharedLayout && "only support load dot operand from shared.");
-  auto instrShape = mmaEncoding.getInstrShape();
+  auto shapePerCTA = getShapePerCTA(aTensorTy);
+  auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA, 0);
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto aOrd = aSharedLayout.getOrder();
   bool transA = aOrd[0] == 0;
-  auto shapePerCTA = getShapePerCTA(aTensorTy);
 
   int numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0] * wpt[0]);
   int numRepK = ceil<unsigned>(shapePerCTA[1], instrShape[2]);
@@ -191,11 +191,12 @@ DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
   auto bTensorTy = tensor.getType().cast<RankedTensorType>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   assert(bSharedLayout && "only support load B from shared.");
-  auto instrShape = mmaEncoding.getInstrShape();
+  auto shapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
+  auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA, 1);
+
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto bOrd = bSharedLayout.getOrder();
   bool transB = bOrd[0] == 1;
-  auto shapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
 
   int numRepK = ceil<unsigned>(shapePerCTA[0], instrShape[2]);
   int numRepN = ceil<unsigned>(shapePerCTA[1], instrShape[1] * wpt[1]);
@@ -278,7 +279,8 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   bool transA = aOrd[0] == 0;
   bool transB = bOrd[0] == 1;
   auto dShapePerCTA = getShapePerCTA(dTensorTy);
-  auto instrShape = mmaEncoding.getInstrShape();
+  auto instrShape = mmaVersionToInstrShape(mmaEncoding, dShapePerCTA);
+
   auto accSize = 2 * (instrShape[1] / 4);
   int M = 4 * instrShape[0];
   int N = instrShape[1];
@@ -359,9 +361,9 @@ Value loadC(Value tensor, Value llTensor) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto mmaEncoding = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>();
   assert(mmaEncoding && "Currently, we only support $c with a mma layout.");
-  auto instrShape = mmaEncoding.getInstrShape();
-  auto wpt = mmaEncoding.getWarpsPerCTA();
   auto shapePerCTA = getShapePerCTA(tensorTy);
+  auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA);
+  auto wpt = mmaEncoding.getWarpsPerCTA();
   auto shapePerCTATile = getShapePerCTATile(mmaEncoding);
 
   int numRepM = ceil<unsigned>(shapePerCTA[0], shapePerCTATile[0]);

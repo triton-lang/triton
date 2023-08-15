@@ -334,6 +334,24 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v);
 
+SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
+                                                ArrayRef<int64_t> shape,
+                                                StringRef inputType);
+SmallVector<unsigned, 3>
+mmaVersionToInstrShape(int version, ArrayRef<int64_t> shape, Type type);
+SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
+                                                ArrayRef<int64_t> shape,
+                                                Type type, int opIdx);
+SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
+                                                ArrayRef<int64_t> shape,
+                                                StringRef inputType, int opIdx);
+SmallVector<unsigned, 3>
+mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
+                       ArrayRef<int64_t> shape);
+SmallVector<unsigned, 3>
+mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
+                       ArrayRef<int64_t> shape, int opIdx);
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

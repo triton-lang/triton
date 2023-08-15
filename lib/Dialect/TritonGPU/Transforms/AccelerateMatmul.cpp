@@ -212,8 +212,8 @@ public:
     if (!versionMajor)
       return failure();
 
-    auto instrShape =
-        mmaVersionToInstrShape(versionMajor, retShapePerCTA, AType);
+    auto instrShape = mmaVersionToInstrShape(versionMajor, retShapePerCTA,
+                                             AType.getElementType());
 
     // operands
     Value a = dotOp.getA();
@@ -259,7 +259,7 @@ public:
                                           numWarps, instrShape);
       mmaEnc = ttg::MmaEncodingAttr::get(oldRetType.getContext(), versionMajor,
                                          0 /*versionMinor*/, warpsPerTile,
-                                         CTALayout, instrShape);
+                                         CTALayout, "", instrShape);
     }
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mmaEnc);
