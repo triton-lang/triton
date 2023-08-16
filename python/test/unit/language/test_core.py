@@ -123,6 +123,8 @@ def check_type_supported(dtype, device):
         cc = torch.cuda.get_device_capability()
         if cc[0] < 8 and (dtype is tl.bfloat16 or dtype == "bfloat16" or dtype is torch.bfloat16):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
+        if cc[0] < 9 and (dtype is tl.float8e4 or dtype == "float8e4"):
+            pytest.skip("float8e4 is only supported on NVGPU with cc >= 90")
 
 
 class MmaLayout:
@@ -1425,6 +1427,7 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
         - conversion tri_fp8 = convert(input=tri_fp16, out=out_dtype) matches the original
     this is only possible if both conversions are correct
     """
+    check_type_supported(in_dtype, device)
     check_type_supported(out_dtype, device)
 
     @triton.jit

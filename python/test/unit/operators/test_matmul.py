@@ -108,6 +108,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
     if capability[0] < 8 and (ADTYPE == "bfloat16" or BDTYPE == "bfloat16"):
         pytest.skip("Only test bfloat16 on devices with sm >= 80")
+    if capability[0] < 9 and (ADTYPE == "float8e4" or BDTYPE == "float8e4"):
+        pytest.skip("Only test float8e4 on devices with sm >= 90")
     if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
     torch.manual_seed(0)
