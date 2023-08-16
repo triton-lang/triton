@@ -419,9 +419,9 @@ struct StoreAsyncOpConversion
     }
   }
 
-  LogicalResult
-  lowerStoreAsync(triton::nvidia_gpu::StoreAsyncOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const {
+  LogicalResult lowerStoreAsync(triton::nvidia_gpu::StoreAsyncOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
 
@@ -593,8 +593,9 @@ struct StoreAsyncOpConversion
   }
 
   LogicalResult
-  lowerStoreAsyncWithSlice(triton::nvidia_gpu::StoreAsyncOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const {
+  lowerStoreAsyncWithSlice(triton::nvidia_gpu::StoreAsyncOp op,
+                           OpAdaptor adaptor,
+                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
 
@@ -694,7 +695,7 @@ struct StoreAsyncOpConversion
         numBox = (shapePerCTA[dim] + tNumElems - 1) / tNumElems;
       }
       if (i == 1) {
-        tNumElems = tNumElems / repM;
+        tNumElems = tNumElems / repM / warpsPerCTA[0];
       }
       boxDims.emplace_back(tNumElems);
     }
@@ -743,13 +744,13 @@ struct StoreAsyncOpConversion
         typeConverter->convertType(rewriter.getI8Type()), 3);
 
     auto threadId = getThreadId(rewriter, loc);
-    Value pred = icmp_eq(threadId, i32_val(0));
+    Value pred = icmp_eq(urem(threadId, i32_val(32)), i32_val(0));
 
     auto llCoord = getTypeConverter()->unpackLLElements(loc, llDst, rewriter,
                                                         dst.getType());
     uint32_t boxStride = std::accumulate(boxDims.begin(), boxDims.end(), 1,
                                          std::multiplies<uint32_t>());
-    boxStride = boxStride * repM;
+    boxStride = boxStride * repM * warpsPerCTA[0];
 
     Value clusterCTAId = getClusterCTAId(rewriter, loc);
     SmallVector<Value> multiDimClusterCTAId =
@@ -768,6 +769,16 @@ struct StoreAsyncOpConversion
     Value warpId = udiv(threadId, i32_val(32));
     Value warpId0 = urem(urem(warpId, i32_val(warpsPerCTA[0])),
                          i32_val(srcShape[0] / instrShape[0]));
+    auto srcOrder = triton::gpu::getOrder(srcLayout);
+    unsigned inVec =
+        srcOrder == sharedLayout.getOrder()
+            ? triton::gpu::getContigPerThread(srcLayout)[srcOrder[0]]
+            : 1;
+    unsigned outVec = sharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    assert(minVec == 2);
+
+    auto wordTy = vec_ty(dstElemTy, minVec);
 
     auto inVals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
                                                        rewriter, srcTy);
@@ -781,67 +792,58 @@ struct StoreAsyncOpConversion
           uint32_t elemIdx = elemIdxOffset + b * numElemsPerRep / numBox + idx;
 
           Value offset = rewriter.create<triton::nvgpu::OffsetOfStmatrixV4Op>(
-              loc, i32_ty, threadId, rowOfWarp, i32_val(b * numElemsPerRep / numBox + idx), leadingDimOffset,
+              loc, i32_ty, threadId, rowOfWarp,
+              i32_val(b * numElemsPerRep / numBox + idx), leadingDimOffset,
               numElemsPerSwizzlingRow, true);
 
           Value addr = gep(dstElemPtrTy, smemBase, offset);
-          Value data0 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 1],
-                                       inVals[elemIdx + 0]);
-          Value data1 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 3],
-                                       inVals[elemIdx + 2]);
-          Value data2 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 5],
-                                       inVals[elemIdx + 4]);
-          Value data3 = pack16bitsTo32(loc, rewriter, inVals[elemIdx + 7],
-                                       inVals[elemIdx + 6]);
+          Value words[4];
+          for (unsigned i = 0; i < 8; ++i) {
+            if (i % minVec == 0)
+              words[i / 2] = undef(wordTy);
+            words[i / 2] = insert_element(
+                wordTy, words[i / 2], inVals[elemIdx + i], i32_val(i % minVec));
+          }
 
           rewriter.create<triton::nvgpu::StoreMatrixOp>(
               loc, bitcast(addr, ptrI8SharedTy),
-              ValueRange{data0, data1, data2, data3});
+              ValueRange{bitcast(words[0], i32_ty), bitcast(words[1], i32_ty),
+                         bitcast(words[2], i32_ty), bitcast(words[3], i32_ty)});
         }
         rewriter.create<triton::nvgpu::FenceAsyncSharedOp>(loc, 0);
-      // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
-      // attr.  Better way to determine barId (number of agents are limited).
-      if (auto optionalAgentId = getWSAgentId(op)) {
-        int agentId = *optionalAgentId, roleId = 0;
-        if (auto optionalRoleId = getWSRoleId(op))
-          roleId = *optionalRoleId;
-        int barId = agentId + roleId + nameBarrierIdBegin;
-        assert(barId < nameBarrierIdEnd);
-        auto bar = rewriter.create<LLVM::ConstantOp>(
-            loc, i32_ty, rewriter.getI32IntegerAttr(barId));
-        auto kNumThreads = rewriter.create<LLVM::ConstantOp>(
-            loc, i32_ty, rewriter.getI32IntegerAttr(128));
-        rewriter.create<triton::nvgpu::NamedBarrierWaitOp>(loc, bar,
-                                                           kNumThreads);
-      } else {
-        barrier();
-      }
-      SmallVector<Value> coord;
-      // raw coord
-      for (int i = 0; i < rank; ++i) {
-        auto dim = getDimOfOrder(dstOrder, i);
-        coord.push_back(llCoord[dim]);
-      }
-      // coord with box and cta offset
-      for (int i = 0; i < rank; ++i) {
-        auto dim = getDimOfOrder(dstOrder, i);
-        if (i == 0) {
-          coord[i] = add(coord[i], i32_val(b * boxDims[i]));
-          auto CTAOffset =
-              mul(multiDimClusterCTAId[dim], i32_val(numBox * boxDims[i]));
-          coord[i] = add(coord[i], CTAOffset);
-        } else {
-          Value blockOffset = i32_val(rep * instrShape[0] * warpsPerCTA[0]);
-          coord[i] = add(add(coord[i], blockOffset),
-                         mul(multiDimClusterCTAId[dim], i32_val(boxDims[i])));
+
+        SmallVector<Value> coord;
+        // raw coord
+        for (int i = 0; i < rank; ++i) {
+          auto dim = getDimOfOrder(dstOrder, i);
+          coord.push_back(llCoord[dim]);
         }
-      }
-      Value srcOffset = i32_val(b * boxStride + rep * instrShape[0] * warpsPerCTA[0] * instrShape[1] * warpsPerCTA[1] / numBox);
-      auto srcPtrTy = ptr_ty(getTypeConverter()->convertType(dstElemTy), 3);
-      Value srcPtrBase = gep(srcPtrTy, smemBase, srcOffset);
-      auto addr = bitcast(srcPtrBase, ptrI8SharedTy);
-      rewriter.create<triton::nvgpu::TMAStoreTiledOp>(loc, tmaDesc, addr, pred,
-                                                      coord);
+        // coord with box and cta offset
+        for (int i = 0; i < rank; ++i) {
+          auto dim = getDimOfOrder(dstOrder, i);
+          if (i == 0) {
+            coord[i] = add(coord[i], i32_val(b * boxDims[i]));
+            auto CTAOffset =
+                mul(multiDimClusterCTAId[dim], i32_val(numBox * boxDims[i]));
+            coord[i] = add(coord[i], CTAOffset);
+          } else {
+            Value blockOffset = i32_val(rep * instrShape[0] * warpsPerCTA[0]);
+            Value warpOffset = mul(warpId0, i32_val(instrShape[0]));
+            coord[i] = add(add(coord[i], add(blockOffset, warpOffset)),
+                           mul(multiDimClusterCTAId[dim],
+                               i32_val(boxDims[i] * repM * warpsPerCTA[0])));
+          }
+        }
+        Value srcOffset =
+            add(i32_val(b * boxStride + rep * instrShape[0] * warpsPerCTA[0] *
+                                            instrShape[1] * warpsPerCTA[1] /
+                                            numBox),
+                mul(warpId0, i32_val(instrShape[0] * numElemsPerSwizzlingRow)));
+        auto srcPtrTy = ptr_ty(getTypeConverter()->convertType(dstElemTy), 3);
+        Value srcPtrBase = gep(srcPtrTy, smemBase, srcOffset);
+        auto addr = bitcast(srcPtrBase, ptrI8SharedTy);
+        rewriter.create<triton::nvgpu::TMAStoreTiledOp>(loc, tmaDesc, addr,
+                                                        pred, coord);
       }
     }
     rewriter.eraseOp(op);

@@ -261,7 +261,6 @@ private:
       unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
                                        std::multiplies{});
       auto bytes = elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes, 1024);
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes, 1024);
     } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
       auto value = op->getOperand(0);
