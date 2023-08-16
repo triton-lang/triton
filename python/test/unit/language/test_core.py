@@ -1359,7 +1359,7 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
     extended_exp = ((1 << (tl.float32.primitive_bitwidth - tl.float32.fp_mantissa_width - 1)) - 1) << tl.float32.fp_mantissa_width
     # special cases, exp is 0b11..1
     if dtype in [tl.float8e4nv, tl.float8e4b15]:
-        # float8e4m3 does not have infinities
+        # float8e4m3nv does not have infinities
         output[fp == 0b01111111] = torch.nan
         output[fp == 0b11111111] = torch.nan
     else:
