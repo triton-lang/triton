@@ -463,6 +463,9 @@ public:
 
     return success();
   }
+
+private:
+  int computeCapability;
 };
 
 template <typename SourceOp, typename DestOp>
@@ -474,11 +477,6 @@ struct ElementwiseOpConversion
                                   ElementwiseOpConversion<SourceOp, DestOp>>;
   using Base::Base;
   using OpAdaptor = typename Base::OpAdaptor;
-
-  explicit ElementwiseOpConversion(LLVMTypeConverter &typeConverter,
-                                   PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase<SourceOp, ElementwiseOpConversion>(
-            typeConverter, benefit) {}
 
   // An interface to support variant DestOp builder.
   SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
@@ -495,6 +493,11 @@ struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<triton::FpToFpOp, FpToFpOpConversion> {
   using ElementwiseOpConversionBase<
       triton::FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
+
+  explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                              int computeCapability, PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, benefit),
+        computeCapability(computeCapability) {}
 
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
@@ -584,6 +587,12 @@ struct FpToFpOpConversion
                    << "\n";
       llvm_unreachable("");
     }
+    if (computeCapability < 90 &&
+        (srcTy.isFloat8E4M3FNUZ() || dstTy.isFloat8E4M3FNUZ())) {
+      llvm::errs() << "Conversion from/to f8e4m3 is only supported on hopper"
+                   << "\n";
+      llvm_unreachable("");
+    }
     return makeConverterFromPtx(srcMap.lookup(key),
                                 getTypeConverter()->convertType(srcTy),
                                 getTypeConverter()->convertType(dstTy),
@@ -622,6 +631,9 @@ struct FpToFpOpConversion
     // Pack values
     return outVals;
   }
+
+private:
+  int computeCapability;
 };
 
 struct CmpIOpConversion
@@ -1095,7 +1107,9 @@ struct IndexCastOpLowering
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit) {
+    ModuleAllocation &allocation,
+    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    int computeCapability, PatternBenefit benefit) {
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
   POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
@@ -1159,7 +1173,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SIToFPOpConversion>(typeConverter, benefit);
   patterns.add<IndexCastOpLowering>(typeConverter, benefit);
 
-  patterns.add<FpToFpOpConversion>(typeConverter, benefit);
+  patterns.add<FpToFpOpConversion>(typeConverter, computeCapability, benefit);
 
   patterns.add<ExternElementwiseOpConversion<triton::PureExternElementwiseOp>>(
       typeConverter, benefit);

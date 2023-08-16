@@ -523,7 +523,7 @@ public:
     populatePatterns1(populateTritonGPUToLLVMPatterns);
     populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
     populatePatterns2(populateDotOpToLLVMPatterns);
-    populatePatterns2(populateElementwiseOpToLLVMPatterns);
+    populatePatterns4(populateElementwiseOpToLLVMPatterns);
     populatePatterns3(populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(populateReduceOpToLLVMPatterns);
     populatePatterns1(populateScanOpToLLVMPatterns);
