@@ -351,7 +351,6 @@ jobs:
             echo "Error while comparing artifacts"
             echo "COMPARISON_RESULT=error" >> $GITHUB_ENV
           fi
-          echo "COMPARISON_RESULT=env.COMPARISON_RESULT"
       - name: Check exit code and handle failure
         if: ${{ env.COMPARISON_RESULT == 'error' }}
         run: |
