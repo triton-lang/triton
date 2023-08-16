@@ -173,65 +173,6 @@ const std::string Fp16_to_Fp8E4M3 = "{ \n"
                                     "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
                                     "}";
 
-// WARN: subnormal (0bs0000xxx) are not handled
-const std::string Fp8E4M3_to_Bf16 =
-    "{                                      \n"
-    ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-    "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
-    "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
-    "and.b32 b0, a0, 0x7fff7fff;            \n" // b0 = a0 & 0x7fff7fff
-    "and.b32 b1, a1, 0x7fff7fff;            \n" // (strip sign)
-    "shr.b32 b0, b0, 4;                     \n" // b0 >>= 4
-    "shr.b32 b1, b1, 4;                     \n" // shift into fp16 position
-    "add.u32 b0, b0, 0x3c003c00;            \n" // b0.exp += 2**7-2**3
-                                                // exponent compensate = 120
-    "add.u32 b1, b1, 0x3c003c00;            \n" // b1 += 120<<7 | 120<<7<<16
-    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-    "}";
-
-const std::string Bf16_to_Fp8E4M3 =
-    "{                                           \n" // bf16=fp8>>4 + 120<<7
-    ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
-    ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
-    "mov.u32 fp8_min, 0x3c003c00;                \n" // so bf16_min = 0x3c00
-    "mov.u32 fp8_max, 0x43f043f0;                \n" // so bf16_max = 0x43f0
-    "mov.u32 rn_, 0x80008;                       \n" // round to nearest
-    "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
-    "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
-    "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
-    "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
-    "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
-
-    // nosign = clamp(nosign, min, max)
-    ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
-    "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
-    "max.u32 nosign_0_0, nosign_0_0, 0x3c000000; \n"
-    "min.u32 nosign_0_0, nosign_0_0, 0x43f00000; \n"
-    "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
-    "max.u32 nosign_0_1, nosign_0_1, 0x3c00;     \n"
-    "min.u32 nosign_0_1, nosign_0_1, 0x43f0;     \n"
-    "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
-    "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
-    "max.u32 nosign_1_0, nosign_1_0, 0x3c000000; \n"
-    "min.u32 nosign_1_0, nosign_1_0, 0x43f00000; \n"
-    "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
-    "max.u32 nosign_1_1, nosign_1_1, 0x3c00;     \n"
-    "min.u32 nosign_1_1, nosign_1_1, 0x43f0;     \n"
-    "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
-
-    "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
-    "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
-    "sub.u32 nosign0, nosign0, 0x3c003c00;       \n" // nosign0-=0x3c003c00
-    "sub.u32 nosign1, nosign1, 0x3c003c00;       \n" // (compensate offset)
-    "shr.u32 nosign0, nosign0, 4;                \n" // nosign0 >>= 4
-    "shr.u32 nosign1, nosign1, 4;                \n" // shift into to fp8e4
-    "prmt.b32 nosign, nosign0, nosign1, 0x6420;  \n" // nosign0 = 0x00f100f2
-                                                     // nosign1 = 0x00f300f4
-                                                     // nosign = 0xf3f4f1f2
-    "or.b32 $0, nosign, sign;                    \n" // restore sign
-    "}";
-
 /* ----- Packed integer to BF16 ------ */
 const std::string S8_to_Bf16 =
     "{                                           \n"
@@ -622,21 +563,17 @@ struct FpToFpOpConversion
         {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3},
         {{F16TyID, F8E5M2TyID}, Fp16_to_Fp8E5M2},
         // F8 -> BF16
-        {{F8E4M3TyID, BF16TyID}, Fp8E4M3_to_Bf16},
         {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16},
         // BF16 -> F8
-        {{BF16TyID, F8E4M3TyID}, Bf16_to_Fp8E4M3},
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2},
     };
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
     if (srcTy.isFloat8E4M3FNUZ() && dstTy.isF16()) {
-      std::cout << "Here" << std::endl;
       inVecWidthBits = 16;
       outVecWidthBits = 32;
     }
     if (srcTy.isF16() && dstTy.isFloat8E4M3FNUZ()) {
-      std::cout << "there" << std::endl;
       inVecWidthBits = 32;
       outVecWidthBits = 16;
     }
