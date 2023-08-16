@@ -151,11 +151,49 @@ void MaterializeLoadStorePass::materializeStoreTilePtr(
   auto loc = store.getLoc();
   OpBuilder builder(store);
   auto value = store.getValue();
+  auto dst = store.getPtr();
+
   auto cvtOp = llvm::dyn_cast_or_null<mlir::triton::gpu::ConvertLayoutOp>(
       value.getDefiningOp());
-  auto mmaVal = cvtOp.getOperand();
-  auto dst = store.getPtr();
-  builder.create<ttng::StoreAsyncOp>(loc, dst, mmaVal);
+  if (cvtOp) {
+    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    auto dstTy = cvtOp.getResult().getType().cast<RankedTensorType>();
+    auto elemTy = srcTy.getElementType();
+    auto srcMmaLayout = srcTy.getEncoding().dyn_cast<MmaEncodingAttr>();
+    auto dstSharedLayout = dstTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    auto truncFOP = llvm::dyn_cast_or_null<arith::TruncFOp>(cvtOp.getOperand().getDefiningOp());
+    unsigned numElems = ttg::getTotalElemsPerThread(srcTy);
+    auto inOrd = ttg::getOrder(srcTy.getEncoding());
+    auto outOrd = ttg::getOrder(dstTy.getEncoding());
+    if (srcMmaLayout && srcMmaLayout.isHopper() && dstSharedLayout && truncFOP && elemTy.getIntOrFloatBitWidth() == 16 && numElems >= 16 && inOrd == outOrd) {
+      builder.create<ttng::StoreAsyncOp>(loc, dst, cvtOp.getOperand());
+      builder.create<ttg::AsyncBulkCommitGroupOp>(loc);
+      builder.create<ttg::AsyncBulkWaitOp>(loc, 0);
+      store->erase();
+      return;
+    }
+  }
+
+  auto *ctx = store.getContext();
+  auto storeTy = value.getType().dyn_cast<RankedTensorType>();
+  assert(storeTy);
+  auto storeElemTy = storeTy.getElementType();
+  auto ctaLayout = getCTALayout(storeTy.getEncoding());
+  auto storeShape = storeTy.getShape();
+  SmallVector<int64_t> bufferShape(storeShape.begin(), storeShape.end());
+  auto rank = storeShape.size();
+  // The order of smem should be consistent with gmem.
+  auto makeTensorPtrOp = getMakeTensorPtrOp(dst);
+  SmallVector<unsigned> sharedOrder;
+  for (auto o : makeTensorPtrOp.getOrder()) {
+    sharedOrder.emplace_back(o);
+  }
+  auto sharedEncoding = SharedEncodingAttr::get(ctx, storeShape, sharedOrder,
+                                                ctaLayout, storeElemTy);
+  auto bufferTy =
+      RankedTensorType::get(bufferShape, storeElemTy, sharedEncoding);
+  Value cvt = builder.create<ttg::ConvertLayoutOp>(loc, bufferTy, value);
+  builder.create<ttng::StoreAsyncOp>(loc, dst, cvt);
   builder.create<mlir::triton::gpu::AsyncBulkCommitGroupOp>(loc);
   builder.create<mlir::triton::gpu::AsyncBulkWaitOp>(loc, 0);
   store->erase();
