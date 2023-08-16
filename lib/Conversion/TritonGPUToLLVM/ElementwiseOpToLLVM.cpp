@@ -164,45 +164,14 @@ const std::string Fp16_to_Fp8E4M3B15x4 =
     "}";
 
 /* ----- FP8E4M3 ------ */
-// Note: when handled by software, this format
-// does not handle denormals and has
-// more than a single NaN values.
-
-// Fp8E4M3 -> Fp16 (packed)
-const std::string Fp8E4M3_to_Fp16 =
-    "{                                      \n"
-    ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-    "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
-    "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
-    "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-    "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-    "shr.b32  b0, b0, 1;                    \n" // b0 >>= 1
-    "shr.b32  b1, b1, 1;                    \n" // shift into fp16 position
-    "add.u32  b0, b0, 0x20002000;           \n" // b0.exp += 2**4-2**3
-                                                // exponent compensate = 8
-    "add.u32  b1, b1, 0x20002000;           \n" // b1 += 8<<10 | 8<<10<<16
-    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-    "}";
-
-// Fp16 -> Fp8E4M3 (packed)
-const std::string Fp16_to_Fp8E4M3 =
-    "{                                      \n"
-    ".reg .b32 a<2>, b<2>;                  \n" // see Fp8E4M3x4ToFp16x4
-    "sub.u32 a0, $1, 0x20002000;            \n" // a0 = input0 - 0x20002000
-                                                // (compensate offset)
-    "sub.u32 a1, $2, 0x20002000;            \n" // a1 = input1 - 0x20002000
-                                                // (8 << 10 | 8 << 10 << 16)
-    "shl.b32 a0, a0, 1;                     \n" // a0 <<= 1
-    "shl.b32 a1, a1, 1;                     \n" // shift into fp8e4 position
-    "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n" // a0 &= 0x7fff7fff
-    "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-    "add.u32 a0, a0, 0x00800080;            \n" // a0 += 0x00800080
-    "add.u32 a1, a1, 0x00800080;            \n" // (round to nearest)
-    "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n" // b0 = a0|(0x80008000&in0)
-    "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
-    "prmt.b32 $0, b0, b1, 0x7531;           \n" // output = b1b0
-    "}";
+// Fp8E4M3 (x2) -> Fp16 (x2) (packed)
+const std::string Fp8E4M3_to_Fp16 = "{ \n"
+                                    "cvt.rn.f16x2.e4m3x2 $0, $1; \n"
+                                    "}";
+// Fp16 (x2) -> Fp8E4M3 (x2) (packed)
+const std::string Fp16_to_Fp8E4M3 = "{ \n"
+                                    "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
+                                    "}";
 
 // WARN: subnormal (0bs0000xxx) are not handled
 const std::string Fp8E4M3_to_Bf16 =
@@ -409,40 +378,49 @@ inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
 }
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
-                                         const Value &, const Value &,
-                                         const Value &, const Value &)>
+                                         const SmallVector<Value> &)>
     ConverterT;
 
 static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
-                                       Type outType) {
+                                       Type outType,
+                                       const int inVecWidthBits = 32,
+                                       const int outVecWidthBits = 32) {
 
-  ConverterT converter = [ptxAsm, inType, outType](
-                             Location loc, ConversionPatternRewriter &rewriter,
-                             const Value &v0, const Value &v1, const Value &v2,
-                             const Value &v3) -> SmallVector<Value> {
-    SmallVector<Value> v = {v0, v1, v2, v3};
+  ConverterT converter =
+      [ptxAsm, inType, outType, inVecWidthBits,
+       outVecWidthBits](Location loc, ConversionPatternRewriter &rewriter,
+                        const SmallVector<Value> &v) -> SmallVector<Value> {
+    int numElements = v.size();
+    assert(numElements == 4 || numElements == 2 && "invalid vector size");
+
     auto ctx = rewriter.getContext();
     int inBitwidth = inType.getIntOrFloatBitWidth();
     int outBitwidth = outType.getIntOrFloatBitWidth();
     // first, we pack `v` into 32-bit ints
-    int inVecWidth = 32 / inBitwidth;
+    int inVecWidth = inVecWidthBits / inBitwidth;
     auto inVecTy = vec_ty(inType, inVecWidth);
-    SmallVector<Value> inPacked(4 / inVecWidth, undef(inVecTy));
-    for (size_t i = 0; i < 4; i++)
+    SmallVector<Value> inPacked(numElements / inVecWidth, undef(inVecTy));
+    for (size_t i = 0; i < numElements; i++)
       inPacked[i / inVecWidth] = insert_element(
           inVecTy, inPacked[i / inVecWidth], v[i], i32_val(i % inVecWidth));
     for (size_t i = 0; i < inPacked.size(); i++)
-      inPacked[i] = bitcast(inPacked[i], i32_ty);
+      inPacked[i] = bitcast(inPacked[i], int_ty(inVecWidthBits));
 
     // then, we run the provided inline PTX
-    int outVecWidth = 32 / outBitwidth;
-    int outNums = 4 / outVecWidth;
+    int outVecWidth = outVecWidthBits / outBitwidth;
+    int outNums = numElements / outVecWidth;
     PTXBuilder builder;
     SmallVector<PTXBuilder::Operand *> operands;
-    for (int i = 0; i < outNums; i++)
-      operands.push_back(builder.newOperand("=r"));
-    for (Value inVal : inPacked)
-      operands.push_back(builder.newOperand(inVal, "r"));
+    auto outConstriant = outVecWidthBits == 16 ? "=h" : "=r";
+    auto inConstraint = inVecWidthBits == 16 ? "h" : "r";
+    for (int i = 0; i < outNums; i++) {
+      operands.push_back(builder.newOperand(outConstriant));
+    }
+
+    for (Value inVal : inPacked) {
+      operands.push_back(builder.newOperand(inVal, inConstraint));
+    }
+
     auto &ptxOp = *builder.create(ptxAsm);
     ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
     auto outVecTy = vec_ty(outType, outVecWidth);
@@ -457,7 +435,7 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
     }
     // unpack the output
     SmallVector<Value> ret;
-    for (size_t i = 0; i < 4; i++)
+    for (size_t i = 0; i < numElements; i++)
       ret.push_back(extract_element(outType, outPacked[i / outVecWidth],
                                     i32_val(i % outVecWidth)));
     return ret;
@@ -650,6 +628,18 @@ struct FpToFpOpConversion
         {{BF16TyID, F8E4M3TyID}, Bf16_to_Fp8E4M3},
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2},
     };
+    int inVecWidthBits = 32;
+    int outVecWidthBits = 32;
+    if (srcTy.isFloat8E4M3FNUZ() && dstTy.isF16()) {
+      std::cout << "Here" << std::endl;
+      inVecWidthBits = 16;
+      outVecWidthBits = 32;
+    }
+    if (srcTy.isF16() && dstTy.isFloat8E4M3FNUZ()) {
+      std::cout << "there" << std::endl;
+      inVecWidthBits = 32;
+      outVecWidthBits = 16;
+    }
 
     std::pair<TypeID, TypeID> key = {srcTy.getTypeID(), dstTy.getTypeID()};
     if (srcMap.count(key) == 0) {
@@ -659,28 +649,35 @@ struct FpToFpOpConversion
     }
     return makeConverterFromPtx(srcMap.lookup(key),
                                 getTypeConverter()->convertType(srcTy),
-                                getTypeConverter()->convertType(dstTy));
+                                getTypeConverter()->convertType(dstTy),
+                                inVecWidthBits, outVecWidthBits);
   }
 
   SmallVector<Value> createDestOps(triton::FpToFpOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    assert(operands.size() % 4 == 0 &&
-           "FP8 casting only support tensors with 4-aligned sizes");
     auto srcElementType = getElementType(op.getFrom());
     auto dstElementType = getElementType(op.getResult());
+    int numElements = 4;
+    if (srcElementType.isFloat8E4M3FNUZ() && dstElementType.isF16() ||
+        srcElementType.isF16() && dstElementType.isFloat8E4M3FNUZ()) {
+      numElements = 2;
+    }
+    assert(operands.size() % numElements == 0 &&
+           "FP8 casting only support tensors with aligned sizes");
     bool isSrcFP32 = srcElementType.isF32();
     bool isDstFP32 = dstElementType.isF32();
     auto cvtFunc = getConversionFunc(isSrcFP32 ? f16_ty : srcElementType,
                                      isDstFP32 ? f16_ty : dstElementType);
-    SmallVector<Value> inVals = {operands[0][0], operands[1][0], operands[2][0],
-                                 operands[3][0]};
+    SmallVector<Value> inVals;
+    for (unsigned i = 0; i < numElements; i++) {
+      inVals.push_back(operands[i][0]);
+    }
     if (isSrcFP32)
       for (Value &v : inVals)
         v = convertFp32ToFp16(loc, rewriter, v);
-    SmallVector<Value> outVals =
-        cvtFunc(loc, rewriter, inVals[0], inVals[1], inVals[2], inVals[3]);
+    SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
     if (isDstFP32)
       for (Value &v : outVals)
@@ -974,8 +971,9 @@ struct SIToFPOpConversion
       auto cvtFunc = makeConverterFromPtx(
           S8_to_Bf16, getTypeConverter()->convertType(inElemTy),
           getTypeConverter()->convertType(outElemTy));
-      auto outVals = cvtFunc(loc, rewriter, operands[0][0], operands[1][0],
-                             operands[2][0], operands[3][0]);
+      SmallVector<Value> inVals = {operands[0][0], operands[1][0],
+                                   operands[2][0], operands[3][0]};
+      auto outVals = cvtFunc(loc, rewriter, inVals);
       assert(outVals.size() == 4);
       return outVals;
     } else if (outElemTy.isBF16()) {
