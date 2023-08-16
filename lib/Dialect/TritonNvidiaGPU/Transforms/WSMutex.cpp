@@ -264,8 +264,9 @@ void mutexSync(ModuleOp &mod, scf::IfOp &ifOp, scf::ForOp &persistentForOp,
       });
     for (int i = 0; i < numRoles; ++i) {
       if (lockLocs[i] == op) {
+        if (roleId != -1)
+          op->setAttr("agent.mutex_role", builder.getI32IntegerAttr(roleId));
         roleId = i;
-        op->setAttr("agent.mutex_role", builder.getI32IntegerAttr(i));
         break;
       }
     }

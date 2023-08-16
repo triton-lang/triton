@@ -225,4 +225,22 @@ def TritonGPURewriteTensorPointer : Pass</*cli-arg*/"tritongpu-rewrite-tensor-po
   ];
 }
 
+def TritonGPUWSFixupMissingAttrs : Pass<"triton-nvidia-gpu-ws-fixup-missing-attrs", "mlir::ModuleOp"> {
+  let summary = "Fixup missing WS related attributes";
+
+  let description = [{
+    WS related attributes are attached to some key operations and are used when lowering to llvm.
+    However these attributes maybe be dropped in the following IR transform. This pass tries to
+    fixup the missing attributes.
+  }];
+
+  let constructor = "mlir::createTritonNvidiaGPUWSFixupMissingAttrs()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
+
 #endif

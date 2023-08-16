@@ -6,6 +6,7 @@ add_mlir_dialect_library(TritonNvidiaGPUTransforms
   WSPipeline.cpp
   WSMutex.cpp
   WSMaterialization.cpp
+  WSFixupMissingAttrs.cpp
   FenceInsertion.cpp
   RewriteTensorPointer.cpp
   Utility.cpp

@@ -125,7 +125,7 @@ struct DotWaitOpConversion
   matchAndRewrite(triton::nvidia_gpu::DotWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto pendings = op.getPendings();
-    rewriter.create<triton::nvgpu::WGMMAWaitOp>(op.getLoc(), pendings);
+    rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(op.getLoc(), pendings);
 
     // Safe to remove the op since it doesn't have any return value.
     rewriter.eraseOp(op);

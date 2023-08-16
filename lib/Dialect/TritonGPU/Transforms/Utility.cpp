@@ -731,4 +731,28 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
   return linear;
 }
 
+std::optional<int> getWSAgentId(Operation *op) {
+  int prevAgentId = -1;
+  if (auto attr = op->getAttrOfType<DenseIntElementsAttr>("async_agent")) {
+    for (auto agentId : attr.getValues<int>()) {
+      assert(prevAgentId == -1 && "support at most one agent id");
+      prevAgentId = agentId;
+    }
+  }
+  if (prevAgentId == -1)
+    return std::nullopt;
+  return prevAgentId;
+}
+
+std::optional<int> getWSRoleId(Operation *op) {
+  if (!op->hasAttr("agent.mutex_role"))
+    return std::nullopt;
+  return op->getAttrOfType<IntegerAttr>("agent.mutex_role").getInt();
+}
+
+void setRoleId(Operation *op, int roleId) {
+  auto attr = IntegerAttr::get(IntegerType::get(op->getContext(), 32), roleId);
+  op->setAttr("agent.mutex_role", attr);
+}
+
 } // namespace mlir

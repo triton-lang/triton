@@ -1,6 +1,7 @@
 #include "ReduceOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -289,7 +290,7 @@ private:
             triton::ReduceOp op) const {
     // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
     // attr.
-    if (op->hasAttr("async_agent")) {
+    if (getWSAgentId(op)) {
       barSync(rewriter, op, getAgentIds(op).front(), 128);
     } else {
       barrier();
@@ -320,17 +321,14 @@ private:
       return NVVM::ReduxKind::OR;
     if (isa<arith::XOrIOp>(reduceOp))
       return NVVM::ReduxKind::XOR;
-    if (auto externalCall =
-            dyn_cast<triton::PureExternElementwiseOp>(reduceOp)) {
-      if (externalCall.getSymbol() == "__nv_min")
-        return NVVM::ReduxKind::MIN;
-      if (externalCall.getSymbol() == "__nv_umin")
-        return NVVM::ReduxKind::UMIN;
-      if (externalCall.getSymbol() == "__nv_max")
-        return NVVM::ReduxKind::MAX;
-      if (externalCall.getSymbol() == "__nv_umax")
-        return NVVM::ReduxKind::UMAX;
-    }
+    if (isa<arith::MinSIOp>(reduceOp))
+      return NVVM::ReduxKind::MIN;
+    if (isa<arith::MinUIOp>(reduceOp))
+      return NVVM::ReduxKind::UMIN;
+    if (isa<arith::MaxSIOp>(reduceOp))
+      return NVVM::ReduxKind::MAX;
+    if (isa<arith::MaxUIOp>(reduceOp))
+      return NVVM::ReduxKind::UMAX;
     return std::nullopt;
   }
 
