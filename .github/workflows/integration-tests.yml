@@ -336,7 +336,7 @@ jobs:
       - name: Compare artifacts
         run: |
           set +e
-          python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml
+          python3 python/test/tools/compare_files.py --path1 reference --path2 current
           exit_code=$?
           set -e
           echo $exit_code
