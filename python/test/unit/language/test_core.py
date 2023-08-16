@@ -374,6 +374,7 @@ def test_addptr(dtype, order, device):
     kernel[1,](x_tri, y_tri, order, SIZE)
     np.testing.assert_allclose(y, to_numpy(y_tri))
 
+
 @pytest.mark.parametrize("dtype_x, dtype_y",
                          [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes] +
                          [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes]

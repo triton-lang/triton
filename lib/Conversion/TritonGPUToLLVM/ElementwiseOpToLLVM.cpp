@@ -10,11 +10,11 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 const std::string Fp16_to_Fp8E5M2 =
     "{                            \n"
     ".reg .b32 a<2>;              \n"
-    "and.b32 a0, $1, 0xfffefffe;  \n"           // a0 &= 0xfffefffe
-    "and.b32 a1, $2, 0xfffefffe;  \n"           // (strip lowest bit)
-    "add.u32 a0, a0, 0x00800080;  \n"           // a0 += 0x00800080
-    "add.u32 a1, a1, 0x00800080;  \n"           // (round to nearest)
-    "prmt.b32 $0, a0, a1, 0x7531; \n\t"         // output = a1a0
+    "and.b32 a0, $1, 0xfffefffe;  \n"   // a0 &= 0xfffefffe
+    "and.b32 a1, $2, 0xfffefffe;  \n"   // (strip lowest bit)
+    "add.u32 a0, a0, 0x00800080;  \n"   // a0 += 0x00800080
+    "add.u32 a1, a1, 0x00800080;  \n"   // (round to nearest)
+    "prmt.b32 $0, a0, a1, 0x7531; \n\t" // output = a1a0
     "}";
 
 const std::string Fp8E5M2_to_Fp16 = "{                           \n"
@@ -170,7 +170,8 @@ const std::string Fp8E4M3_to_Fp16 =
     "add.u32  b0, b0, a0;                   \n" // b0 = b0 + a0
     "add.u32  b1, b1, a1;                   \n" // (move sign to the left)
     "mad.lo.u32 $0, b0, 128, 0x20002000;    \n" // out0 = (b0 << 7) + 0x20002000
-    "mad.lo.u32 $1, b1, 128, 0x20002000;    \n" // (shift into position and bias exponent)
+    "mad.lo.u32 $1, b1, 128, 0x20002000;    \n" // (shift into position and bias
+                                                // exponent)
     "}";
 
 // Fp16 -> Fp8E4M3 (packed)
@@ -180,7 +181,8 @@ const std::string Fp16_to_Fp8E4M3 =
     "and.b32 a0, $1, 0x7fff7fff;            \n" // a0 = input0 & 0x7fff7fff
     "and.b32 a1, $2, 0x7fff7fff;            \n" // (strip sign)
     "mad.lo.u32 a0, a0, 2, 0x40804080;      \n" // shift exponent (<< 1),
-    "mad.lo.u32 a1, a1, 2, 0x40804080;      \n" // correct bias (0x40004000), and round to nearest
+    "mad.lo.u32 a1, a1, 2, 0x40804080;      \n" // correct bias (0x40004000),
+                                                // and round to nearest
     "lop3.b32 b0, $1, 0x80008000, a0, 0xe2; \n" // b0 = 0x80008000 ? in0 : a0
     "lop3.b32 b1, $2, 0x80008000, a1, 0xe2; \n" // (restore sign)
     "prmt.b32 $0, b0, b1, 0x7531;           \n" // output = b1b0
@@ -197,7 +199,8 @@ const std::string Fp8E4M3_to_Bf16 =
     "mad.lo.u32 b0, b0, 15, a0;             \n" // b0 = b0 * 15 + a0
     "mad.lo.u32 b1, b1, 15, a1;             \n" // (move sign to the left)
     "mad.lo.u32 $0, b0, 16, 0x3c003c00;     \n" // out0 = (b0 << 4) + 0x3c003c00
-    "mad.lo.u32 $1, b1, 16, 0x3c003c00;     \n" // (shift into position and bias exponent)
+    "mad.lo.u32 $1, b1, 16, 0x3c003c00;     \n" // (shift into position and bias
+                                                // exponent)
     "}";
 
 const std::string Bf16_to_Fp8E4M3 =
