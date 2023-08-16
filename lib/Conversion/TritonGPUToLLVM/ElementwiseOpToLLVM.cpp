@@ -572,11 +572,11 @@ struct FpToFpOpConversion
     };
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
-    if (srcTy.isFloat8E4M3FNUZ() && dstTy.isF16()) {
+    if (srcTy.isFloat8E4M3FNUZ()) {
       inVecWidthBits = 16;
       outVecWidthBits = 32;
     }
-    if (srcTy.isF16() && dstTy.isFloat8E4M3FNUZ()) {
+    if (dstTy.isFloat8E4M3FNUZ()) {
       inVecWidthBits = 32;
       outVecWidthBits = 16;
     }
@@ -606,8 +606,8 @@ struct FpToFpOpConversion
     auto srcElementType = getElementType(op.getFrom());
     auto dstElementType = getElementType(op.getResult());
     int numElements = 4;
-    if (srcElementType.isFloat8E4M3FNUZ() && dstElementType.isF16() ||
-        srcElementType.isF16() && dstElementType.isFloat8E4M3FNUZ()) {
+    if (srcElementType.isFloat8E4M3FNUZ() ||
+        dstElementType.isFloat8E4M3FNUZ()) {
       numElements = 2;
     }
     assert(operands.size() % numElements == 0 &&
