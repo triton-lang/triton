@@ -91,7 +91,7 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1' && env.ENABLE_MMA_V3 == '1'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime
+          python3 -m pytest -n 8 --ignore=runtime --ignore=operators
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
 
@@ -99,15 +99,31 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime --ignore=hopper
+          python3 -m pytest -n 8 --ignore=runtime --ignore=hopper --ignore=operators
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Run partial tests on CUDA with ENABLE_TMA=1 and ENABLE_MMA_V3=1
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1' && env.ENABLE_MMA_V3 == '1'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 operators
+
+      - name: Run partial tests on CUDA with ENABLE_TMA=0 and ENABLE_MMA_V3=0
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 operators
 
       - name: Create artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           cd ~/.triton
-          tar -czvf artifacts.tar.gz cache
+          tar -czf artifacts.tar.gz cache
 
       - name: Upload artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
