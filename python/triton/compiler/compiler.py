@@ -368,6 +368,35 @@ def get_architecture_descriptor(capability):
     return capability
 
 
+def get_architecture_num_warps(device_type, capability=None):
+    if device_type in ["cuda", "hip"]:
+        arch = get_architecture_descriptor(capability)
+    else:
+        _device_backend = get_backend(device_type)
+        assert _device_backend
+        arch = _device_backend.get_architecture_descriptor(device_type=device_type, capability=capability)
+
+    is_cuda = device_type == "cuda" and _is_cuda(arch)
+    is_hip = device_type in ["cuda", "hip"] and not is_cuda
+    num_warps = 4 if is_cuda or is_hip else arch["num_warps"]
+
+    return num_warps
+
+
+def get_architecture_num_stages(device_type, capability=None):
+    if device_type in ["cuda", "hip"]:
+        arch = get_architecture_descriptor(capability)
+    else:
+        _device_backend = get_backend(device_type)
+        assert _device_backend
+        arch = _device_backend.get_architecture_descriptor(device_type=device_type, capability=capability)
+
+    is_cuda = device_type == "cuda" and _is_cuda(arch)
+    num_stages = 3 if is_cuda and arch >= 75 else 2
+
+    return num_stages
+
+
 def add_rocm_stages(arch, extern_libs, stages):
     extern_libs.update(get_amdgcn_bitcode_paths(arch))
 
@@ -396,10 +425,11 @@ def add_cuda_stages(arch, extern_libs, stages):
 def compile(fn, **kwargs):
     # Get device type to decide which backend should be used
     device_type = kwargs.get("device_type", "cuda")
+    capability = kwargs.get("cc", None)
     _device_backend = get_backend(device_type)
 
     if device_type in ["cuda", "hip"]:
-        arch = get_architecture_descriptor(kwargs.get("cc", None))
+        arch = get_architecture_descriptor(capability)
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
@@ -409,9 +439,10 @@ def compile(fn, **kwargs):
     is_hip = device_type in ["cuda", "hip"] and not is_cuda
     context = ir.context()
     constants = kwargs.get("constants", dict())
-    num_warps = kwargs.get("num_warps", 4)
+    num_warps = kwargs.get("num_warps", get_architecture_num_warps(device_type, capability))
+    assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
-    num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else 2)
+    num_stages = kwargs.get("num_stages", get_architecture_num_stages(device_type, capability))
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
@@ -445,6 +476,8 @@ def compile(fn, **kwargs):
     elif is_hip:
         add_rocm_stages(arch, extern_libs, stages)
     else:
+        arch["num_warps"] = num_warps
+        arch["num_stages"] = num_stages
         _device_backend.add_stages(arch, extern_libs, stages)
 
     # find out the signature of the function

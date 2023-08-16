@@ -362,15 +362,11 @@ class JITFunction(KernelInterface[T]):
         args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
 
         src = f"""
-def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_stages=3, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
-    from ..compiler import compile, CompiledKernel
+def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
+    from ..compiler import compile, CompiledKernel, get_architecture_num_warps, get_architecture_num_stages
     sig_key = {f'{sig_keys},' if len(sig_keys) > 0 else ()}
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
-    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, enable_warp_specialization, self.debug)
-    if not extern_libs is None:
-      key = (key, tuple(extern_libs.items()))
-    assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     assert num_ctas > 0
     assert grid is not None
     if callable(grid):
@@ -389,6 +385,15 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_s
         device_backend = get_backend(device_type)
         if device_backend is None:
             raise ValueError('Cannot find backend for ' + device_type)
+    
+    if num_warps is None:
+        num_warps = get_architecture_num_warps(device_type)
+    if num_stages is None:
+        num_stages = get_architecture_num_stages(device_type)
+    
+    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, enable_warp_specialization, self.debug)
+    if not extern_libs is None:
+      key = (key, tuple(extern_libs.items()))
 
     if device is None:
         if device_type in ['cuda', 'hip']:
