@@ -266,6 +266,15 @@ class JITFunction(KernelInterface[T]):
         for v in list(tys.values()):
             tys[v] = v
         return key if isinstance(key, str) else f"*{tys[dtype_str]}"
+    
+    @staticmethod
+    def _is_dtype(key):
+        dtype_str = str(key).split(".")[-1]
+        DTYPES = ['int8', 'int16', 'int32', 'int64', 'int1', 'uint8',
+                      'uint16', 'uint32', 'uint64', 'fp8e4b15', 'fp8e4',
+                      'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64', 'fp16', 'bf16',
+                      'fp32', 'fp64', 'void']
+        return dtype_str in DTYPES
 
     def _make_signature(self, sig_key):
         signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
@@ -358,10 +367,11 @@ class JITFunction(KernelInterface[T]):
 
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
-        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
+        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = triton.language.dtype(\'{dflt}\')' if self._is_dtype(f'{dflt}') else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
         args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
 
         src = f"""
+import triton
 def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_stages=3, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
     from ..compiler import compile, CompiledKernel
     sig_key = {f'{sig_keys},' if len(sig_keys) > 0 else ()}

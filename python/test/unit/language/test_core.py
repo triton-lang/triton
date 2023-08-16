@@ -2410,6 +2410,18 @@ def test_dot_without_load(dtype_str, device):
     kernel[(1,)](out)
     assert torch.all(out == out_ref)
 
+def test_dot_bf16():
+    @triton.jit
+    def _kernel(a, b, out_dtype=tl.float32, trans_a=False, trans_b=False):
+        tl.static_assert(a.dtype.is_standard_floating())
+        tl.static_assert(b.dtype.is_standard_floating())
+        tl.static_assert(out_dtype.value.is_standard_floating())
+        a = a.to(tl.bfloat16)
+        b = b.to(tl.bfloat16)
+        a = tl.trans(a) if trans_a else a
+        b = tl.trans(b) if trans_b else b
+        return tl.dot(a, b, out_dtype=out_dtype)
+
 # ---------------
 # test arange
 # ---------------
