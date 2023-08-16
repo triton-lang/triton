@@ -1,0 +1,15 @@
+name: Compare Artifacts
+on:
+  workflow_run:
+    workflows:
+      - Integration Tests
+    types:
+      - completed
+
+jobs:
+  Compare-artifacts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Echo
+        run: echo "Testing new workflow"
