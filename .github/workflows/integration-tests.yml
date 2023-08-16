@@ -52,6 +52,7 @@ jobs:
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
           echo "ENABLE_TMA=0" >> "${GITHUB_ENV}"
           echo "ENABLE_MMA_V3=0" >> "${GITHUB_ENV}"
+          echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
 
       - name: Clear cache
         run: |
@@ -91,17 +92,21 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1' && env.ENABLE_MMA_V3 == '1'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime
+          python3 -m pytest -n 8 --ignore=runtime --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
+          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
 
       - name: Run python tests on CUDA with ENABLE_TMA=0 and ENABLE_MMA_V3=0
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime
+          python3 -m pytest -n 8 --ignore=runtime --ignore=hopper --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
+          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
 
       - name: Create artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
@@ -238,6 +243,7 @@ jobs:
         env:
           ARTIFACT_NAME: artifacts A100
           ARTIFACT_JOB_NAME: Integration-Tests-Nvidia
+          MAX_NUM_ACTIONS_PAGES: 30
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OWNER_REPO="${{ github.repository }}"
@@ -254,18 +260,27 @@ jobs:
             USER_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.user.id')
             echo "USER_ID: $USER_ID"
 
+            run_id_found=false
             page=1
             while true; do
+              if [ "$page" -gt $MAX_NUM_ACTIONS_PAGES ]; then
+                break
+              fi
+
               run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" --arg run_name "Integration Tests" --arg user_id "$USER_ID" '.workflow_runs[] | select(.head_branch == $branch_name and .name == $run_name and .actor.id == ($user_id | tonumber))' | jq '.id' | head -1)
               if [ "$run_id" != "" ]; then
                 echo "First run ID on branch $BRANCH_NAME is: $run_id"
                 WORKFLOW_RUN_ID=$run_id
+                run_id_found=true
                 break
               fi
 
               ((page++))
             done
-
+            if ! $run_id_found; then
+              echo "No run_id found for PR ${PR_NUMBER}, moving to the next PR."
+              continue
+            fi
             echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
             ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq --arg artifact_name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $artifact_name).archive_download_url' --raw-output)
             echo "ARTIFACT_URL: $ARTIFACT_URL"

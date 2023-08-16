@@ -76,7 +76,7 @@ def _to_tensor(x, builder):
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -97,6 +97,10 @@ class dtype:
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
             if name == 'fp8e4b15':
+                self.fp_mantissa_width = 3
+                self.primitive_bitwidth = 8
+                self.exponent_bias = 15
+            elif name == 'fp8e4b15x4':
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
@@ -137,6 +141,9 @@ class dtype:
 
     def is_fp8e4b15(self):
         return self.name == 'fp8e4b15'
+
+    def is_fp8e4b15x4(self):
+        return self.name == 'fp8e4b15x4'
 
     def is_fp16(self):
         return self.name == 'fp16'
@@ -241,6 +248,8 @@ class dtype:
             return builder.get_fp8e4_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
+        elif self.name == 'fp8e4b15x4':
+            return builder.get_fp8e4b15x4_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
         elif self.name == 'bf16':
@@ -375,6 +384,7 @@ uint64 = dtype('uint64')
 float8e5 = dtype('fp8e5')
 float8e4 = dtype('fp8e4')
 float8e4b15 = dtype('fp8e4b15')
+float8e4b15x4 = dtype('fp8e4b15x4')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')
@@ -1382,7 +1392,7 @@ def minimum(x, y):
     :param other: the second input tensor
     :type other: Block
     """
-    return where(x < y, x, y)
+    return math.min(x, y)
 
 
 @jit
@@ -1395,7 +1405,7 @@ def maximum(x, y):
     :param other: the second input tensor
     :type other: Block
     """
-    return where(x > y, x, y)
+    return math.max(x, y)
 
 # max and argmax
 
@@ -1423,11 +1433,6 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
-def _fast_max(x, y):
-    return math.max(x, y)
-
-
-@jit
 @_add_reduction_docstr("maximum",
                        return_indices_arg="return_indices",
                        tie_break_arg="return_indices_tie_break_left")
@@ -1445,7 +1450,7 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(int32)
-        return reduce(input, axis, _fast_max)
+        return reduce(input, axis, maximum)
 
 
 @jit
@@ -1480,11 +1485,6 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 
 
 @jit
-def _fast_min(x, y):
-    return math.min(x, y)
-
-
-@jit
 @_add_reduction_docstr("minimum",
                        return_indices_arg="return_indices",
                        tie_break_arg="return_indices_tie_break_left")
@@ -1502,7 +1502,7 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(int32)
-        return reduce(input, axis, _fast_min)
+        return reduce(input, axis, minimum)
 
 
 @jit
@@ -1924,6 +1924,16 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _builder)
+
+
+def binary_op_type_legalization(lhs, rhs, builder):
+    '''
+        Convert both operands to a single common type
+        :param lhs: the left operand
+        :param rhs: the right operand
+        :param builder: the builder
+    '''
+    return semantic.binary_op_type_checking_impl(lhs, rhs, builder)
 
 
 def extern(fn):

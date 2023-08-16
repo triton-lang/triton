@@ -11,10 +11,9 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Tuple
 
-import triton
-import triton._C.libtriton.triton as _triton
-from .._C.libtriton.triton import (add_external_libs, compile_ptx_to_cubin,
-                                   get_num_warps, get_shared_memory_size, ir,
+from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs,
+                                   compile_ptx_to_cubin, get_env_vars, get_num_warps,
+                                   get_shared_memory_size, ir,
                                    translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
                                    translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend, path_to_ptxas
@@ -101,8 +100,8 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     if arch // 10 >= 9 and enable_warp_specialization and num_warps == 4:
         pm.add_tritongpu_ws_feasibility_checking_pass(arch)
         pm.run(mod)
-        ws_enabled = _triton.ir.is_ws_supported(mod)
-        pm = _triton.ir.pass_manager(mod.context)
+        ws_enabled = ir.is_ws_supported(mod)
+        pm = ir.pass_manager(mod.context)
         pm.enable_debug()
     if ws_enabled:
         pm.add_tritongpu_wsdecomposing_pass(arch)
@@ -426,12 +425,12 @@ def compile(fn, **kwargs):
     if os.environ.get('OPTIMIZE_EPILOGUE', '') == '1':
         optimize_epilogue = True
     #
-    cluster_info = _triton.ClusterInfo()
+    cluster_info = ClusterInfo()
     if "clusterDims" in kwargs:
         cluster_info.clusterDimX = kwargs["clusterDims"][0]
         cluster_info.clusterDimY = kwargs["clusterDims"][1]
         cluster_info.clusterDimZ = kwargs["clusterDims"][2]
-    tma_infos = _triton.TMAInfos()
+    tma_infos = TMAInfos()
     # build compilation stages
     stages = dict()
     stages["ast"] = (lambda path: fn, None)
@@ -479,7 +478,7 @@ def compile(fn, **kwargs):
         first_stage = list(stages.keys()).index(ir_name)
 
     # create cache manager
-    fn_cache_manager = get_cache_manager(make_hash(fn, arch, _triton.get_env_vars(), **kwargs))
+    fn_cache_manager = get_cache_manager(make_hash(fn, arch, get_env_vars(), **kwargs))
     # determine name and extension type of provided function
     if isinstance(fn, JITFunction):
         name, ext = fn.__name__, "ast"
@@ -512,14 +511,13 @@ def compile(fn, **kwargs):
                     "constants": _get_jsonable_constants(constants),
                     "debug": debug,
                     "arch": arch, }
-        metadata.update(_triton.get_env_vars())
+        metadata.update(get_env_vars())
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
 
     # Add device type to meta information
     metadata["device_type"] = device_type
-    metadata["cache_key"] = fn_cache_manager.key
 
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
@@ -559,7 +557,7 @@ def compile(fn, **kwargs):
         if ir_name == "llir" and "shared" not in metadata:
             metadata["shared"] = get_shared_memory_size(module)
         if ir_name == "ttgir":
-            metadata["enable_warp_specialization"] = _triton.ir.is_ws_supported(next_module)
+            metadata["enable_warp_specialization"] = ir.is_ws_supported(next_module)
             if metadata["enable_warp_specialization"]:
                 metadata["num_warps"] = get_num_warps(next_module)
         if ir_name == "ptx":
@@ -571,7 +569,7 @@ def compile(fn, **kwargs):
             _device_backend.add_meta_info(ir_name, module, next_module, metadata, asm)
         module = next_module
 
-    ids_of_folded_args = tuple([int(k) for k in configs[0].ids_of_folded_args]) if isinstance(fn, triton.runtime.JITFunction) else ()
+    ids_of_folded_args = tuple([int(k) for k in configs[0].ids_of_folded_args]) if isinstance(fn, JITFunction) else ()
     if "clusterDims" not in metadata:
         metadata["clusterDims"] = [
             cluster_info.clusterDimX,
@@ -586,10 +584,10 @@ def compile(fn, **kwargs):
             metadata["tensormaps_info"][i].ids_of_folded_args = ids_of_folded_args
 
     ids_of_tensormaps = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
-    if isinstance(fn, triton.runtime.JITFunction) and "tensormaps_info" in metadata:
+    if isinstance(fn, JITFunction) and "tensormaps_info" in metadata:
         fn.tensormaps_info = metadata["tensormaps_info"]
 
-    ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, triton.runtime.JITFunction) else ()
+    ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, JITFunction) else ()
     ids = {"ids_of_tensormaps": ids_of_tensormaps, "ids_of_folded_args": ids_of_folded_args, "ids_of_const_exprs": ids_of_const_exprs}
     # cache manager
     if is_cuda or is_hip:
@@ -629,7 +627,6 @@ class CompiledKernel:
         if "tensormaps_info" in metadata:
             self.tensormaps_info = metadata["tensormaps_info"]
         self.constants = metadata["constants"]
-        self.cache_key = metadata["cache_key"]
         self.device_type = metadata["device_type"]
         self.device_backend = get_backend(self.device_type) if self.device_type not in ["cuda", "hip"] else None
         # initialize asm dict
@@ -676,20 +673,20 @@ class CompiledKernel:
         return super().__getattribute__(name)
 
     # capture args and expand args with cutensormap*
-    def assemble_tensormap_to_arg(self, args, constants):
+    def assemble_tensormap_to_arg(self, args):
         args_with_tma = list(args)
         if hasattr(self, 'tensormaps_info'):
             # tuple for hashable
             args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
             for i, e in enumerate(self.tensormaps_info):
-                args_with_tma.append(CompiledKernel.tensormap_manager[(self.cache_key, e, args_ptr)])
+                args_with_tma.append(CompiledKernel.tensormap_manager[(e, args_ptr)])
         return args_with_tma
 
     def __getitem__(self, grid):
         self._init_handles()
 
         def runner(*args, stream=None):
-            args_expand = self.assemble_tensormap_to_arg(args, self.constants)
+            args_expand = self.assemble_tensormap_to_arg(args)
             if stream is None:
                 if self.device_type in ["cuda", "hip"]:
                     stream = get_cuda_stream()

@@ -627,6 +627,7 @@ struct FpToFpOpConversion
     auto F8E4M3B15TyID = TypeID::get<mlir::Float8E4M3B11FNUZType>();
     auto F8E4M3TyID = TypeID::get<mlir::Float8E4M3FNUZType>();
     auto F8E5M2TyID = TypeID::get<mlir::Float8E5M2Type>();
+    auto F8E4M3FNTyID = TypeID::get<mlir::Float8E4M3FNType>();
     auto F16TyID = TypeID::get<mlir::Float16Type>();
     auto BF16TyID = TypeID::get<mlir::BFloat16Type>();
     auto F32TyID = TypeID::get<mlir::Float32Type>();
@@ -634,10 +635,12 @@ struct FpToFpOpConversion
     static DenseMap<std::pair<TypeID, TypeID>, std::string> srcMap = {
         // F8 -> F16
         {{F8E4M3B15TyID, F16TyID}, Fp8E4M3B15_to_Fp16},
+        {{F8E4M3FNTyID, F16TyID}, Fp8E4M3B15x4_to_Fp16},
         {{F8E4M3TyID, F16TyID}, Fp8E4M3_to_Fp16},
         {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16},
         // F16 -> F8
         {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15},
+        {{F16TyID, F8E4M3FNTyID}, Fp16_to_Fp8E4M3B15x4},
         {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3},
         {{F16TyID, F8E5M2TyID}, Fp16_to_Fp8E5M2},
         // F8 -> BF16
@@ -1181,7 +1184,11 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)  // >>
   POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)  // >>
   POPULATE_BINARY_OP(arith::MinFOp, LLVM::MinNumOp) // fmin
+  POPULATE_BINARY_OP(arith::MaxFOp, LLVM::MaxNumOp) // fmax
   POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)  // smin
+  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp)  // smax
+  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp)  // umin
+  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp)  // umax
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
