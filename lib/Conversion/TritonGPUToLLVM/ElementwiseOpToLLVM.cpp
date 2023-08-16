@@ -10,12 +10,10 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 const std::string Fp16_to_Fp8E5M2 =
     "{                            \n"
     ".reg .b32 a<2>;              \n"
-    "and.b32 a0, $1, 0x7fff7fff;  \n"           // a0 &= 0x7fff7fff
-    "and.b32 a1, $2, 0x7fff7fff;  \n"           // (strip sign)
+    "and.b32 a0, $1, 0xfffefffe;  \n"           // a0 &= 0xfffefffe
+    "and.b32 a1, $2, 0xfffefffe;  \n"           // (strip lowest bit)
     "add.u32 a0, a0, 0x00800080;  \n"           // a0 += 0x00800080
     "add.u32 a1, a1, 0x00800080;  \n"           // (round to nearest)
-    "lop3.b32 a0, $1, 0x80008000, a0, 0xea; \n" // a0 = a0|(0x80008000&in0)
-    "lop3.b32 a1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
     "prmt.b32 $0, a0, a1, 0x7531; \n\t"         // output = a1a0
     "}";
 
@@ -93,32 +91,27 @@ const std::string Bf16_to_Fp8E5M2 =
 const std::string Fp8E4M3B15_to_Fp16 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n"
-    "prmt.b32 a0, 0, $2, 0x5040;            \n"
-    "prmt.b32 a1, 0, $2, 0x7060;            \n"
-    "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-    "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n"
+    "prmt.b32 a0, 0, $2, 0x5746;            \n"
+    "and.b32 b0, a0, 0x7f007f00;            \n"
+    "and.b32 b1, a0, 0x00ff00ff;            \n"
+    "and.b32 a1, a0, 0x00800080;            \n"
     "shr.b32  b0, b0, 1;                    \n"
-    "shr.b32  b1, b1, 1;                    \n"
+    "add.u32 b1, b1, a1;                    \n"
     "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
-    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n"
+    "shl.b32 $1, b1, 7;                     \n"
     "}                                      \n";
 
 const std::string Fp16_to_Fp8E4M3B15 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n"
-    ".reg .b32 min_val, max_val;            \n"
-    "mov.b32 min_val, 0xBF80BF80;           \n"
+    ".reg .b32 max_val;                     \n"
     "mov.b32 max_val, 0x3F803F80;           \n"
-    "max.f16x2 $1, $1, min_val;             \n"
-    "min.f16x2 $1, $1, max_val;             \n"
-    "max.f16x2 $2, $2, min_val;             \n"
-    "min.f16x2 $2, $2, max_val;             \n"
-    "shl.b32 a0, $1, 1;                     \n"
-    "shl.b32 a1, $2, 1;                     \n"
-    "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-    "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-    "add.u32 a0, a0, 0x00800080;            \n"
-    "add.u32 a1, a1, 0x00800080;            \n"
+    "and.b32 a0, $1, 0x7fff7fff;            \n"
+    "and.b32 a1, $2, 0x7fff7fff;            \n"
+    "min.f16x2 a0, a0, max_val;             \n"
+    "min.f16x2 a1, a1, max_val;             \n"
+    "mad.lo.u32 a0, a0, 2, 0x00800080;      \n"
+    "mad.lo.u32 a1, a1, 2, 0x00800080;      \n"
     "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
     "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
     "prmt.b32 $0, b0, b1, 0x7531;           \n"
@@ -137,12 +130,11 @@ const std::string Fp16_to_Fp8E4M3B15 =
 const std::string Fp8E4M3B15x4_to_Fp16 =
     "{                                      \n"
     ".reg .b32 a<2>;                        \n"
-    "shl.b32 a0, $2, 1;                     \n"
+    "add.u32 a0, $2, $2;                    \n"
     "shl.b32 a1, $2, 7;                     \n"
     "and.b32  $0, a0, 0x80008000;           \n"
     "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
-    "and.b32  $1, $2, 0x80008000;           \n"
-    "lop3.b32 $1, $1, $2, 0x3f803f80, 0xf8; \n"
+    "and.b32  $1, $2, 0xbf80bf80;           \n"
     "}";
 
 // Fp16 -> Fp8E4M3B15 (packed)
@@ -159,8 +151,7 @@ const std::string Fp16_to_Fp8E4M3B15x4 =
     "shr.b32  a1, $1, 7;                     \n"
     "and.b32  $0,     a0, 0x40004000;        \n"
     "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n"
+    "lop3.b32 $0, $0, $2, 0xbf80bf80, 0xf8;  \n"
     "}";
 
 /* ----- FP8E4M3 ------ */
