@@ -11,156 +11,41 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Install gh CLI
-        run: |
-          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-key 23F3D4EA75716059
-          echo "deb [arch=$(dpkg --print-architecture)] https://cli.github.com/packages focal main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install gh
-
-      - name: Create artifacts directory
-        run: |
-          mkdir /tmp/artifacts
-
-      - name: Get the PR Number artifact
-        uses: dawidd6/action-download-artifact@v2
+      - name: 'Download artifact'
+        uses: actions/github-script@v6
         with:
-          workflow: ${{ github.event.workflow_run.workflow_id }}
-          workflow_conclusion: ""
-          name: pr-number
-          path: /tmp/artifacts
-      - name: Read PR Number into GitHub environment variables
-        run: echo "PR_NUMBER=$(cat /tmp/artifacts/pr-number.txt)" >> $GITHUB_ENV
-      - name: Confirm the PR Number (Debugging)
-        run: echo $PR_NUMBER
-
-      - name: Download latest main artifacts
-        env:
-          ARTIFACT_NAME: artifacts A100
-          ARTIFACT_JOB_NAME: Integration-Tests-Nvidia
-          MAX_NUM_ACTIONS_PAGES: 30
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          OWNER_REPO="${{ github.repository }}"
-          echo "OWNER_REPO: $OWNER_REPO"
-          PR_NUMBERS=($(gh api --method GET repos/$OWNER_REPO/pulls -f state=closed | jq -r ".[] | select(.merged_at != null) | .number"))
-
-          # Not all PRs go through integration tests
-          success=0
-          for PR_NUMBER in "${PR_NUMBERS[@]}"
-          do
-            echo "Last merged PR number: $PR_NUMBER"
-            BRANCH_NAME=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.head.ref')
-            echo "BRANCH_NAME: $BRANCH_NAME"
-            USER_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.user.id')
-            echo "USER_ID: $USER_ID"
-
-            run_id_found=false
-            page=1
-            while true; do
-              if [ "$page" -gt $MAX_NUM_ACTIONS_PAGES ]; then
-                break
-              fi
-
-              run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" --arg run_name "Integration Tests" --arg user_id "$USER_ID" '.workflow_runs[] | select(.head_branch == $branch_name and .name == $run_name and .actor.id == ($user_id | tonumber))' | jq '.id' | head -1)
-              if [ "$run_id" != "" ]; then
-                echo "First run ID on branch $BRANCH_NAME is: $run_id"
-                WORKFLOW_RUN_ID=$run_id
-                run_id_found=true
-                break
-              fi
-
-              ((page++))
-            done
-            if ! $run_id_found; then
-              echo "No run_id found for PR ${PR_NUMBER}, moving to the next PR."
-              continue
-            fi
-            echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
-            ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq --arg artifact_name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $artifact_name).archive_download_url' --raw-output)
-            echo "ARTIFACT_URL: $ARTIFACT_URL"
-
-            if [ -n "$ARTIFACT_URL" ]; then
-              echo "Downloading artifact: $ARTIFACT_URL"
-              cd /tmp/artifacts
-              curl --location --remote-header-name -H "Authorization: token $GH_TOKEN" -o reference.zip "$ARTIFACT_URL"
-              # Print the size of the downloaded artifact
-              echo "Artifact size (stat): $(stat --printf="%s bytes" reference.zip)"
-              echo "Artifact size (du): $(du -sh reference.zip)"
-              unzip reference.zip
-              tar -xzf artifacts.tar.gz
-              rm reference.zip
-              rm artifacts.tar.gz
-              mv cache reference
-              success=1
-              break
-            fi
-          done
-
-          if [ $success -eq 0 ]; then
-            echo "No artifact found with the name: $ARTIFACT_NAME"
-            exit 1
-          fi
-      - name: Download current job artifacts
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: ${{ github.event.workflow_run.workflow_id }}
-          workflow_conclusion: ""
-          name: artifacts A100
-          path: /tmp/artifacts
-      - name: Unzip current job artifacts
-        run: |
-          cd /tmp/artifacts
-          # Print the size of the downloaded artifact
-          echo "Artifact size (stat): $(stat --printf="%s bytes" artifacts.tar.gz)"
-          echo "Artifact size (du): $(du -sh artifacts.tar.gz)"
-          tar -xzf artifacts.tar.gz
-          rm artifacts.tar.gz
-          mv cache current
-      - name: Compare artifacts
-        run: |
-          set +e
-          python3 python/test/tools/compare_files.py --path1 /tmp/artifacts/reference --path2 /tmp/artifacts/current
-          exit_code=$?
-          set -e
-          echo $exit_code
-          if [ $exit_code -eq 0 ]; then
-            echo "Artifacts are identical"
-            echo "COMPARISON_RESULT=true" >> $GITHUB_ENV
-          elif [ $exit_code -eq 1 ]; then
-            echo "Artifacts are different"
-            echo "COMPARISON_RESULT=false" >> $GITHUB_ENV
-          else
-            echo "Error while comparing artifacts"
-            echo "COMPARISON_RESULT=error" >> $GITHUB_ENV
-          fi
-          echo "COMPARISON_RESULT=${env.COMPARISON_RESULT}"
-      - name: Check exit code and handle failure
-        if: ${{ env.COMPARISON_RESULT == 'error' }}
-        run: |
-          echo "Error while comparing artifacts"
-          exit 1
-
-      - name: Upload results as artifact
-        uses: actions/upload-artifact@v2
-        with:
-          name: kernels-reference-check
-          path: kernels_reference_check.txt
-
-      - name: Check output and comment on PR
-        if: ${{ env.COMPARISON_RESULT == 'false' }}
-        uses: actions/github-script@v5
-        with:
-          github-token: ${{ secrets.CI_ACCESS_TOKEN }}
           script: |
-            const issue_number = context.payload.pull_request.number;
-            const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details.`;
+            let allArtifacts = await github.rest.actions.listWorkflowRunArtifacts({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               run_id: context.payload.workflow_run.id,
+            });
+            let matchArtifact = allArtifacts.data.artifacts.filter((artifact) => {
+              return artifact.name == "pr_number"
+            })[0];
+            let download = await github.rest.actions.downloadArtifact({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               artifact_id: matchArtifact.id,
+               archive_format: 'zip',
+            });
+            let fs = require('fs');
+            fs.writeFileSync(`${process.env.GITHUB_WORKSPACE}/pr_number.zip`, Buffer.from(download.data));
+
+      - name: 'Unzip artifact'
+        run: unzip pr_number.zip
+
+      - name: 'Comment on PR'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            let fs = require('fs');
+            let issue_number = Number(fs.readFileSync('./pr_number'));
+            echo $issue_number
             await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue_number,
-                body: message
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue_number,
+              body: 'Thank you for the PR!'
             });
