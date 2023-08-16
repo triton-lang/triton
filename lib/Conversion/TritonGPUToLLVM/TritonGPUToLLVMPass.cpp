@@ -63,14 +63,17 @@ static void addWSNamedAttrs(Operation *op,
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, bool isROCM)
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-    if (isROCM) {
-      addLegalDialect<ROCDL::ROCDLDialect>();
-    } else {
+    switch (target) {
+    case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
+      break;
+    case Target::ROCDL:
+      addLegalDialect<ROCDL::ROCDLDialect>();
+      break;
     }
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
@@ -359,13 +362,16 @@ private:
 
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx, bool isROCM)
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    if (isROCM) {
-      addLegalDialect<ROCDL::ROCDLDialect>();
-    } else {
+    switch (target) {
+    case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
+      break;
+    case Target::ROCDL:
+      addLegalDialect<ROCDL::ROCDLDialect>();
+      break;
     }
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
@@ -387,7 +393,7 @@ struct ConvertTritonGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget target(*context, isROCM);
+    TritonLLVMConversionTarget convTarget(*context, target);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -441,7 +447,7 @@ struct ConvertTritonGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
@@ -461,7 +467,7 @@ struct ConvertTritonGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
@@ -539,16 +545,19 @@ struct ConvertTritonGPUToLLVM
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     // Native lowering patterns
-    if (isROCM) {
+    switch (target) {
+    case Target::NVVM:
+      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+      break;
+    case Target::ROCDL:
       mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
                                                  mlir::gpu::amd::HIP);
-    } else {
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+      break;
     }
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
 
     // Fold CTAId when there is only 1 CTA.
