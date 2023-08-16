@@ -73,6 +73,8 @@ createTritonNvidiaGPUFenceInsertionPass(int computeCapability = 90);
 std::unique_ptr<Pass>
 createTritonGPURewriteTensorPointerPass(int computeCapability = 80);
 
+std::unique_ptr<Pass> createTritonNvidiaGPUWSFixupMissingAttrs();
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"

@@ -11,7 +11,7 @@ from collections import defaultdict, namedtuple
 from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast,
                     overload)
 
-import triton
+from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,7 +60,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def __init__(self, globals, src) -> None:
         super().__init__()
-        self.ret = hashlib.md5(src.encode("utf-8")).hexdigest()
+        self.ret = hashlib.sha1(src.encode("utf-8")).hexdigest()
         self.globals = globals
 
     def visit_Name(self, node):
@@ -90,7 +90,7 @@ class DependenciesFinder(ast.NodeVisitor):
             func.hash = finder.ret
         noinline = str(getattr(func, 'noinline', False))
         self.ret = (self.ret + func.hash + noinline).encode("utf-8")
-        self.ret = hashlib.md5(self.ret).hexdigest()
+        self.ret = hashlib.sha1(self.ret).hexdigest()
 
 # -----------------------------------------------------------------------------
 # JITFunction
@@ -103,23 +103,29 @@ def version_key():
     contents = []
     # frontend
     with open(__file__, "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+        contents += [hashlib.sha1(f.read()).hexdigest()]
     # compiler
     compiler_path = os.path.join(TRITON_PATH, 'compiler')
     for lib in pkgutil.iter_modules([compiler_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
+            contents += [hashlib.sha1(f.read()).hexdigest()]
     # backend
+    libtriton_hash = hashlib.sha1()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
-        contents += [hashlib.md5(f.read()).hexdigest()]
+        while True:
+            chunk = f.read(1024 ** 2)
+            if not chunk:
+                break
+            libtriton_hash.update(chunk)
+    contents.append(libtriton_hash.hexdigest())
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.iter_modules([language_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.md5(f.read()).hexdigest()]
+            contents += [hashlib.sha1(f.read()).hexdigest()]
     # ptxas version
     ptxas = path_to_ptxas()[0]
-    ptxas_version = hashlib.md5(subprocess.check_output([ptxas, "--version"])).hexdigest()
+    ptxas_version = hashlib.sha1(subprocess.check_output([ptxas, "--version"])).hexdigest()
     return '-'.join(TRITON_VERSION) + '-' + ptxas_version + '-' + '-'.join(contents)
 
 
@@ -242,6 +248,7 @@ class JITFunction(KernelInterface[T]):
             "float8e4": "fp8e4",
             "float8e5": "fp8e5",
             "float8e4b15": "fp8e4b15",
+            "float8e4b15x4": "fp8e4b15x4",
             "float16": "fp16",
             "bfloat16": "bf16",
             "float32": "fp32",
@@ -400,13 +407,8 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_s
     if bin is not None:
       # build dict of constant values
       args = [{args}]
-      all_args = {', '.join([f'{arg}' for arg in self.arg_names]) + ', ' if len(self.arg_names) > 0 else ()}
-      configs = self._get_config(*all_args),
-      constants = self._make_constants(constexpr_key)
-      constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})
-      constants.update({{i: 1 for i in configs[0].equal_to_1}})
       # Create tensormaps and append to args
-      args = bin.assemble_tensormap_to_arg(args, constants)
+      args = bin.assemble_tensormap_to_arg(args)
       if not warmup:
           bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.num_ctas, bin.clusterDims[0], bin.clusterDims[1], bin.clusterDims[2], bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
       return bin
@@ -428,7 +430,7 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_s
       if not self._call_hook(key, signature, device, constants, num_warps, num_ctas, num_stages, enable_warp_specialization, extern_libs, configs):
         bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, enable_warp_specialization=enable_warp_specialization, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
         # Create tensormaps and append to args
-        args = bin.assemble_tensormap_to_arg(args, constants)
+        args = bin.assemble_tensormap_to_arg(args)
         if not warmup:
             bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.num_ctas, bin.clusterDims[0], bin.clusterDims[1], bin.clusterDims[2], bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
         self.cache[device][key] = bin
@@ -479,7 +481,7 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_s
         # index of constexprs
         self.constexprs = [self.arg_names.index(name) for name, ty in self.__annotations__.items() if 'constexpr' in ty]
         # tma info
-        self.tensormaps_info = triton._C.libtriton.triton.TMAInfos()
+        self.tensormaps_info = TMAInfos()
         # launcher
         self.run = self._make_launcher()
         # re-use docs of wrapped function

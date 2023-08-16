@@ -192,7 +192,7 @@ def truediv(input: tl.tensor,
     elif input_scalar_ty.is_int() and other_scalar_ty.is_int():
         input = cast(input, tl.float32, builder)
         other = cast(other, tl.float32, builder)
-    # float / float (cast to highest exponent type)
+    # float / float (cast to the highest exponent type)
     elif input_scalar_ty.is_floating() and other_scalar_ty.is_floating():
         if input_scalar_ty.fp_mantissa_width > other_scalar_ty.fp_mantissa_width:
             other = cast(other, input_scalar_ty, builder)
@@ -1364,7 +1364,7 @@ def associative_scan(
 
 def _check_dtype(dtypes: List[str]) -> T:
     """
-    We following libdevice's convention to check accepted data types for math functions.
+    We're following libdevice's convention to check accepted data types for math functions.
     It is not a good practice to support all data types as accelerators/GPUs don't support
     many float16 and bfloat16 math operations.
     We should let the users know that they are using and invoke explicit cast to convert

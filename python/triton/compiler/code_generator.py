@@ -1065,6 +1065,7 @@ def str_to_ty(name):
         "fp8e4": language.float8e4,
         "fp8e5": language.float8e5,
         "fp8e4b15": language.float8e4b15,
+        "fp8e4b15x4": language.float8e4b15x4,
         "fp16": language.float16,
         "bf16": language.bfloat16,
         "fp32": language.float32,
