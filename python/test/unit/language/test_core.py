@@ -352,6 +352,28 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             num_ctas=num_ctas)
 
 
+@pytest.mark.parametrize("dtype, order", [(dtype, order) for dtype in dtypes_with_bfloat16 for order in [0, 1]])
+def test_addptr(dtype, order, device):
+    check_type_supported(dtype, device)
+
+    @triton.jit
+    def kernel(x, y, ORDER: tl.constexpr, SIZE: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        if ORDER == 0:
+            tl.store(y + offs, tl.load(x + offs))
+        else:
+            tl.store(offs + y, tl.load(offs + x))
+
+    SIZE = 1024
+    rs = RandomState(17)
+    x = numpy_random(SIZE, dtype_str=dtype, rs=rs)
+    y = numpy_random(SIZE, dtype_str=dtype, rs=rs)
+    x_tri = to_triton(x, dst_type=dtype, device=device)
+    y_tri = to_triton(y, dst_type=dtype, device=device)
+    y = x
+    kernel[1,](x_tri, y_tri, order, SIZE)
+    np.testing.assert_allclose(y, to_numpy(y_tri))
+
 @pytest.mark.parametrize("dtype_x, dtype_y",
                          [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes] +
                          [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes]
