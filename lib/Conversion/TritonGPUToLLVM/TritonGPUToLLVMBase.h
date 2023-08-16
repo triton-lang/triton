@@ -569,6 +569,28 @@ public:
         mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
                                    i32_val(shape[dim])));
       }
+      // Do not write duplicated data when multicast is enabled
+      if (triton::gpu::getNumCTAs(layout) > 1) {
+        auto _0 = i32_val(0);
+        auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
+        auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
+        auto CTAOrder = triton::gpu::getCTAOrder(layout);
+
+        auto clusterCTAId = getClusterCTAId(rewriter, loc);
+        auto multiDimClusterCTAId =
+            delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
+
+        for (unsigned dim = 0; dim < rank; ++dim) {
+          // Skip when multicast is not enabled in this dimension
+          if (CTAsPerCGA[dim] == CTASplitNum[dim])
+            continue;
+          // This wrapping rule must be consistent with emitCTAOffsetForLayout
+          unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
+          multiDimClusterCTAId[dim] =
+              urem(multiDimClusterCTAId[dim], i32_val(splitNum));
+          mask = and_(mask, icmp_eq(multiDimClusterCTAId[dim], _0));
+        }
+      }
     } else {
       // If the tensor is not ranked, then it is a scalar and only thread 0 can
       // write
