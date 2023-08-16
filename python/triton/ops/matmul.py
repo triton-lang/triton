@@ -151,8 +151,8 @@ class _matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
         # allocates output
-        if a.dtype in [tl.float8e4, tl.float8e4b15, tl.float8e5] or\
-           b.dtype in [tl.float8e4, tl.float8e4b15, tl.float8e5]:
+        if a.dtype in [tl.float8e4nv, tl.float8e4b15, tl.float8e5] or\
+           b.dtype in [tl.float8e4nv, tl.float8e4b15, tl.float8e5]:
             c_dtype = torch.float16
         else:
             c_dtype = get_higher_dtype(a.dtype, b.dtype)

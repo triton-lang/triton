@@ -684,7 +684,7 @@ def cast(input: tl.tensor,
 
     if _is_cuda(builder.arch) and builder.arch < 89 and \
        (src_sca_ty.is_fp8e4() or dst_sca_ty.is_fp8e4()):
-        warnings.warn("Standard tl.float8e4 format will be deprecated on SM < 89. "
+        warnings.warn("Standard tl.float8e4nv format will be deprecated on SM < 89. "
                       "Please use tl.float8e4b15.", DeprecationWarning)
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
