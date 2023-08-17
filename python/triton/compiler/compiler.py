@@ -13,7 +13,7 @@ from typing import Any, Tuple
 
 from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs,
                                    compile_ptx_to_cubin, get_env_vars, get_num_warps,
-                                   get_shared_memory_size, ir,
+                                   get_shared_memory_size, ir, runtime,
                                    translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
                                    translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend, path_to_ptxas
