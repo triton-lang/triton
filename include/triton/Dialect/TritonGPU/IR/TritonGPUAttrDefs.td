@@ -627,7 +627,7 @@ section 9.7.13.4.1 for more details.
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    "unsigned":$MMAv2kWidth
+    "unsigned":$kWidth
   );
 
   let builders = [
@@ -639,16 +639,16 @@ section 9.7.13.4.1 for more details.
       if (!parentAttr || !parentAttr.isAmpere())
         return $_get(context, opIdx, parent, 0);
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      unsigned MMAv2kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, MMAv2kWidth);
+      unsigned kWidth = 32 / bitwidth;
+      return $_get(context, opIdx, parent, kWidth);
     }]>,
 
     // Specially for MFMA(MI100/MI200)
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent), [{
       assert(llvm::isa<MfmaEncodingAttr>(parent));
-      unsigned MMAv2kWidth = 0; // unused for MFMA ops
-      return $_get(context, opIdx, parent, MMAv2kWidth);
+      unsigned kWidth = 0; // unused for MFMA ops
+      return $_get(context, opIdx, parent, kWidth);
     }]>
   ];
 

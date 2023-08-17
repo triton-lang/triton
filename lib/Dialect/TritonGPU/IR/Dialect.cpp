@@ -1097,7 +1097,7 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", parent = " << getParent();
   if (mmaParent && mmaParent.isAmpere())
-    printer << ", kWidth = " << getMMAv2kWidth();
+    printer << ", kWidth = " << getKWidth();
   printer << "}>";
 }
 
