@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from enum import Enum
 from contextlib import contextmanager
+from enum import Enum
 from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
-from . import math, semantic
 from .._C.libtriton.triton import ir
+from . import math, semantic
 
 T = TypeVar('T')
 
@@ -70,6 +70,7 @@ def _to_tensor(x, builder):
     elif isinstance(x, tensor):
         return x
     assert False, f"cannot convert {x} of type {type(x)} to tensor"
+
 
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
@@ -370,6 +371,7 @@ class function_type(dtype):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
         return builder.get_function_ty(ir_param_types, ret_types)
+
 
 # scalar types
 void = dtype('void')
