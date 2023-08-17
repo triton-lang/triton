@@ -134,6 +134,8 @@ def add(input: tl.tensor,
     # ptr + offset
     if other_scalar_ty.is_ptr() and not input_scalar_ty.is_ptr():
         input, other = other, input
+        input_scalar_ty = input.type.scalar
+        other_scalar_ty = other.type.scalar
     if input_scalar_ty.is_ptr():
         return tl.tensor(builder.create_addptr(input.handle, other.handle), input.type)
     # float + float
