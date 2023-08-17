@@ -1,5 +1,6 @@
 name: Compare Artifacts
 on:
+  workflow_dispatch:
   workflow_run:
     workflows:
       - Integration Tests
