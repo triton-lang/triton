@@ -9,9 +9,8 @@ import yaml
 
 
 class ComparisonResult:
-    def __init__(self, name: str, extension: str, numComparisons: int, diffs: List[str] = None, errors: List[str] = None):
+    def __init__(self, name: str, numComparisons: int, diffs: List[str] = None, errors: List[str] = None):
         self.name = name
-        self.extension = extension
         self.numComparisons = numComparisons
         self.diffs = [] if diffs is None else diffs
         self.errors = [] if errors is None else errors
@@ -20,7 +19,7 @@ class ComparisonResult:
         return len(self.diffs) == 0 and len(self.errors) == 0
 
     def __str__(self) -> str:
-        return f"name={self.name}, extension={self.extension}, numComparisons={self.numComparisons}, success={self.isSuccess()}"
+        return f"name={self.name}, numComparisons={self.numComparisons}, success={self.isSuccess()}"
 
 
 def listFilesWithExtension(path: str, extension: str) -> List[str]:
@@ -143,9 +142,9 @@ def doFilesMatch(path1: str, path2: str) -> bool:
     return True
 
 
-def compareMatchingFiles(name: str, extension: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]], args) -> ComparisonResult:
+def compareMatchingFiles(name: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]], args) -> ComparisonResult:
     """
-        Compare files with the given name/extension in all hashes in both paths
+        Compare files with the given name in all hashes in both paths
         Return the first mismatching files as a tuple (file1, file2), otherwise, return an empty tuple
     """
     hashes1 = nameToHashes1.get(name, [])
@@ -164,14 +163,14 @@ def compareMatchingFiles(name: str, extension: str, nameToHashes1: Dict[str, Lis
             if not doFilesMatch(path1, path2):
                 continue
             numComparisons += 1
-            extFile1 = listFilesWithExtension(path1, extension)[0]
-            extFile2 = listFilesWithExtension(path2, extension)[0]
+            extFile1 = listFilesWithExtension(path1, "ptx")[0]
+            extFile2 = listFilesWithExtension(path2, "ptx")[0]
             diff = diffFiles(extFile1, extFile2)
             if len(diff) > 0:
                 diffs.append(diffFiles(extFile2, extFile1))
     if numComparisons == 0:
         errors.append(f"Did not find any matching files for {name}")
-    return ComparisonResult(name=name, extension=extension, numComparisons=numComparisons, diffs=diffs, errors=errors)
+    return ComparisonResult(name=name, numComparisons=numComparisons, diffs=diffs, errors=errors)
 
 
 def dumpResults(results: List[ComparisonResult], fileName: str):
@@ -203,20 +202,15 @@ def main(args) -> bool:
     nameToHashes1 = getNameToHashesDict(args.path1)
     nameToHashes2 = getNameToHashesDict(args.path2)
 
-    yamlFilePath = args.kernels
-    if not os.path.exists(yamlFilePath):
-        print(f"Path {yamlFilePath} does not exist!")
-        sys.exit(2)
-    nameAndExtension = loadYamlFile(yamlFilePath)["name_and_extension"]
+    # Get all kernels that need to be checked
+    kernelNames = set(nameToHashes1.keys()).union(set(nameToHashes2.keys()))
 
     results = []
     # iterate over the kernels that need to be checked
-    for d in nameAndExtension:
-        name = d["name"]  # kernel name
-        extension = d["extension"]  # extension of the file to be compared (e.g. ptx)
+    for name in kernelNames:
         # Compare all hashes on path 1 with all hashes on path 2
         # result is either the mismatching (file1, file2) with "extension" or empty tuple if no mismatch
-        result = compareMatchingFiles(name, extension, nameToHashes1, nameToHashes2, args)
+        result = compareMatchingFiles(name, nameToHashes1, nameToHashes2, args)
         print(result)
         # Otherwise, add it to the mismatches
         results.append(result)
@@ -249,13 +243,6 @@ if __name__ == "__main__":
         default=None,
         required=True,
         help=("Path to second cache directory"),
-    )
-    parser.add_argument(
-        "--kernels",
-        type=str,
-        default=None,
-        required=True,
-        help=("Path to kernels yaml file"),
     )
     args = parser.parse_args()
     main(args)

@@ -325,8 +325,18 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
       }
     }
 
+    llvm::SmallVector<unsigned> CTASplitNum = CTAsPerCGA;
+
+    // If numCTAs > 1 and the only dimension is the reduced dimension, after the
+    // above two for-loops, CTAsPerCGA = [0] and remainingCTAs = numCTAs. We set
+    // CTAsPerCGA[0] = numCTAs and keep CTASplitNum[0] = 1 to ensure that no
+    // cross-CTA reduction is required, although this will introduce duplicated
+    // calculation
+    if (remainingCTAs > 0)
+      CTAsPerCGA[order[rank - 1]] *= remainingCTAs;
+
     auto CTALayout =
-        ttg::CTALayoutAttr::get(context, CTAsPerCGA, CTAsPerCGA, CTAOrder);
+        ttg::CTALayoutAttr::get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
     if (!tiled)
       setTiling(CTALayout.getCTAsPerCGA());
     auto newSrcLayout = replaceCTALayout(srcLayout, srcShape, CTALayout);

@@ -351,7 +351,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::createConvertIndexToLLVMPass());
   pm.addPass(
-      createConvertTritonGPUToLLVMPass(computeCapability, &tmaInfos, isROCM));
+      createConvertTritonGPUToLLVMPass({computeCapability, &tmaInfos, isROCM}));
   pm.addPass(createConvertNVGPUToLLVMPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createCanonicalizerPass());

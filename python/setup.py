@@ -335,6 +335,7 @@ setup(
             "matplotlib",
             "pandas",
             "tabulate",
+            "torch",
         ],
     },
 )
