@@ -35,7 +35,7 @@ public:
   }
   // TODO: support more general patterns to insert fences. eg. any op(generic)
   // to shared in use-def chain which refers by async proxy. We have generic(
-  // convertlayout with sts/stmatix) + fence + async(wgmma/tma store) up to now
+  // convertlayout with sts/stmatix) + fence + async(wgmma) up to now
   void runOnOperation() override {
     // Only insert fences for compute capability 9.0
     if (computeCapability < 90)
@@ -55,7 +55,8 @@ public:
                                .getEncoding()
                                .dyn_cast<ttg::MmaEncodingAttr>();
         auto isHopperEncoding = mmaEncoding && mmaEncoding.isHopper();
-        if (isHopperEncoding && (canReachGeneric(a) || canReachGeneric(b))) {
+        if (isHopperEncoding &&
+            (dependOnSharedEncOperand(a) || dependOnSharedEncOperand(b))) {
           builder.create<ttng::FenceAsyncSharedOp>(op->getLoc(),
                                                    false /*bCluster*/);
         }
@@ -64,32 +65,60 @@ public:
   }
 
 private:
-  bool canReachGeneric(Value operand) {
+  bool dependOnSharedEncOperand(Value operand) {
+    static DenseSet<std::pair<Operation *, unsigned>> trace;
     auto op = operand.getDefiningOp();
-
-    if (BlockArgument arg = dyn_cast<BlockArgument>(operand)) {
-      unsigned argNum = arg.getArgNumber();
-      Operation *argOwner = arg.getOwner()->getParentOp();
-      // suport ForOp
-      if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
-        Value v = forOp.getBody()->getTerminator()->getOperand(argNum - 1);
-        if (canReachGeneric(v))
+    // avoid redundant insertion
+    if (op && isa<tt::DotOp, ttng::DotAsyncOp>(op))
+      return false;
+    // reach convertlayout
+    if (op && isa<ttg::ConvertLayoutOp>(op) && ttg::isSharedEncoding(operand))
+      return true;
+    // root and not BlockArgument
+    if (!op && !isa<BlockArgument>(operand))
+      return false;
+    // op and not BlockArgument
+    if (op && !isa<BlockArgument>(operand)) {
+      for (auto v : op->getOperands()) {
+        if (dependOnSharedEncOperand(v))
           return true;
       }
     }
+    // reach BlockArgument
+    // TODO: support other scf ops, IfOp, WhileOp, etc.
+    if (BlockArgument arg = dyn_cast<BlockArgument>(operand)) {
+      unsigned argNum = arg.getArgNumber();
+      Operation *argOwner = arg.getOwner()->getParentOp();
+      // suport ForOp only
+      if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
+        // prologue
+        auto iterOperands = forOp.getIterOperands();
+        if (argNum == 0)
+          return false;
+        if (dependOnSharedEncOperand(iterOperands[argNum - 1]))
+          return true;
+        // yield
+        auto yieldOp = forOp.getBody()->getTerminator();
+        Value v = yieldOp->getOperand(argNum - 1);
+        auto entry = std::make_pair<Operation *, unsigned>(std::move(yieldOp),
+                                                           std::move(argNum));
+        // avoid cyclic
+        if (trace.contains(entry))
+          return false;
+        else
+          trace.insert(entry);
 
-    if (!op)
-      return false;
-    if (isa<ttg::ConvertLayoutOp>(op) && ttg::isSharedEncoding(operand))
-      return true;
-    for (auto v : op->getOperands()) {
-      if (canReachGeneric(v))
-        return true;
+        if (dependOnSharedEncOperand(v))
+          return true;
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(argOwner)) {
+        assert(false && "FenceInsertionPass does not supported WhileOp");
+      } else if (auto ifOp = dyn_cast<scf::IfOp>(argOwner)) {
+        assert(false && "FenceInsertionPass does not supported IfOp");
+      }
     }
     return false;
   }
 };
-
 } // namespace
 
 std::unique_ptr<Pass>
