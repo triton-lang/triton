@@ -1,6 +1,12 @@
 """isort:skip_file"""
 # Import order is significant here.
 
+from .language_types import (
+    block_type,
+    dtype,
+    function_type,
+    pointer_type,
+)
 from . import math
 from . import extra
 from .standard import (
@@ -29,7 +35,6 @@ from .core import (
     atomic_xchg,
     atomic_xor,
     bfloat16,
-    block_type,
     broadcast,
     broadcast_to,
     cat,
@@ -41,7 +46,6 @@ from .core import (
     device_assert,
     device_print,
     dot,
-    dtype,
     exp,
     expand_dims,
     full,
@@ -53,7 +57,6 @@ from .core import (
     float8e4b15x4,
     float8e4,
     float8e5,
-    function_type,
     int1,
     int16,
     int32,
@@ -71,7 +74,6 @@ from .core import (
     multiple_of,
     num_programs,
     pi32_t,
-    pointer_type,
     program_id,
     reduce,
     reshape,

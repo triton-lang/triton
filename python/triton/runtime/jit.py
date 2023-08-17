@@ -14,6 +14,8 @@ from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union,
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
 
+from triton.language.language_types import dtype
+
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
 
@@ -266,15 +268,6 @@ class JITFunction(KernelInterface[T]):
         for v in list(tys.values()):
             tys[v] = v
         return key if isinstance(key, str) else f"*{tys[dtype_str]}"
-    
-    @staticmethod
-    def _is_dtype(key):
-        dtype_str = str(key).split(".")[-1]
-        DTYPES = ['int8', 'int16', 'int32', 'int64', 'int1', 'uint8',
-                      'uint16', 'uint32', 'uint64', 'fp8e4b15', 'fp8e4',
-                      'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64', 'fp16', 'bf16',
-                      'fp32', 'fp64', 'void']
-        return dtype_str in DTYPES
 
     def _make_signature(self, sig_key):
         signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
@@ -367,7 +360,7 @@ class JITFunction(KernelInterface[T]):
 
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
-        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = triton.language.dtype(\'{dflt}\')' if self._is_dtype(f'{dflt}') else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
+        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = triton.language.dtype(\'{dflt}\')' if dtype.is_dtype(f'{dflt}') else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
         args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
 
         src = f"""
