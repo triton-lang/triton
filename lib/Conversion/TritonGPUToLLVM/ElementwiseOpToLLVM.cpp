@@ -10,11 +10,11 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 const std::string Fp16_to_Fp8E5M2 =
     "{                            \n"
     ".reg .b32 a<2>;              \n"
-    "and.b32 a0, $1, 0xfffefffe;  \n"           // a0 &= 0xfffefffe
-    "and.b32 a1, $2, 0xfffefffe;  \n"           // (strip lowest bit)
-    "add.u32 a0, a0, 0x00800080;  \n"           // a0 += 0x00800080
-    "add.u32 a1, a1, 0x00800080;  \n"           // (round to nearest)
-    "prmt.b32 $0, a0, a1, 0x7531; \n\t"         // output = a1a0
+    "and.b32 a0, $1, 0xfffefffe;  \n"   // a0 &= 0xfffefffe
+    "and.b32 a1, $2, 0xfffefffe;  \n"   // (strip lowest bit)
+    "add.u32 a0, a0, 0x00800080;  \n"   // a0 += 0x00800080
+    "add.u32 a1, a1, 0x00800080;  \n"   // (round to nearest)
+    "prmt.b32 $0, a0, a1, 0x7531; \n\t" // output = a1a0
     "}";
 
 const std::string Fp8E5M2_to_Fp16 = "{                           \n"

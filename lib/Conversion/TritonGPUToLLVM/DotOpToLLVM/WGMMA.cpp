@@ -298,7 +298,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
   triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
-  triton::nvgpu::WGMMAEltType eltTypeB = eltTypeA;
+  triton::nvgpu::WGMMAEltType eltTypeB = getMmaOperandType(b, allowTF32);
 
   triton::nvgpu::WGMMALayout layoutA = transA ? triton::nvgpu::WGMMALayout::col
                                               : triton::nvgpu::WGMMALayout::row;

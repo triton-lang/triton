@@ -145,6 +145,9 @@ class dtype:
     def is_fp8e4b15x4(self):
         return self.name == 'fp8e4b15x4'
 
+    def is_fp8e5(self):
+        return self.name == 'fp8e5'
+
     def is_fp16(self):
         return self.name == 'fp16'
 
