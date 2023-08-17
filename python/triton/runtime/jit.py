@@ -13,8 +13,7 @@ from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union,
 
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
-
-from triton.language.language_types import dtype
+from ..language.core import dtype
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"

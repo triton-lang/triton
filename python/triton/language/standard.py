@@ -96,3 +96,177 @@ def zeros(shape, dtype):
 @jit
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
+
+@jit
+def minimum(x, y):
+    """
+    Computes the element-wise minimum of :code:`x` and :code:`y`.
+
+    :param input: the first input tensor
+    :type input: Block
+    :param other: the second input tensor
+    :type other: Block
+    """
+    return math.min(x, y)
+
+
+@jit
+def maximum(x, y):
+    """
+    Computes the element-wise maximum of :code:`x` and :code:`y`.
+
+    :param input: the first input tensor
+    :type input: Block
+    :param other: the second input tensor
+    :type other: Block
+    """
+    return math.max(x, y)
+
+# max and argmax
+
+
+@jit
+def _argmax_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    gt = value1 > value2 or tie
+    v_ret = where(gt, value1, value2)
+    i_ret = where(gt, index1, index2)
+    return v_ret, i_ret
+
+
+@jit
+def _argmax_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, True)
+
+
+@jit
+def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmax_combine(value1, index1, value2, index2, False)
+
+
+@jit
+@core._add_reduction_docstr("maximum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
+def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
+    input = _promote_reduction_input(input)
+    if return_indices:
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
+    else:
+        if constexpr(input.dtype.primitive_bitwidth) < 32:
+            if constexpr(input.dtype.is_floating()):
+                input = input.to(float32)
+            else:
+                assert input.dtype.is_integer_type()
+                input = input.to(int32)
+        return reduce(input, axis, maximum)
+
+
+@jit
+@core._add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
+def argmax(input, axis, tie_break_left=True):
+    (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
+    return ret
+
+# min and argmin
+
+
+@jit
+def _argmin_combine(value1, index1, value2, index2, tie_break_left):
+    if tie_break_left:
+        tie = value1 == value2 and index1 < index2
+    else:
+        tie = False
+    lt = value1 < value2 or tie
+    value_ret = where(lt, value1, value2)
+    index_ret = where(lt, index1, index2)
+    return value_ret, index_ret
+
+
+@jit
+def _argmin_combine_tie_break_left(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, True)
+
+
+@jit
+def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
+    return _argmin_combine(value1, index1, value2, index2, False)
+
+
+@jit
+@core._add_reduction_docstr("minimum",
+                       return_indices_arg="return_indices",
+                       tie_break_arg="return_indices_tie_break_left")
+def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
+    input = _promote_reduction_input(input)
+    if return_indices:
+        if return_indices_tie_break_left:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
+        else:
+            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
+    else:
+        if constexpr(input.dtype.primitive_bitwidth) < 32:
+            if constexpr(input.dtype.is_floating()):
+                input = input.to(float32)
+            else:
+                assert input.dtype.is_integer_type()
+                input = input.to(int32)
+        return reduce(input, axis, minimum)
+
+
+@jit
+@core._add_reduction_docstr("minimum index",
+                       tie_break_arg="tie_break_left")
+def argmin(input, axis, tie_break_left=True):
+    _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
+    return ret
+
+
+@jit
+def _sum_combine(a, b):
+    return a + b
+
+# sum
+
+
+@jit
+@core._add_reduction_docstr("sum")
+def sum(input, axis=None):
+    input = _promote_reduction_input(input)
+    return reduce(input, axis, _sum_combine)
+
+
+@jit
+def _xor_combine(a, b):
+    return a ^ b
+
+# cumsum
+
+
+@jit
+@core._add_scan_docstr("cumsum")
+def cumsum(input, axis=0):
+    # todo rename this to a generic function name
+    input = _promote_reduction_input(input)
+    return associative_scan(input, axis, _sum_combine)
+
+# cumprod
+
+
+@jit
+def _prod_combine(a, b):
+    return a * b
+
+
+@jit
+@core._add_scan_docstr("cumprod")
+def cumprod(input, axis=0):
+    # todo rename this to a generic function name
+    input = _promote_reduction_input(input)
+    return associative_scan(input, axis, _prod_combine)
