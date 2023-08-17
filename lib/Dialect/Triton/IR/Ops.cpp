@@ -401,7 +401,8 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
 LogicalResult mlir::triton::DotOp::verify() {
   auto aTy = getOperand(0).getType().cast<RankedTensorType>();
   auto bTy = getOperand(1).getType().cast<RankedTensorType>();
-  if (aTy.getIntOrFloatBitWidth() != bTy.getIntOrFloatBitWidth())
+  if (aTy.getElementType().getIntOrFloatBitWidth() !=
+      bTy.getElementType().getIntOrFloatBitWidth())
     return emitError(
         "element types of operands A and B must have same bit width");
   auto aEncoding = aTy.getEncoding();
