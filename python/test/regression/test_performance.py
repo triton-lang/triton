@@ -248,7 +248,7 @@ def _sum(x_ptr, y_ptr, output_ptr, n_elements,
     tl.store(output_ptr + offsets, x, mask=mask)
 
 
-elementwise_data = {
+reduction_data = {
     'a100': {
         1024 * 16384: {'float16': 0.016, 'float32': 0.031, 'int16': 0.015, 'int32': 0.031},
         1024 * 65536: {'float16': 0.016, 'float32': 0.032, 'int16': 0.015, 'int32': 0.032},
@@ -256,14 +256,14 @@ elementwise_data = {
 }
 
 
-@pytest.mark.parametrize('N', elementwise_data[DEVICE_NAME].keys())
+@pytest.mark.parametrize('N', reduction_data[DEVICE_NAME].keys())
 @pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'int16', 'int32'])
 def test_reductions(N, dtype_str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
     torch.manual_seed(0)
     dtype = {'float16': torch.float16, 'float32': torch.float32, 'int16': torch.int16, 'int32': torch.int32}[dtype_str]
-    ref_gpu_util = elementwise_data[DEVICE_NAME][N][dtype_str]
+    ref_gpu_util = reduction_data[DEVICE_NAME][N][dtype_str]
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
     z = torch.empty((N, ), dtype=dtype, device='cuda')
