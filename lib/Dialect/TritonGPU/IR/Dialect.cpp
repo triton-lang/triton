@@ -849,11 +849,13 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 
 unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
+  auto shapePerCTA = getShapePerCTA(*this, shape);
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
+    // A100
     if (mmaParent.isAmpere()) {
-      auto rep = getMMAv2Rep(shape, eltTy.getIntOrFloatBitWidth());
+      auto rep = getMMAv2Rep(shapePerCTA, eltTy.getIntOrFloatBitWidth());
       if (getOpIdx() == 0)
         return 4 * rep[0] * rep[1];
       if (getOpIdx() == 1)
@@ -925,8 +927,8 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
     auto order = blockedLayout.getOrder();
     auto sizePerThread = getSizePerThread(blockedLayout);
 
-    int K = getOpIdx() == 0 ? shape[1] : shape[0];
-    int otherDim = getOpIdx() == 1 ? shape[1] : shape[0];
+    int K = getOpIdx() == 0 ? shapePerCTA[1] : shapePerCTA[0];
+    int otherDim = getOpIdx() == 1 ? shapePerCTA[1] : shapePerCTA[0];
 
     bool isM = getOpIdx() == 0;
 
@@ -1256,7 +1258,7 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", parent = " << getParent();
   if (mmaParent && mmaParent.isAmpere())
-    printer << ", kWidth = " << getMMAv2kWidth();
+    printer << ", kWidth = " << getKWidth();
   printer << "}>";
 }
 
@@ -1460,9 +1462,10 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
-                                   Attribute retEncoding,
-                                   Optional<Location> location) const override {
+  LogicalResult
+  inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
+                     Attribute retEncoding,
+                     std::optional<Location> location) const override {
     auto mmaRetEncoding = retEncoding.dyn_cast<MmaEncodingAttr>();
     if (mmaRetEncoding && mmaRetEncoding.isHopper()) {
       // TODO: support gmma when A/B does not reside in shared memory
@@ -1493,7 +1496,7 @@ struct TritonGPUInferLayoutInterface
     // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
-    if (aEncoding.getMMAv2kWidth() != bEncoding.getMMAv2kWidth())
+    if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
     return success();
   }

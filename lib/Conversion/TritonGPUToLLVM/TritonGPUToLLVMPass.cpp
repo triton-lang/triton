@@ -40,12 +40,16 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
+namespace mlir {
+namespace triton {
+#define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+} // namespace triton
+} // namespace mlir
+
 using namespace mlir;
 using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
-
-#define GEN_PASS_CLASSES
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 
 namespace {
 
@@ -372,15 +376,10 @@ public:
   }
 };
 
-class ConvertTritonGPUToLLVM
-    : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
-
-public:
-  explicit ConvertTritonGPUToLLVM(int computeCapability,
-                                  mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-                                  bool isROCM)
-      : computeCapability(computeCapability), tmaMetadata(tmaMetadata),
-        isROCM(isROCM) {}
+struct ConvertTritonGPUToLLVM
+    : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
+  using ConvertTritonGPUToLLVMBase<
+      ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -569,10 +568,6 @@ private:
            CacheKeyDenseMapInfo>
       indexCache;
 
-  int computeCapability{};
-  bool isROCM{};
-  mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
-
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
@@ -610,7 +605,8 @@ private:
   void decomposeFp8e4b15Convert(ModuleOp mod) const {
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      if (!getElementTypeOrSelf(cvtOp).isa<mlir::Float8E4M3B11FNUZType>())
+      if (!getElementTypeOrSelf(cvtOp)
+               .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>())
         return;
       auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
       auto argEncoding =
@@ -861,12 +857,12 @@ private:
 namespace mlir {
 namespace triton {
 
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
+  return std::make_unique<ConvertTritonGPUToLLVM>();
+}
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int computeCapability,
-                                 mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-                                 bool isROCM) {
-  return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability,
-                                                    tmaMetadata, isROCM);
+createConvertTritonGPUToLLVMPass(const ConvertTritonGPUToLLVMOptions &options) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(options);
 }
 
 } // namespace triton

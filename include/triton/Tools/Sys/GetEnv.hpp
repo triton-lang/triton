@@ -24,7 +24,9 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <set>
 #include <string>
+
 namespace triton {
 
 const std::set<std::string> ENV_VARS = {

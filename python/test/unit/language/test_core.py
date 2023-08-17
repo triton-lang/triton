@@ -352,6 +352,29 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             num_ctas=num_ctas)
 
 
+@pytest.mark.parametrize("dtype, order", [(dtype, order) for dtype in dtypes_with_bfloat16 for order in [0, 1]])
+def test_addptr(dtype, order, device):
+    check_type_supported(dtype, device)
+
+    @triton.jit
+    def kernel(x, y, ORDER: tl.constexpr, SIZE: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        if ORDER == 0:
+            tl.store(y + offs, tl.load(x + offs))
+        else:
+            tl.store(offs + y, tl.load(offs + x))
+
+    SIZE = 1024
+    rs = RandomState(17)
+    x = numpy_random(SIZE, dtype_str=dtype, rs=rs)
+    y = numpy_random(SIZE, dtype_str=dtype, rs=rs)
+    x_tri = to_triton(x, dst_type=dtype, device=device)
+    y_tri = to_triton(y, dst_type=dtype, device=device)
+    y = x
+    kernel[1,](x_tri, y_tri, order, SIZE)
+    np.testing.assert_allclose(y, to_numpy(y_tri))
+
+
 @pytest.mark.parametrize("dtype_x, dtype_y",
                          [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes] +
                          [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes]
@@ -1384,43 +1407,39 @@ def test_convert_float16_to_float32(in_dtype, device):
 
 
 def serialize_fp8(np_data, in_dtype):
-    return np_data
-# def serialize_fp8(np_data, in_dtype):
-#     if in_dtype == tl.float8e4b15:
-#         # triton's f8e4b15 format is optimized for software emulation
-#         # as a result, each pack of 4xfp8 values:
-#         # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
-#         # is actually internally stored as
-#         # s0s2b0b2s1s3b1b3
-#         # we apply the conversion here
-#         f8x4 = np_data.view(np.uint32)
-#         s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
-#         b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
-#         signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
-#         bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
-#         # tensor of triton fp8 data
-#         return (signs | bits).view(np.int8)
-#     else:
-#         return np_data
+    if in_dtype == tl.float8e4b15x4:
+        # triton's f8e4b15 format is optimized for software emulation
+        # as a result, each pack of 4xfp8 values:
+        # s0b0s1b1s2b2s3b3 (for s, b sign and bits respectively)
+        # is actually internally stored as
+        # s0s2b0b2s1s3b1b3
+        # we apply the conversion here
+        f8x4 = np_data.view(np.uint32)
+        s = [(f8x4 & (0x80000000 >> i)) << i for i in range(0, 32, 8)]
+        b = [(f8x4 & (0x7f000000 >> i)) << i for i in range(0, 32, 8)]
+        signs = (s[0] >> 0) | (s[1] >> 16) | (s[2] >> 1) | (s[3] >> 17)
+        bits = (b[0] >> 1) | (b[1] >> 17) | (b[2] >> 8) | (b[3] >> 24)
+        # tensor of triton fp8 data
+        return (signs | bits).view(np.int8)
+    else:
+        return np_data
 
 # inverse of `serialize_fp8`
 
 
 def deserialize_fp8(np_data, in_dtype):
-    return np_data
-# def deserialize_fp8(np_data, in_dtype):
-#     if in_dtype == tl.float8e4b15:
-#         f8x4 = np_data.view(np.uint32)
-#         s = [(f8x4 & (0x80000000 >> i)) << i for i in [0, 16, 1, 17]]
-#         b = [(f8x4 & (0x7f000000 >> i)) << i for i in [1, 17, 8, 24]]
-#         signs = (s[0] >> 0) | (s[1] >> 8) | (s[2] >> 16) | (s[3] >> 24)
-#         bits = (b[0] >> 0) | (b[1] >> 8) | (b[2] >> 16) | (b[3] >> 24)
-#         return (signs | bits).view(np.int8)
-#     else:
-#         return np_data
+    if in_dtype == tl.float8e4b15x4:
+        f8x4 = np_data.view(np.uint32)
+        s = [(f8x4 & (0x80000000 >> i)) << i for i in [0, 16, 1, 17]]
+        b = [(f8x4 & (0x7f000000 >> i)) << i for i in [1, 17, 8, 24]]
+        signs = (s[0] >> 0) | (s[1] >> 8) | (s[2] >> 16) | (s[3] >> 24)
+        bits = (b[0] >> 0) | (b[1] >> 8) | (b[2] >> 16) | (b[3] >> 24)
+        return (signs | bits).view(np.int8)
+    else:
+        return np_data
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4b15x4, tl.float8e4, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
 def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     """
