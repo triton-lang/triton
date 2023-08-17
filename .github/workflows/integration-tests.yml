@@ -10,7 +10,6 @@ on:
 
 concurrency:
   group: ${{ github.ref }}
-  # cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
