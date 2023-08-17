@@ -12,9 +12,13 @@ using namespace mlir::triton::gpu;
 // TypeConverter
 //
 TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
-                                               int numWarps, int threadsPerWarp)
-    : context(context), numWarps(numWarps), threadsPerWarp(threadsPerWarp) {
+                                               int numWarps, int threadsPerWarp,
+                                               int numCTAs)
+    : context(context), numWarps(numWarps), threadsPerWarp(threadsPerWarp),
+      numCTAs(numCTAs) {
   addConversion([](Type type) { return type; });
+
+  // Add encoding for tensor
   addConversion([this](RankedTensorType tensorType) -> RankedTensorType {
     // types with encoding are already in the right format
     // TODO: check for layout encodings more specifically
@@ -30,8 +34,22 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     llvm::SmallVector<unsigned> sizePerThread(rank, 1);
     Attribute encoding = triton::gpu::BlockedEncodingAttr::get(
         this->context, shape, sizePerThread, order, this->numWarps,
-        this->threadsPerWarp);
+        this->threadsPerWarp, this->numCTAs);
     return RankedTensorType::get(shape, tensorType.getElementType(), encoding);
+  });
+
+  // Add encoding for tensor pointer
+  addConversion([this](triton::PointerType ptrType) -> triton::PointerType {
+    // Check whether tensor pointer `tt.ptr<tensor<>>`
+    auto pointeeTensorType =
+        ptrType.getPointeeType().dyn_cast<RankedTensorType>();
+    if (pointeeTensorType == nullptr)
+      return ptrType;
+
+    // Add layout into the tensor
+    auto convertedTensorType = convertType(pointeeTensorType);
+    return triton::PointerType::get(convertedTensorType,
+                                    ptrType.getAddressSpace());
   });
 
   //

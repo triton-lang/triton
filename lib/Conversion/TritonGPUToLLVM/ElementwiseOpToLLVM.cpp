@@ -10,13 +10,11 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 const std::string Fp16_to_Fp8E5M2 =
     "{                            \n"
     ".reg .b32 a<2>;              \n"
-    "and.b32 a0, $1, 0x7fff7fff;  \n"           // a0 &= 0x7fff7fff
-    "and.b32 a1, $2, 0x7fff7fff;  \n"           // (strip sign)
-    "add.u32 a0, a0, 0x00800080;  \n"           // a0 += 0x00800080
-    "add.u32 a1, a1, 0x00800080;  \n"           // (round to nearest)
-    "lop3.b32 a0, $1, 0x80008000, a0, 0xea; \n" // a0 = a0|(0x80008000&in0)
-    "lop3.b32 a1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
-    "prmt.b32 $0, a0, a1, 0x7531; \n\t"         // output = a1a0
+    "and.b32 a0, $1, 0xfffefffe;  \n"   // a0 &= 0xfffefffe
+    "and.b32 a1, $2, 0xfffefffe;  \n"   // (strip lowest bit)
+    "add.u32 a0, a0, 0x00800080;  \n"   // a0 += 0x00800080
+    "add.u32 a1, a1, 0x00800080;  \n"   // (round to nearest)
+    "prmt.b32 $0, a0, a1, 0x7531; \n\t" // output = a1a0
     "}";
 
 const std::string Fp8E5M2_to_Fp16 = "{                           \n"
@@ -93,25 +91,27 @@ const std::string Bf16_to_Fp8E5M2 =
 const std::string Fp8E4M3B15_to_Fp16 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n"
-    "prmt.b32 a0, 0, $2, 0x5040;            \n"
-    "prmt.b32 a1, 0, $2, 0x7060;            \n"
-    "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-    "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n"
+    "prmt.b32 a0, 0, $2, 0x5746;            \n"
+    "and.b32 b0, a0, 0x7f007f00;            \n"
+    "and.b32 b1, a0, 0x00ff00ff;            \n"
+    "and.b32 a1, a0, 0x00800080;            \n"
     "shr.b32  b0, b0, 1;                    \n"
-    "shr.b32  b1, b1, 1;                    \n"
+    "add.u32 b1, b1, a1;                    \n"
     "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
-    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n"
+    "shl.b32 $1, b1, 7;                     \n"
     "}                                      \n";
 
 const std::string Fp16_to_Fp8E4M3B15 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n"
-    "shl.b32 a0, $1, 1;                     \n"
-    "shl.b32 a1, $2, 1;                     \n"
-    "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-    "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-    "add.u32 a0, a0, 0x00800080;            \n"
-    "add.u32 a1, a1, 0x00800080;            \n"
+    ".reg .b32 max_val;                     \n"
+    "mov.b32 max_val, 0x3F803F80;           \n"
+    "and.b32 a0, $1, 0x7fff7fff;            \n"
+    "and.b32 a1, $2, 0x7fff7fff;            \n"
+    "min.f16x2 a0, a0, max_val;             \n"
+    "min.f16x2 a1, a1, max_val;             \n"
+    "mad.lo.u32 a0, a0, 2, 0x00800080;      \n"
+    "mad.lo.u32 a1, a1, 2, 0x00800080;      \n"
     "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
     "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
     "prmt.b32 $0, b0, b1, 0x7531;           \n"
@@ -130,12 +130,11 @@ const std::string Fp16_to_Fp8E4M3B15 =
 const std::string Fp8E4M3B15x4_to_Fp16 =
     "{                                      \n"
     ".reg .b32 a<2>;                        \n"
-    "shl.b32 a0, $2, 1;                     \n"
+    "add.u32 a0, $2, $2;                    \n"
     "shl.b32 a1, $2, 7;                     \n"
     "and.b32  $0, a0, 0x80008000;           \n"
     "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
-    "and.b32  $1, $2, 0x80008000;           \n"
-    "lop3.b32 $1, $1, $2, 0x3f803f80, 0xf8; \n"
+    "and.b32  $1, $2, 0xbf80bf80;           \n"
     "}";
 
 // Fp16 -> Fp8E4M3B15 (packed)
@@ -152,8 +151,7 @@ const std::string Fp16_to_Fp8E4M3B15x4 =
     "shr.b32  a1, $1, 7;                     \n"
     "and.b32  $0,     a0, 0x40004000;        \n"
     "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0x80008000, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0x3f803f80, 0xf8;  \n"
+    "lop3.b32 $0, $0, $2, 0xbf80bf80, 0xf8;  \n"
     "}";
 
 /* ----- FP8E4M3 ------ */
@@ -165,35 +163,28 @@ const std::string Fp16_to_Fp8E4M3B15x4 =
 const std::string Fp8E4M3_to_Fp16 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-    "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
-    "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
-    "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-    "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-    "shr.b32  b0, b0, 1;                    \n" // b0 >>= 1
-    "shr.b32  b1, b1, 1;                    \n" // shift into fp16 position
-    "add.u32  b0, b0, 0x20002000;           \n" // b0.exp += 2**4-2**3
-                                                // exponent compensate = 8
-    "add.u32  b1, b1, 0x20002000;           \n" // b1 += 8<<10 | 8<<10<<16
-    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+    "prmt.b32 a0, 0, $2, 0x0504;            \n" // a0 = 0x00f300f4
+    "prmt.b32 a1, 0, $2, 0x0706;            \n" // a1 = 0x00f100f2
+    "and.b32  b0, a0, 0x00800080;           \n" // b0 = a0 & 0x00800080
+    "and.b32  b1, a1, 0x00800080;           \n" // (extract sign)
+    "add.u32  b0, b0, a0;                   \n" // b0 = b0 + a0
+    "add.u32  b1, b1, a1;                   \n" // (move sign to the left)
+    "mad.lo.u32 $0, b0, 128, 0x20002000;    \n" // out0 = (b0 << 7) + 0x20002000
+    "mad.lo.u32 $1, b1, 128, 0x20002000;    \n" // (shift into position and bias
+                                                // exponent)
     "}";
 
 // Fp16 -> Fp8E4M3 (packed)
 const std::string Fp16_to_Fp8E4M3 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n" // see Fp8E4M3x4ToFp16x4
-    "sub.u32 a0, $1, 0x20002000;            \n" // a0 = input0 - 0x20002000
-                                                // (compensate offset)
-    "sub.u32 a1, $2, 0x20002000;            \n" // a1 = input1 - 0x20002000
-                                                // (8 << 10 | 8 << 10 << 16)
-    "shl.b32 a0, a0, 1;                     \n" // a0 <<= 1
-    "shl.b32 a1, a1, 1;                     \n" // shift into fp8e4 position
-    "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n" // a0 &= 0x7fff7fff
-    "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-    "add.u32 a0, a0, 0x00800080;            \n" // a0 += 0x00800080
-    "add.u32 a1, a1, 0x00800080;            \n" // (round to nearest)
-    "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n" // b0 = a0|(0x80008000&in0)
-    "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
+    "and.b32 a0, $1, 0x7fff7fff;            \n" // a0 = input0 & 0x7fff7fff
+    "and.b32 a1, $2, 0x7fff7fff;            \n" // (strip sign)
+    "mad.lo.u32 a0, a0, 2, 0x40804080;      \n" // shift exponent (<< 1),
+    "mad.lo.u32 a1, a1, 2, 0x40804080;      \n" // correct bias (0x40004000),
+                                                // and round to nearest
+    "lop3.b32 b0, $1, 0x80008000, a0, 0xe2; \n" // b0 = 0x80008000 ? in0 : a0
+    "lop3.b32 b1, $2, 0x80008000, a1, 0xe2; \n" // (restore sign)
     "prmt.b32 $0, b0, b1, 0x7531;           \n" // output = b1b0
     "}";
 
@@ -201,17 +192,15 @@ const std::string Fp16_to_Fp8E4M3 =
 const std::string Fp8E4M3_to_Bf16 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-    "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
-    "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
-    "and.b32 b0, a0, 0x7fff7fff;            \n" // b0 = a0 & 0x7fff7fff
-    "and.b32 b1, a1, 0x7fff7fff;            \n" // (strip sign)
-    "shr.b32 b0, b0, 4;                     \n" // b0 >>= 4
-    "shr.b32 b1, b1, 4;                     \n" // shift into fp16 position
-    "add.u32 b0, b0, 0x3c003c00;            \n" // b0.exp += 2**7-2**3
-                                                // exponent compensate = 120
-    "add.u32 b1, b1, 0x3c003c00;            \n" // b1 += 120<<7 | 120<<7<<16
-    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+    "prmt.b32 a0, 0, $2, 0x0504;            \n" // a0 = 0x00f300f4
+    "prmt.b32 a1, 0, $2, 0x0706;            \n" // a1 = 0x00f100f2
+    "and.b32  b0, a0, 0x00800080;           \n" // b0 = a0 & 0x00800080
+    "and.b32  b1, a1, 0x00800080;           \n" // (extract sign)
+    "mad.lo.u32 b0, b0, 15, a0;             \n" // b0 = b0 * 15 + a0
+    "mad.lo.u32 b1, b1, 15, a1;             \n" // (move sign to the left)
+    "mad.lo.u32 $0, b0, 16, 0x3c003c00;     \n" // out0 = (b0 << 4) + 0x3c003c00
+    "mad.lo.u32 $1, b1, 16, 0x3c003c00;     \n" // (shift into position and bias
+                                                // exponent)
     "}";
 
 const std::string Bf16_to_Fp8E4M3 =
@@ -344,6 +333,13 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
     // }
   }
   llvm_unreachable("unimplemented code path");
+}
+
+inline Type getElementType(Value value) {
+  auto type = value.getType();
+  if (auto tensorType = type.dyn_cast<RankedTensorType>())
+    return tensorType.getElementType();
+  return type;
 }
 
 inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
@@ -613,6 +609,7 @@ struct FpToFpOpConversion
     auto F8E4M3B15TyID = TypeID::get<mlir::Float8E4M3B11FNUZType>();
     auto F8E4M3TyID = TypeID::get<mlir::Float8E4M3FNUZType>();
     auto F8E5M2TyID = TypeID::get<mlir::Float8E5M2Type>();
+    auto F8E4M3FNTyID = TypeID::get<mlir::Float8E4M3FNType>();
     auto F16TyID = TypeID::get<mlir::Float16Type>();
     auto BF16TyID = TypeID::get<mlir::BFloat16Type>();
     auto F32TyID = TypeID::get<mlir::Float32Type>();
@@ -620,10 +617,12 @@ struct FpToFpOpConversion
     static DenseMap<std::pair<TypeID, TypeID>, std::string> srcMap = {
         // F8 -> F16
         {{F8E4M3B15TyID, F16TyID}, Fp8E4M3B15_to_Fp16},
+        {{F8E4M3FNTyID, F16TyID}, Fp8E4M3B15x4_to_Fp16},
         {{F8E4M3TyID, F16TyID}, Fp8E4M3_to_Fp16},
         {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16},
         // F16 -> F8
         {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15},
+        {{F16TyID, F8E4M3FNTyID}, Fp16_to_Fp8E4M3B15x4},
         {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3},
         {{F16TyID, F8E5M2TyID}, Fp16_to_Fp8E5M2},
         // F8 -> BF16
@@ -1142,7 +1141,8 @@ struct IndexCastOpLowering
 
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    ModuleAllocation &allocation, PatternBenefit benefit) {
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
   POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
@@ -1166,7 +1166,11 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)  // >>
   POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)  // >>
   POPULATE_BINARY_OP(arith::MinFOp, LLVM::MinNumOp) // fmin
+  POPULATE_BINARY_OP(arith::MaxFOp, LLVM::MaxNumOp) // fmax
   POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)  // smin
+  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp)  // smax
+  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp)  // umin
+  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp)  // umax
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
@@ -1214,4 +1218,162 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
+}
+
+struct FPExtOpConversion
+    : ElementwiseOpConversionBase<LLVM::FPExtOp, FPExtOpConversion> {
+  using Base = ElementwiseOpConversionBase<LLVM::FPExtOp, FPExtOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::FPExtOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isF32() && srcTy.isF16()) {
+      return false;
+    }
+    return true;
+  }
+
+  SmallVector<Value> createDestOps(LLVM::FPExtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return {
+        FpToFpOpConversion::convertFp16ToFp32(loc, rewriter, operands[0][0])};
+  }
+};
+
+struct FPTruncOpConversion
+    : ElementwiseOpConversionBase<LLVM::FPTruncOp, FPTruncOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<LLVM::FPTruncOp, FPTruncOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::FPTruncOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isF16() && srcTy.isF32()) {
+      return false;
+    }
+    return true;
+  }
+
+  SmallVector<Value> createDestOps(LLVM::FPTruncOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return {
+        FpToFpOpConversion::convertFp32ToFp16(loc, rewriter, operands[0][0])};
+  }
+};
+
+struct TruncOpConversion
+    : ElementwiseOpConversionBase<LLVM::TruncOp, TruncOpConversion> {
+  using Base = ElementwiseOpConversionBase<LLVM::TruncOp, TruncOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::TruncOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isInteger(16) && srcTy.isInteger(32)) {
+      return false;
+    }
+    return true;
+  }
+
+  SmallVector<Value> createDestOps(LLVM::TruncOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.u16.u32");
+    auto res = builder.newOperand("=h");
+    auto operand = builder.newOperand(operands[0][0], "r");
+    cvt(res, operand);
+    return {builder.launch(rewriter, loc, i16_ty, false)};
+  }
+};
+
+struct SExtOpConversion
+    : ElementwiseOpConversionBase<LLVM::SExtOp, SExtOpConversion> {
+  using Base = ElementwiseOpConversionBase<LLVM::SExtOp, SExtOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::SExtOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isInteger(32) && srcTy.isInteger(16)) {
+      return false;
+    }
+    return true;
+  }
+
+  SmallVector<Value> createDestOps(LLVM::SExtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.s32.s16");
+    auto res = builder.newOperand("=r");
+    auto operand = builder.newOperand(operands[0][0], "h");
+    cvt(res, operand);
+    return {builder.launch(rewriter, loc, i32_ty, false)};
+  }
+};
+
+struct ZExtOpConversion
+    : ElementwiseOpConversionBase<LLVM::ZExtOp, ZExtOpConversion> {
+  using Base = ElementwiseOpConversionBase<LLVM::ZExtOp, ZExtOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  static bool isLegalOp(LLVM::ZExtOp op) {
+    auto retTy = op.getResult().getType();
+    auto srcTy = op.getOperand().getType();
+    if (retTy.isInteger(32) && srcTy.isInteger(16)) {
+      return false;
+    }
+    return true;
+  }
+
+  SmallVector<Value> createDestOps(LLVM::ZExtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    PTXBuilder builder;
+    auto &cvt = *builder.create("cvt.u32.u16");
+    auto res = builder.newOperand("=r");
+    auto operand = builder.newOperand(operands[0][0], "h");
+    cvt(res, operand);
+    return {builder.launch(rewriter, loc, i32_ty, false)};
+  }
+};
+
+bool isLegalElementwiseOp(Operation *op) {
+  if (isa<LLVM::FPExtOp>(op)) {
+    return FPExtOpConversion::isLegalOp(cast<LLVM::FPExtOp>(op));
+  } else if (isa<LLVM::FPTruncOp>(op)) {
+    return FPTruncOpConversion::isLegalOp(cast<LLVM::FPTruncOp>(op));
+  } else if (isa<LLVM::TruncOp>(op)) {
+    return TruncOpConversion::isLegalOp(cast<LLVM::TruncOp>(op));
+  } else if (isa<LLVM::SExtOp>(op)) {
+    return SExtOpConversion::isLegalOp(cast<LLVM::SExtOp>(op));
+  } else if (isa<LLVM::ZExtOp>(op)) {
+    return ZExtOpConversion::isLegalOp(cast<LLVM::ZExtOp>(op));
+  }
+  return true;
+}
+
+void populateElementwiseOpToPTXPatterns(
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
+  patterns.add<FPExtOpConversion>(typeConverter, benefit);
+  patterns.add<FPTruncOpConversion>(typeConverter, benefit);
+  patterns.add<TruncOpConversion>(typeConverter, benefit);
+  patterns.add<SExtOpConversion>(typeConverter, benefit);
+  patterns.add<ZExtOpConversion>(typeConverter, benefit);
 }

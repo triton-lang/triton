@@ -1,5 +1,5 @@
 /*
- * Copyright 1993-2018 NVIDIA Corporation.  All rights reserved.
+ * Copyright 1993-2022 NVIDIA Corporation.  All rights reserved.
  *
  * NOTICE TO LICENSEE:
  *
@@ -144,7 +144,23 @@ typedef uint64_t cuuint64_t;
 #define cuDevicePrimaryCtxSetFlags          cuDevicePrimaryCtxSetFlags_v2
 #define cuDeviceGetUuid_v2                  cuDeviceGetUuid_v2
 #define cuIpcOpenMemHandle                  cuIpcOpenMemHandle_v2
-#define cuGraphInstantiate                  cuGraphInstantiate_v2
+
+#define cuGraphInstantiate                  cuGraphInstantiateWithFlags
+
+#define cuGraphExecUpdate                   cuGraphExecUpdate_v2 
+#define cuGetProcAddress                    cuGetProcAddress_v2
+#define cuGraphAddKernelNode                cuGraphAddKernelNode_v2
+#define cuGraphKernelNodeGetParams          cuGraphKernelNodeGetParams_v2
+#define cuGraphKernelNodeSetParams          cuGraphKernelNodeSetParams_v2
+#define cuGraphExecKernelNodeSetParams      cuGraphExecKernelNodeSetParams_v2
+
+#define cuStreamWriteValue32                __CUDA_API_PTSZ(cuStreamWriteValue32_v2)
+#define cuStreamWaitValue32                 __CUDA_API_PTSZ(cuStreamWaitValue32_v2)
+#define cuStreamWriteValue64                __CUDA_API_PTSZ(cuStreamWriteValue64_v2)
+#define cuStreamWaitValue64                 __CUDA_API_PTSZ(cuStreamWaitValue64_v2)
+#define cuStreamBatchMemOp                  __CUDA_API_PTSZ(cuStreamBatchMemOp_v2)
+#define cuStreamGetCaptureInfo              __CUDA_API_PTSZ(cuStreamGetCaptureInfo_v2)
+#define cuStreamGetCaptureInfo_v2           __CUDA_API_PTSZ(cuStreamGetCaptureInfo_v2)
 
 #if defined(__CUDA_API_PER_THREAD_DEFAULT_STREAM)
     #define cuMemcpy                            __CUDA_API_PTDS(cuMemcpy)
@@ -163,13 +179,12 @@ typedef uint64_t cuuint64_t;
     #define cuMemsetD2D32Async                  __CUDA_API_PTSZ(cuMemsetD2D32Async)
 
     #define cuStreamGetPriority                 __CUDA_API_PTSZ(cuStreamGetPriority)
+    #define cuStreamGetId                       __CUDA_API_PTSZ(cuStreamGetId)
     #define cuStreamGetFlags                    __CUDA_API_PTSZ(cuStreamGetFlags)
     #define cuStreamGetCtx                      __CUDA_API_PTSZ(cuStreamGetCtx)
     #define cuStreamWaitEvent                   __CUDA_API_PTSZ(cuStreamWaitEvent)
     #define cuStreamEndCapture                  __CUDA_API_PTSZ(cuStreamEndCapture)
     #define cuStreamIsCapturing                 __CUDA_API_PTSZ(cuStreamIsCapturing)
-    #define cuStreamGetCaptureInfo              __CUDA_API_PTSZ(cuStreamGetCaptureInfo)
-    #define cuStreamGetCaptureInfo_v2           __CUDA_API_PTSZ(cuStreamGetCaptureInfo_v2)
     #define cuStreamUpdateCaptureDependencies   __CUDA_API_PTSZ(cuStreamUpdateCaptureDependencies)
     #define cuStreamAddCallback                 __CUDA_API_PTSZ(cuStreamAddCallback)
     #define cuStreamAttachMemAsync              __CUDA_API_PTSZ(cuStreamAttachMemAsync)
@@ -178,24 +193,17 @@ typedef uint64_t cuuint64_t;
     #define cuEventRecord                       __CUDA_API_PTSZ(cuEventRecord)
     #define cuEventRecordWithFlags              __CUDA_API_PTSZ(cuEventRecordWithFlags)
     #define cuLaunchKernel                      __CUDA_API_PTSZ(cuLaunchKernel)
-
-
-
+    #define cuLaunchKernelEx                    __CUDA_API_PTSZ(cuLaunchKernelEx)
     #define cuLaunchHostFunc                    __CUDA_API_PTSZ(cuLaunchHostFunc)
     #define cuGraphicsMapResources              __CUDA_API_PTSZ(cuGraphicsMapResources)
     #define cuGraphicsUnmapResources            __CUDA_API_PTSZ(cuGraphicsUnmapResources)
-
-    #define cuStreamWriteValue32                __CUDA_API_PTSZ(cuStreamWriteValue32)
-    #define cuStreamWaitValue32                 __CUDA_API_PTSZ(cuStreamWaitValue32)
-    #define cuStreamWriteValue64                __CUDA_API_PTSZ(cuStreamWriteValue64)
-    #define cuStreamWaitValue64                 __CUDA_API_PTSZ(cuStreamWaitValue64)
-    #define cuStreamBatchMemOp                  __CUDA_API_PTSZ(cuStreamBatchMemOp)
 
     #define cuLaunchCooperativeKernel           __CUDA_API_PTSZ(cuLaunchCooperativeKernel)
 
     #define cuSignalExternalSemaphoresAsync     __CUDA_API_PTSZ(cuSignalExternalSemaphoresAsync)
     #define cuWaitExternalSemaphoresAsync       __CUDA_API_PTSZ(cuWaitExternalSemaphoresAsync)
 
+    #define cuGraphInstantiateWithParams        __CUDA_API_PTSZ(cuGraphInstantiateWithParams)
     #define cuGraphUpload                       __CUDA_API_PTSZ(cuGraphUpload)
     #define cuGraphLaunch                       __CUDA_API_PTSZ(cuGraphLaunch)
     #define cuStreamCopyAttributes              __CUDA_API_PTSZ(cuStreamCopyAttributes)
@@ -229,7 +237,7 @@ typedef uint64_t cuuint64_t;
 /**
  * CUDA API version number
  */
-#define CUDA_VERSION 11060
+#define CUDA_VERSION 12010
 
 #ifdef __cplusplus
 extern "C" {
@@ -251,6 +259,8 @@ typedef CUdevice_v1 CUdevice;                                /**< CUDA device */
 typedef struct CUctx_st *CUcontext;                          /**< CUDA context */
 typedef struct CUmod_st *CUmodule;                           /**< CUDA module */
 typedef struct CUfunc_st *CUfunction;                        /**< CUDA function */
+typedef struct CUlib_st *CUlibrary;                          /**< CUDA library */
+typedef struct CUkern_st *CUkernel;                          /**< CUDA kernel */
 typedef struct CUarray_st *CUarray;                          /**< CUDA array */
 typedef struct CUmipmappedArray_st *CUmipmappedArray;        /**< CUDA mipmapped array */
 typedef struct CUtexref_st *CUtexref;                        /**< CUDA texture reference */
@@ -331,8 +341,42 @@ typedef enum CUctx_flags_enum {
                                          *  and it no longer has any effect. All contexts 
                                          *  as of CUDA 3.2 behave as though the flag is enabled. */
     CU_CTX_LMEM_RESIZE_TO_MAX  = 0x10, /**< Keep local memory allocation after launch */
-    CU_CTX_FLAGS_MASK          = 0x1f
+    CU_CTX_COREDUMP_ENABLE     = 0x20, /**< Trigger coredumps from exceptions in this context */
+    CU_CTX_USER_COREDUMP_ENABLE= 0x40, /**< Enable user pipe to trigger coredumps in this context */
+    CU_CTX_SYNC_MEMOPS         = 0x80, /**< Force synchronous blocking on cudaMemcpy/cudaMemset */
+    CU_CTX_FLAGS_MASK          = 0xFF
 } CUctx_flags;
+
+/**
+ * Event sched flags
+ */
+typedef enum CUevent_sched_flags_enum {
+    CU_EVENT_SCHED_AUTO = 0x00, /**< Automatic scheduling */
+    CU_EVENT_SCHED_SPIN = 0x01, /**< Set spin as default scheduling */
+    CU_EVENT_SCHED_YIELD = 0x02, /**< Set yield as default scheduling */
+    CU_EVENT_SCHED_BLOCKING_SYNC = 0x04, /**< Set blocking synchronization as default scheduling */
+} CUevent_sched_flags;
+
+/**
+ * NVCL event scheduling flags
+ */
+typedef enum cl_event_flags_enum {
+    NVCL_EVENT_SCHED_AUTO = 0x00, /**< Automatic scheduling */
+    NVCL_EVENT_SCHED_SPIN = 0x01, /**< Set spin as default scheduling */
+    NVCL_EVENT_SCHED_YIELD = 0x02, /**< Set yield as default scheduling */
+    NVCL_EVENT_SCHED_BLOCKING_SYNC = 0x04, /**< Set blocking synchronization as default scheduling */
+} cl_event_flags;
+
+/**
+ * NVCL context scheduling flags
+ */
+typedef enum cl_context_flags_enum {
+    NVCL_CTX_SCHED_AUTO = 0x00, /**< Automatic scheduling */
+    NVCL_CTX_SCHED_SPIN = 0x01, /**< Set spin as default scheduling */
+    NVCL_CTX_SCHED_YIELD = 0x02, /**< Set yield as default scheduling */
+    NVCL_CTX_SCHED_BLOCKING_SYNC = 0x04, /**< Set blocking synchronization as default scheduling */
+} cl_context_flags;
+
 
 /**
  * Stream creation flags
@@ -412,7 +456,7 @@ typedef enum CUstreamWaitValue_flags_enum {
                                              two remote writes arrive in a defined order, the wait is satisfied by the
                                              second write, and downstream work needs to observe the first write.
                                              Support for this operation is restricted to selected platforms and can be
-                                             queried with ::CU_DEVICE_ATTRIBUTE_CAN_USE_WAIT_VALUE_FLUSH.*/
+                                             queried with ::CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES.*/
 } CUstreamWaitValue_flags;
 
 /**
@@ -425,7 +469,8 @@ typedef enum CUstreamWriteValue_flags_enum {
                                                         ::cuStreamWriteValue32 will provide a memory fence before the
                                                         write, which has similar semantics to
                                                         __threadfence_system() but is scoped to the stream
-                                                        rather than a CUDA thread. */
+                                                        rather than a CUDA thread.
+                                                        This flag is not supported in the v2 API. */
 } CUstreamWriteValue_flags;
 
 /**
@@ -436,9 +481,18 @@ typedef enum CUstreamBatchMemOpType_enum {
     CU_STREAM_MEM_OP_WRITE_VALUE_32 = 2,     /**< Represents a ::cuStreamWriteValue32 operation */
     CU_STREAM_MEM_OP_WAIT_VALUE_64  = 4,     /**< Represents a ::cuStreamWaitValue64 operation */
     CU_STREAM_MEM_OP_WRITE_VALUE_64 = 5,     /**< Represents a ::cuStreamWriteValue64 operation */
+    CU_STREAM_MEM_OP_BARRIER = 6,            /**< Insert a memory barrier of the specified type */ 
     CU_STREAM_MEM_OP_FLUSH_REMOTE_WRITES = 3 /**< This has the same effect as ::CU_STREAM_WAIT_VALUE_FLUSH, but as a
                                                   standalone operation. */
 } CUstreamBatchMemOpType;
+
+/**
+ * Flags for ::cuStreamMemoryBarrier
+ */
+typedef enum CUstreamMemoryBarrier_flags_enum {
+    CU_STREAM_MEMORY_BARRIER_TYPE_SYS = 0x0, /**< System-wide memory barrier. */
+    CU_STREAM_MEMORY_BARRIER_TYPE_GPU = 0x1 /**< Limit memory barrier scope to the GPU. */
+} CUstreamMemoryBarrier_flags;
 
 /**
  * Per-operation parameters for ::cuStreamBatchMemOp
@@ -469,9 +523,20 @@ typedef union CUstreamBatchMemOpParams_union {
         CUstreamBatchMemOpType operation;
         unsigned int flags;
     } flushRemoteWrites;
+    struct CUstreamMemOpMemoryBarrierParams_st { /**< Only supported in the _v2 API */
+        CUstreamBatchMemOpType operation;
+        unsigned int flags;
+    } memoryBarrier;
     cuuint64_t pad[6];
 } CUstreamBatchMemOpParams_v1;
 typedef CUstreamBatchMemOpParams_v1 CUstreamBatchMemOpParams;
+
+typedef struct CUDA_BATCH_MEM_OP_NODE_PARAMS_st {
+    CUcontext ctx;
+    unsigned int count;
+    CUstreamBatchMemOpParams *paramArray;
+    unsigned int flags;
+} CUDA_BATCH_MEM_OP_NODE_PARAMS;
 
 /**
  * Occupancy calculator flag
@@ -648,9 +713,9 @@ typedef enum CUdevice_attribute_enum {
     CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS = 89,                     /**< Device can coherently access managed memory concurrently with the CPU */
     CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED = 90,                  /**< Device supports compute preemption. */
     CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM = 91,       /**< Device can access host registered memory at the same virtual address as the CPU */
-    CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS = 92,                        /**< ::cuStreamBatchMemOp and related APIs are supported. */
-    CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS = 93,                 /**< 64-bit operations are supported in ::cuStreamBatchMemOp and related APIs. */
-    CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR = 94,                 /**< ::CU_STREAM_WAIT_VALUE_NOR is supported. */
+    CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS_V1 = 92,                     /**< Deprecated, along with v1 MemOps API, ::cuStreamBatchMemOp and related APIs are supported. */
+    CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS_V1 = 93,              /**< Deprecated, along with v1 MemOps API, 64-bit operations are supported in ::cuStreamBatchMemOp and related APIs. */
+    CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR_V1 = 94,              /**< Deprecated, along with v1 MemOps API, ::CU_STREAM_WAIT_VALUE_NOR is supported. */
     CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH = 95,                            /**< Device supports launching cooperative kernels via ::cuLaunchCooperativeKernel */
     CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH = 96,               /**< Deprecated, ::cuLaunchCooperativeKernelMultiDevice is deprecated. */
     CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN = 97,             /**< Maximum optin shared memory per block */
@@ -677,12 +742,18 @@ typedef enum CUdevice_attribute_enum {
     CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS = 117,         /**< The returned attribute shall be interpreted as a bitmask, where the individual bits are described by the ::CUflushGPUDirectRDMAWritesOptions enum */
     CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING = 118,              /**< GPUDirect RDMA writes to the device do not need to be flushed for consumers within the scope indicated by the returned attribute. See ::CUGPUDirectRDMAWritesOrdering for the numerical values returned here. */
     CU_DEVICE_ATTRIBUTE_MEMPOOL_SUPPORTED_HANDLE_TYPES = 119,               /**< Handle types supported with mempool based IPC */
-
-
-
-
+    CU_DEVICE_ATTRIBUTE_CLUSTER_LAUNCH = 120,                               /**< Indicates device supports cluster launch */
     CU_DEVICE_ATTRIBUTE_DEFERRED_MAPPING_CUDA_ARRAY_SUPPORTED = 121,        /**< Device supports deferred mapping CUDA arrays and CUDA mipmapped arrays */
-
+    CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS = 122,                /**< 64-bit operations are supported in ::cuStreamBatchMemOp and related MemOp APIs. */
+    CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR = 123,                /**< ::CU_STREAM_WAIT_VALUE_NOR is supported by MemOp APIs. */
+    CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED = 124,                            /**< Device supports buffer sharing with dma_buf mechanism. */ 
+    CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED = 125,                          /**< Device supports IPC Events. */ 
+    CU_DEVICE_ATTRIBUTE_MEM_SYNC_DOMAIN_COUNT = 126,                        /**< Number of memory domains the device supports. */
+    CU_DEVICE_ATTRIBUTE_TENSOR_MAP_ACCESS_SUPPORTED = 127,                  /**< Device supports accessing memory using Tensor Map. */
+    CU_DEVICE_ATTRIBUTE_UNIFIED_FUNCTION_POINTERS = 129,                    /**< Device supports unified function pointers. */
+    CU_DEVICE_ATTRIBUTE_IS_NUMA_NODE = 130,
+    CU_DEVICE_ATTRIBUTE_NUMA_ID = 131,
+    CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED = 132,                          /**< Device supports switch multicast and reduction operations. */
     CU_DEVICE_ATTRIBUTE_MAX
 } CUdevice_attribute;
 
@@ -724,6 +795,10 @@ typedef enum CUpointer_attribute_enum {
     CU_POINTER_ATTRIBUTE_IS_GPU_DIRECT_RDMA_CAPABLE = 15, /**< 1 if the memory this pointer is referencing can be used with the GPUDirect RDMA API **/
     CU_POINTER_ATTRIBUTE_ACCESS_FLAGS = 16,               /**< Returns the access flags the device associated with the current context has on the corresponding memory referenced by the pointer given */
     CU_POINTER_ATTRIBUTE_MEMPOOL_HANDLE = 17              /**< Returns the mempool handle for the allocation if it was allocated from a mempool. Otherwise returns NULL. **/
+    ,
+    CU_POINTER_ATTRIBUTE_MAPPING_SIZE = 18,               /**< Size of the actual underlying mapping that the pointer belongs to **/
+    CU_POINTER_ATTRIBUTE_MAPPING_BASE_ADDR = 19,          /**< The start address of the mapping that the pointer belongs to **/
+    CU_POINTER_ATTRIBUTE_MEMORY_BLOCK_ID = 20             /**< A process-wide unique id corresponding to the physical allocation the pointer belongs to **/
 } CUpointer_attribute;
 
 /**
@@ -788,7 +863,7 @@ typedef enum CUfunction_attribute_enum {
      * The maximum size in bytes of dynamically-allocated shared memory that can be used by
      * this function. If the user-specified dynamic shared memory size is larger than this
      * value, the launch will fail.
-     * See ::cuFuncSetAttribute
+     * See ::cuFuncSetAttribute, ::cuKernelSetAttribute
      */
     CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES = 8,
 
@@ -797,80 +872,78 @@ typedef enum CUfunction_attribute_enum {
      * this sets the shared memory carveout preference, in percent of the total shared memory.
      * Refer to ::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR.
      * This is only a hint, and the driver can choose a different ratio if required to execute the function.
-     * See ::cuFuncSetAttribute
+     * See ::cuFuncSetAttribute, ::cuKernelSetAttribute
      */
     CU_FUNC_ATTRIBUTE_PREFERRED_SHARED_MEMORY_CARVEOUT = 9,
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    /**
+     * If this attribute is set, the kernel must launch with a valid cluster
+     * size specified.
+     * See ::cuFuncSetAttribute, ::cuKernelSetAttribute
+     */
+    CU_FUNC_ATTRIBUTE_CLUSTER_SIZE_MUST_BE_SET = 10,
+
+    /**
+     * The required cluster width in blocks. The values must either all be 0 or
+     * all be positive. The validity of the cluster dimensions is otherwise
+     * checked at launch time.
+     *
+     * If the value is set during compile time, it cannot be set at runtime.
+     * Setting it at runtime will return CUDA_ERROR_NOT_PERMITTED.
+     * See ::cuFuncSetAttribute, ::cuKernelSetAttribute
+     */
+    CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_WIDTH = 11,
+
+    /**
+     * The required cluster height in blocks. The values must either all be 0 or
+     * all be positive. The validity of the cluster dimensions is otherwise
+     * checked at launch time.
+     *
+     * If the value is set during compile time, it cannot be set at runtime.
+     * Setting it at runtime should return CUDA_ERROR_NOT_PERMITTED.
+     * See ::cuFuncSetAttribute, ::cuKernelSetAttribute
+     */
+    CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_HEIGHT = 12,
+
+    /**
+     * The required cluster depth in blocks. The values must either all be 0 or
+     * all be positive. The validity of the cluster dimensions is otherwise
+     * checked at launch time.
+     *
+     * If the value is set during compile time, it cannot be set at runtime.
+     * Setting it at runtime should return CUDA_ERROR_NOT_PERMITTED.
+     * See ::cuFuncSetAttribute, ::cuKernelSetAttribute
+     */
+    CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_DEPTH = 13,
+
+    /**
+     * Whether the function can be launched with non-portable cluster size. 1 is
+     * allowed, 0 is disallowed. A non-portable cluster size may only function
+     * on the specific SKUs the program is tested on. The launch might fail if
+     * the program is run on a different hardware platform.
+     *
+     * CUDA API provides cudaOccupancyMaxActiveClusters to assist with checking
+     * whether the desired size can be launched on the current device.
+     *
+     * Portable Cluster Size
+     *
+     * A portable cluster size is guaranteed to be functional on all compute
+     * capabilities higher than the target compute capability. The portable
+     * cluster size for sm_90 is 8 blocks per cluster. This value may increase
+     * for future compute capabilities.
+     *
+     * The specific hardware unit may support higher cluster sizes that’s not
+     * guaranteed to be portable.
+     * See ::cuFuncSetAttribute, ::cuKernelSetAttribute
+     */
+    CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED = 14,
+
+    /**
+     * The block scheduling policy of a function. The value type is
+     * CUclusterSchedulingPolicy / cudaClusterSchedulingPolicy.
+     * See ::cuFuncSetAttribute, ::cuKernelSetAttribute
+     */
+    CU_FUNC_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE = 15,
 
     CU_FUNC_ATTRIBUTE_MAX
 } CUfunction_attribute;
@@ -895,7 +968,7 @@ typedef enum CUsharedconfig_enum {
 } CUsharedconfig;
 
 /**
- * Shared memory carveout configurations. These may be passed to ::cuFuncSetAttribute
+ * Shared memory carveout configurations. These may be passed to ::cuFuncSetAttribute or ::cuKernelSetAttribute
  */
 typedef enum CUshared_carveout_enum {
     CU_SHAREDMEM_CARVEOUT_DEFAULT       = -1,  /**< No preference for shared memory or L1 (default) */
@@ -926,7 +999,7 @@ typedef enum CUcomputemode_enum {
  * Memory advise values
  */
 typedef enum CUmem_advise_enum {
-    CU_MEM_ADVISE_SET_READ_MOSTLY          = 1, /**< Data will mostly be read and only occassionally be written to */
+    CU_MEM_ADVISE_SET_READ_MOSTLY          = 1, /**< Data will mostly be read and only occasionally be written to */
     CU_MEM_ADVISE_UNSET_READ_MOSTLY        = 2, /**< Undo the effect of ::CU_MEM_ADVISE_SET_READ_MOSTLY */
     CU_MEM_ADVISE_SET_PREFERRED_LOCATION   = 3, /**< Set the preferred location for the data as the specified device */
     CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION = 4, /**< Clear the preferred location for the data */
@@ -935,7 +1008,7 @@ typedef enum CUmem_advise_enum {
 } CUmem_advise;
 
 typedef enum CUmem_range_attribute_enum {
-    CU_MEM_RANGE_ATTRIBUTE_READ_MOSTLY            = 1, /**< Whether the range will mostly be read and only occassionally be written to */
+    CU_MEM_RANGE_ATTRIBUTE_READ_MOSTLY            = 1, /**< Whether the range will mostly be read and only occasionally be written to */
     CU_MEM_RANGE_ATTRIBUTE_PREFERRED_LOCATION     = 2, /**< The preferred location of the range */
     CU_MEM_RANGE_ATTRIBUTE_ACCESSED_BY            = 3, /**< Memory range has ::CU_MEM_ADVISE_SET_ACCESSED_BY set for specified device */
     CU_MEM_RANGE_ATTRIBUTE_LAST_PREFETCH_LOCATION = 4  /**< The last location to which the range was prefetched */
@@ -957,7 +1030,7 @@ typedef enum CUjit_option_enum
      * IN: Specifies minimum number of threads per block to target compilation
      * for\n
      * OUT: Returns the number of threads the compiler actually targeted.
-     * This restricts the resource utilization fo the compiler (e.g. max
+     * This restricts the resource utilization of the compiler (e.g. max
      * registers) such that a block with the given number of threads should be
      * able to launch based on register limitations. Note, this option does not
      * currently take into account any other resource limitations, such as
@@ -966,7 +1039,7 @@ typedef enum CUjit_option_enum
      * Option type: unsigned int\n
      * Applies to: compiler only
      */
-    CU_JIT_THREADS_PER_BLOCK,
+    CU_JIT_THREADS_PER_BLOCK = 1,
 
     /**
      * Overwrites the option value with the total wall clock time, in
@@ -974,7 +1047,7 @@ typedef enum CUjit_option_enum
      * Option type: float\n
      * Applies to: compiler and linker
      */
-    CU_JIT_WALL_TIME,
+    CU_JIT_WALL_TIME = 2,
 
     /**
      * Pointer to a buffer in which to print any log messages
@@ -983,7 +1056,7 @@ typedef enum CUjit_option_enum
      * Option type: char *\n
      * Applies to: compiler and linker
      */
-    CU_JIT_INFO_LOG_BUFFER,
+    CU_JIT_INFO_LOG_BUFFER = 3,
 
     /**
      * IN: Log buffer size in bytes.  Log messages will be capped at this size
@@ -992,7 +1065,7 @@ typedef enum CUjit_option_enum
      * Option type: unsigned int\n
      * Applies to: compiler and linker
      */
-    CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES,
+    CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES = 4,
 
     /**
      * Pointer to a buffer in which to print any log messages that
@@ -1001,7 +1074,7 @@ typedef enum CUjit_option_enum
      * Option type: char *\n
      * Applies to: compiler and linker
      */
-    CU_JIT_ERROR_LOG_BUFFER,
+    CU_JIT_ERROR_LOG_BUFFER = 5,
 
     /**
      * IN: Log buffer size in bytes.  Log messages will be capped at this size
@@ -1010,7 +1083,7 @@ typedef enum CUjit_option_enum
      * Option type: unsigned int\n
      * Applies to: compiler and linker
      */
-    CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES,
+    CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES = 6,
 
     /**
      * Level of optimizations to apply to generated code (0 - 4), with 4
@@ -1018,7 +1091,7 @@ typedef enum CUjit_option_enum
      * Option type: unsigned int\n
      * Applies to: compiler only
      */
-    CU_JIT_OPTIMIZATION_LEVEL,
+    CU_JIT_OPTIMIZATION_LEVEL = 7,
 
     /**
      * No option value required. Determines the target based on the current
@@ -1026,7 +1099,7 @@ typedef enum CUjit_option_enum
      * Option type: No option value needed\n
      * Applies to: compiler and linker
      */
-    CU_JIT_TARGET_FROM_CUCONTEXT,
+    CU_JIT_TARGET_FROM_CUCONTEXT = 8,
 
     /**
      * Target is chosen based on supplied ::CUjit_target.  Cannot be
@@ -1034,7 +1107,7 @@ typedef enum CUjit_option_enum
      * Option type: unsigned int for enumerated type ::CUjit_target\n
      * Applies to: compiler and linker
      */
-    CU_JIT_TARGET,
+    CU_JIT_TARGET = 9,
 
     /**
      * Specifies choice of fallback strategy if matching cubin is not found.
@@ -1043,7 +1116,7 @@ typedef enum CUjit_option_enum
      * Option type: unsigned int for enumerated type ::CUjit_fallback\n
      * Applies to: compiler only
      */
-    CU_JIT_FALLBACK_STRATEGY,
+    CU_JIT_FALLBACK_STRATEGY = 10,
 
     /**
      * Specifies whether to create debug information in output (-g)
@@ -1051,21 +1124,21 @@ typedef enum CUjit_option_enum
      * Option type: int\n
      * Applies to: compiler and linker
      */
-    CU_JIT_GENERATE_DEBUG_INFO,
+    CU_JIT_GENERATE_DEBUG_INFO = 11,
 
     /**
      * Generate verbose log messages (0: false, default)\n
      * Option type: int\n
      * Applies to: compiler and linker
      */
-    CU_JIT_LOG_VERBOSE,
+    CU_JIT_LOG_VERBOSE = 12,
 
     /**
      * Generate line number information (-lineinfo) (0: false, default)\n
      * Option type: int\n
      * Applies to: compiler only
      */
-    CU_JIT_GENERATE_LINE_INFO,
+    CU_JIT_GENERATE_LINE_INFO = 13,
 
     /**
      * Specifies whether to enable caching explicitly (-dlcm) \n
@@ -1073,19 +1146,24 @@ typedef enum CUjit_option_enum
      * Option type: unsigned int for enumerated type ::CUjit_cacheMode_enum\n
      * Applies to: compiler only
      */
-    CU_JIT_CACHE_MODE,
+    CU_JIT_CACHE_MODE = 14,
 
     /**
-     * The below jit options are used for internal purposes only, in this version of CUDA
+     * \deprecated
+     * This jit option is deprecated and should not be used.
      */
-    CU_JIT_NEW_SM3X_OPT,
-    CU_JIT_FAST_COMPILE,
+    CU_JIT_NEW_SM3X_OPT = 15,
 
     /**
-     * Array of device symbol names that will be relocated to the corresponing
+     * This jit option is used for internal purpose only.
+     */
+    CU_JIT_FAST_COMPILE = 16,
+
+    /**
+     * Array of device symbol names that will be relocated to the corresponding
      * host addresses stored in ::CU_JIT_GLOBAL_SYMBOL_ADDRESSES.\n
      * Must contain ::CU_JIT_GLOBAL_SYMBOL_COUNT entries.\n
-     * When loding a device module, driver will relocate all encountered
+     * When loading a device module, driver will relocate all encountered
      * unresolved symbols to the host addresses.\n
      * It is only allowed to register symbols that correspond to unresolved
      * global variables.\n
@@ -1093,7 +1171,7 @@ typedef enum CUjit_option_enum
      * Option type: const char **\n
      * Applies to: dynamic linker only
      */
-    CU_JIT_GLOBAL_SYMBOL_NAMES,
+    CU_JIT_GLOBAL_SYMBOL_NAMES = 17,
 
     /**
      * Array of host addresses that will be used to relocate corresponding
@@ -1102,7 +1180,7 @@ typedef enum CUjit_option_enum
      * Option type: void **\n
      * Applies to: dynamic linker only
      */
-    CU_JIT_GLOBAL_SYMBOL_ADDRESSES,
+    CU_JIT_GLOBAL_SYMBOL_ADDRESSES = 18,
 
     /**
      * Number of entries in ::CU_JIT_GLOBAL_SYMBOL_NAMES and
@@ -1110,92 +1188,186 @@ typedef enum CUjit_option_enum
      * Option type: unsigned int\n
      * Applies to: dynamic linker only
      */
-    CU_JIT_GLOBAL_SYMBOL_COUNT,
+    CU_JIT_GLOBAL_SYMBOL_COUNT = 19,
 
     /**
-     * Enable link-time optimization (-dlto) for device code (0: false, default).\n
+     * \deprecated
+     * Enable link-time optimization (-dlto) for device code (Disabled by default).\n
      * This option is not supported on 32-bit platforms.\n
      * Option type: int\n
      * Applies to: compiler and linker
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
      */
-    CU_JIT_LTO,
+    CU_JIT_LTO = 20,
 
     /**
+     * \deprecated
      * Control single-precision denormals (-ftz) support (0: false, default).
      * 1 : flushes denormal values to zero
      * 0 : preserves denormal values
      * Option type: int\n
      * Applies to: link-time optimization specified with CU_JIT_LTO
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
      */
-    CU_JIT_FTZ,
+    CU_JIT_FTZ = 21,
 
     /**
+     * \deprecated
      * Control single-precision floating-point division and reciprocals
      * (-prec-div) support (1: true, default).
      * 1 : Enables the IEEE round-to-nearest mode
      * 0 : Enables the fast approximation mode
      * Option type: int\n
      * Applies to: link-time optimization specified with CU_JIT_LTO
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
      */
-    CU_JIT_PREC_DIV,
+    CU_JIT_PREC_DIV = 22,
 
     /**
+     * \deprecated
      * Control single-precision floating-point square root
      * (-prec-sqrt) support (1: true, default).
      * 1 : Enables the IEEE round-to-nearest mode
      * 0 : Enables the fast approximation mode
      * Option type: int\n
      * Applies to: link-time optimization specified with CU_JIT_LTO
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
      */
-    CU_JIT_PREC_SQRT,
+    CU_JIT_PREC_SQRT = 23,
 
     /**
+     * \deprecated
      * Enable/Disable the contraction of floating-point multiplies
      * and adds/subtracts into floating-point multiply-add (-fma)
      * operations (1: Enable, default; 0: Disable).
      * Option type: int\n
      * Applies to: link-time optimization specified with CU_JIT_LTO
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
      */
-    CU_JIT_FMA,
+    CU_JIT_FMA = 24,
+
+    /**
+     * \deprecated
+     * Array of kernel names that should be preserved at link time while others
+     * can be removed.\n
+     * Must contain ::CU_JIT_REFERENCED_KERNEL_COUNT entries.\n
+     * Note that kernel names can be mangled by the compiler in which case the
+     * mangled name needs to be specified.\n
+     * Wildcard "*" can be used to represent zero or more characters instead of
+     * specifying the full or mangled name.\n
+     * It is important to note that the wildcard "*" is also added implicitly.
+     * For example, specifying "foo" will match "foobaz", "barfoo", "barfoobaz" and
+     * thus preserve all kernels with those names. This can be avoided by providing
+     * a more specific name like "barfoobaz".\n
+     * Option type: const char **\n
+     * Applies to: dynamic linker only
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
+     */
+    CU_JIT_REFERENCED_KERNEL_NAMES = 25,
+
+    /**
+     * \deprecated
+     * Number of entries in ::CU_JIT_REFERENCED_KERNEL_NAMES array.\n
+     * Option type: unsigned int\n
+     * Applies to: dynamic linker only
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
+     */
+    CU_JIT_REFERENCED_KERNEL_COUNT = 26,
+
+    /**
+     * \deprecated
+     * Array of variable names (__device__ and/or __constant__) that should be
+     * preserved at link time while others can be removed.\n
+     * Must contain ::CU_JIT_REFERENCED_VARIABLE_COUNT entries.\n
+     * Note that variable names can be mangled by the compiler in which case the
+     * mangled name needs to be specified.\n
+     * Wildcard "*" can be used to represent zero or more characters instead of
+     * specifying the full or mangled name.\n
+     * It is important to note that the wildcard "*" is also added implicitly.
+     * For example, specifying "foo" will match "foobaz", "barfoo", "barfoobaz" and
+     * thus preserve all variables with those names. This can be avoided by providing
+     * a more specific name like "barfoobaz".\n
+     * Option type: const char **\n
+     * Applies to: link-time optimization specified with CU_JIT_LTO
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
+     */
+    CU_JIT_REFERENCED_VARIABLE_NAMES = 27,
+
+    /**
+     * \deprecated
+     * Number of entries in ::CU_JIT_REFERENCED_VARIABLE_NAMES array.\n
+     * Option type: unsigned int\n
+     * Applies to: link-time optimization specified with CU_JIT_LTO
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
+     */
+    CU_JIT_REFERENCED_VARIABLE_COUNT = 28,
+
+    /**
+     * \deprecated
+     * This option serves as a hint to enable the JIT compiler/linker
+     * to remove constant (__constant__) and device (__device__) variables
+     * unreferenced in device code (Disabled by default).\n
+     * Note that host references to constant and device variables using APIs like
+     * ::cuModuleGetGlobal() with this option specified may result in undefined behavior unless
+     * the variables are explicitly specified using ::CU_JIT_REFERENCED_VARIABLE_NAMES.\n
+     * Option type: int\n
+     * Applies to: link-time optimization specified with CU_JIT_LTO
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
+     */
+    CU_JIT_OPTIMIZE_UNUSED_DEVICE_VARIABLES = 29,
+
+    /**
+     * Generate position independent code (0: false)\n
+     * Option type: int\n
+     * Applies to: compiler only
+     */
+    CU_JIT_POSITION_INDEPENDENT_CODE = 30,
 
     CU_JIT_NUM_OPTIONS
 
 } CUjit_option;
+
+/*
+ * Indicates that compute device class supports accelerated features.
+ */
+#define CU_COMPUTE_ACCELERATED_TARGET_BASE   0x10000
 
 /**
  * Online compilation targets
  */
 typedef enum CUjit_target_enum
 {
-
-    CU_TARGET_COMPUTE_20 = 20,       /**< Compute device class 2.0 */
-    CU_TARGET_COMPUTE_21 = 21,       /**< Compute device class 2.1 */
-
-
     CU_TARGET_COMPUTE_30 = 30,       /**< Compute device class 3.0 */
     CU_TARGET_COMPUTE_32 = 32,       /**< Compute device class 3.2 */
     CU_TARGET_COMPUTE_35 = 35,       /**< Compute device class 3.5 */
     CU_TARGET_COMPUTE_37 = 37,       /**< Compute device class 3.7 */
-
-
     CU_TARGET_COMPUTE_50 = 50,       /**< Compute device class 5.0 */
     CU_TARGET_COMPUTE_52 = 52,       /**< Compute device class 5.2 */
     CU_TARGET_COMPUTE_53 = 53,       /**< Compute device class 5.3 */
-
-
     CU_TARGET_COMPUTE_60 = 60,       /**< Compute device class 6.0.*/
     CU_TARGET_COMPUTE_61 = 61,       /**< Compute device class 6.1.*/
     CU_TARGET_COMPUTE_62 = 62,       /**< Compute device class 6.2.*/
-
-
     CU_TARGET_COMPUTE_70 = 70,       /**< Compute device class 7.0.*/
     CU_TARGET_COMPUTE_72 = 72,       /**< Compute device class 7.2.*/
-
     CU_TARGET_COMPUTE_75 = 75,       /**< Compute device class 7.5.*/
-
     CU_TARGET_COMPUTE_80 = 80,       /**< Compute device class 8.0.*/
-    CU_TARGET_COMPUTE_86 = 86        /**< Compute device class 8.6.*/
+    CU_TARGET_COMPUTE_86 = 86,       /**< Compute device class 8.6.*/
+    CU_TARGET_COMPUTE_87 = 87,       /**< Compute device class 8.7.*/
+    CU_TARGET_COMPUTE_89 = 89,       /**< Compute device class 8.9.*/
+    CU_TARGET_COMPUTE_90 = 90,        /**< Compute device class 9.0.*/
 
+    /**< Compute device class 9.0. with accelerated features.*/
+    CU_TARGET_COMPUTE_90A = CU_COMPUTE_ACCELERATED_TARGET_BASE + CU_TARGET_COMPUTE_90
 } CUjit_target;
 
 /**
@@ -1234,33 +1406,36 @@ typedef enum CUjitInputType_enum
      * PTX source code\n
      * Applicable options: PTX compiler options
      */
-    CU_JIT_INPUT_PTX,
+    CU_JIT_INPUT_PTX = 1,
 
     /**
      * Bundle of multiple cubins and/or PTX of some device code\n
      * Applicable options: PTX compiler options, ::CU_JIT_FALLBACK_STRATEGY
      */
-    CU_JIT_INPUT_FATBINARY,
+    CU_JIT_INPUT_FATBINARY = 2,
 
     /**
      * Host object with embedded device code\n
      * Applicable options: PTX compiler options, ::CU_JIT_FALLBACK_STRATEGY
      */
-    CU_JIT_INPUT_OBJECT,
+    CU_JIT_INPUT_OBJECT = 3,
 
     /**
      * Archive of host objects with embedded device code\n
      * Applicable options: PTX compiler options, ::CU_JIT_FALLBACK_STRATEGY
      */
-    CU_JIT_INPUT_LIBRARY,
+    CU_JIT_INPUT_LIBRARY = 4,
 
     /**
+     * \deprecated
      * High-level intermediate code for link-time optimization\n
      * Applicable options: NVVM compiler options, PTX compiler options
+     *
+     * Only valid with LTO-IR compiled with toolkits prior to CUDA 12.0
      */
-    CU_JIT_INPUT_NVVM,
+    CU_JIT_INPUT_NVVM = 5,
 
-    CU_JIT_NUM_INPUT_TYPES
+    CU_JIT_NUM_INPUT_TYPES = 6
 } CUjitInputType;
 
 typedef struct CUlinkState_st *CUlinkState;
@@ -1315,7 +1490,7 @@ typedef enum CUlimit_enum {
  * Resource types
  */
 typedef enum CUresourcetype_enum {
-    CU_RESOURCE_TYPE_ARRAY           = 0x00, /**< Array resoure */
+    CU_RESOURCE_TYPE_ARRAY           = 0x00, /**< Array resource */
     CU_RESOURCE_TYPE_MIPMAPPED_ARRAY = 0x01, /**< Mipmapped array resource */
     CU_RESOURCE_TYPE_LINEAR          = 0x02, /**< Linear resource */
     CU_RESOURCE_TYPE_PITCH2D         = 0x03  /**< Pitch 2D resource */
@@ -1361,6 +1536,9 @@ typedef struct CUaccessPolicyWindow_st {
     CUaccessProperty hitProp;           /**< ::CUaccessProperty set for hit. */
     CUaccessProperty missProp;          /**< ::CUaccessProperty set for miss. Must be either NORMAL or STREAMING */
 } CUaccessPolicyWindow_v1;
+/**
+ * Access policy window
+ */
 typedef CUaccessPolicyWindow_v1 CUaccessPolicyWindow;
 
 /**
@@ -1378,7 +1556,24 @@ typedef struct CUDA_KERNEL_NODE_PARAMS_st {
     void **kernelParams;         /**< Array of pointers to kernel parameters */
     void **extra;                /**< Extra options */
 } CUDA_KERNEL_NODE_PARAMS_v1;
-typedef CUDA_KERNEL_NODE_PARAMS_v1 CUDA_KERNEL_NODE_PARAMS;
+
+/**
+ * GPU kernel node parameters
+ */typedef struct CUDA_KERNEL_NODE_PARAMS_v2_st {
+    CUfunction func;             /**< Kernel to launch */
+    unsigned int gridDimX;       /**< Width of grid in blocks */
+    unsigned int gridDimY;       /**< Height of grid in blocks */
+    unsigned int gridDimZ;       /**< Depth of grid in blocks */
+    unsigned int blockDimX;      /**< X dimension of each thread block */
+    unsigned int blockDimY;      /**< Y dimension of each thread block */
+    unsigned int blockDimZ;      /**< Z dimension of each thread block */
+    unsigned int sharedMemBytes; /**< Dynamic shared-memory size per thread block in bytes */
+    void **kernelParams;         /**< Array of pointers to kernel parameters */
+    void **extra;                /**< Extra options */
+    CUkernel kern;               /**< Kernel to launch, will only be referenced if func is NULL */
+    CUcontext ctx;               /**< Context for the kernel task to run in. The value NULL will indicate the current context should be used by the api. This field is ignored if func is set. */
+} CUDA_KERNEL_NODE_PARAMS_v2;
+typedef CUDA_KERNEL_NODE_PARAMS_v2 CUDA_KERNEL_NODE_PARAMS;
 
 /**
  * Memset node parameters
@@ -1417,8 +1612,32 @@ typedef enum CUgraphNodeType_enum {
     CU_GRAPH_NODE_TYPE_EXT_SEMAS_SIGNAL = 8, /**< External semaphore signal node */
     CU_GRAPH_NODE_TYPE_EXT_SEMAS_WAIT   = 9, /**< External semaphore wait node */
     CU_GRAPH_NODE_TYPE_MEM_ALLOC        = 10,/**< Memory Allocation Node */
-    CU_GRAPH_NODE_TYPE_MEM_FREE         = 11 /**< Memory Free Node */
+    CU_GRAPH_NODE_TYPE_MEM_FREE         = 11,/**< Memory Free Node */
+    CU_GRAPH_NODE_TYPE_BATCH_MEM_OP     = 12 /**< Batch MemOp Node */
 } CUgraphNodeType;
+
+/**
+ * Graph instantiation results
+*/
+typedef enum CUgraphInstantiateResult_enum
+{
+    CUDA_GRAPH_INSTANTIATE_SUCCESS = 0,                          /**< Instantiation succeeded */
+    CUDA_GRAPH_INSTANTIATE_ERROR = 1,                            /**< Instantiation failed for an unexpected reason which is described in the return value of the function */
+    CUDA_GRAPH_INSTANTIATE_INVALID_STRUCTURE = 2,                /**< Instantiation failed due to invalid structure, such as cycles */
+    CUDA_GRAPH_INSTANTIATE_NODE_OPERATION_NOT_SUPPORTED = 3,     /**< Instantiation for device launch failed because the graph contained an unsupported operation */
+    CUDA_GRAPH_INSTANTIATE_MULTIPLE_CTXS_NOT_SUPPORTED = 4       /**< Instantiation for device launch failed due to the nodes belonging to different contexts */
+} CUgraphInstantiateResult;
+
+/**
+ * Graph instantiation parameters
+ */
+typedef struct CUDA_GRAPH_INSTANTIATE_PARAMS_st
+{
+	cuuint64_t flags;                    /**< Instantiation flags */
+	CUstream hUploadStream;              /**< Upload stream */
+	CUgraphNode hErrNode_out;            /**< The node which caused instantiation to fail, if any */
+	CUgraphInstantiateResult result_out; /**< Whether instantiation was successful.  If it failed, the reason why */
+} CUDA_GRAPH_INSTANTIATE_PARAMS;
 
 typedef enum CUsynchronizationPolicy_enum {
     CU_SYNC_POLICY_AUTO = 1,
@@ -1428,20 +1647,124 @@ typedef enum CUsynchronizationPolicy_enum {
 } CUsynchronizationPolicy;
 
 /**
- * Graph kernel node Attributes
+ * Cluster scheduling policies. These may be passed to ::cuFuncSetAttribute or ::cuKernelSetAttribute
  */
-typedef enum CUkernelNodeAttrID_enum {
-    CU_KERNEL_NODE_ATTRIBUTE_ACCESS_POLICY_WINDOW       = 1,    /**< Identifier for ::CUkernelNodeAttrValue::accessPolicyWindow. */
-    CU_KERNEL_NODE_ATTRIBUTE_COOPERATIVE                = 2     /**< Allows a kernel node to be cooperative (see ::cuLaunchCooperativeKernel). */
-} CUkernelNodeAttrID;
+typedef enum CUclusterSchedulingPolicy_enum {
+    CU_CLUSTER_SCHEDULING_POLICY_DEFAULT        = 0, /**< the default policy */
+    CU_CLUSTER_SCHEDULING_POLICY_SPREAD         = 1, /**< spread the blocks within a cluster to the SMs */
+    CU_CLUSTER_SCHEDULING_POLICY_LOAD_BALANCING = 2  /**< allow the hardware to load-balance the blocks in a cluster to the SMs */
+} CUclusterSchedulingPolicy;
 
-/**
- * Graph kernel node attributes union, used with ::cuKernelNodeSetAttribute/::cuKernelNodeGetAttribute
- */
-typedef union CUkernelNodeAttrValue_union {
-    CUaccessPolicyWindow accessPolicyWindow;    /**< Attribute ::CUaccessPolicyWindow. */
-    int cooperative;                            /**< Nonzero indicates a cooperative kernel (see ::cuLaunchCooperativeKernel). */
-} CUkernelNodeAttrValue_v1;
+typedef enum CUlaunchMemSyncDomain_enum {
+    CU_LAUNCH_MEM_SYNC_DOMAIN_DEFAULT = 0,
+    CU_LAUNCH_MEM_SYNC_DOMAIN_REMOTE  = 1
+} CUlaunchMemSyncDomain;
+
+typedef struct CUlaunchMemSyncDomainMap_st {
+    unsigned char default_;
+    unsigned char remote;
+} CUlaunchMemSyncDomainMap;
+
+typedef enum CUlaunchAttributeID_enum {
+    CU_LAUNCH_ATTRIBUTE_IGNORE = 0 /**< Ignored entry, for convenient composition */
+  , CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW   = 1 /**< Valid for streams, graph nodes, launches. */
+  , CU_LAUNCH_ATTRIBUTE_COOPERATIVE            = 2 /**< Valid for graph nodes, launches. */
+  , CU_LAUNCH_ATTRIBUTE_SYNCHRONIZATION_POLICY = 3 /**< Valid for streams. */
+  , CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION                    = 4 /**< Valid for graph nodes, launches. */
+  , CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE = 5 /**< Valid for graph nodes, launches. */
+  , CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION    = 6 /**< Valid for launches. Setting
+                                                                      programmaticStreamSerializationAllowed to non-0
+                                                                      signals that the kernel will use programmatic
+                                                                      means to resolve its stream dependency, so that
+                                                                      the CUDA runtime should opportunistically allow
+                                                                      the grid's execution to overlap with the previous
+                                                                      kernel in the stream, if that kernel requests the
+                                                                      overlap. The dependent launches can choose to wait
+                                                                      on the dependency using the programmatic sync
+                                                                      (cudaGridDependencySynchronize() or equivalent PTX
+                                                                      instructions). */
+  , CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_EVENT                   = 7 /**< Valid for launches. Event recorded through this
+                                                                      launch attribute is guaranteed to only trigger
+                                                                      after all block in the associated kernel trigger
+                                                                      the event. A block can trigger the event through
+                                                                      PTX launchdep.release or CUDA builtin function
+                                                                      cudaTriggerProgrammaticLaunchCompletion(). A
+                                                                      trigger can also be inserted at the beginning of
+                                                                      each block's execution if triggerAtBlockStart is
+                                                                      set to non-0. The dependent launches can choose to
+                                                                      wait on the dependency using the programmatic sync
+                                                                      (cudaGridDependencySynchronize() or equivalent PTX
+                                                                      instructions). Note that dependents (including the
+                                                                      CPU thread calling cuEventSynchronize()) are not
+                                                                      guaranteed to observe the release precisely when
+                                                                      it is released.  For example, cuEventSynchronize()
+                                                                      may only observe the event trigger long after the
+                                                                      associated kernel has completed. This recording
+                                                                      type is primarily meant for establishing
+                                                                      programmatic dependency between device tasks. The
+                                                                      event supplied must not be an interprocess or
+                                                                      interop event. The event must disable timing (i.e.
+                                                                      created with ::CU_EVENT_DISABLE_TIMING flag set).
+                                                                      */
+  , CU_LAUNCH_ATTRIBUTE_PRIORITY               = 8 /**< Valid for streams, graph nodes, launches. */
+  , CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN_MAP    = 9
+  , CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN        = 10
+#ifdef __CUDA_API_VERSION_INTERNAL
+  , CU_LAUNCH_ATTRIBUTE_MAX
+#endif
+} CUlaunchAttributeID;
+
+typedef union CUlaunchAttributeValue_union {
+    char pad[64]; /**< Pad to 64 bytes */
+    CUaccessPolicyWindow accessPolicyWindow; /**< Attribute ::CUaccessPolicyWindow. */
+    int cooperative; /**< Nonzero indicates a cooperative kernel (see ::cuLaunchCooperativeKernel). */
+    CUsynchronizationPolicy syncPolicy; /**< ::CUsynchronizationPolicy for work queued up in this stream */
+    struct {
+        unsigned int x;
+        unsigned int y;
+        unsigned int z;
+    } clusterDim; /**< Cluster dimensions for the kernel node. */
+    CUclusterSchedulingPolicy clusterSchedulingPolicyPreference; /**< Cluster scheduling policy preference for the kernel node. */
+    int programmaticStreamSerializationAllowed;
+    struct {
+        CUevent event;
+        int flags;                      /* Does not accept ::CU_EVENT_RECORD_EXTERNAL */
+        int triggerAtBlockStart;
+    } programmaticEvent;
+    int priority; /**< Execution priority of the kernel. */
+    CUlaunchMemSyncDomainMap memSyncDomainMap;
+    CUlaunchMemSyncDomain memSyncDomain;
+} CUlaunchAttributeValue;
+
+typedef struct CUlaunchAttribute_st {
+    CUlaunchAttributeID id;
+    char pad[8 - sizeof(CUlaunchAttributeID)];
+    CUlaunchAttributeValue value;
+} CUlaunchAttribute;
+
+typedef struct CUlaunchConfig_st {
+    unsigned int gridDimX;       /**< Width of grid in blocks */
+    unsigned int gridDimY;       /**< Height of grid in blocks */
+    unsigned int gridDimZ;       /**< Depth of grid in blocks */
+    unsigned int blockDimX;      /**< X dimension of each thread block */
+    unsigned int blockDimY;      /**< Y dimension of each thread block */
+    unsigned int blockDimZ;      /**< Z dimension of each thread block */
+    unsigned int sharedMemBytes; /**< Dynamic shared-memory size per thread block in bytes */
+    CUstream hStream;            /**< Stream identifier */
+    CUlaunchAttribute *attrs;    /**< nullable if numAttrs == 0 */
+    unsigned int numAttrs;       /**< number of attributes populated in attrs */
+} CUlaunchConfig;
+
+typedef CUlaunchAttributeID CUkernelNodeAttrID;
+#define CU_KERNEL_NODE_ATTRIBUTE_ACCESS_POLICY_WINDOW CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW
+#define CU_KERNEL_NODE_ATTRIBUTE_COOPERATIVE          CU_LAUNCH_ATTRIBUTE_COOPERATIVE
+#define CU_KERNEL_NODE_ATTRIBUTE_CLUSTER_DIMENSION                    CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION
+#define CU_KERNEL_NODE_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE
+#define CU_KERNEL_NODE_ATTRIBUTE_PRIORITY             CU_LAUNCH_ATTRIBUTE_PRIORITY
+#define CU_KERNEL_NODE_ATTRIBUTE_MEM_SYNC_DOMAIN_MAP  CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN_MAP
+#define CU_KERNEL_NODE_ATTRIBUTE_MEM_SYNC_DOMAIN      CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN
+
+typedef CUlaunchAttributeValue CUkernelNodeAttrValue_v1;
 typedef CUkernelNodeAttrValue_v1 CUkernelNodeAttrValue;
 
 /**
@@ -1464,21 +1787,14 @@ typedef enum CUstreamCaptureMode_enum {
     CU_STREAM_CAPTURE_MODE_RELAXED      = 2
 } CUstreamCaptureMode;
 
-/**
- * Stream Attributes 
- */
-typedef enum CUstreamAttrID_enum {
-    CU_STREAM_ATTRIBUTE_ACCESS_POLICY_WINDOW    = 1,   /**< Identifier for ::CUstreamAttrValue::accessPolicyWindow. */
-    CU_STREAM_ATTRIBUTE_SYNCHRONIZATION_POLICY  = 3    /**< ::CUsynchronizationPolicy for work queued up in this stream */
-} CUstreamAttrID;
+typedef CUlaunchAttributeID CUstreamAttrID;
+#define CU_STREAM_ATTRIBUTE_ACCESS_POLICY_WINDOW   CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW
+#define CU_STREAM_ATTRIBUTE_SYNCHRONIZATION_POLICY CU_LAUNCH_ATTRIBUTE_SYNCHRONIZATION_POLICY
+#define CU_STREAM_ATTRIBUTE_PRIORITY               CU_LAUNCH_ATTRIBUTE_PRIORITY
+#define CU_STREAM_ATTRIBUTE_MEM_SYNC_DOMAIN_MAP    CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN_MAP
+#define CU_STREAM_ATTRIBUTE_MEM_SYNC_DOMAIN        CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN
 
-/**
- * Stream attributes union, used with ::cuStreamSetAttribute/::cuStreamGetAttribute
- */
-typedef union CUstreamAttrValue_union {
-    CUaccessPolicyWindow accessPolicyWindow;   /**< Attribute ::CUaccessPolicyWindow. */
-    CUsynchronizationPolicy syncPolicy;        /**< Value for ::CU_STREAM_ATTRIBUTE_SYNCHRONIZATION_POLICY. */
-} CUstreamAttrValue_v1;
+typedef CUlaunchAttributeValue CUstreamAttrValue_v1;
 typedef CUstreamAttrValue_v1 CUstreamAttrValue;
 
 /**
@@ -1489,6 +1805,15 @@ typedef enum CUdriverProcAddress_flags_enum {
     CU_GET_PROC_ADDRESS_LEGACY_STREAM = 1 << 0,             /**< Search for legacy versions of driver symbols. */
     CU_GET_PROC_ADDRESS_PER_THREAD_DEFAULT_STREAM = 1 << 1  /**< Search for per-thread versions of driver symbols. */ 
 } CUdriverProcAddress_flags;
+
+/**
+ * Flags to indicate search status. For more details see ::cuGetProcAddress
+ */
+typedef enum CUdriverProcAddressQueryResult_enum {
+    CU_GET_PROC_ADDRESS_SUCCESS                = 0,  /**< Symbol was succesfully found */
+    CU_GET_PROC_ADDRESS_SYMBOL_NOT_FOUND       = 1,  /**< Symbol was not found in search */
+    CU_GET_PROC_ADDRESS_VERSION_NOT_SUFFICIENT = 2   /**< Symbol was found but version supplied was not sufficient */
+}  CUdriverProcAddressQueryResult;
 
 /**
  * Execution Affinity Types 
@@ -1515,7 +1840,39 @@ typedef struct CUexecAffinityParam_st {
         CUexecAffinitySmCount smCount;    /** Value for ::CU_EXEC_AFFINITY_TYPE_SM_COUNT */
     } param;
 } CUexecAffinityParam_v1;
+/**
+ * Execution Affinity Parameters
+ */
 typedef CUexecAffinityParam_v1 CUexecAffinityParam;
+
+/**
+ * Library options to be specified with ::cuLibraryLoadData() or ::cuLibraryLoadFromFile()
+ */
+typedef enum CUlibraryOption_enum
+{
+    CU_LIBRARY_HOST_UNIVERSAL_FUNCTION_AND_DATA_TABLE = 0,
+
+    /**
+     * Specifes that the argument \p code passed to ::cuLibraryLoadData() will be preserved.
+     * Specifying this option will let the driver know that \p code can be accessed at any point
+     * until ::cuLibraryUnload(). The default behavior is for the driver to allocate and
+     * maintain its own copy of \p code. Note that this is only a memory usage optimization
+     * hint and the driver can choose to ignore it if required.
+     * Specifying this option with ::cuLibraryLoadFromFile() is invalid and
+     * will return ::CUDA_ERROR_INVALID_VALUE.
+     */
+    CU_LIBRARY_BINARY_IS_PRESERVED = 1,
+
+    CU_LIBRARY_NUM_OPTIONS
+} CUlibraryOption;
+
+typedef struct CUlibraryHostUniversalFunctionAndDataTable_st
+{
+    void *functionTable;
+    size_t functionWindowSize;
+    void *dataTable;
+    size_t dataWindowSize;
+} CUlibraryHostUniversalFunctionAndDataTable;
 
 /**
  * Error codes
@@ -1586,6 +1943,13 @@ typedef enum cudaError_enum {
      * driver loaded will result in CUDA API returning this error.
      */
     CUDA_ERROR_STUB_LIBRARY                   = 34,
+
+    /**  
+     * This indicates that requested CUDA device is unavailable at the current
+     * time. Devices are often unavailable due to use of
+     * ::CU_COMPUTEMODE_EXCLUSIVE_PROCESS or ::CU_COMPUTEMODE_PROHIBITED.
+     */
+    CUDA_ERROR_DEVICE_UNAVAILABLE            = 46,
 
     /**
      * This indicates that no CUDA-capable devices were detected by the installed
@@ -1743,6 +2107,12 @@ typedef enum cudaError_enum {
      * supported by the active device.
      */ 
     CUDA_ERROR_UNSUPPORTED_EXEC_AFFINITY      = 224,
+
+    /**
+     * This indicates that the code to be compiled by the PTX JIT contains
+     * unsupported call to cudaDeviceSynchronize.
+     */
+    CUDA_ERROR_UNSUPPORTED_DEVSIDE_SYNC       = 225,
 
     /**
      * This indicates that the device kernel source is invalid. This includes
@@ -2015,6 +2385,21 @@ typedef enum cudaError_enum {
     CUDA_ERROR_MPS_MAX_CONNECTIONS_REACHED    = 809,
 
     /**
+     * This error indicates that the MPS client has been terminated by the server. To continue using CUDA, the process must be terminated and relaunched.
+     */
+    CUDA_ERROR_MPS_CLIENT_TERMINATED          = 810,
+
+    /**
+     * This error indicates that the module is using CUDA Dynamic Parallelism, but the current configuration, like MPS, does not support it.
+     */
+    CUDA_ERROR_CDP_NOT_SUPPORTED              = 811,
+
+    /**
+     * This error indicates that a module contains an unsupported interaction between different versions of CUDA Dynamic Parallelism.
+     */
+    CUDA_ERROR_CDP_VERSION_MISMATCH           = 812,
+
+    /**
      * This error indicates that the operation is not permitted when
      * the stream is capturing.
      */
@@ -2090,12 +2475,10 @@ typedef enum cudaError_enum {
      */
     CUDA_ERROR_EXTERNAL_DEVICE               = 911,
 
-
-
-
-
-
-
+    /**
+     * Indicates a kernel launch error due to cluster misconfiguration.
+     */
+    CUDA_ERROR_INVALID_CLUSTER_SIZE           = 912,
 
     /**
      * This indicates that an unknown internal error has occurred.
@@ -2113,17 +2496,6 @@ typedef enum CUdevice_P2PAttribute_enum {
     CU_DEVICE_P2P_ATTRIBUTE_ACCESS_ACCESS_SUPPORTED              = 0x04,  /**< \deprecated use CU_DEVICE_P2P_ATTRIBUTE_CUDA_ARRAY_ACCESS_SUPPORTED instead */
     CU_DEVICE_P2P_ATTRIBUTE_CUDA_ARRAY_ACCESS_SUPPORTED          = 0x04   /**< Accessing CUDA arrays over the link supported */
 } CUdevice_P2PAttribute;
-
-
-
-
-
-
-
-
-
-
-
 
 /**
  * CUDA stream callback
@@ -2355,7 +2727,6 @@ typedef struct CUDA_ARRAY_SPARSE_PROPERTIES_st {
 } CUDA_ARRAY_SPARSE_PROPERTIES_v1;
 typedef CUDA_ARRAY_SPARSE_PROPERTIES_v1 CUDA_ARRAY_SPARSE_PROPERTIES;
 
-
 /**
  * CUDA array memory requirements
  */
@@ -2365,7 +2736,6 @@ typedef struct CUDA_ARRAY_MEMORY_REQUIREMENTS_st {
     unsigned int reserved[4];
 } CUDA_ARRAY_MEMORY_REQUIREMENTS_v1;
 typedef CUDA_ARRAY_MEMORY_REQUIREMENTS_v1 CUDA_ARRAY_MEMORY_REQUIREMENTS;
-
 
 /**
  * CUDA Resource descriptor
@@ -2479,6 +2849,79 @@ typedef struct CUDA_RESOURCE_VIEW_DESC_st
     unsigned int reserved[16];
 } CUDA_RESOURCE_VIEW_DESC_v1;
 typedef CUDA_RESOURCE_VIEW_DESC_v1 CUDA_RESOURCE_VIEW_DESC;
+
+/**
+ * Size of tensor map descriptor
+ */
+#define CU_TENSOR_MAP_NUM_QWORDS 16
+
+/**
+ * Tensor map descriptor. Requires compiler support for aligning to 64 bytes.
+ */
+typedef struct CUtensorMap_st {
+#if __cplusplus >= 201103L
+    alignas(64)
+#elif __STDC_VERSION__ >= 201112L
+    _Alignas(64)
+#endif
+    cuuint64_t opaque[CU_TENSOR_MAP_NUM_QWORDS];
+} CUtensorMap;
+
+/**
+ * Tensor map data type
+ */
+typedef enum CUtensorMapDataType_enum {
+    CU_TENSOR_MAP_DATA_TYPE_UINT8 = 0,
+    CU_TENSOR_MAP_DATA_TYPE_UINT16,
+    CU_TENSOR_MAP_DATA_TYPE_UINT32,
+    CU_TENSOR_MAP_DATA_TYPE_INT32,
+    CU_TENSOR_MAP_DATA_TYPE_UINT64,
+    CU_TENSOR_MAP_DATA_TYPE_INT64,
+    CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
+    CU_TENSOR_MAP_DATA_TYPE_FLOAT32,
+    CU_TENSOR_MAP_DATA_TYPE_FLOAT64,
+    CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
+    CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ,
+    CU_TENSOR_MAP_DATA_TYPE_TFLOAT32,
+    CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ
+} CUtensorMapDataType;
+
+/**
+ * Tensor map interleave layout type
+ */
+typedef enum CUtensorMapInterleave_enum {
+    CU_TENSOR_MAP_INTERLEAVE_NONE = 0,
+    CU_TENSOR_MAP_INTERLEAVE_16B,
+    CU_TENSOR_MAP_INTERLEAVE_32B
+} CUtensorMapInterleave;
+
+/**
+ * Tensor map swizzling mode of shared memory banks
+ */
+typedef enum CUtensorMapSwizzle_enum {
+    CU_TENSOR_MAP_SWIZZLE_NONE = 0,
+    CU_TENSOR_MAP_SWIZZLE_32B,
+    CU_TENSOR_MAP_SWIZZLE_64B,
+    CU_TENSOR_MAP_SWIZZLE_128B
+} CUtensorMapSwizzle;
+
+/**
+ * Tensor map L2 promotion type
+ */
+typedef enum CUtensorMapL2promotion_enum {
+    CU_TENSOR_MAP_L2_PROMOTION_NONE = 0,
+    CU_TENSOR_MAP_L2_PROMOTION_L2_64B,
+    CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+    CU_TENSOR_MAP_L2_PROMOTION_L2_256B
+} CUtensorMapL2promotion;
+
+/**
+ * Tensor map out-of-bounds fill type
+ */
+typedef enum CUtensorMapFloatOOBfill_enum {
+    CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE = 0,
+    CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
+} CUtensorMapFloatOOBfill;
 
 /**
  * GPU Direct v3 tokens
@@ -2965,6 +3408,15 @@ typedef enum CUmemAllocationGranularity_flags_enum {
 } CUmemAllocationGranularity_flags;
 
 /**
+* Specifies the handle type for address range
+*/
+typedef enum CUmemRangeHandleType_enum
+{
+    CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD = 0x1,
+    CU_MEM_RANGE_HANDLE_TYPE_MAX        = 0x7FFFFFFF
+} CUmemRangeHandleType;
+
+/**
  * Sparse subresource types
  */
 typedef enum CUarraySparseSubresourceType_enum {
@@ -3066,9 +3518,9 @@ typedef struct CUmemAllocationProp_st {
     CUmemLocation location;
     /**
      * Windows-specific POBJECT_ATTRIBUTES required when
-     * ::CU_MEM_HANDLE_TYPE_WIN32 is specified.  This object atributes structure
+     * ::CU_MEM_HANDLE_TYPE_WIN32 is specified.  This object attributes structure
      * includes security attributes that define
-     * the scope of which exported allocations may be tranferred to other
+     * the scope of which exported allocations may be transferred to other
      * processes.  In all other cases, this field is required to be zero.
      */
     void *win32HandleMetaData;
@@ -3093,6 +3545,40 @@ typedef struct CUmemAllocationProp_st {
 typedef CUmemAllocationProp_v1 CUmemAllocationProp;
 
 /**
+* Flags for querying different granularities for a multicast object
+*/
+typedef enum CUmulticastGranularity_flags_enum {
+    CU_MULTICAST_GRANULARITY_MINIMUM     = 0x0,     /**< Minimum required granularity */
+    CU_MULTICAST_GRANULARITY_RECOMMENDED = 0x1      /**< Recommended granularity for best performance */
+} CUmulticastGranularity_flags;
+
+/**
+* Specifies the properties for a multicast object.
+*/
+typedef struct CUmulticastObjectProp_st {
+    /**
+     * The number of devices in the multicast team that will bind memory to this
+     * object
+     */
+    unsigned int numDevices;
+    /** 
+     * The maximum amount of memory that can be bound to this multicast object
+     * per device
+     */
+    size_t size;
+    /**
+     * Bitmask of exportable handle types (see ::CUmemAllocationHandleType) for
+     * this object
+     */
+    unsigned long long handleTypes;
+    /** 
+     * Flags for future use, must be zero now
+     */
+    unsigned long long flags;
+} CUmulticastObjectProp_v1;
+typedef CUmulticastObjectProp_v1 CUmulticastObjectProp;
+
+/**
  * Memory access descriptor
  */
 typedef struct CUmemAccessDesc_st {
@@ -3101,6 +3587,9 @@ typedef struct CUmemAccessDesc_st {
 } CUmemAccessDesc_v1;
 typedef CUmemAccessDesc_v1 CUmemAccessDesc;
 
+/**
+ * CUDA Graph Update error types
+ */
 typedef enum CUgraphExecUpdateResult_enum {
     CU_GRAPH_EXEC_UPDATE_SUCCESS                     = 0x0, /**< The update succeeded */
     CU_GRAPH_EXEC_UPDATE_ERROR                       = 0x1, /**< The update failed for an unexpected reason which is described in the return value of the function */
@@ -3112,6 +3601,29 @@ typedef enum CUgraphExecUpdateResult_enum {
     CU_GRAPH_EXEC_UPDATE_ERROR_UNSUPPORTED_FUNCTION_CHANGE = 0x7, /**< The update failed because the function of a kernel node changed in an unsupported way */
     CU_GRAPH_EXEC_UPDATE_ERROR_ATTRIBUTES_CHANGED    = 0x8  /**< The update failed because the node attributes changed in a way that is not supported */
 } CUgraphExecUpdateResult;
+
+/**
+ * Result information returned by cuGraphExecUpdate
+ */
+typedef struct CUgraphExecUpdateResultInfo_st {
+    /**
+     * Gives more specific detail when a cuda graph update fails.
+     */
+    CUgraphExecUpdateResult result;
+
+    /**
+     * The "to node" of the error edge when the topologies do not match.
+     * The error node when the error is associated with a specific node.
+     * NULL when the error is generic.
+     */
+    CUgraphNode errorNode;
+
+    /**
+     * The from node of error edge when the topologies do not match. Otherwise NULL.
+     */
+    CUgraphNode errorFromNode;
+} CUgraphExecUpdateResultInfo_v1; 
+typedef CUgraphExecUpdateResultInfo_v1 CUgraphExecUpdateResultInfo;
 
 /**
  * CUDA memory pool attributes
@@ -3189,7 +3701,7 @@ typedef struct CUmemPoolProps_st {
     /**
      * Windows-specific LPSECURITYATTRIBUTES required when
      * ::CU_MEM_HANDLE_TYPE_WIN32 is specified.  This security attribute defines
-     * the scope of which exported allocations may be tranferred to other
+     * the scope of which exported allocations may be transferred to other
      * processes.  In all other cases, this field is required to be zero.
      */
     void *win32SecurityAttributes;
@@ -3313,13 +3825,11 @@ typedef enum CUgraphMem_attribute_enum {
  */
 #define CUDA_ARRAY3D_SPARSE 0x40
 
-
 /**
  * This flag if set indicates that the CUDA array or CUDA mipmapped array
  * will allow deferred memory mapping
  */
 #define CUDA_ARRAY3D_DEFERRED_MAPPING 0x80
-
 
 /**
  * Override the texref format with a format inferred from the array.
@@ -3359,10 +3869,20 @@ typedef enum CUgraphMem_attribute_enum {
 #define CU_TRSF_SEAMLESS_CUBEMAP  0x40
 
 /**
+ * C++ compile time constant for CU_LAUNCH_PARAM_END
+ */
+#define CU_LAUNCH_PARAM_END_AS_INT     0x00
+
+/**
  * End of array terminator for the \p extra parameter to
  * ::cuLaunchKernel
  */
-#define CU_LAUNCH_PARAM_END            ((void*)0x00)
+#define CU_LAUNCH_PARAM_END            ((void*)CU_LAUNCH_PARAM_END_AS_INT)
+
+/**
+ * C++ compile time constant for CU_LAUNCH_PARAM_BUFFER_POINTER
+ */
+#define CU_LAUNCH_PARAM_BUFFER_POINTER_AS_INT 0x01
 
 /**
  * Indicator that the next value in the \p extra parameter to
@@ -3373,7 +3893,12 @@ typedef enum CUgraphMem_attribute_enum {
  * \p extra array, then ::CU_LAUNCH_PARAM_BUFFER_POINTER will have no
  * effect.
  */
-#define CU_LAUNCH_PARAM_BUFFER_POINTER ((void*)0x01)
+#define CU_LAUNCH_PARAM_BUFFER_POINTER        ((void*)CU_LAUNCH_PARAM_BUFFER_POINTER_AS_INT)
+
+/**
+ * C++ compile time constant for CU_LAUNCH_PARAM_BUFFER_SIZE
+ */
+#define CU_LAUNCH_PARAM_BUFFER_SIZE_AS_INT 0x02
 
 /**
  * Indicator that the next value in the \p extra parameter to
@@ -3383,7 +3908,7 @@ typedef enum CUgraphMem_attribute_enum {
  * in the \p extra array if the value associated with
  * ::CU_LAUNCH_PARAM_BUFFER_SIZE is not zero.
  */
-#define CU_LAUNCH_PARAM_BUFFER_SIZE    ((void*)0x02)
+#define CU_LAUNCH_PARAM_BUFFER_SIZE        ((void*)CU_LAUNCH_PARAM_BUFFER_SIZE_AS_INT)
 
 /**
  * For texture references loaded into the module, use default texunit from
@@ -3437,19 +3962,21 @@ typedef enum CUflushGPUDirectRDMAWritesTarget_enum {
  * The additional write options for ::cuGraphDebugDotPrint
  */
 typedef enum CUgraphDebugDot_flags_enum {
-    CU_GRAPH_DEBUG_DOT_FLAGS_VERBOSE                        = 1<<0,  /** Output all debug data as if every debug flag is enabled */
-    CU_GRAPH_DEBUG_DOT_FLAGS_RUNTIME_TYPES                  = 1<<1,  /** Use CUDA Runtime structures for output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_KERNEL_NODE_PARAMS             = 1<<2,  /** Adds CUDA_KERNEL_NODE_PARAMS values to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_MEMCPY_NODE_PARAMS             = 1<<3,  /** Adds CUDA_MEMCPY3D values to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_MEMSET_NODE_PARAMS             = 1<<4,  /** Adds CUDA_MEMSET_NODE_PARAMS values to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_HOST_NODE_PARAMS               = 1<<5,  /** Adds CUDA_HOST_NODE_PARAMS values to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_EVENT_NODE_PARAMS              = 1<<6,  /** Adds CUevent handle from record and wait nodes to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_EXT_SEMAS_SIGNAL_NODE_PARAMS   = 1<<7,  /** Adds CUDA_EXT_SEM_SIGNAL_NODE_PARAMS values to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_EXT_SEMAS_WAIT_NODE_PARAMS     = 1<<8,  /** Adds CUDA_EXT_SEM_WAIT_NODE_PARAMS values to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_KERNEL_NODE_ATTRIBUTES         = 1<<9,  /** Adds CUkernelNodeAttrValue values to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_HANDLES                        = 1<<10, /** Adds node handles and every kernel function handle to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_MEM_ALLOC_NODE_PARAMS          = 1<<11, /** Adds memory alloc node parameters to output */
-    CU_GRAPH_DEBUG_DOT_FLAGS_MEM_FREE_NODE_PARAMS           = 1<<12  /** Adds memory free node parameters to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_VERBOSE                        = 1<<0,  /**< Output all debug data as if every debug flag is enabled */
+    CU_GRAPH_DEBUG_DOT_FLAGS_RUNTIME_TYPES                  = 1<<1,  /**< Use CUDA Runtime structures for output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_KERNEL_NODE_PARAMS             = 1<<2,  /**< Adds CUDA_KERNEL_NODE_PARAMS values to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_MEMCPY_NODE_PARAMS             = 1<<3,  /**< Adds CUDA_MEMCPY3D values to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_MEMSET_NODE_PARAMS             = 1<<4,  /**< Adds CUDA_MEMSET_NODE_PARAMS values to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_HOST_NODE_PARAMS               = 1<<5,  /**< Adds CUDA_HOST_NODE_PARAMS values to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_EVENT_NODE_PARAMS              = 1<<6,  /**< Adds CUevent handle from record and wait nodes to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_EXT_SEMAS_SIGNAL_NODE_PARAMS   = 1<<7,  /**< Adds CUDA_EXT_SEM_SIGNAL_NODE_PARAMS values to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_EXT_SEMAS_WAIT_NODE_PARAMS     = 1<<8,  /**< Adds CUDA_EXT_SEM_WAIT_NODE_PARAMS values to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_KERNEL_NODE_ATTRIBUTES         = 1<<9,  /**< Adds CUkernelNodeAttrValue values to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_HANDLES                        = 1<<10, /**< Adds node handles and every kernel function handle to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_MEM_ALLOC_NODE_PARAMS          = 1<<11, /**< Adds memory alloc node parameters to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_MEM_FREE_NODE_PARAMS           = 1<<12, /**< Adds memory free node parameters to output */
+    CU_GRAPH_DEBUG_DOT_FLAGS_BATCH_MEM_OP_NODE_PARAMS       = 1<<13  /**< Adds batch mem op node parameters to output */
+    , CU_GRAPH_DEBUG_DOT_FLAGS_EXTRA_TOPO_INFO                = 1<<14  /**< Adds edge numbering information */
 } CUgraphDebugDot_flags;
 
 /**
@@ -3470,54 +3997,17 @@ typedef enum CUuserObjectRetain_flags_enum {
  * Flags for instantiating a graph
  */
 typedef enum CUgraphInstantiate_flags_enum {
-    CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH  = 1  /**< Automatically free memory allocated in a graph before relaunching. */
+    CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH  = 1 /**< Automatically free memory allocated in a graph before relaunching. */
+  , CUDA_GRAPH_INSTANTIATE_FLAG_UPLOAD               = 2 /**< Automatically upload the graph after instantiaton. */
+  , CUDA_GRAPH_INSTANTIATE_FLAG_DEVICE_LAUNCH        = 4 /**< Instantiate the graph to be launchable from the device. */
+  , CUDA_GRAPH_INSTANTIATE_FLAG_USE_NODE_PRIORITY    = 8 /**< Run the graph using the per-node priority attributes rather than the
+                                                              priority of the stream it is launched into. */
 } CUgraphInstantiate_flags;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+typedef enum cuDeviceIsNumaNode_enum {
+    CU_DEVICE_NOT_NUMA_NODE = 0x01,
+    CU_DEVICE_IS_NUMA_NODE = 0x02,
+} cuDeviceIsNumaNode;
 
 /** @} */ /* END CUDA_TYPES */
 
@@ -3603,9 +4093,8 @@ CUresult CUDAAPI cuGetErrorName(CUresult error, const char **pStr);
 
 /**
  * \brief Initialize the CUDA driver API
- *
  * Initializes the driver API and must be called before any other function from
- * the driver API. Currently, the \p Flags parameter must be 0. If ::cuInit()
+ * the driver API in the current process. Currently, the \p Flags parameter must be 0. If ::cuInit()
  * has not been called, any function from the driver API will return
  * ::CUDA_ERROR_NOT_INITIALIZED.
  *
@@ -3732,7 +4221,7 @@ CUresult CUDAAPI cuDeviceGet(CUdevice *device, int ordinal);
 CUresult CUDAAPI cuDeviceGetCount(int *count);
 
 /**
- * \brief Returns an identifer string for the device
+ * \brief Returns an identifier string for the device
  *
  * Returns an ASCII string identifying the device \p dev in the NULL-terminated
  * string pointed to by \p name. \p len specifies the maximum length of the
@@ -3769,7 +4258,7 @@ CUresult CUDAAPI cuDeviceGetName(char *name, int len, CUdevice dev);
  * Note there is a later version of this API, ::cuDeviceGetUuid_v2. It will
  * supplant this version in 12.0, which is retained for minor version compatibility.
  *
- * Returns 16-octets identifing the device \p dev in the structure
+ * Returns 16-octets identifying the device \p dev in the structure
  * pointed by the \p uuid.
  *
  * \param uuid - Returned UUID
@@ -3799,7 +4288,7 @@ CUresult CUDAAPI cuDeviceGetUuid(CUuuid *uuid, CUdevice dev);
 /**
  * \brief Return an UUID for the device (11.4+)
  *
- * Returns 16-octets identifing the device \p dev in the structure
+ * Returns 16-octets identifying the device \p dev in the structure
  * pointed by the \p uuid. If the device is in MIG mode, returns its
  * MIG UUID which uniquely identifies the subscribed MIG compute instance.
  *
@@ -4080,7 +4569,7 @@ CUresult CUDAAPI cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, 
  *   supports native atomic operations.
  * - ::CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO: Ratio of single precision performance
  *   (in floating-point operations per second) to double precision performance.
- * - ::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS: Device suppports coherently accessing
+ * - ::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS: Device supports coherently accessing
  *   pageable memory without calling cudaHostRegister on it.
  * - ::CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS: Device can coherently access managed memory
  *   concurrently with the CPU.
@@ -4088,7 +4577,7 @@ CUresult CUDAAPI cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, 
  * - ::CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM: Device can access host registered
  *   memory at the same virtual address as the CPU.
  * -  ::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN: The maximum per block shared memory size
- *    suported on this device. This is the maximum value that can be opted into when using the cuFuncSetAttribute() call.
+ *    supported on this device. This is the maximum value that can be opted into when using the cuFuncSetAttribute() or cuKernelSetAttribute() call.
  *    For more details see ::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
  * - ::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES: Device accesses pageable memory via the host's
  *   page tables.
@@ -4110,9 +4599,7 @@ CUresult CUDAAPI cuDeviceGetTexture1DLinearMaxWidth(size_t *maxWidthInElements, 
  * - ::CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS: The returned attribute shall be interpreted as a bitmask, where the individual bits are described by the ::CUflushGPUDirectRDMAWritesOptions enum
  * - ::CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING: GPUDirect RDMA writes to the device do not need to be flushed for consumers within the scope indicated by the returned attribute. See ::CUGPUDirectRDMAWritesOrdering for the numerical values returned here.
  * - ::CU_DEVICE_ATTRIBUTE_MEMPOOL_SUPPORTED_HANDLE_TYPES: Bitmask of handle types supported with mempool based IPC
-
  * - ::CU_DEVICE_ATTRIBUTE_DEFERRED_MAPPING_CUDA_ARRAY_SUPPORTED: Device supports deferred mapping CUDA arrays and CUDA mipmapped arrays.
-
  *
  * \param pi     - Returned device attribute value
  * \param attrib - Device attribute to query
@@ -4164,6 +4651,20 @@ CUresult CUDAAPI cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevi
  * returns ::CUDA_ERROR_INVALID_VALUE. Both the flags are orthogonal
  * to one another: a developer may set both these flags that allows to
  * set both wait and signal specific attributes in the same \p nvSciSyncAttrList.
+ *
+ * Note that this API updates the input \p nvSciSyncAttrList with values equivalent
+ * to the following public attribute key-values:
+ * NvSciSyncAttrKey_RequiredPerm is set to
+ * - NvSciSyncAccessPerm_SignalOnly if ::CUDA_NVSCISYNC_ATTR_SIGNAL is set in \p flags.
+ * - NvSciSyncAccessPerm_WaitOnly if ::CUDA_NVSCISYNC_ATTR_WAIT is set in \p flags.
+ * - NvSciSyncAccessPerm_WaitSignal if both ::CUDA_NVSCISYNC_ATTR_WAIT and
+ * ::CUDA_NVSCISYNC_ATTR_SIGNAL are set in \p flags.
+ * NvSciSyncAttrKey_PrimitiveInfo is set to
+ * - NvSciSyncAttrValPrimitiveType_SysmemSemaphore on any valid \p device.
+ * - NvSciSyncAttrValPrimitiveType_Syncpoint if \p device is a Tegra device.
+ * - NvSciSyncAttrValPrimitiveType_SysmemSemaphorePayload64b if \p device is GA10X+.
+ * NvSciSyncAttrKey_GpuId is set to the same UUID that is returned for this 
+ * \p device from ::cuDeviceGetUuid.
  *
  * \param nvSciSyncAttrList     - Return NvSciSync attributes supported.
  * \param dev                   - Valid Cuda Device to get NvSciSync attributes for.
@@ -4239,6 +4740,37 @@ CUresult CUDAAPI cuDeviceGetMemPool(CUmemoryPool *pool, CUdevice dev);
  * \sa ::cuMemAllocAsync, ::cuMemPoolTrimTo, ::cuMemPoolGetAttribute, ::cuMemPoolSetAttribute, cuMemPoolSetAccess, ::cuDeviceGetMemPool, ::cuMemPoolCreate
  */
 CUresult CUDAAPI cuDeviceGetDefaultMemPool(CUmemoryPool *pool_out, CUdevice dev);
+
+/**
+ * \brief Returns information about the execution affinity support of the device.
+ *
+ * Returns in \p *pi whether execution affinity type \p type is supported by device \p dev.
+ * The supported types are:
+ * - ::CU_EXEC_AFFINITY_TYPE_SM_COUNT: 1 if context with limited SMs is supported by the device,
+ *   or 0 if not;
+ *
+ * \param pi   - 1 if the execution affinity type \p type is supported by the device, or 0 if not
+ * \param type - Execution affinity type to query
+ * \param dev  - Device handle
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE
+ * \notefnerr
+ *
+ * \sa
+ * ::cuDeviceGetAttribute,
+ * ::cuDeviceGetCount,
+ * ::cuDeviceGetName,
+ * ::cuDeviceGetUuid,
+ * ::cuDeviceGet,
+ * ::cuDeviceTotalMem
+ */
+CUresult CUDAAPI cuDeviceGetExecAffinitySupport(int *pi, CUexecAffinityType type, CUdevice dev);
 
 /**
  * \brief Blocks until remote writes are visible to the specified scope
@@ -4354,7 +4886,7 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuDeviceGetProperties(CUdevprop *prop, CUdevi
  *
  * \deprecated
  *
- * This function was deprecated as of CUDA 5.0 and its functionality superceded
+ * This function was deprecated as of CUDA 5.0 and its functionality superseded
  * by ::cuDeviceGetAttribute().
  *
  * Returns in \p *major and \p *minor the major and minor revision numbers that
@@ -4537,6 +5069,31 @@ CUresult CUDAAPI cuDevicePrimaryCtxRelease(CUdevice dev);
  * <b>Deprecated:</b> This flag is deprecated and the behavior enabled
  * by this flag is now the default and cannot be disabled.
  *
+ * - ::CU_CTX_COREDUMP_ENABLE: If GPU coredumps have not been enabled globally
+ * with ::cuCoredumpSetAttributeGlobal or environment variables, this flag can
+ * be set during context creation to instruct CUDA to create a coredump if
+ * this context raises an exception during execution. These environment variables
+ * are described in the CUDA-GDB user guide under the "GPU core dump support"
+ * section.
+ * The initial settings will be taken from the global settings at the time of
+ * context creation. The other settings that control coredump output can be 
+ * modified by calling ::cuCoredumpSetAttribute from the created context after
+ * it becomes current.
+ *
+ * - ::CU_CTX_USER_COREDUMP_ENABLE: If user-triggered GPU coredumps have not
+ * been enabled globally with ::cuCoredumpSetAttributeGlobal or environment 
+ * variables, this flag can be set during context creation to instruct CUDA to
+ * create a coredump if data is written to a certain pipe that is present in the
+ * OS space. These environment variables are described in the CUDA-GDB user
+ * guide under the "GPU core dump support" section.
+ * It is important to note that the pipe name *must* be set with
+ * ::cuCoredumpSetAttributeGlobal before creating the context if this flag is
+ * used. Setting this flag implies that ::CU_CTX_COREDUMP_ENABLE is set.
+ * The initial settings will be taken from the global settings at the time of
+ * context creation. The other settings that control coredump output can be 
+ * modified by calling ::cuCoredumpSetAttribute from the created context after 
+ * it becomes current.
+ *
  * \param dev   - Device for which the primary context flags are set
  * \param flags - New flags for the device
  *
@@ -4552,6 +5109,7 @@ CUresult CUDAAPI cuDevicePrimaryCtxRelease(CUdevice dev);
  * ::cuDevicePrimaryCtxGetState,
  * ::cuCtxCreate,
  * ::cuCtxGetFlags,
+ * ::cuCtxSetFlags,
  * ::cudaSetDeviceFlags
  */
 CUresult CUDAAPI cuDevicePrimaryCtxSetFlags(CUdevice dev, unsigned int flags);
@@ -4578,6 +5136,7 @@ CUresult CUDAAPI cuDevicePrimaryCtxSetFlags(CUdevice dev, unsigned int flags);
  * \sa
  * ::cuDevicePrimaryCtxSetFlags,
  * ::cuCtxGetFlags,
+ * ::cuCtxSetFlags,
  * ::cudaGetDeviceFlags
  */
 CUresult CUDAAPI cuDevicePrimaryCtxGetState(CUdevice dev, unsigned int *flags, int *active);
@@ -4625,37 +5184,6 @@ CUresult CUDAAPI cuDevicePrimaryCtxReset(CUdevice dev);
 /** @} */ /* END CUDA_PRIMARY_CTX */
 
 /**
- * \brief Returns information about the execution affinity support of the device.
- *
- * Returns in \p *pi whether execution affinity type \p type is supported by device \p dev.
- * The supported types are:
- * - ::CU_EXEC_AFFINITY_TYPE_SM_COUNT: 1 if context with limited SMs is supported by the device,
- *   or 0 if not;
- *
- * \param pi   - 1 if the execution affinity type \p type is supported by the device, or 0 if not
- * \param type - Execution affinity type to query
- * \param dev  - Device handle
- *
- * \return
- * ::CUDA_SUCCESS,
- * ::CUDA_ERROR_DEINITIALIZED,
- * ::CUDA_ERROR_NOT_INITIALIZED,
- * ::CUDA_ERROR_INVALID_CONTEXT,
- * ::CUDA_ERROR_INVALID_VALUE,
- * ::CUDA_ERROR_INVALID_DEVICE
- * \notefnerr
- *
- * \sa
- * ::cuDeviceGetAttribute,
- * ::cuDeviceGetCount,
- * ::cuDeviceGetName,
- * ::cuDeviceGetUuid,
- * ::cuDeviceGet,
- * ::cuDeviceTotalMem
- */
-CUresult CUDAAPI cuDeviceGetExecAffinitySupport(int *pi, CUexecAffinityType type, CUdevice dev);
-
-/**
  * \defgroup CUDA_CTX Context Management
  *
  * ___MANBRIEF___ context management functions of the low-level CUDA driver
@@ -4677,7 +5205,7 @@ CUresult CUDAAPI cuDeviceGetExecAffinitySupport(int *pi, CUexecAffinityType type
  *
  * Creates a new CUDA context and associates it with the calling thread. The
  * \p flags parameter is described below. The context is created with a usage
- * count of 1 and the caller of ::cuCtxCreate() must call ::cuCtxDestroy() or
+ * count of 1 and the caller of ::cuCtxCreate() must call ::cuCtxDestroy()
  * when done using the context. If a context is already current to the thread,
  * it is supplanted by the newly created context and may be restored by a subsequent
  * call to ::cuCtxPopCurrent().
@@ -4727,6 +5255,33 @@ CUresult CUDAAPI cuDeviceGetExecAffinitySupport(int *pi, CUexecAffinityType type
  * by this flag is now the default and cannot be disabled.
  * Instead, the per-thread stack size can be controlled with ::cuCtxSetLimit().
  *
+ * - ::CU_CTX_COREDUMP_ENABLE: If GPU coredumps have not been enabled globally
+ * with ::cuCoredumpSetAttributeGlobal or environment variables, this flag can
+ * be set during context creation to instruct CUDA to create a coredump if
+ * this context raises an exception during execution. These environment variables
+ * are described in the CUDA-GDB user guide under the "GPU core dump support"
+ * section.
+ * The initial attributes will be taken from the global attributes at the time of
+ * context creation. The other attributes that control coredump output can be 
+ * modified by calling ::cuCoredumpSetAttribute from the created context after
+ * it becomes current.
+ *
+ * - ::CU_CTX_USER_COREDUMP_ENABLE: If user-triggered GPU coredumps have not
+ * been enabled globally with ::cuCoredumpSetAttributeGlobal or environment 
+ * variables, this flag can be set during context creation to instruct CUDA to
+ * create a coredump if data is written to a certain pipe that is present in the
+ * OS space. These environment variables are described in the CUDA-GDB user
+ * guide under the "GPU core dump support" section.
+ * It is important to note that the pipe name *must* be set with
+ * ::cuCoredumpSetAttributeGlobal before creating the context if this flag is
+ * used. Setting this flag implies that ::CU_CTX_COREDUMP_ENABLE is set.
+ * The initial attributes will be taken from the global attributes at the time of
+ * context creation. The other attributes that control coredump output can be 
+ * modified by calling ::cuCoredumpSetAttribute from the created context after 
+ * it becomes current.
+ * Setting this flag on any context creation is equivalent to setting the 
+ * ::CU_COREDUMP_ENABLE_USER_TRIGGER attribute to \p true globally.
+ *
  * Context creation will fail with ::CUDA_ERROR_UNKNOWN if the compute mode of
  * the device is ::CU_COMPUTEMODE_PROHIBITED. The function ::cuDeviceGetAttribute()
  * can be used with ::CU_DEVICE_ATTRIBUTE_COMPUTE_MODE to determine the
@@ -4760,6 +5315,8 @@ CUresult CUDAAPI cuDeviceGetExecAffinitySupport(int *pi, CUexecAffinityType type
  * ::cuCtxPushCurrent,
  * ::cuCtxSetCacheConfig,
  * ::cuCtxSetLimit,
+ * ::cuCoredumpSetAttributeGlobal,
+ * ::cuCoredumpSetAttribute,
  * ::cuCtxSynchronize
  */
 CUresult CUDAAPI cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev);
@@ -4770,7 +5327,7 @@ CUresult CUDAAPI cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev);
  * Creates a new CUDA context with execution affinity and associates it with
  * the calling thread. The \p paramsArray and \p flags parameter are described below.
  * The context is created with a usage count of 1 and the caller of ::cuCtxCreate() must
- * call ::cuCtxDestroy() or when done using the context. If a context is already
+ * call ::cuCtxDestroy() when done using the context. If a context is already
  * current to the thread, it is supplanted by the newly created context and may
  * be restored by a subsequent call to ::cuCtxPopCurrent().
  *
@@ -4830,6 +5387,33 @@ CUresult CUDAAPI cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev);
  * by this flag is now the default and cannot be disabled.
  * Instead, the per-thread stack size can be controlled with ::cuCtxSetLimit().
  *
+ * - ::CU_CTX_COREDUMP_ENABLE: If GPU coredumps have not been enabled globally
+ * with ::cuCoredumpSetAttributeGlobal or environment variables, this flag can
+ * be set during context creation to instruct CUDA to create a coredump if
+ * this context raises an exception during execution. These environment variables
+ * are described in the CUDA-GDB user guide under the "GPU core dump support"
+ * section.
+ * The initial attributes will be taken from the global attributes at the time of
+ * context creation. The other attributes that control coredump output can be 
+ * modified by calling ::cuCoredumpSetAttribute from the created context after
+ * it becomes current.
+ *
+ * - ::CU_CTX_USER_COREDUMP_ENABLE: If user-triggered GPU coredumps have not
+ * been enabled globally with ::cuCoredumpSetAttributeGlobal or environment 
+ * variables, this flag can be set during context creation to instruct CUDA to
+ * create a coredump if data is written to a certain pipe that is present in the
+ * OS space. These environment variables are described in the CUDA-GDB user
+ * guide under the "GPU core dump support" section.
+ * It is important to note that the pipe name *must* be set with
+ * ::cuCoredumpSetAttributeGlobal before creating the context if this flag is
+ * used. Setting this flag implies that ::CU_CTX_COREDUMP_ENABLE is set.
+ * The initial attributes will be taken from the global attributes at the time of
+ * context creation. The other attributes that control coredump output can be 
+ * modified by calling ::cuCoredumpSetAttribute from the created context after 
+ * it becomes current.
+ * Setting this flag on any context creation is equivalent to setting the 
+ * ::CU_COREDUMP_ENABLE_USER_TRIGGER attribute to \p true globally.
+ *
  * Context creation will fail with ::CUDA_ERROR_UNKNOWN if the compute mode of
  * the device is ::CU_COMPUTEMODE_PROHIBITED. The function ::cuDeviceGetAttribute()
  * can be used with ::CU_DEVICE_ATTRIBUTE_COMPUTE_MODE to determine the
@@ -4867,6 +5451,8 @@ CUresult CUDAAPI cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev);
  * ::cuCtxSetCacheConfig,
  * ::cuCtxSetLimit,
  * ::cuCtxSynchronize,
+ * ::cuCoredumpSetAttributeGlobal,
+ * ::cuCoredumpSetAttribute,
  * ::CUexecAffinityParam
  */
 CUresult CUDAAPI cuCtxCreate_v3(CUcontext *pctx, CUexecAffinityParam *paramsArray, int numParams, unsigned int flags, CUdevice dev);
@@ -5091,9 +5677,68 @@ CUresult CUDAAPI cuCtxGetDevice(CUdevice *device);
  * ::cuCtxGetLimit,
  * ::cuCtxGetSharedMemConfig,
  * ::cuCtxGetStreamPriorityRange,
+ * ::cuCtxSetFlags,
  * ::cudaGetDeviceFlags
  */
 CUresult CUDAAPI cuCtxGetFlags(unsigned int *flags);
+
+/**
+ * \brief Sets the flags for the current context
+ *
+ * \param flags - Flags to set on the current context
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * \notefnerr
+ *
+ * \sa ::cuCtxCreate,
+ * ::cuCtxGetApiVersion,
+ * ::cuCtxGetCacheConfig,
+ * ::cuCtxGetCurrent,
+ * ::cuCtxGetDevice,
+ * ::cuCtxGetLimit,
+ * ::cuCtxGetSharedMemConfig,
+ * ::cuCtxGetStreamPriorityRange,
+ * ::cuCtxGetFlags,
+ * ::cudaGetDeviceFlags,
+ * ::cuDevicePrimaryCtxSetFlags,
+ */
+CUresult CUDAAPI cuCtxSetFlags(unsigned int flags);
+
+/**
+ * \brief Returns the unique Id associated with the context supplied
+ *
+ * Returns in \p ctxId the unique Id which is associated with a given context.
+ * The Id is unique for the life of the program for this instance of CUDA.
+ * If context is supplied as NULL and there is one current, the Id of the
+ * current context is returned.
+ *
+ * \param ctx - Context for which to obtain the Id
+ * \param ctxId - Pointer to store the Id of the context
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_CONTEXT_IS_DESTROYED,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE
+ * \notefnerr
+ *
+ * \sa ::cuCtxCreate,
+ * ::cuCtxDestroy,
+ * ::cuCtxGetApiVersion,
+ * ::cuCtxGetCacheConfig,
+ * ::cuCtxGetDevice,
+ * ::cuCtxGetFlags,
+ * ::cuCtxGetLimit,
+ * ::cuCtxPushCurrent
+ */
+CUresult CUDAAPI cuCtxGetId(CUcontext ctx, unsigned long long *ctxId);
 
 /**
  * \brief Block for a context's tasks to complete
@@ -5168,9 +5813,9 @@ CUresult CUDAAPI cuCtxSynchronize(void);
  *   memory which can no longer be used for user allocations. If these
  *   reservations of device memory fail, ::cuCtxSetLimit() will return
  *   ::CUDA_ERROR_OUT_OF_MEMORY, and the limit can be reset to a lower value.
- *   This limit is only applicable to devices of compute capability 3.5 and
- *   higher. Attempting to set this limit on devices of compute capability less
- *   than 3.5 will result in the error ::CUDA_ERROR_UNSUPPORTED_LIMIT being
+ *   This limit is only applicable to devices of compute capability < 9.0.
+ *   Attempting to set this limit on devices of other compute capability
+ *   versions will result in the error ::CUDA_ERROR_UNSUPPORTED_LIMIT being
  *   returned.
  *
  * - ::CU_LIMIT_DEV_RUNTIME_PENDING_LAUNCH_COUNT controls the maximum number of
@@ -5191,10 +5836,10 @@ CUresult CUDAAPI cuCtxSynchronize(void);
  *   returned.
  *
  * - ::CU_LIMIT_MAX_L2_FETCH_GRANULARITY controls the L2 cache fetch granularity.
- *   Values can range from 0B to 128B. This is purely a performence hint and
+ *   Values can range from 0B to 128B. This is purely a performance hint and
  *   it can be ignored or clamped depending on the platform.
  *
- * - ::CU_LIMIT_PERSISTING_L2_CACHE_SIZE controls size in bytes availabe for
+ * - ::CU_LIMIT_PERSISTING_L2_CACHE_SIZE controls size in bytes available for
  *   persisting L2 cache. This is purely a performance hint and it can be
  *   ignored or clamped depending on the platform.
  *
@@ -5318,7 +5963,7 @@ CUresult CUDAAPI cuCtxGetCacheConfig(CUfunc_cache *pconfig);
  * the current context. This is only a preference. The driver will use
  * the requested configuration if possible, but it is free to choose a different
  * configuration if required to execute the function. Any function preference
- * set via ::cuFuncSetCacheConfig() will be preferred over this context-wide
+ * set via ::cuFuncSetCacheConfig() or ::cuKernelSetCacheConfig() will be preferred over this context-wide
  * setting. Setting the context-wide cache configuration to
  * ::CU_FUNC_CACHE_PREFER_NONE will cause subsequent kernel launches to prefer
  * to not change the cache configuration unless required to launch the kernel.
@@ -5357,7 +6002,8 @@ CUresult CUDAAPI cuCtxGetCacheConfig(CUfunc_cache *pconfig);
  * ::cuCtxSetLimit,
  * ::cuCtxSynchronize,
  * ::cuFuncSetCacheConfig,
- * ::cudaDeviceSetCacheConfig
+ * ::cudaDeviceSetCacheConfig,
+ * ::cuKernelSetCacheConfig
  */
 CUresult CUDAAPI cuCtxSetCacheConfig(CUfunc_cache config);
 
@@ -5874,6 +6520,32 @@ CUresult CUDAAPI cuModuleLoadFatBinary(CUmodule *module, const void *fatCubin);
 CUresult CUDAAPI cuModuleUnload(CUmodule hmod);
 
 /**
+ * CUDA Lazy Loading status
+ */
+typedef enum CUmoduleLoadingMode_enum {
+    CU_MODULE_EAGER_LOADING = 0x1, /**< Lazy Kernel Loading is not enabled */
+    CU_MODULE_LAZY_LOADING  = 0x2, /**< Lazy Kernel Loading is enabled */
+} CUmoduleLoadingMode;
+
+/**
+ * \brief Query lazy loading mode
+ *
+ * Returns lazy loading mode
+ * Module loading mode is controlled by CUDA_MODULE_LOADING env variable
+ *
+ * \param mode      - Returns the lazy loading mode
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * \notefnerr
+ *
+ * \sa
+ * ::cuModuleLoad,
+ */
+CUresult CUDAAPI cuModuleGetLoadingMode(CUmoduleLoadingMode *mode);
+
+/**
  * \brief Returns a function handle
  *
  * Returns in \p *hfunc the handle of the function of name \p name located in
@@ -5908,9 +6580,9 @@ CUresult CUDAAPI cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const cha
  *
  * Returns in \p *dptr and \p *bytes the base pointer and size of the
  * global of name \p name located in module \p hmod. If no variable of that name
- * exists, ::cuModuleGetGlobal() returns ::CUDA_ERROR_NOT_FOUND. Both
- * parameters \p dptr and \p bytes are optional. If one of them is
- * NULL, it is ignored.
+ * exists, ::cuModuleGetGlobal() returns ::CUDA_ERROR_NOT_FOUND.
+ * One of the parameters \p dptr or \p bytes (not both) can be NULL in which
+ * case it is ignored.
  *
  * \param dptr  - Returned global device pointer
  * \param bytes - Returned global size in bytes
@@ -5939,72 +6611,6 @@ CUresult CUDAAPI cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const cha
 CUresult CUDAAPI cuModuleGetGlobal(CUdeviceptr *dptr, size_t *bytes, CUmodule hmod, const char *name);
 
 /**
- * \brief Returns a handle to a texture reference
- *
- * Returns in \p *pTexRef the handle of the texture reference of name \p name
- * in the module \p hmod. If no texture reference of that name exists,
- * ::cuModuleGetTexRef() returns ::CUDA_ERROR_NOT_FOUND. This texture reference
- * handle should not be destroyed, since it will be destroyed when the module
- * is unloaded.
- *
- * \param pTexRef  - Returned texture reference
- * \param hmod     - Module to retrieve texture reference from
- * \param name     - Name of texture reference to retrieve
- *
- * \return
- * ::CUDA_SUCCESS,
- * ::CUDA_ERROR_DEINITIALIZED,
- * ::CUDA_ERROR_NOT_INITIALIZED,
- * ::CUDA_ERROR_INVALID_CONTEXT,
- * ::CUDA_ERROR_INVALID_VALUE,
- * ::CUDA_ERROR_NOT_FOUND
- * \notefnerr
- *
- * \sa ::cuModuleGetFunction,
- * ::cuModuleGetGlobal,
- * ::cuModuleGetSurfRef,
- * ::cuModuleLoad,
- * ::cuModuleLoadData,
- * ::cuModuleLoadDataEx,
- * ::cuModuleLoadFatBinary,
- * ::cuModuleUnload,
- * ::cudaGetTextureReference
- */
-CUresult CUDAAPI cuModuleGetTexRef(CUtexref *pTexRef, CUmodule hmod, const char *name);
-
-/**
- * \brief Returns a handle to a surface reference
- *
- * Returns in \p *pSurfRef the handle of the surface reference of name \p name
- * in the module \p hmod. If no surface reference of that name exists,
- * ::cuModuleGetSurfRef() returns ::CUDA_ERROR_NOT_FOUND.
- *
- * \param pSurfRef  - Returned surface reference
- * \param hmod     - Module to retrieve surface reference from
- * \param name     - Name of surface reference to retrieve
- *
- * \return
- * ::CUDA_SUCCESS,
- * ::CUDA_ERROR_DEINITIALIZED,
- * ::CUDA_ERROR_NOT_INITIALIZED,
- * ::CUDA_ERROR_INVALID_CONTEXT,
- * ::CUDA_ERROR_INVALID_VALUE,
- * ::CUDA_ERROR_NOT_FOUND
- * \notefnerr
- *
- * \sa ::cuModuleGetFunction,
- * ::cuModuleGetGlobal,
- * ::cuModuleGetTexRef,
- * ::cuModuleLoad,
- * ::cuModuleLoadData,
- * ::cuModuleLoadDataEx,
- * ::cuModuleLoadFatBinary,
- * ::cuModuleUnload,
- * ::cudaGetSurfaceReference
- */
-CUresult CUDAAPI cuModuleGetSurfRef(CUsurfref *pSurfRef, CUmodule hmod, const char *name);
-
-/**
  * \brief Creates a pending JIT linker invocation.
  *
  * If the call is successful, the caller owns the returned CUlinkState, which
@@ -6020,6 +6626,8 @@ CUresult CUDAAPI cuModuleGetSurfRef(CUsurfref *pSurfRef, CUmodule hmod, const ch
  * \p optionValues must remain valid for the life of the CUlinkState if output
  * options are used.  No other references to inputs are maintained after this
  * call returns.
+ *
+ * \note For LTO-IR input, only LTO-IR compiled with toolkits prior to CUDA 12.0 will be accepted
  *
  * \param numOptions   Size of options arrays
  * \param options      Array of linker and compiler options
@@ -6055,6 +6663,8 @@ cuLinkCreate(unsigned int numOptions, CUjit_option *options, void **optionValues
  * be compiled from PTX, and does not accept any of
  * ::CU_JIT_WALL_TIME, ::CU_JIT_INFO_LOG_BUFFER, ::CU_JIT_ERROR_LOG_BUFFER,
  * ::CU_JIT_TARGET_FROM_CUCONTEXT, or ::CU_JIT_TARGET.
+ *
+ * \note For LTO-IR input, only LTO-IR compiled with toolkits prior to CUDA 12.0 will be accepted
  *
  * \param state        A pending linker action.
  * \param type         The type of the input data.
@@ -6096,6 +6706,8 @@ cuLinkAddData(CUlinkState state, CUjitInputType type, void *data, size_t size, c
  *
  * This method is equivalent to invoking ::cuLinkAddData on the contents
  * of the file.
+ *
+ * \note For LTO-IR input, only LTO-IR compiled with toolkits prior to CUDA 12.0 will be accepted
  *
  * \param state        A pending linker action
  * \param type         The type of the input data
@@ -6166,6 +6778,619 @@ cuLinkDestroy(CUlinkState state);
 
 /** @} */ /* END CUDA_MODULE */
 
+/**
+ * \defgroup CUDA_MODULE_DEPRECATED Module Management [DEPRECATED]
+ *
+ * ___MANBRIEF___ deprecated module management functions of the low-level CUDA
+ * driver API (___CURRENT_FILE___) ___ENDMANBRIEF___
+ *
+ * This section describes the deprecated module management functions of the low-level
+ * CUDA driver application programming interface.
+ *
+ * @{
+ */
+
+/**
+ * \brief Returns a handle to a texture reference
+ *
+ * \deprecated
+ *
+ * Returns in \p *pTexRef the handle of the texture reference of name \p name
+ * in the module \p hmod. If no texture reference of that name exists,
+ * ::cuModuleGetTexRef() returns ::CUDA_ERROR_NOT_FOUND. This texture reference
+ * handle should not be destroyed, since it will be destroyed when the module
+ * is unloaded.
+ *
+ * \param pTexRef  - Returned texture reference
+ * \param hmod     - Module to retrieve texture reference from
+ * \param name     - Name of texture reference to retrieve
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_NOT_FOUND
+ * \notefnerr
+ *
+ * \sa
+ * ::cuModuleGetFunction,
+ * ::cuModuleGetGlobal,
+ * ::cuModuleGetSurfRef,
+ * ::cuModuleLoad,
+ * ::cuModuleLoadData,
+ * ::cuModuleLoadDataEx,
+ * ::cuModuleLoadFatBinary,
+ * ::cuModuleUnload
+ */
+__CUDA_DEPRECATED CUresult CUDAAPI cuModuleGetTexRef(CUtexref *pTexRef, CUmodule hmod, const char *name);
+
+/**
+ * \brief Returns a handle to a surface reference
+ *
+ * \deprecated
+ *
+ * Returns in \p *pSurfRef the handle of the surface reference of name \p name
+ * in the module \p hmod. If no surface reference of that name exists,
+ * ::cuModuleGetSurfRef() returns ::CUDA_ERROR_NOT_FOUND.
+ *
+ * \param pSurfRef  - Returned surface reference
+ * \param hmod     - Module to retrieve surface reference from
+ * \param name     - Name of surface reference to retrieve
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_NOT_FOUND
+ * \notefnerr
+ *
+ * \sa
+ * ::cuModuleGetFunction,
+ * ::cuModuleGetGlobal,
+ * ::cuModuleGetTexRef,
+ * ::cuModuleLoad,
+ * ::cuModuleLoadData,
+ * ::cuModuleLoadDataEx,
+ * ::cuModuleLoadFatBinary,
+ * ::cuModuleUnload
+ */
+__CUDA_DEPRECATED CUresult CUDAAPI cuModuleGetSurfRef(CUsurfref *pSurfRef, CUmodule hmod, const char *name);
+
+/** @} */ /* END CUDA_MODULE_DEPRECATED */
+
+/**
+ * \defgroup CUDA_LIBRARY Library Management
+ *
+ * ___MANBRIEF___ library management functions of the low-level CUDA driver API
+ * (___CURRENT_FILE___) ___ENDMANBRIEF___
+ *
+ * This section describes the library management functions of the low-level CUDA
+ * driver application programming interface.
+ *
+ * @{
+ */
+
+/**
+ * \brief Load a library with specified code and options
+ *
+ * Takes a pointer \p code and loads the corresponding library \p library into
+ * all contexts existent at the time of the call and future contexts at the time
+ * of creation until the library is unloaded with ::cuLibraryUnload().
+ *
+ * The pointer may be obtained by mapping a \e cubin or \e PTX or \e fatbin file,
+ * passing a \e cubin or \e PTX or \e fatbin file as a NULL-terminated text string, or
+ * incorporating a \e cubin or \e fatbin object into the executable resources and
+ * using operating system calls such as Windows \c FindResource() to obtain the pointer.
+ *
+ * Options are passed as an array via \p jitOptions and any corresponding parameters are passed in
+ * \p jitOptionsValues. The number of total JIT options is supplied via \p numJitOptions.
+ * Any outputs will be returned via \p jitOptionsValues.
+ *
+ * Library load options are passed as an array via \p libraryOptions and any corresponding parameters are passed in
+ * \p libraryOptionValues. The number of total library load options is supplied via \p numLibraryOptions.
+ *
+ * \param library             - Returned library
+ * \param code                - Code to load
+ * \param jitOptions          - Options for JIT
+ * \param jitOptionsValues    - Option values for JIT
+ * \param numJitOptions       - Number of options
+ * \param libraryOptions      - Options for loading
+ * \param libraryOptionValues - Option values for loading
+ * \param numLibraryOptions   - Number of options for loading
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_PTX,
+ * ::CUDA_ERROR_UNSUPPORTED_PTX_VERSION,
+ * ::CUDA_ERROR_OUT_OF_MEMORY,
+ * ::CUDA_ERROR_NO_BINARY_FOR_GPU,
+ * ::CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND,
+ * ::CUDA_ERROR_SHARED_OBJECT_INIT_FAILED,
+ * ::CUDA_ERROR_JIT_COMPILER_NOT_FOUND
+ *
+ * \sa ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ * ::cuModuleLoad,
+ * ::cuModuleLoadData,
+ * ::cuModuleLoadDataEx
+ */
+CUresult CUDAAPI cuLibraryLoadData(CUlibrary *library, const void *code,
+                                   CUjit_option *jitOptions, void **jitOptionsValues, unsigned int numJitOptions,
+                                   CUlibraryOption *libraryOptions, void** libraryOptionValues, unsigned int numLibraryOptions);
+
+/**
+ * \brief Load a library with specified file and options
+ *
+ * Takes a filename \p fileName and loads the corresponding library \p library into
+ * all contexts existent at the time of the call and future contexts at the time of
+ * creation until the library is unloaded with ::cuLibraryUnload().
+ *
+ * The file should be a \e cubin file as output by \b nvcc, or a \e PTX file either
+ * as output by \b nvcc or handwritten, or a \e fatbin file as output by \b nvcc
+ * from toolchain 4.0 or later.
+ *
+ * Options are passed as an array via \p jitOptions and any corresponding parameters are
+ * passed in \p jitOptionsValues. The number of total options is supplied via \p numJitOptions.
+ * Any outputs will be returned via \p jitOptionsValues.
+ *
+ * Library load options are passed as an array via \p libraryOptions and any corresponding parameters are passed in
+ * \p libraryOptionValues. The number of total library load options is supplied via \p numLibraryOptions.
+ *
+ * \param library             - Returned library
+ * \param fileName            - File to load from
+ * \param jitOptions          - Options for JIT
+ * \param jitOptionsValues    - Option values for JIT
+ * \param numJitOptions       - Number of options
+ * \param libraryOptions      - Options for loading
+ * \param libraryOptionValues - Option values for loading
+ * \param numLibraryOptions   - Number of options for loading
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_PTX,
+ * ::CUDA_ERROR_UNSUPPORTED_PTX_VERSION,
+ * ::CUDA_ERROR_OUT_OF_MEMORY,
+ * ::CUDA_ERROR_NO_BINARY_FOR_GPU,
+ * ::CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND,
+ * ::CUDA_ERROR_SHARED_OBJECT_INIT_FAILED,
+ * ::CUDA_ERROR_JIT_COMPILER_NOT_FOUND
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryUnload,
+ * ::cuModuleLoad,
+ * ::cuModuleLoadData,
+ * ::cuModuleLoadDataEx
+ */
+CUresult CUDAAPI cuLibraryLoadFromFile(CUlibrary *library, const char *fileName,
+                                       CUjit_option *jitOptions, void **jitOptionsValues, unsigned int numJitOptions,
+                                       CUlibraryOption *libraryOptions, void **libraryOptionValues, unsigned int numLibraryOptions);
+
+/**
+ * \brief Unloads a library
+ *
+ * Unloads the library specified with \p library
+ *
+ * \param library - Library to unload
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuModuleUnload
+ */
+CUresult CUDAAPI cuLibraryUnload(CUlibrary library);
+
+/**
+ * \brief Returns a kernel handle
+ *
+ * Returns in \p pKernel the handle of the kernel with name \p name located in library \p library.
+ * If kernel handle is not found, the call returns ::CUDA_ERROR_NOT_FOUND.
+ *
+ * \param pKernel - Returned kernel handle
+ * \param library - Library to retrieve kernel from
+ * \param name - Name of kernel to retrieve
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_NOT_FOUND,
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ * ::cuKernelGetFunction,
+ * ::cuLibraryGetModule,
+ * ::cuModuleGetFunction
+ */
+CUresult CUDAAPI cuLibraryGetKernel(CUkernel *pKernel, CUlibrary library, const char *name);
+
+/**
+ * \brief Returns a module handle
+ *
+ * Returns in \p pMod the module handle associated with the current context located in
+ * library \p library. If module handle is not found, the call returns ::CUDA_ERROR_NOT_FOUND.
+ *
+ * \param pMod - Returned module handle
+ * \param library - Library to retrieve module from
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_NOT_FOUND,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_CONTEXT_IS_DESTROYED
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ * ::cuModuleGetFunction
+ */
+CUresult CUDAAPI cuLibraryGetModule(CUmodule *pMod, CUlibrary library);
+
+/**
+ * \brief Returns a function handle
+ *
+ * Returns in \p pFunc the handle of the function for the requested kernel \p kernel and
+ * the current context. If function handle is not found, the call returns ::CUDA_ERROR_NOT_FOUND.
+ *
+ * \param pFunc - Returned function handle
+ * \param kernel - Kernel to retrieve function for the requested context
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_NOT_FOUND,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_CONTEXT_IS_DESTROYED
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ * ::cuLibraryGetKernel,
+ * ::cuLibraryGetModule,
+ * ::cuModuleGetFunction
+ */
+CUresult CUDAAPI cuKernelGetFunction(CUfunction *pFunc, CUkernel kernel);
+
+/**
+ * \brief Returns a global device pointer
+ *
+ * Returns in \p *dptr and \p *bytes the base pointer and size of the global with
+ * name \p name for the requested library \p library and the current context.
+ * If no global for the requested name \p name exists, the call returns ::CUDA_ERROR_NOT_FOUND.
+ * One of the parameters \p dptr or \p bytes (not both) can be NULL in which
+ * case it is ignored.
+ *
+ * \param dptr - Returned global device pointer for the requested context
+ * \param bytes - Returned global size in bytes
+ * \param library - Library to retrieve global from
+ * \param name - Name of global to retrieve
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_NOT_FOUND,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_CONTEXT_IS_DESTROYED
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ * ::cuLibraryGetModule,
+ * cuModuleGetGlobal
+ */
+CUresult CUDAAPI cuLibraryGetGlobal(CUdeviceptr *dptr, size_t *bytes, CUlibrary library, const char *name);
+
+/**
+ * \brief Returns a pointer to managed memory
+ *
+ * Returns in \p *dptr and \p *bytes the base pointer and size of the managed memory with
+ * name \p name for the requested library \p library. If no managed memory with the
+ * requested name \p name exists, the call returns ::CUDA_ERROR_NOT_FOUND. One of the parameters
+ * \p dptr or \p bytes (not both) can be NULL in which case it is ignored.
+ * Note that managed memory for library \p library is shared across devices and is registered
+ * when the library is loaded into atleast one context.
+ *
+ * \note The API requires a CUDA context to be present and initialized on at least one device.
+ * If no context is present, the call returns ::CUDA_ERROR_NOT_FOUND.
+ *
+ * \param dptr - Returned pointer to the managed memory
+ * \param bytes - Returned memory size in bytes
+ * \param library - Library to retrieve managed memory from
+ * \param name - Name of managed memory to retrieve
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_NOT_FOUND,
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ */
+CUresult CUDAAPI cuLibraryGetManaged(CUdeviceptr *dptr, size_t *bytes, CUlibrary library, const char *name);
+
+/**
+ * \brief Returns a pointer to a unified function
+ *
+ * Returns in \p *fptr the function pointer to a unified function denoted by \p symbol.
+ * If no unified function with name \p symbol exists, the call returns ::CUDA_ERROR_NOT_FOUND.
+ * If there is no device with attribute ::CU_DEVICE_ATTRIBUTE_UNIFIED_FUNCTION_POINTERS present in the system,
+ * the call may return ::CUDA_ERROR_NOT_FOUND.
+ *
+ * \param fptr - Returned pointer to a unified function
+ * \param library - Library to retrieve function pointer memory from
+ * \param symbol - Name of function pointer to retrieve
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_NOT_FOUND,
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ */
+CUresult CUDAAPI cuLibraryGetUnifiedFunction(void **fptr, CUlibrary library, const char *symbol);
+
+/**
+ * \brief Returns information about a kernel
+ *
+ * Returns in \p *pi the integer value of the attribute \p attrib for the kernel
+ * \p kernel for the requested device \p dev. The supported attributes are:
+ * - ::CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK: The maximum number of threads
+ *   per block, beyond which a launch of the kernel would fail. This number
+ *   depends on both the kernel and the requested device.
+ * - ::CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES: The size in bytes of
+ *   statically-allocated shared memory per block required by this kernel.
+ *   This does not include dynamically-allocated shared memory requested by
+ *   the user at runtime.
+ * - ::CU_FUNC_ATTRIBUTE_CONST_SIZE_BYTES: The size in bytes of user-allocated
+ *   constant memory required by this kernel.
+ * - ::CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES: The size in bytes of local memory
+ *   used by each thread of this kernel.
+ * - ::CU_FUNC_ATTRIBUTE_NUM_REGS: The number of registers used by each thread
+ *   of this kernel.
+ * - ::CU_FUNC_ATTRIBUTE_PTX_VERSION: The PTX virtual architecture version for
+ *   which the kernel was compiled. This value is the major PTX version * 10
+ *   + the minor PTX version, so a PTX version 1.3 function would return the
+ *   value 13. Note that this may return the undefined value of 0 for cubins
+ *   compiled prior to CUDA 3.0.
+ * - ::CU_FUNC_ATTRIBUTE_BINARY_VERSION: The binary architecture version for
+ *   which the kernel was compiled. This value is the major binary
+ *   version * 10 + the minor binary version, so a binary version 1.3 function
+ *   would return the value 13. Note that this will return a value of 10 for
+ *   legacy cubins that do not have a properly-encoded binary architecture
+ *   version.
+ * - ::CU_FUNC_CACHE_MODE_CA: The attribute to indicate whether the kernel has
+ *   been compiled with user specified option "-Xptxas --dlcm=ca" set.
+ * - ::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES: The maximum size in bytes of
+ *   dynamically-allocated shared memory.
+ * - ::CU_FUNC_ATTRIBUTE_PREFERRED_SHARED_MEMORY_CARVEOUT: Preferred shared memory-L1
+ *   cache split ratio in percent of total shared memory.
+ * - ::CU_FUNC_ATTRIBUTE_CLUSTER_SIZE_MUST_BE_SET: If this attribute is set, the
+ *   kernel must launch with a valid cluster size specified.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_WIDTH: The required cluster width in
+ *   blocks.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_HEIGHT: The required cluster height in
+ *   blocks.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_DEPTH: The required cluster depth in
+ *   blocks.
+ * - ::CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED: Indicates whether
+ *   the function can be launched with non-portable cluster size. 1 is allowed,
+ *   0 is disallowed. A non-portable cluster size may only function on the
+ *   specific SKUs the program is tested on. The launch might fail if the
+ *   program is run on a different hardware platform. CUDA API provides
+ *   cudaOccupancyMaxActiveClusters to assist with checking whether the desired
+ *   size can be launched on the current device. A portable cluster size is
+ *   guaranteed to be functional on all compute capabilities higher than the
+ *   target compute capability. The portable cluster size for sm_90 is 8 blocks
+ *   per cluster. This value may increase for future compute capabilities. The
+ *   specific hardware unit may support higher cluster sizes that’s not
+ *   guaranteed to be portable.
+ * - ::CU_FUNC_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE: The block
+ *   scheduling policy of a function. The value type is CUclusterSchedulingPolicy.
+ *
+ * \note If another thread is trying to set the same attribute on the same device using
+ * ::cuKernelSetAttribute() simultaneously, the attribute query will give the old or new
+ * value depending on the interleavings chosen by the OS scheduler and memory consistency.
+ *
+ * \param pi     - Returned attribute value
+ * \param attrib - Attribute requested
+ * \param kernel  - Kernel to query attribute of
+ * \param dev - Device to query attribute of
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ * ::cuKernelSetAttribute,
+ * ::cuLibraryGetKernel,
+ * ::cuLaunchKernel,
+ * ::cuKernelGetFunction,
+ * ::cuLibraryGetModule,
+ * ::cuModuleGetFunction,
+ * ::cuFuncGetAttribute
+ */
+CUresult CUDAAPI cuKernelGetAttribute(int *pi, CUfunction_attribute attrib, CUkernel kernel, CUdevice dev);
+
+/**
+ * \brief Sets information about a kernel
+ *
+ * This call sets the value of a specified attribute \p attrib on the kernel \p kernel
+ * for the requested device \p dev to an integer value specified by \p val.
+ * This function returns CUDA_SUCCESS if the new value of the attribute could be
+ * successfully set. If the set fails, this call will return an error.
+ * Not all attributes can have values set. Attempting to set a value on a read-only
+ * attribute will result in an error (CUDA_ERROR_INVALID_VALUE)
+ *
+ * Note that attributes set using ::cuFuncSetAttribute() will override the attribute
+ * set by this API irrespective of whether the call to ::cuFuncSetAttribute() is made
+ * before or after this API call. However, ::cuKernelGetAttribute() will always
+ * return the attribute value set by this API.
+ *
+ * Supported attributes are:
+ * - ::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES: This is the maximum size in bytes of
+ *   dynamically-allocated shared memory. The value should contain the requested
+ *   maximum size of dynamically-allocated shared memory. The sum of this value and
+ *   the function attribute ::CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES cannot exceed the
+ *   device attribute ::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN.
+ *   The maximal size of requestable dynamic shared memory may differ by GPU
+ *   architecture.
+ * - ::CU_FUNC_ATTRIBUTE_PREFERRED_SHARED_MEMORY_CARVEOUT: On devices where the L1
+ *   cache and shared memory use the same hardware resources, this sets the shared memory
+ *   carveout preference, in percent of the total shared memory.
+ *   See ::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR
+ *   This is only a hint, and the driver can choose a different ratio if required to execute the function.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_WIDTH: The required cluster width in
+ *   blocks. The width, height, and depth values must either all be 0 or all be
+ *   positive. The validity of the cluster dimensions is checked at launch time.
+ *   If the value is set during compile time, it cannot be set at runtime.
+ *   Setting it at runtime will return CUDA_ERROR_NOT_PERMITTED.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_HEIGHT: The required cluster height in
+ *   blocks. The width, height, and depth values must either all be 0 or all be
+ *   positive. The validity of the cluster dimensions is checked at launch time.
+ *   If the value is set during compile time, it cannot be set at runtime.
+ *   Setting it at runtime will return CUDA_ERROR_NOT_PERMITTED.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_DEPTH: The required cluster depth in
+ *   blocks. The width, height, and depth values must either all be 0 or all be
+ *   positive. The validity of the cluster dimensions is checked at launch time.
+ *   If the value is set during compile time, it cannot be set at runtime.
+ *   Setting it at runtime will return CUDA_ERROR_NOT_PERMITTED.
+ * - ::CU_FUNC_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE: The block
+ *   scheduling policy of a function. The value type is CUclusterSchedulingPolicy.
+ *
+ * \note The API has stricter locking requirements in comparison to its legacy counterpart
+ * ::cuFuncSetAttribute() due to device-wide semantics. If multiple threads are trying to
+ * set the same attribute on the same device simultaneously, the attribute setting will depend
+ * on the interleavings chosen by the OS scheduler and memory consistency.
+ *
+ * \param attrib - Attribute requested
+ * \param val - Value to set
+ * \param kernel  - Kernel to set attribute of
+ * \param dev - Device to set attribute of
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE,
+ * ::CUDA_ERROR_OUT_OF_MEMORY
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ * ::cuKernelGetAttribute,
+ * ::cuLibraryGetKernel,
+ * ::cuLaunchKernel,
+ * ::cuKernelGetFunction,
+ * ::cuLibraryGetModule,
+ * ::cuModuleGetFunction,
+ * ::cuFuncSetAttribute
+ */
+CUresult CUDAAPI cuKernelSetAttribute(CUfunction_attribute attrib, int val, CUkernel kernel, CUdevice dev);
+
+/**
+ * \brief Sets the preferred cache configuration for a device kernel.
+ *
+ * On devices where the L1 cache and shared memory use the same hardware
+ * resources, this sets through \p config the preferred cache configuration for
+ * the device kernel \p kernel on the requested device \p dev. This is only a preference.
+ * The driver will use the requested configuration if possible, but it is free to choose a different
+ * configuration if required to execute \p kernel.  Any context-wide preference
+ * set via ::cuCtxSetCacheConfig() will be overridden by this per-kernel
+ * setting.
+ *
+ * Note that attributes set using ::cuFuncSetCacheConfig() will override the attribute
+ * set by this API irrespective of whether the call to ::cuFuncSetCacheConfig() is made
+ * before or after this API call.
+ *
+ * This setting does nothing on devices where the size of the L1 cache and
+ * shared memory are fixed.
+ *
+ * Launching a kernel with a different preference than the most recent
+ * preference setting may insert a device-side synchronization point.
+ *
+ *
+ * The supported cache configurations are:
+ * - ::CU_FUNC_CACHE_PREFER_NONE: no preference for shared memory or L1 (default)
+ * - ::CU_FUNC_CACHE_PREFER_SHARED: prefer larger shared memory and smaller L1 cache
+ * - ::CU_FUNC_CACHE_PREFER_L1: prefer larger L1 cache and smaller shared memory
+ * - ::CU_FUNC_CACHE_PREFER_EQUAL: prefer equal sized L1 cache and shared memory
+ *
+ * \note The API has stricter locking requirements in comparison to its legacy counterpart
+ * ::cuFuncSetCacheConfig() due to device-wide semantics. If multiple threads are trying to
+ * set a config on the same device simultaneously, the cache config setting will depend
+ * on the interleavings chosen by the OS scheduler and memory consistency.
+ *
+ * \param kernel  - Kernel to configure cache for
+ * \param config - Requested cache configuration
+ * \param dev - Device to set attribute of
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE,
+ * ::CUDA_ERROR_OUT_OF_MEMORY
+ *
+ * \sa ::cuLibraryLoadData,
+ * ::cuLibraryLoadFromFile,
+ * ::cuLibraryUnload,
+ * ::cuLibraryGetKernel,
+ * ::cuKernelGetFunction,
+ * ::cuLibraryGetModule,
+ * ::cuModuleGetFunction,
+ * ::cuFuncSetCacheConfig,
+ * ::cuCtxSetCacheConfig,
+ * ::cuLaunchKernel
+ */
+CUresult CUDAAPI cuKernelSetCacheConfig(CUkernel kernel, CUfunc_cache config, CUdevice dev);
+
+/** @} */ /* END CUDA_LIBRARY */
 
 /**
  * \defgroup CUDA_MEM Memory Management
@@ -6322,8 +7547,14 @@ CUresult CUDAAPI cuMemAllocPitch(CUdeviceptr *dptr, size_t *pPitch, size_t Width
  * \brief Frees device memory
  *
  * Frees the memory space pointed to by \p dptr, which must have been returned
- * by a previous call to ::cuMemAlloc() or ::cuMemAllocPitch().
+ * by a previous call to one of the following memory allocation APIs - ::cuMemAlloc(), 
+ * ::cuMemAllocPitch(), ::cuMemAllocManaged(), ::cuMemAllocAsync(), ::cuMemAllocFromPoolAsync()
  *
+ * Note - This API will not perform any implict synchronization when the pointer was allocated with
+ * ::cuMemAllocAsync or ::cuMemAllocFromPoolAsync. Callers must ensure that all accesses to the
+ * pointer have completed before invoking ::cuMemFree. For best performance and memory reuse, users
+ * should use ::cuMemFreeAsync to free memory allocated via the stream ordered memory allocator.
+ * 
  * \param dptr - Pointer to memory to free
  *
  * \return
@@ -6336,12 +7567,12 @@ CUresult CUDAAPI cuMemAllocPitch(CUdeviceptr *dptr, size_t *pPitch, size_t Width
  *
  * \sa ::cuArray3DCreate, ::cuArray3DGetDescriptor, ::cuArrayCreate,
  * ::cuArrayDestroy, ::cuArrayGetDescriptor, ::cuMemAlloc, ::cuMemAllocHost,
- * ::cuMemAllocPitch, ::cuMemcpy2D, ::cuMemcpy2DAsync, ::cuMemcpy2DUnaligned,
- * ::cuMemcpy3D, ::cuMemcpy3DAsync, ::cuMemcpyAtoA, ::cuMemcpyAtoD,
- * ::cuMemcpyAtoH, ::cuMemcpyAtoHAsync, ::cuMemcpyDtoA, ::cuMemcpyDtoD, ::cuMemcpyDtoDAsync,
- * ::cuMemcpyDtoH, ::cuMemcpyDtoHAsync, ::cuMemcpyHtoA, ::cuMemcpyHtoAAsync,
- * ::cuMemcpyHtoD, ::cuMemcpyHtoDAsync, ::cuMemFreeHost,
- * ::cuMemGetAddressRange, ::cuMemGetInfo, ::cuMemHostAlloc,
+ * ::cuMemAllocPitch, ::cuMemAllocManaged, ::cuMemAllocAsync, ::cuMemAllocFromPoolAsync, 
+ * ::cuMemcpy2D, ::cuMemcpy2DAsync, ::cuMemcpy2DUnaligned, ::cuMemcpy3D, ::cuMemcpy3DAsync,
+ * ::cuMemcpyAtoA, ::cuMemcpyAtoD, ::cuMemcpyAtoH, ::cuMemcpyAtoHAsync, ::cuMemcpyDtoA,
+ * ::cuMemcpyDtoD, ::cuMemcpyDtoDAsync, ::cuMemcpyDtoH, ::cuMemcpyDtoHAsync, ::cuMemcpyHtoA,
+ * ::cuMemcpyHtoAAsync, ::cuMemcpyHtoD, ::cuMemcpyHtoDAsync, ::cuMemFreeHost,
+ * ::cuMemGetAddressRange, ::cuMemGetInfo, ::cuMemHostAlloc, ::cuMemFreeAsync,
  * ::cuMemHostGetDevicePointer, ::cuMemsetD2D8, ::cuMemsetD2D16,
  * ::cuMemsetD2D32, ::cuMemsetD8, ::cuMemsetD16, ::cuMemsetD32,
  * ::cudaFree
@@ -6640,7 +7871,7 @@ CUresult CUDAAPI cuMemHostGetFlags(unsigned int *pFlags, void *p);
  * ::cuStreamAttachMemAsync will be required to enable access on such devices.
  *
  * If the association is later changed via ::cuStreamAttachMemAsync to
- * a single stream, the default association as specifed during ::cuMemAllocManaged
+ * a single stream, the default association as specified during ::cuMemAllocManaged
  * is restored when that stream is destroyed. For __managed__ variables, the
  * default association is always ::CU_MEM_ATTACH_GLOBAL. Note that destroying a
  * stream is an asynchronous operation, and as a result, the change to default
@@ -6807,6 +8038,8 @@ CUresult CUDAAPI cuDeviceGetPCIBusId(char *pciBusId, int len, CUdevice dev);
  * IPC functionality is restricted to devices with support for unified
  * addressing on Linux and Windows operating systems.
  * IPC functionality on Windows is restricted to GPUs in TCC mode
+ * Users can test their device for IPC functionality by calling
+ * ::cuapiDeviceGetAttribute with ::CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED
  *
  * \param pHandle - Pointer to a user allocated CUipcEventHandle
  *                    in which to return the opaque event handle
@@ -6848,6 +8081,8 @@ CUresult CUDAAPI cuIpcGetEventHandle(CUipcEventHandle *pHandle, CUevent event);
  * IPC functionality is restricted to devices with support for unified
  * addressing on Linux and Windows operating systems.
  * IPC functionality on Windows is restricted to GPUs in TCC mode
+ * Users can test their device for IPC functionality by calling
+ * ::cuapiDeviceGetAttribute with ::CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED
  *
  * \param phEvent - Returns the imported event
  * \param handle  - Interprocess handle to open
@@ -6891,6 +8126,8 @@ CUresult CUDAAPI cuIpcOpenEventHandle(CUevent *phEvent, CUipcEventHandle handle)
  * IPC functionality is restricted to devices with support for unified
  * addressing on Linux and Windows operating systems.
  * IPC functionality on Windows is restricted to GPUs in TCC mode
+ * Users can test their device for IPC functionality by calling
+ * ::cuapiDeviceGetAttribute with ::CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED
  *
  * \param pHandle - Pointer to user allocated ::CUipcMemHandle to return
  *                    the handle in.
@@ -6944,6 +8181,8 @@ CUresult CUDAAPI cuIpcGetMemHandle(CUipcMemHandle *pHandle, CUdeviceptr dptr);
  * IPC functionality is restricted to devices with support for unified
  * addressing on Linux and Windows operating systems.
  * IPC functionality on Windows is restricted to GPUs in TCC mode
+ * Users can test their device for IPC functionality by calling
+ * ::cuapiDeviceGetAttribute with ::CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED
  *
  * \param pdptr  - Returned device pointer
  * \param handle - ::CUipcMemHandle to open
@@ -6987,6 +8226,8 @@ CUresult CUDAAPI cuIpcOpenMemHandle(CUdeviceptr *pdptr, CUipcMemHandle handle, u
  * IPC functionality is restricted to devices with support for unified
  * addressing on Linux and Windows operating systems.
  * IPC functionality on Windows is restricted to GPUs in TCC mode
+ * Users can test their device for IPC functionality by calling
+ * ::cuapiDeviceGetAttribute with ::CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED
  *
  * \param dptr - Device pointer returned by ::cuIpcOpenMemHandle
  *
@@ -7021,7 +8262,9 @@ CUresult CUDAAPI cuIpcCloseMemHandle(CUdeviceptr dptr);
  * best used sparingly to register staging areas for data exchange between
  * host and device.
  *
- * This function has limited support on Mac OS X. OS 10.7 or higher is required.
+ * On systems where ::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES 
+ * is true, ::cuMemHostRegister will not page-lock the memory range specified 
+ * by \p ptr but only populate unpopulated pages.
  *
  * The \p Flags parameter enables different options to be specified that
  * affect the allocation, as follows.
@@ -9313,7 +10556,6 @@ CUresult CUDAAPI cuArrayGetSparseProperties(CUDA_ARRAY_SPARSE_PROPERTIES *sparse
  */
 CUresult CUDAAPI cuMipmappedArrayGetSparseProperties(CUDA_ARRAY_SPARSE_PROPERTIES *sparseProperties, CUmipmappedArray mipmap);
 
-
 /**
  * \brief Returns the memory requirements of a CUDA array
  *
@@ -9361,7 +10603,6 @@ CUresult CUDAAPI cuArrayGetMemoryRequirements(CUDA_ARRAY_MEMORY_REQUIREMENTS *me
  */
 CUresult CUDAAPI cuMipmappedArrayGetMemoryRequirements(CUDA_ARRAY_MEMORY_REQUIREMENTS *memoryRequirements, CUmipmappedArray mipmap, CUdevice device);
 
-
 /**
  * \brief Gets a CUDA array plane from a CUDA array
  *
@@ -9391,7 +10632,7 @@ CUresult CUDAAPI cuMipmappedArrayGetMemoryRequirements(CUDA_ARRAY_MEMORY_REQUIRE
  *
  * \sa
  * ::cuArrayCreate,
- * ::cudaGetArrayPlane
+ * ::cudaArrayGetPlane
  */
 CUresult CUDAAPI cuArrayGetPlane(CUarray *pPlaneArray, CUarray hArray, unsigned int planeIdx);
 
@@ -9841,6 +11082,39 @@ CUresult CUDAAPI cuMipmappedArrayGetLevel(CUarray *pLevelArray, CUmipmappedArray
  */
 CUresult CUDAAPI cuMipmappedArrayDestroy(CUmipmappedArray hMipmappedArray);
 
+/** 
+* \brief Retrieve handle for an address range 
+* 
+* Get a handle of the specified type to an address range. The address range
+* must have been obtained by a prior call to either ::cuMemAlloc or ::cuMemAddressReserve.
+* If the address range was obtained via ::cuMemAddressReserve, it must also be fully mapped via ::cuMemMap.
+* 
+* Users must ensure the \p dptr and \p size are aligned to the host page size.
+* 
+* When requesting CUmemRangeHandleType::CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
+* users are expected to query for dma_buf support for the platform
+* by using ::CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED device attribute before calling
+* this API. The \p handle will be interpreted as a pointer to an integer to store the dma_buf file descriptor.
+* Users must ensure the entire address range is backed and mapped when
+* the address range is allocated by ::cuMemAddressReserve. All the physical
+* allocations backing the address range must be resident on the same device and
+* have identical allocation properties. Users are also expected to retrieve a
+* new handle every time the underlying physical allocation(s) corresponding
+* to a previously queried VA range are changed.
+* 
+* \param[out] handle     - Pointer to the location where the returned handle will be stored. 
+* \param[in] dptr        - Pointer to a valid CUDA device allocation. Must be aligned to host page size.
+* \param[in] size        - Length of the address range. Must be aligned to host page size.
+* \param[in] handleType  - Type of handle requested (defines type and size of the \p handle output parameter)
+* \param[in] flags       - Reserved, must be zero 
+* 
+* \return
+* CUDA_SUCCESS 
+* CUDA_ERROR_INVALID_VALUE 
+* CUDA_ERROR_NOT_SUPPORTED 
+*/
+CUresult CUDAAPI cuMemGetHandleForAddressRange(void *handle, CUdeviceptr dptr, size_t size, CUmemRangeHandleType handleType, unsigned long long flags);
+
 /** @} */ /* END CUDA_MEM */
 
 /**
@@ -9907,13 +11181,13 @@ CUresult CUDAAPI cuMemAddressFree(CUdeviceptr ptr, size_t size);
 * \brief Create a CUDA memory handle representing a memory allocation of a given size described by the given properties
 *
 * This creates a memory allocation on the target device specified through the
-* \p prop strcuture. The created allocation will not have any device or host
+* \p prop structure. The created allocation will not have any device or host
 * mappings. The generic memory \p handle for the allocation can be
 * mapped to the address space of calling process via ::cuMemMap. This handle
 * cannot be transmitted directly to other processes (see
 * ::cuMemExportToShareableHandle).  On Windows, the caller must also pass
 * an LPSECURITYATTRIBUTE in \p prop to be associated with this handle which
-* limits or allows access to this handle for a recepient process (see
+* limits or allows access to this handle for a recipient process (see
 * ::CUmemAllocationProp::win32HandleMetaData for more).  The \p size of this
 * allocation must be a multiple of the the value given via
 * ::cuMemGetAllocationGranularity with the ::CU_MEM_ALLOC_GRANULARITY_MINIMUM
@@ -9951,7 +11225,7 @@ CUresult CUDAAPI cuMemCreate(CUmemGenericAllocationHandle *handle, size_t size, 
 * are unmapped and when all outstanding references to the handle (including it's
 * shareable counterparts) are also released. The generic memory handle can be
 * freed when there are still outstanding mappings made with this handle. Each
-* time a recepient process imports a shareable handle, it needs to pair it with
+* time a recipient process imports a shareable handle, it needs to pair it with
 * ::cuMemRelease for the handle to be freed.  If \p handle is not a valid handle
 * the behavior is undefined. 
 *
@@ -9978,6 +11252,12 @@ CUresult CUDAAPI cuMemRelease(CUmemGenericAllocationHandle handle);
 * \p offset + \p size must be less than the size of the memory allocation.
 * Both \p ptr, \p size, and \p offset must be a multiple of the value given via
 * ::cuMemGetAllocationGranularity with the ::CU_MEM_ALLOC_GRANULARITY_MINIMUM flag.
+* If \p handle represents a multicast object, \p ptr, \p size and \p offset must
+* be aligned to the value returned by ::cuMulticastGetGranularity with the flag
+* ::CU_MULTICAST_MINIMUM_GRANULARITY. For best performance however, it is
+* recommended that \p ptr, \p size and \p offset be aligned to the value
+* returned by ::cuMulticastGetGranularity with the flag
+* ::CU_MULTICAST_RECOMMENDED_GRANULARITY.
 * 
 * Please note calling ::cuMemMap does not make the address accessible,
 * the caller needs to update accessibility of a contiguous mapped VA
@@ -10065,17 +11345,13 @@ CUresult CUDAAPI cuMemMap(CUdeviceptr ptr, size_t size, size_t offset, CUmemGene
  * ::CUarrayMapInfo::resource::array must be set to a valid sparse CUDA array handle.
  * The CUDA array must be either a 2D, 2D layered or 3D CUDA array and must have been allocated using
  * ::cuArrayCreate or ::cuArray3DCreate with the flag ::CUDA_ARRAY3D_SPARSE
-
  * or ::CUDA_ARRAY3D_DEFERRED_MAPPING.
-
  * For CUDA arrays obtained using ::cuMipmappedArrayGetLevel, ::CUDA_ERROR_INVALID_VALUE will be returned.
  * If ::CUarrayMapInfo::resourceType is set to ::CUresourcetype::CU_RESOURCE_TYPE_MIPMAPPED_ARRAY 
  * then ::CUarrayMapInfo::resource::mipmap must be set to a valid sparse CUDA mipmapped array handle.
  * The CUDA mipmapped array must be either a 2D, 2D layered or 3D CUDA mipmapped array and must have been
  * allocated using ::cuMipmappedArrayCreate with the flag ::CUDA_ARRAY3D_SPARSE
-
  * or ::CUDA_ARRAY3D_DEFERRED_MAPPING.
-
  *
  * ::CUarrayMapInfo::subresourceType specifies the type of subresource within the resource. 
  * ::CUarraySparseSubresourceType_enum is defined as:
@@ -10114,11 +11390,9 @@ CUresult CUDAAPI cuMemMap(CUdeviceptr ptr, size_t size, size_t offset, CUmemGene
  * as returned by ::cuMipmappedArrayGetSparseProperties, ::CUarrayMapInfo::subresource::miptail::layer must specify a valid layer index.
  * Otherwise, must be zero.
  *
-
  * If ::CUarrayMapInfo::resource::array or ::CUarrayMapInfo::resource::mipmap was created with ::CUDA_ARRAY3D_DEFERRED_MAPPING
  * flag set the ::CUarrayMapInfo::subresourceType and the contents of ::CUarrayMapInfo::subresource will be ignored.
  *
-
  * ::CUarrayMapInfo::memOperationType specifies the type of operation. ::CUmemOperationType is defined as:
  \code
     typedef enum CUmemOperationType_enum {
@@ -10190,6 +11464,12 @@ CUresult CUDAAPI cuMemUnmap(CUdeviceptr ptr, size_t size);
 * in the array given by \p desc and \p count, set the access flags for the
 * target locations.  The range must be a fully mapped address range
 * containing all allocations created by ::cuMemMap / ::cuMemCreate.
+* When setting the access flags for a virtual address range mapping a multicast
+* object, \p ptr and \p size must be aligned to the value returned by
+* ::cuMulticastGetGranularity with the flag ::CU_MULTICAST_MINIMUM_GRANULARITY.
+* For best performance however, it is recommended that \p ptr and \p size be
+* aligned to the value returned by ::cuMulticastGetGranularity with the flag
+* ::CU_MULTICAST_RECOMMENDED_GRANULARITY.
 *
 * \param[in] ptr   - Starting address for the virtual address range
 * \param[in] size  - Length of the virtual address range
@@ -10779,6 +12059,264 @@ CUresult CUDAAPI cuMemPoolImportPointer(CUdeviceptr *ptr_out, CUmemoryPool pool,
 /** @} */ /* END CUDA_MALLOC_ASYNC */
 
 /**
+ * \defgroup CUDA_MULTICAST Multicast Object Management
+ *
+ * ___MANBRIEF___ Functions for creating multicast objects, adding devices to them and binding/unbinding memory
+ * (___CURRENT_FILE___) ___ENDMANBRIEF___
+ *
+ * This section describes the CUDA multicast object operations exposed by the
+ * low-level CUDA driver application programming interface.
+ *
+ * @{
+ *
+ * \section CUDA_MULTICAST_overview overview
+ *
+ * A multicast object created via ::cuMulticastCreate enables certain memory
+ * operations to be broadcasted to a team of devices. Devices can be added to a
+ * multicast object via ::cuMulticastAddDevice. Memory can be bound on each
+ * participating device via either ::cuMulticastBindMem or ::cuMulticastBindAddr.
+ * Multicast objects can be mapped into a device's virtual address space using
+ * the virtual memmory management APIs (see ::cuMemMap and ::cuMemSetAccess).
+ *
+ * \section CUDA_MULTICAST_support Supported Platforms
+ *
+ * Support for multicast on a specific device can be queried using the device
+ * attribute ::CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED
+ */
+
+/**
+ * \brief Create a generic allocation handle representing a multicast object described by the given properties.
+ *
+ * This creates a multicast object as described by \p prop. The number of
+ * participating devices is specified by ::CUmulticastObjectProp::numDevices.
+ * Devices can be added to the multicast object via ::cuMulticastAddDevice.
+ * All participating devices must be added to the multicast object before memory
+ * can be bound to it. Memory is bound to the multicast object via either
+ * ::cuMulticastBindMem or ::cuMulticastBindAddr, and can be unbound via
+ * ::cuMulticastUnbind. The total amount of memory that can be bound per device
+ * is specified by :CUmulticastObjectProp::size. This size must be a multiple of
+ * the value returned by ::cuMulticastGetGranularity with the flag
+ * ::CU_MULTICAST_GRANULARITY_MINIMUM. For best performance however, the size
+ * should be aligned to the value returned by ::cuMulticastGetGranularity with
+ * the flag ::CU_MULTICAST_GRANULARITY_RECOMMENDED.
+ *
+ * After all participating devices have been added, multicast objects can also
+ * be mapped to a device's virtual address space using the virtual memory
+ * management APIs (see ::cuMemMap and ::cuMemSetAccess). Multicast objects can
+ * also be shared with other processes by requesting a shareable handle via
+ * ::cuMemExportToShareableHandle. Note that the desired types of shareable
+ * handles must be specified in the bitmask ::CUmulticastObjectProp::handleTypes.
+ * Multicast objects can be released using the virtual memory management API
+ * ::cuMemRelease.
+ *
+ * \param[out] mcHandle     Value of handle returned.
+ * \param[in]  prop         Properties of the multicast object to create.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_OUT_OF_MEMORY,
+ * ::CUDA_ERROR_INVALID_DEVICE,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_PERMITTED,
+ * ::CUDA_ERROR_NOT_SUPPORTED
+ *
+ * \sa ::cuMulticastAddDevice, ::cuMulticastBindMem, ::cuMulticastBindAddr, ::cuMulticastUnbind
+ * \sa ::cuMemCreate, ::cuMemRelease, ::cuMemExportToShareableHandle, ::cuMemImportFromShareableHandle
+ */
+CUresult CUDAAPI cuMulticastCreate(CUmemGenericAllocationHandle *mcHandle, const CUmulticastObjectProp *prop);
+
+/**
+ * \brief Associate a device to a multicast object.
+ *
+ * Associates a device to a multicast object. The added device will be a part of
+ * the multicast team of size specified by CUmulticastObjectProp::numDevices
+ * during ::cuMulticastCreate.
+ * The association of the device to the multicast object is permanent during
+ * the life time of the multicast object.
+ * All devices must be added to the multicast team before any memory can be
+ * bound to any device in the team. Any calls to ::cuMulticastBindMem or
+ * ::cuMulticastBindAddr will block until all devices have been added.
+ * Similarly all devices must be added to the multicast team before a virtual
+ * address range can be mapped to the multicast object. A call to ::cuMemMap
+ * will block until all devices have been added.
+ *
+ * \param[in] mcHandle     Handle representing a multicast object.
+ * \param[in] dev          Device that will be associated to the multicast
+ *                         object.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_OUT_OF_MEMORY,
+ * ::CUDA_ERROR_INVALID_DEVICE,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_PERMITTED,
+ * ::CUDA_ERROR_NOT_SUPPORTED
+ *
+ * \sa ::cuMulticastCreate, ::cuMulticastBindMem, ::cuMulticastBindAddr
+ */
+CUresult CUDAAPI cuMulticastAddDevice(CUmemGenericAllocationHandle mcHandle, CUdevice dev);
+
+/**
+ * \brief Bind a memory allocation represented by a handle to a multicast object.
+ *
+ * Binds a memory allocation specified by \p memHandle and created via
+ * ::cuMemCreate to a multicast object represented by \p mcHandle and created
+ * via ::cuMulticastCreate. The intended \p size of the bind, the offset in the
+ * multicast range \p mcOffset as well as the offset in the memory \p memOffset
+ * must be a multiple of the value returned by ::cuMulticastGetGranularity with
+ * the flag ::CU_MULTICAST_GRANULARITY_MINIMUM. For best performance however,
+ * \p size, \p mcOffset and \p memOffset should be aligned to the granularity of
+ * the memory allocation(see ::cuMemGetAllocationGranularity) or to the value
+ * returned by ::cuMulticastGetGranularity with the flag
+ * ::CU_MULTICAST_GRANULARITY_RECOMMENDED.
+ *
+ * The \p size + \p memOffset must be smaller than the size of the allocated
+ * memory. Similarly the \p size + \p mcOffset must be smaller than the size
+ * of the multicast object.
+ * The memory allocation must have beeen created on one of the devices
+ * that was added to the multicast team via ::cuMulticastAddDevice.
+ * Externally shareable as well as imported multicast objects can be bound only
+ * to externally shareable memory.
+ * Note that this call will return CUDA_ERROR_OUT_OF_MEMORY if there are
+ * insufficient resources required to perform the bind. This call may also
+ * return CUDA_ERROR_SYSTEM_NOT_READY if the necessary system software is not
+ * initialized or running.
+ *
+ * \param[in]  mcHandle     Handle representing a multicast object.
+ * \param[in]  mcOffset     Offset into the multicast object for attachment.
+ * \param[in]  memHandle    Handle representing a memory allocation.
+ * \param[in]  memOffset    Offset into the memory for attachment.
+ * \param[in]  size         Size of the memory that will be bound to the
+ *                          multicast object.
+ * \param[in]  flags        Flags for future use, must be zero for now.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_PERMITTED,
+ * ::CUDA_ERROR_NOT_SUPPORTED,
+ * ::CUDA_ERROR_OUT_OF_MEMORY,
+ * ::CUDA_ERROR_SYSTEM_NOT_READY
+ *
+ * \sa ::cuMulticastCreate, ::cuMulticastAddDevice, ::cuMemCreate
+ */
+CUresult CUDAAPI cuMulticastBindMem(CUmemGenericAllocationHandle mcHandle, size_t mcOffset, CUmemGenericAllocationHandle memHandle, size_t memOffset, size_t size, unsigned long long flags);
+
+/**
+ * \brief Bind a memory allocation represented by a virtual address to a multicast object.
+ *
+ * Binds a memory allocation specified by its mapped address \p memptr to a
+ * multicast object represented by \p mcHandle.
+ * The memory must have been allocated via ::cuMemCreate or ::cudaMallocAsync.
+ * The intended \p size of the bind, the offset in the multicast range
+ * \p mcOffset and \p memptr must be a multiple of the value returned by
+ * ::cuMulticastGetGranularity with the flag ::CU_MULTICAST_GRANULARITY_MINIMUM.
+ * For best performance however, \p size, \p mcOffset and \p memptr should be
+ * aligned to the value returned by ::cuMulticastGetGranularity with the flag
+ * ::CU_MULTICAST_GRANULARITY_RECOMMENDED.
+ *
+ * The \p size must be smaller than the size of the allocated memory.
+ * Similarly the \p size + \p mcOffset must be smaller than the total size
+ * of the multicast object.
+ * The memory allocation must have beeen created on one of the devices
+ * that was added to the multicast team via ::cuMulticastAddDevice.
+ * Externally shareable as well as imported multicast objects can be bound only
+ * to externally shareable memory.
+ * Note that this call will return CUDA_ERROR_OUT_OF_MEMORY if there are
+ * insufficient resources required to perform the bind. This call may also
+ * return CUDA_ERROR_SYSTEM_NOT_READY if the necessary system software is not
+ * initialized or running.
+ *
+ * \param[in]  mcHandle     Handle representing a multicast object.
+ * \param[in]  mcOffset     Offset into multicast va range for attachment.
+ * \param[in]  memptr       Virtual address of the memory allocation.
+ * \param[in]  size         Size of memory that will be bound to the
+ *                          multicast object.
+ * \param[in]  flags        Flags for future use, must be zero now.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_PERMITTED,
+ * ::CUDA_ERROR_NOT_SUPPORTED,
+ * ::CUDA_ERROR_OUT_OF_MEMORY,
+ * ::CUDA_ERROR_SYSTEM_NOT_READY
+ *
+ * \sa ::cuMulticastCreate, ::cuMulticastAddDevice, ::cuMemCreate
+ */
+CUresult CUDAAPI cuMulticastBindAddr(CUmemGenericAllocationHandle mcHandle, size_t mcOffset, CUdeviceptr memptr, size_t size, unsigned long long flags);
+
+/**
+ * \brief Unbind any memory allocations bound to a multicast object at a given offset and upto a given size.
+ *
+ * Unbinds any memory allocations hosted on \p dev and bound to a multicast
+ * object at \p mcOffset and upto a given \p size.
+ * The intended \p size of the unbind and the offset in the multicast range
+ * ( \p mcOffset ) must be a multiple of the value returned by
+ * ::cuMulticastGetGranularity flag ::CU_MULTICAST_GRANULARITY_MINIMUM.
+ * The \p size + \p mcOffset must be smaller than the total size of the
+ * multicast object.
+ *
+ * \note 
+ * Warning:
+ * The \p mcOffset and the \p size must match the corresponding values specified
+ * during the bind call. Any other values may result in undefined behavior.
+ *
+ * \param[in]  mcHandle     Handle representing a multicast object.
+ * \param[in]  dev          Device that hosts the memory allocation.
+ * \param[in]  mcOffset     Offset into the multicast object.
+ * \param[in]  size         Desired size to unbind.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_DEVICE,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_PERMITTED,
+ * ::CUDA_ERROR_NOT_SUPPORTED
+ *
+ * \sa ::cuMulticastBindMem, ::cuMulticastBindAddr
+ */
+CUresult CUDAAPI cuMulticastUnbind(CUmemGenericAllocationHandle mcHandle, CUdevice dev, size_t mcOffset, size_t size);
+
+/**
+* \brief Calculates either the minimal or recommended granularity for multicast object
+*
+* Calculates either the minimal or recommended granularity for a given set of
+* multicast object properties and returns it in granularity.  This granularity
+* can be used as a multiple for size, bind offsets and address mappings of the
+* multicast object.
+*
+* \param[out] granularity Returned granularity.
+* \param[in]  prop        Properties of the multicast object.
+* \param[in]  option      Determines which granularity to return.
+*
+* \returns
+* ::CUDA_SUCCESS,
+* ::CUDA_ERROR_INVALID_VALUE,
+* ::CUDA_ERROR_NOT_INITIALIZED,
+* ::CUDA_ERROR_DEINITIALIZED,
+* ::CUDA_ERROR_NOT_PERMITTED,
+* ::CUDA_ERROR_NOT_SUPPORTED
+*
+* \sa ::cuMulticastCreate, ::cuMulticastBindMem, ::cuMulticastBindAddr, ::cuMulticastUnbind
+*/
+CUresult CUDAAPI cuMulticastGetGranularity(size_t *granularity, const CUmulticastObjectProp *prop, CUmulticastGranularity_flags option);
+
+/** @} */ /* END CUDA_MULTICAST */
+
+/**
  * \defgroup CUDA_UNIFIED Unified Addressing
  *
  * ___MANBRIEF___ unified addressing functions of the low-level CUDA driver
@@ -11277,7 +12815,7 @@ CUresult CUDAAPI cuMemAdvise(CUdeviceptr devPtr, size_t count, CUmem_advise advi
  * a GPU id or CU_DEVICE_CPU depending on whether the last location for prefetch was a GPU or the CPU
  * respectively. If any page in the memory range was never explicitly prefetched or if all pages were not
  * prefetched to the same location, CU_DEVICE_INVALID will be returned. Note that this simply returns the
- * last location that the applicaton requested to prefetch the memory range to. It gives no indication as to
+ * last location that the application requested to prefetch the memory range to. It gives no indication as to
  * whether the prefetch operation to that location has completed or even begun.
  *
  * \param data      - A pointers to a memory location where the result
@@ -11592,6 +13130,39 @@ CUresult CUDAAPI cuStreamGetPriority(CUstream hStream, int *priority);
 CUresult CUDAAPI cuStreamGetFlags(CUstream hStream, unsigned int *flags);
 
 /**
+ * \brief Returns the unique Id associated with the stream handle supplied
+ *
+ * Returns in \p streamId the unique Id which is associated with the given stream handle.
+ * The Id is unique for the life of the program.
+ * 
+ * The stream handle \p hStream can refer to any of the following:
+ * <ul>
+ *   <li>a stream created via any of the CUDA driver APIs such as ::cuStreamCreate
+ *   and ::cuStreamCreateWithPriority, or their runtime API equivalents such as
+ *   ::cudaStreamCreate, ::cudaStreamCreateWithFlags and ::cudaStreamCreateWithPriority.
+ *   Passing an invalid handle will result in undefined behavior.</li>
+ *   <li>any of the special streams such as the NULL stream, ::CU_STREAM_LEGACY and
+ *   ::CU_STREAM_PER_THREAD. The runtime API equivalents of these are also accepted,
+ *   which are NULL, ::cudaStreamLegacy and ::cudaStreamPerThread respectively.</li>
+ * </ul>
+ *
+ * \param hStream    - Handle to the stream to be queried
+ * \param streamId   - Pointer to store the Id of the stream
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_HANDLE
+ * \notefnerr
+ *
+ * \sa ::cuStreamDestroy,
+ * ::cuStreamCreate,
+ * ::cuStreamGetPriority,
+ * ::cudaStreamGetId
+ */
+CUresult CUDAAPI cuStreamGetId(CUstream hStream, unsigned long long *streamId);
+
+/**
  * \brief Query the context associated with a stream
  *
  * Returns the CUDA context that the stream is associated with.
@@ -11742,7 +13313,7 @@ CUresult CUDAAPI cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned in
  * ::cuStreamDestroy,
  * ::cuMemAllocManaged,
  * ::cuStreamAttachMemAsync,
- * ::cuStreamLaunchHostFunc,
+ * ::cuLaunchHostFunc,
  * ::cudaStreamAddCallback
  */
 CUresult CUDAAPI cuStreamAddCallback(CUstream hStream, CUstreamCallback callback, void *userData, unsigned int flags);
@@ -11909,35 +13480,7 @@ CUresult CUDAAPI cuStreamEndCapture(CUstream hStream, CUgraph *phGraph);
 CUresult CUDAAPI cuStreamIsCapturing(CUstream hStream, CUstreamCaptureStatus *captureStatus);
 
 /**
- * \brief Query capture status of a stream
- *
- * Note there is a later version of this API, ::cuStreamGetCaptureInfo_v2. It will
- * supplant this version in 12.0, which is retained for minor version compatibility.
- *
- * Query the capture status of a stream and and get an id for 
- * the capture sequence, which is unique over the lifetime of the process.
- *
- * If called on ::CU_STREAM_LEGACY (the "null stream") while a stream not created 
- * with ::CU_STREAM_NON_BLOCKING is capturing, returns ::CUDA_ERROR_STREAM_CAPTURE_IMPLICIT.
- *
- * A valid id is returned only if both of the following are true:
- * - the call returns CUDA_SUCCESS
- * - captureStatus is set to ::CU_STREAM_CAPTURE_STATUS_ACTIVE
- *
- * \return
- * ::CUDA_SUCCESS,
- * ::CUDA_ERROR_STREAM_CAPTURE_IMPLICIT
- * \notefnerr
- *
- * \sa
- * ::cuStreamGetCaptureInfo_v2,
- * ::cuStreamBeginCapture,
- * ::cuStreamIsCapturing
- */
-CUresult CUDAAPI cuStreamGetCaptureInfo(CUstream hStream, CUstreamCaptureStatus *captureStatus_out, cuuint64_t *id_out);
-
-/**
- * \brief Query a stream's capture state (11.3+)
+ * \brief Query a stream's capture state
  *
  * Query stream state related to stream capture.
  *
@@ -11947,11 +13490,6 @@ CUresult CUDAAPI cuStreamGetCaptureInfo(CUstream hStream, CUstreamCaptureStatus 
  * Valid data (other than capture status) is returned only if both of the following are true:
  * - the call returns CUDA_SUCCESS
  * - the returned capture status is ::CU_STREAM_CAPTURE_STATUS_ACTIVE
- *
- * This version of cuStreamGetCaptureInfo is introduced in CUDA 11.3 and will supplant the
- * previous version in 12.0. Developers requiring compatibility across minor versions to
- * CUDA 11.0 (driver version 445) should use ::cuStreamGetCaptureInfo or include a fallback
- * path.
  *
  * \param hStream - The stream to query
  * \param captureStatus_out - Location to return the capture status of the stream; required
@@ -11983,12 +13521,11 @@ CUresult CUDAAPI cuStreamGetCaptureInfo(CUstream hStream, CUstreamCaptureStatus 
  * \notefnerr
  *
  * \sa
- * ::cuStreamGetCaptureInfo,
  * ::cuStreamBeginCapture,
  * ::cuStreamIsCapturing,
  * ::cuStreamUpdateCaptureDependencies
  */
-CUresult CUDAAPI cuStreamGetCaptureInfo_v2(CUstream hStream, CUstreamCaptureStatus *captureStatus_out,
+CUresult CUDAAPI cuStreamGetCaptureInfo(CUstream hStream, CUstreamCaptureStatus *captureStatus_out,
         cuuint64_t *id_out, CUgraph *graph_out, const CUgraphNode **dependencies_out, size_t *numDependencies_out);
 
 /**
@@ -12019,7 +13556,6 @@ CUresult CUDAAPI cuStreamGetCaptureInfo_v2(CUstream hStream, CUstreamCaptureStat
  * \sa
  * ::cuStreamBeginCapture,
  * ::cuStreamGetCaptureInfo,
- * ::cuStreamGetCaptureInfo_v2
  */
 CUresult CUDAAPI cuStreamUpdateCaptureDependencies(CUstream hStream, CUgraphNode *dependencies, size_t numDependencies, unsigned int flags);
 
@@ -12536,7 +14072,8 @@ CUresult CUDAAPI cuEventDestroy(CUevent hEvent);
  * ::CUDA_ERROR_NOT_INITIALIZED,
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_HANDLE,
- * ::CUDA_ERROR_NOT_READY
+ * ::CUDA_ERROR_NOT_READY,
+ * ::CUDA_ERROR_UNKNOWN
  * \notefnerr
  *
  * \sa ::cuEventCreate,
@@ -12711,7 +14248,8 @@ CUresult CUDAAPI cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUeven
  * ::CUDA_SUCCESS,
  * ::CUDA_ERROR_NOT_INITIALIZED,
  * ::CUDA_ERROR_INVALID_VALUE,
- * ::CUDA_ERROR_INVALID_HANDLE
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_OPERATING_SYSTEM
  * \notefnerr
  *
  * \note If the Vulkan memory imported into CUDA is mapped on the CPU then the
@@ -13003,7 +14541,8 @@ CUresult CUDAAPI cuDestroyExternalMemory(CUexternalMemory extMem);
  * ::CUDA_SUCCESS,
  * ::CUDA_ERROR_NOT_INITIALIZED,
  * ::CUDA_ERROR_NOT_SUPPORTED,
- * ::CUDA_ERROR_INVALID_HANDLE
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_OPERATING_SYSTEM
  * \notefnerr
  *
  * \sa ::cuDestroyExternalSemaphore,
@@ -13054,6 +14593,21 @@ CUresult CUDAAPI cuImportExternalSemaphore(CUexternalSemaphore *extSem_out, cons
  * if the NvSciSyncAttrList used to create the NvSciSyncObj had not set the flags in
  * ::cuDeviceGetNvSciSyncAttributes to CUDA_NVSCISYNC_ATTR_SIGNAL, this API will return
  * CUDA_ERROR_NOT_SUPPORTED.
+ * NvSciSyncFence associated with semaphore object of the type 
+ * ::CU_EXTERNAL_SEMAPHORE_HANDLE_TYPE_NVSCISYNC can be deterministic. For this the 
+ * NvSciSyncAttrList used to create the semaphore object must have value of 
+ * NvSciSyncAttrKey_RequireDeterministicFences key set to true. Deterministic fences 
+ * allow users to enqueue a wait over the semaphore object even before corresponding
+ * signal is enqueued. For such a semaphore object, CUDA guarantees that each signal 
+ * operation will increment the fence value by '1'. Users are expected to track count 
+ * of signals enqueued on the semaphore object and insert waits accordingly. When such 
+ * a semaphore object is signaled from multiple streams, due to concurrent stream 
+ * execution, it is possible that the order in which the semaphore gets signaled is 
+ * indeterministic. This could lead to waiters of the semaphore getting unblocked 
+ * incorrectly. Users are expected to handle such situations, either by not using the 
+ * same semaphore object with deterministic fence support enabled in different streams 
+ * or by adding explicit dependency amongst such streams so that the semaphore is 
+ * signaled in order.
  *
  * If the semaphore object is any one of the following types:
  * ::CU_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D11_KEYED_MUTEX,
@@ -13179,7 +14733,7 @@ CUresult CUDAAPI cuDestroyExternalSemaphore(CUexternalSemaphore extSem);
 /** @} */ /* END CUDA_EXTRES_INTEROP */
 
 /**
- * \defgroup CUDA_MEMOP Stream memory operations
+ * \defgroup CUDA_MEMOP Stream Memory Operations
  *
  * ___MANBRIEF___ Stream memory operations of the low-level CUDA driver API
  * (___CURRENT_FILE___) ___ENDMANBRIEF___
@@ -13187,19 +14741,8 @@ CUresult CUDAAPI cuDestroyExternalSemaphore(CUexternalSemaphore extSem);
  * This section describes the stream memory operations of the low-level CUDA
  * driver application programming interface.
  *
- * The whole set of operations is disabled by default. Users are required
- * to explicitly enable them, e.g. on Linux by passing the kernel module
- * parameter shown below:
- *     modprobe nvidia NVreg_EnableStreamMemOPs=1
- * There is currently no way to enable these operations on other operating
- * systems.
- *
- * Users can programmatically query whether the device supports these
- * operations with ::cuDeviceGetAttribute() and
- * ::CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS.
- *
  * Support for the ::CU_STREAM_WAIT_VALUE_NOR flag can be queried with
- * ::CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR.
+ * ::CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR_V2.
  *
  * Support for the ::cuStreamWriteValue64() and ::cuStreamWaitValue64()
  * functions, as well as for the ::CU_STREAM_MEM_OP_WAIT_VALUE_64 and
@@ -13218,6 +14761,14 @@ CUresult CUDAAPI cuDestroyExternalSemaphore(CUexternalSemaphore extSem);
  * None of the operations accepts pointers to managed memory buffers
  * (::cuMemAllocManaged).
  *
+ * \note
+ * Warning:
+ * Improper use of these APIs may deadlock the application. Synchronization 
+ * ordering established through these APIs is not visible to CUDA. CUDA tasks 
+ * that are (even indirectly) ordered by these APIs should also have that order
+ * expressed with CUDA-visible dependencies such as events. This ensures that 
+ * the scheduler does not serialize them in an improper order.
+ *
  * @{
  */
 
@@ -13234,11 +14785,16 @@ CUresult CUDAAPI cuDestroyExternalSemaphore(CUexternalSemaphore extSem);
  * should be obtained with ::cuMemHostGetDevicePointer(). This function cannot
  * be used with managed memory (::cuMemAllocManaged).
  *
- * Support for this can be queried with ::cuDeviceGetAttribute() and
- * ::CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS.
- *
  * Support for CU_STREAM_WAIT_VALUE_NOR can be queried with ::cuDeviceGetAttribute() and
- * ::CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR.
+ * ::CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR_V2.
+ *
+ * \note
+ * Warning:
+ * Improper use of this API may deadlock the application. Synchronization 
+ * ordering established through this API is not visible to CUDA. CUDA tasks 
+ * that are (even indirectly) ordered by this API should also have that order
+ * expressed with CUDA-visible dependencies such as events. This ensures that 
+ * the scheduler does not serialize them in an improper order.
  *
  * \param stream The stream to synchronize on the memory location.
  * \param addr The memory location to wait on.
@@ -13275,6 +14831,14 @@ CUresult CUDAAPI cuStreamWaitValue32(CUstream stream, CUdeviceptr addr, cuuint32
  * Support for this can be queried with ::cuDeviceGetAttribute() and
  * ::CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS.
  *
+ * \note
+ * Warning:
+ * Improper use of this API may deadlock the application. Synchronization 
+ * ordering established through this API is not visible to CUDA. CUDA tasks 
+ * that are (even indirectly) ordered by this API should also have that order
+ * expressed with CUDA-visible dependencies such as events. This ensures that 
+ * the scheduler does not serialize them in an improper order.
+ *
  * \param stream The stream to synchronize on the memory location.
  * \param addr The memory location to wait on.
  * \param value The value to compare with the memory location.
@@ -13298,17 +14862,11 @@ CUresult CUDAAPI cuStreamWaitValue64(CUstream stream, CUdeviceptr addr, cuuint64
 /**
  * \brief Write a value to memory
  *
- * Write a value to memory. Unless the ::CU_STREAM_WRITE_VALUE_NO_MEMORY_BARRIER
- * flag is passed, the write is preceded by a system-wide memory fence,
- * equivalent to a __threadfence_system() but scoped to the stream
- * rather than a CUDA thread.
+ * Write a value to memory.
  *
  * If the memory was registered via ::cuMemHostRegister(), the device pointer
  * should be obtained with ::cuMemHostGetDevicePointer(). This function cannot
  * be used with managed memory (::cuMemAllocManaged).
- *
- * Support for this can be queried with ::cuDeviceGetAttribute() and
- * ::CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS.
  *
  * \param stream The stream to do the write in.
  * \param addr The device address to write to.
@@ -13333,10 +14891,7 @@ CUresult CUDAAPI cuStreamWriteValue32(CUstream stream, CUdeviceptr addr, cuuint3
 /**
  * \brief Write a value to memory
  *
- * Write a value to memory. Unless the ::CU_STREAM_WRITE_VALUE_NO_MEMORY_BARRIER
- * flag is passed, the write is preceded by a system-wide memory fence,
- * equivalent to a __threadfence_system() but scoped to the stream
- * rather than a CUDA thread.
+ * Write a value to memory.
  *
  * If the memory was registered via ::cuMemHostRegister(), the device pointer
  * should be obtained with ::cuMemHostGetDevicePointer().
@@ -13376,9 +14931,17 @@ CUresult CUDAAPI cuStreamWriteValue64(CUstream stream, CUdeviceptr addr, cuuint6
  * ::cuStreamWaitValue32(), ::cuStreamWaitValue64(), ::cuStreamWriteValue32(),
  * and ::cuStreamWriteValue64() for details of specific operations.
  *
- * Basic support for this can be queried with ::cuDeviceGetAttribute() and
- * ::CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS. See related APIs for details
- * on querying support for specific operations.
+ * See related APIs for details on querying support for specific operations.
+ *
+ * \note
+ * Warning:
+ * Improper use of this API may deadlock the application. Synchronization 
+ * ordering established through this API is not visible to CUDA. CUDA tasks 
+ * that are (even indirectly) ordered by this API should also have that order
+ * expressed with CUDA-visible dependencies such as events. This ensures that 
+ * the scheduler does not serialize them in an improper order. For more 
+ * information, see the Stream Memory Operations section in the programming 
+ * guide(https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html).
  *
  * \param stream The stream to enqueue the operations in.
  * \param count The number of operations in the array. Must be less than 256.
@@ -13449,6 +15012,28 @@ CUresult CUDAAPI cuStreamBatchMemOp(CUstream stream, unsigned int count, CUstrea
  *   dynamically-allocated shared memory.
  * - ::CU_FUNC_ATTRIBUTE_PREFERRED_SHARED_MEMORY_CARVEOUT: Preferred shared memory-L1
  *   cache split ratio in percent of total shared memory.
+ * - ::CU_FUNC_ATTRIBUTE_CLUSTER_SIZE_MUST_BE_SET: If this attribute is set, the
+ *   kernel must launch with a valid cluster size specified.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_WIDTH: The required cluster width in
+ *   blocks.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_HEIGHT: The required cluster height in
+ *   blocks.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_DEPTH: The required cluster depth in
+ *   blocks.
+ * - ::CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED: Indicates whether
+ *   the function can be launched with non-portable cluster size. 1 is allowed,
+ *   0 is disallowed. A non-portable cluster size may only function on the
+ *   specific SKUs the program is tested on. The launch might fail if the
+ *   program is run on a different hardware platform. CUDA API provides
+ *   cudaOccupancyMaxActiveClusters to assist with checking whether the desired
+ *   size can be launched on the current device. A portable cluster size is
+ *   guaranteed to be functional on all compute capabilities higher than the
+ *   target compute capability. The portable cluster size for sm_90 is 8 blocks
+ *   per cluster. This value may increase for future compute capabilities. The
+ *   specific hardware unit may support higher cluster sizes that’s not
+ *   guaranteed to be portable.
+ * - ::CU_FUNC_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE: The block
+ *   scheduling policy of a function. The value type is CUclusterSchedulingPolicy.
  *
  * \param pi     - Returned attribute value
  * \param attrib - Attribute requested
@@ -13468,7 +15053,8 @@ CUresult CUDAAPI cuStreamBatchMemOp(CUstream stream, unsigned int count, CUstrea
  * ::cuFuncSetCacheConfig,
  * ::cuLaunchKernel,
  * ::cudaFuncGetAttributes,
- * ::cudaFuncSetAttribute
+ * ::cudaFuncSetAttribute,
+ * ::cuKernelGetAttribute
  */
 CUresult CUDAAPI cuFuncGetAttribute(int *pi, CUfunction_attribute attrib, CUfunction hfunc);
 
@@ -13495,6 +15081,23 @@ CUresult CUDAAPI cuFuncGetAttribute(int *pi, CUfunction_attribute attrib, CUfunc
  *   carveout preference, in percent of the total shared memory. 
  *   See ::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR
  *   This is only a hint, and the driver can choose a different ratio if required to execute the function.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_WIDTH: The required cluster width in
+ *   blocks. The width, height, and depth values must either all be 0 or all be
+ *   positive. The validity of the cluster dimensions is checked at launch time.
+ *   If the value is set during compile time, it cannot be set at runtime.
+ *   Setting it at runtime will return CUDA_ERROR_NOT_PERMITTED.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_HEIGHT: The required cluster height in
+ *   blocks. The width, height, and depth values must either all be 0 or all be
+ *   positive. The validity of the cluster dimensions is checked at launch time.
+ *   If the value is set during compile time, it cannot be set at runtime.
+ *   Setting it at runtime will return CUDA_ERROR_NOT_PERMITTED.
+ * - ::CU_FUNC_ATTRIBUTE_REQUIRED_CLUSTER_DEPTH: The required cluster depth in
+ *   blocks. The width, height, and depth values must either all be 0 or all be
+ *   positive. The validity of the cluster dimensions is checked at launch time.
+ *   If the value is set during compile time, it cannot be set at runtime.
+ *   Setting it at runtime will return CUDA_ERROR_NOT_PERMITTED.
+ * - ::CU_FUNC_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE: The block
+ *   scheduling policy of a function. The value type is CUclusterSchedulingPolicy.
  *
  * \param hfunc  - Function to query attribute of
  * \param attrib - Attribute requested
@@ -13514,7 +15117,8 @@ CUresult CUDAAPI cuFuncGetAttribute(int *pi, CUfunction_attribute attrib, CUfunc
  * ::cuFuncSetCacheConfig,
  * ::cuLaunchKernel,
  * ::cudaFuncGetAttributes,
- * ::cudaFuncSetAttribute
+ * ::cudaFuncSetAttribute,
+ * ::cuKernelSetAttribute
  */
 CUresult CUDAAPI cuFuncSetAttribute(CUfunction hfunc, CUfunction_attribute attrib, int value);
 
@@ -13558,7 +15162,8 @@ CUresult CUDAAPI cuFuncSetAttribute(CUfunction hfunc, CUfunction_attribute attri
  * ::cuCtxSetCacheConfig,
  * ::cuFuncGetAttribute,
  * ::cuLaunchKernel,
- * ::cudaFuncSetCacheConfig
+ * ::cudaFuncSetCacheConfig,
+ * ::cuKernelSetCacheConfig
  */
 CUresult CUDAAPI cuFuncSetCacheConfig(CUfunction hfunc, CUfunc_cache config);
 
@@ -13641,10 +15246,11 @@ CUresult CUDAAPI cuFuncSetSharedMemConfig(CUfunction hfunc, CUsharedconfig confi
 CUresult CUDAAPI cuFuncGetModule(CUmodule *hmod, CUfunction hfunc);
 
 /**
- * \brief Launches a CUDA function
+ * \brief Launches a CUDA function ::CUfunction or a CUDA kernel ::CUkernel
  *
- * Invokes the kernel \p f on a \p gridDimX x \p gridDimY x \p gridDimZ
- * grid of blocks. Each block contains \p blockDimX x \p blockDimY x
+ * Invokes the function ::CUfunction or the kernel ::CUkernel \p f
+ * on a \p gridDimX x \p gridDimY x \p gridDimZ grid of blocks.
+ * Each block contains \p blockDimX x \p blockDimY x
  * \p blockDimZ threads.
  *
  * \p sharedMemBytes sets the amount of dynamic shared memory that will be
@@ -13713,7 +15319,13 @@ CUresult CUDAAPI cuFuncGetModule(CUmodule *hmod, CUfunction hfunc);
  * If either of these conditions is not met, then ::cuLaunchKernel() will
  * return ::CUDA_ERROR_INVALID_IMAGE.
  *
- * \param f              - Kernel to launch
+ * Note that the API can also be used to launch context-less kernel ::CUkernel
+ * by querying the handle using ::cuLibraryGetKernel() and then passing it
+ * to the API by casting to ::CUfunction. Here, the context to launch
+ * the kernel on will either be taken from the specified stream \p hStream
+ * or the current context in case of NULL stream.
+ *
+ * \param f              - Function ::CUfunction or Kernel ::CUkernel to launch
  * \param gridDimX       - Width of grid in blocks
  * \param gridDimY       - Height of grid in blocks
  * \param gridDimZ       - Depth of grid in blocks
@@ -13737,7 +15349,8 @@ CUresult CUDAAPI cuFuncGetModule(CUmodule *hmod, CUfunction hfunc);
  * ::CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES,
  * ::CUDA_ERROR_LAUNCH_TIMEOUT,
  * ::CUDA_ERROR_LAUNCH_INCOMPATIBLE_TEXTURING,
- * ::CUDA_ERROR_SHARED_OBJECT_INIT_FAILED
+ * ::CUDA_ERROR_SHARED_OBJECT_INIT_FAILED,
+ * ::CUDA_ERROR_NOT_FOUND
  * \note_null_stream
  * \notefnerr
  *
@@ -13745,7 +15358,11 @@ CUresult CUDAAPI cuFuncGetModule(CUmodule *hmod, CUfunction hfunc);
  * ::cuCtxSetCacheConfig,
  * ::cuFuncSetCacheConfig,
  * ::cuFuncGetAttribute,
- * ::cudaLaunchKernel
+ * ::cudaLaunchKernel,
+ * ::cuLibraryGetKernel,
+ * ::cuKernelSetCacheConfig,
+ * ::cuKernelGetAttribute,
+ * ::cuKernelSetAttribute
  */
 CUresult CUDAAPI cuLaunchKernel(CUfunction f,
                                 unsigned int gridDimX,
@@ -13759,19 +15376,206 @@ CUresult CUDAAPI cuLaunchKernel(CUfunction f,
                                 void **kernelParams,
                                 void **extra);
 
+/**
+ * \brief Launches a CUDA function ::CUfunction or a CUDA kernel ::CUkernel with launch-time configuration
+ *
+ * Invokes the function ::CUfunction or the kernel ::CUkernel \p f with the specified launch-time configuration
+ * \p config.
+ *
+ * The ::CUlaunchConfig structure is defined as:
+ * \code
+        typedef struct CUlaunchConfig_st {
+            unsigned int gridDimX;
+            unsigned int gridDimY;
+            unsigned int gridDimZ;
+            unsigned int blockDimX;
+            unsigned int blockDimY;
+            unsigned int blockDimZ;
+            unsigned int sharedMemBytes;
+            CUstream hStream;
+            CUlaunchAttribute *attrs;
+            unsigned int numAttrs;
+        } CUlaunchConfig;
+ * \endcode
+ * where:
+ * - ::CUlaunchConfig::gridDimX is the width of the grid in blocks.
+ * - ::CUlaunchConfig::gridDimY is the height of the grid in blocks.
+ * - ::CUlaunchConfig::gridDimZ is the depth of the grid in blocks.
+ * - ::CUlaunchConfig::blockDimX is the X dimension of each thread block.
+ * - ::CUlaunchConfig::blockDimX is the Y dimension of each thread block.
+ * - ::CUlaunchConfig::blockDimZ is the Z dimension of each thread block.
+ * - ::CUlaunchConfig::sharedMemBytes is the dynamic shared-memory size per
+ *   thread block in bytes.
+ * - ::CUlaunchConfig::hStream is the handle to the stream to perform the launch
+ *   in. The CUDA context associated with this stream must match that associated
+ *   with function f.
+ * - ::CUlaunchConfig::attrs is an array of ::CUlaunchConfig::numAttrs
+ *   continguous ::CUlaunchAttribute elements. The value of this pointer is not
+ *   considered if ::CUlaunchConfig::numAttrs is zero. However, in that case, it
+ *   is recommended to set the pointer to NULL.
+ * - ::CUlaunchConfig::numAttrs is the numbers of attributes populating the
+ *   first ::CUlaunchConfig::numAttrs positions of the ::CUlaunchConfig::attrs
+ *   array.
+ *
+ * Launch-time configuration is specified by adding entries to
+ * ::CUlaunchConfig::attrs. Each entry is an attribute ID and a corresponding
+ * attribute value.
+ *
+ * The ::CUlaunchAttribute structure is defined as:
+ * \code
+        typedef struct CUlaunchAttribute_st {
+            CUlaunchAttributeID id;
+            CUlaunchAttributeValue value;
+        } CUlaunchAttribute;
+ * \endcode
+ * where:
+ * - ::CUlaunchAttribute::id is a unique enum identifying the attribute.
+ * - ::CUlaunchAttribute::value is a union that hold the attribute value.
+ *
+ * An example of using the \p config parameter:
+ * \code
+        CUlaunchAttribute coopAttr = {.id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE,
+                                      .value = 1};
+        CUlaunchConfig config = {... // set block and grid dimensions
+                                 .attrs = &coopAttr,
+                                 .numAttrs = 1};
 
-
-
-
-
-
+        cuLaunchKernelEx(&config, kernel, NULL, NULL);
+ * \endcode
+ *
+ * The ::CUlaunchAttributeID enum is defined as:
+ * \code
+        typedef enum CUlaunchAttributeID_enum {
+            CU_LAUNCH_ATTRIBUTE_IGNORE = 0,
+            CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW   = 1,
+            CU_LAUNCH_ATTRIBUTE_COOPERATIVE            = 2,
+            CU_LAUNCH_ATTRIBUTE_SYNCHRONIZATION_POLICY = 3,
+            CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION                    = 4,
+            CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE = 5,
+            CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION    = 6,
+            CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_EVENT                   = 7,
+        } CUlaunchAttributeID;
+ * \endcode
+ *
+ * and the corresponding ::CUlaunchAttributeValue union as :
+ * \code
+        typedef union CUlaunchAttributeValue_union {
+            cuuint64_t pad[8];
+            CUaccessPolicyWindow accessPolicyWindow;
+            int cooperative;
+            CUsynchronizationPolicy syncPolicy;
+            struct {
+                unsigned int x;
+                unsigned int y;
+                unsigned int z;
+            } clusterDim;
+            CUclusterSchedulingPolicy clusterSchedulingPolicyPreference;
+            int programmaticStreamSerializationAllowed;
+            struct {
+                CUevent event;
+                int flags;
+                int triggerAtBlockStart;
+            } programmaticEvent;
+        } CUlaunchAttributeValue;
+ * \endcode
+ *
+ * Setting ::CU_LAUNCH_ATTRIBUTE_COOPERATIVE to a non-zero value causes the
+ * kernel launch to be a cooperative launch, with exactly the same usage and
+ * semantics of ::cuLaunchCooperativeKernel.
+ *
+ * Setting ::CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION to a non-zero
+ * values causes the kernel to use programmatic means to resolve its stream
+ * dependency -- enabling the CUDA runtime to opportunistically allow the grid's
+ * execution to overlap with the previous kernel in the stream, if that kernel
+ * requests the overlap.
+ *
+ * ::CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_EVENT records an event along with the
+ * kernel launch. Event recorded through this launch attribute is guaranteed to
+ * only trigger after all block in the associated kernel trigger the event. A
+ * block can trigger the event through PTX launchdep.release or CUDA builtin
+ * function cudaTriggerProgrammaticLaunchCompletion(). A trigger can also be
+ * inserted at the beginning of each block's execution if triggerAtBlockStart is
+ * set to non-0. Note that dependents (including the CPU thread calling
+ * cuEventSynchronize()) are not guaranteed to observe the release precisely
+ * when it is released. For example, cuEventSynchronize() may only observe the
+ * event trigger long after the associated kernel has completed. This recording
+ * type is primarily meant for establishing programmatic dependency between
+ * device tasks. The event supplied must not be an interprocess or interop
+ * event. The event must disable timing (i.e. created with
+ * ::CU_EVENT_DISABLE_TIMING flag set).
+ *
+ * The effect of other attributes is consistent with their effect when set via
+ * persistent APIs.
+ *
+ * See ::cuStreamSetAttribute for
+ * - ::CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW
+ * - ::CU_LAUNCH_ATTRIBUTE_SYNCHRONIZATION_POLICY
+ *
+ * See ::cuFunctionSetAttribute for
+ * - ::CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION
+ * - ::CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE
+ *
+ * Kernel parameters to \p f can be specified in the same ways that they can be
+ * using ::cuLaunchKernel.
+ *
+ * Note that the API can also be used to launch context-less kernel ::CUkernel
+ * by querying the handle using ::cuLibraryGetKernel() and then passing it
+ * to the API by casting to ::CUfunction. Here, the context to launch
+ * the kernel on will either be taken from the specified stream ::CUlaunchConfig::hStream
+ * or the current context in case of NULL stream.
+ *
+ * \param config         - Config to launch
+ * \param f              - Function ::CUfunction or Kernel ::CUkernel to launch
+ * \param kernelParams   - Array of pointers to kernel parameters
+ * \param extra          - Extra options
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_INVALID_IMAGE,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_LAUNCH_FAILED,
+ * ::CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES,
+ * ::CUDA_ERROR_LAUNCH_TIMEOUT,
+ * ::CUDA_ERROR_LAUNCH_INCOMPATIBLE_TEXTURING,
+ * ::CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE,
+ * ::CUDA_ERROR_SHARED_OBJECT_INIT_FAILED,
+ * ::CUDA_ERROR_NOT_FOUND
+ * \note_null_stream
+ * \notefnerr
+ *
+ * \sa ::cuCtxGetCacheConfig,
+ * ::cuCtxSetCacheConfig,
+ * ::cuFuncSetCacheConfig,
+ * ::cuFuncGetAttribute,
+ * ::cudaLaunchKernel,
+ * ::cudaLaunchKernelEx,
+ * ::cuLibraryGetKernel,
+ * ::cuKernelSetCacheConfig,
+ * ::cuKernelGetAttribute,
+ * ::cuKernelSetAttribute
+ */
+CUresult CUDAAPI cuLaunchKernelEx(const CUlaunchConfig *config,
+                                  CUfunction f,
+                                  void **kernelParams,
+                                  void **extra);
 
 /**
- * \brief Launches a CUDA function where thread blocks can cooperate and synchronize as they execute
+ * \brief Launches a CUDA function ::CUfunction or a CUDA kernel ::CUkernel where thread blocks
+ * can cooperate and synchronize as they execute
  *
- * Invokes the kernel \p f on a \p gridDimX x \p gridDimY x \p gridDimZ
+ * Invokes the function ::CUfunction or the kernel ::CUkernel \p f on a \p gridDimX x \p gridDimY x \p gridDimZ
  * grid of blocks. Each block contains \p blockDimX x \p blockDimY x
  * \p blockDimZ threads.
+ *
+ * Note that the API can also be used to launch context-less kernel ::CUkernel
+ * by querying the handle using ::cuLibraryGetKernel() and then passing it
+ * to the API by casting to ::CUfunction. Here, the context to launch
+ * the kernel on will either be taken from the specified stream \p hStream
+ * or the current context in case of NULL stream.
  *
  * \p sharedMemBytes sets the amount of dynamic shared memory that will be
  * available to each thread block.
@@ -13807,7 +15611,13 @@ CUresult CUDAAPI cuLaunchKernel(CUfunction f,
  * If either of these conditions is not met, then ::cuLaunchCooperativeKernel() will
  * return ::CUDA_ERROR_INVALID_IMAGE.
  *
- * \param f              - Kernel to launch
+ * Note that the API can also be used to launch context-less kernel ::CUkernel
+ * by querying the handle using ::cuLibraryGetKernel() and then passing it
+ * to the API by casting to ::CUfunction. Here, the context to launch
+ * the kernel on will either be taken from the specified stream \p hStream
+ * or the current context in case of NULL stream.
+ *
+ * \param f              - Function ::CUfunction or Kernel ::CUkernel to launch
  * \param gridDimX       - Width of grid in blocks
  * \param gridDimY       - Height of grid in blocks
  * \param gridDimZ       - Depth of grid in blocks
@@ -13831,7 +15641,8 @@ CUresult CUDAAPI cuLaunchKernel(CUfunction f,
  * ::CUDA_ERROR_LAUNCH_TIMEOUT,
  * ::CUDA_ERROR_LAUNCH_INCOMPATIBLE_TEXTURING,
  * ::CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE,
- * ::CUDA_ERROR_SHARED_OBJECT_INIT_FAILED
+ * ::CUDA_ERROR_SHARED_OBJECT_INIT_FAILED,
+ * ::CUDA_ERROR_NOT_FOUND
  * \note_null_stream
  * \notefnerr
  *
@@ -13840,7 +15651,11 @@ CUresult CUDAAPI cuLaunchKernel(CUfunction f,
  * ::cuFuncSetCacheConfig,
  * ::cuFuncGetAttribute,
  * ::cuLaunchCooperativeKernelMultiDevice,
- * ::cudaLaunchCooperativeKernel
+ * ::cudaLaunchCooperativeKernel,
+ * ::cuLibraryGetKernel,
+ * ::cuKernelSetCacheConfig,
+ * ::cuKernelGetAttribute,
+ * ::cuKernelSetAttribute
  */
 CUresult CUDAAPI cuLaunchCooperativeKernel(CUfunction f,
                                 unsigned int gridDimX,
@@ -13870,7 +15685,7 @@ CUresult CUDAAPI cuLaunchCooperativeKernel(CUfunction f,
  * All kernels launched must be identical with respect to the compiled code. Note that
  * any __device__, __constant__ or __managed__ variables present in the module that owns
  * the kernel launched on each device, are independently instantiated on every device.
- * It is the application's responsiblity to ensure these variables are initialized and
+ * It is the application's responsibility to ensure these variables are initialized and
  * used appropriately.
  *
  * The size of the grids as specified in blocks, the size of the blocks themselves
@@ -13910,6 +15725,9 @@ CUresult CUDAAPI cuLaunchCooperativeKernel(CUfunction f,
  * where:
  * - ::CUDA_LAUNCH_PARAMS::function specifies the kernel to be launched. All functions must
  *   be identical with respect to the compiled code.
+ *   Note that you can also specify context-less kernel ::CUkernel by querying the handle
+ *   using ::cuLibraryGetKernel() and then casting to ::CUfunction. In this case, the context to
+ *   launch the kernel on be taken from the specified stream ::CUDA_LAUNCH_PARAMS::hStream.
  * - ::CUDA_LAUNCH_PARAMS::gridDimX is the width of the grid in blocks. This must match across
  *   all kernels launched.
  * - ::CUDA_LAUNCH_PARAMS::gridDimY is the height of the grid in blocks. This must match across
@@ -15077,7 +16895,7 @@ CUresult CUDAAPI cuGraphAddEmptyNode(CUgraphNode *phGraphNode, CUgraph hGraph, c
  * ::cuGraphAddEmptyNode,
  * ::cuGraphAddKernelNode,
  * ::cuGraphAddMemcpyNode,
- * ::cuGraphAddMemsetNode,
+ * ::cuGraphAddMemsetNode
  */
 CUresult CUDAAPI cuGraphAddEventRecordNode(CUgraphNode *phGraphNode, CUgraph hGraph, const CUgraphNode *dependencies, size_t numDependencies, CUevent event);
  
@@ -15169,7 +16987,7 @@ CUresult CUDAAPI cuGraphEventRecordNodeSetEvent(CUgraphNode hNode, CUevent event
  * ::cuGraphAddEmptyNode,
  * ::cuGraphAddKernelNode,
  * ::cuGraphAddMemcpyNode,
- * ::cuGraphAddMemsetNode,
+ * ::cuGraphAddMemsetNode
  */
 CUresult CUDAAPI cuGraphAddEventWaitNode(CUgraphNode *phGraphNode, CUgraph hGraph, const CUgraphNode *dependencies, size_t numDependencies, CUevent event);
 
@@ -15267,7 +17085,7 @@ CUresult CUDAAPI cuGraphEventWaitNodeSetEvent(CUgraphNode hNode, CUevent event);
  * ::cuGraphAddEmptyNode,
  * ::cuGraphAddKernelNode,
  * ::cuGraphAddMemcpyNode,
- * ::cuGraphAddMemsetNode,
+ * ::cuGraphAddMemsetNode
  */
 CUresult CUDAAPI cuGraphAddExternalSemaphoresSignalNode(CUgraphNode *phGraphNode, CUgraph hGraph, const CUgraphNode *dependencies, size_t numDependencies, const CUDA_EXT_SEM_SIGNAL_NODE_PARAMS *nodeParams);
 
@@ -15371,7 +17189,7 @@ CUresult CUDAAPI cuGraphExternalSemaphoresSignalNodeSetParams(CUgraphNode hNode,
  * ::cuGraphAddEmptyNode,
  * ::cuGraphAddKernelNode,
  * ::cuGraphAddMemcpyNode,
- * ::cuGraphAddMemsetNode,
+ * ::cuGraphAddMemsetNode
  */
 CUresult CUDAAPI cuGraphAddExternalSemaphoresWaitNode(CUgraphNode *phGraphNode, CUgraph hGraph, const CUgraphNode *dependencies, size_t numDependencies, const CUDA_EXT_SEM_WAIT_NODE_PARAMS *nodeParams);
 
@@ -15430,6 +17248,161 @@ CUresult CUDAAPI cuGraphExternalSemaphoresWaitNodeGetParams(CUgraphNode hNode, C
  * ::cuWaitExternalSemaphoresAsync
  */
 CUresult CUDAAPI cuGraphExternalSemaphoresWaitNodeSetParams(CUgraphNode hNode, const CUDA_EXT_SEM_WAIT_NODE_PARAMS *nodeParams);
+
+/**
+ * \brief Creates a batch memory operation node and adds it to a graph
+ *
+ * Creates a new batch memory operation node and adds it to \p hGraph with \p
+ * numDependencies dependencies specified via \p dependencies and arguments specified in \p nodeParams.
+ * It is possible for \p numDependencies to be 0, in which case the node will be placed
+ * at the root of the graph. \p dependencies may not have any duplicate entries.
+ * A handle to the new node will be returned in \p phGraphNode.
+ *
+ * When the node is added, the paramArray inside \p nodeParams is copied and therefore it can be
+ * freed after the call returns.
+ *
+ * \note
+ * Warning:
+ * Improper use of this API may deadlock the application. Synchronization 
+ * ordering established through this API is not visible to CUDA. CUDA tasks 
+ * that are (even indirectly) ordered by this API should also have that order
+ * expressed with CUDA-visible dependencies such as events. This ensures that 
+ * the scheduler does not serialize them in an improper order. For more 
+ * information, see the Stream Memory Operations section in the programming 
+ * guide(https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html).
+ *
+ * \param phGraphNode     - Returns newly created node
+ * \param hGraph          - Graph to which to add the node
+ * \param dependencies    - Dependencies of the node
+ * \param numDependencies - Number of dependencies
+ * \param nodeParams      - Parameters for the node
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_NOT_SUPPORTED,
+ * ::CUDA_ERROR_INVALID_VALUE
+ * \note_graph_thread_safety
+ * \notefnerr
+ *
+ * \sa
+ * ::cuStreamBatchMemOp,
+ * ::cuStreamWaitValue32,
+ * ::cuStreamWriteValue32,
+ * ::cuStreamWaitValue64,
+ * ::cuStreamWriteValue64,
+ * ::cuGraphBatchMemOpNodeGetParams,
+ * ::cuGraphBatchMemOpNodeSetParams,
+ * ::cuGraphCreate,
+ * ::cuGraphDestroyNode,
+ * ::cuGraphAddChildGraphNode,
+ * ::cuGraphAddEmptyNode,
+ * ::cuGraphAddKernelNode,
+ * ::cuGraphAddMemcpyNode,
+ * ::cuGraphAddMemsetNode
+ */
+CUresult CUDAAPI cuGraphAddBatchMemOpNode(CUgraphNode *phGraphNode, CUgraph hGraph, const CUgraphNode *dependencies, size_t numDependencies, const CUDA_BATCH_MEM_OP_NODE_PARAMS *nodeParams);
+
+/**
+ * \brief Returns a batch mem op node's parameters
+ *
+ * Returns the parameters of batch mem op node \p hNode in \p nodeParams_out.
+ * The \p paramArray returned in \p nodeParams_out is owned by the node.
+ * This memory remains valid until the node is destroyed or its
+ * parameters are modified, and should not be modified
+ * directly. Use ::cuGraphBatchMemOpNodeSetParams to update the
+ * parameters of this node.
+ *
+ * \param hNode          - Node to get the parameters for
+ * \param nodeParams_out - Pointer to return the parameters
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_VALUE
+ * \note_graph_thread_safety
+ * \notefnerr
+ *
+ * \sa
+ * ::cuStreamBatchMemOp,
+ * ::cuGraphAddBatchMemOpNode,
+ * ::cuGraphBatchMemOpNodeSetParams
+ */
+CUresult CUDAAPI cuGraphBatchMemOpNodeGetParams(CUgraphNode hNode, CUDA_BATCH_MEM_OP_NODE_PARAMS *nodeParams_out);
+
+/**
+ * \brief Sets a batch mem op node's parameters
+ *
+ * Sets the parameters of batch mem op node \p hNode to \p nodeParams.
+ *
+ * The paramArray inside \p nodeParams is copied and therefore it can be
+ * freed after the call returns.
+ *
+ * \param hNode      - Node to set the parameters for
+ * \param nodeParams - Parameters to copy
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_HANDLE,
+ * ::CUDA_ERROR_OUT_OF_MEMORY
+ * \note_graph_thread_safety
+ * \notefnerr
+ *
+ * \sa
+ * ::cuStreamBatchMemOp,
+ * ::cuGraphAddBatchMemOpNode,
+ * ::cuGraphBatchMemOpNodeGetParams
+ */
+CUresult CUDAAPI cuGraphBatchMemOpNodeSetParams(CUgraphNode hNode, const CUDA_BATCH_MEM_OP_NODE_PARAMS *nodeParams);
+
+/**
+ * \brief Sets the parameters for a batch mem op node in the given graphExec
+ *
+ * Sets the parameters of a batch mem op node in an executable graph \p hGraphExec.
+ * The node is identified by the corresponding node \p hNode in the
+ * non-executable graph, from which the executable graph was instantiated.
+ *
+ * The following fields on operations may be modified on an executable graph:
+ *
+ *  op.waitValue.address
+ *  op.waitValue.value[64]
+ *  op.waitValue.flags bits corresponding to wait type (i.e. CU_STREAM_WAIT_VALUE_FLUSH bit cannot be modified)
+ *  op.writeValue.address
+ *  op.writeValue.value[64]
+ *
+ * Other fields, such as the context, count or type of operations, and other types of operations such as membars, 
+ * may not be modified.
+ *
+ * \p hNode must not have been removed from the original graph.
+ *
+ * The modifications only affect future launches of \p hGraphExec. Already
+ * enqueued or running launches of \p hGraphExec are not affected by this call.
+ * \p hNode is also not modified by this call.
+ *
+ * The paramArray inside \p nodeParams is copied and therefore it can be
+ * freed after the call returns.
+ *
+ * \param hGraphExec - The executable graph in which to set the specified node
+ * \param hNode      - Batch mem op node from the graph from which graphExec was instantiated
+ * \param nodeParams - Updated Parameters to set
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * \note_graph_thread_safety
+ * \notefnerr
+ *
+ * \sa
+ * ::cuStreamBatchMemOp,
+ * ::cuGraphAddBatchMemOpNode,
+ * ::cuGraphBatchMemOpNodeGetParams,
+ * ::cuGraphBatchMemOpNodeSetParams,
+ * ::cuGraphInstantiate
+ */
+CUresult CUDAAPI cuGraphExecBatchMemOpNodeSetParams(CUgraphExec hGraphExec, CUgraphNode hNode, const CUDA_BATCH_MEM_OP_NODE_PARAMS *nodeParams);
 
 /**
  * \brief Creates an allocation node and adds it to a graph
@@ -16019,44 +17992,6 @@ CUresult CUDAAPI cuGraphDestroyNode(CUgraphNode hNode);
  * validated. If instantiation is successful, a handle to the instantiated graph
  * is returned in \p phGraphExec.
  *
- * If there are any errors, diagnostic information may be returned in \p errorNode and
- * \p logBuffer. This is the primary way to inspect instantiation errors. The output
- * will be null terminated unless the diagnostics overflow
- * the buffer. In this case, they will be truncated, and the last byte can be
- * inspected to determine if truncation occurred.
- *
- * \param phGraphExec - Returns instantiated graph
- * \param hGraph      - Graph to instantiate
- * \param phErrorNode - In case of an instantiation error, this may be modified to
- *                      indicate a node contributing to the error
- * \param logBuffer   - A character buffer to store diagnostic messages
- * \param bufferSize  - Size of the log buffer in bytes
- *
- * \return
- * ::CUDA_SUCCESS,
- * ::CUDA_ERROR_DEINITIALIZED,
- * ::CUDA_ERROR_NOT_INITIALIZED,
- * ::CUDA_ERROR_INVALID_VALUE
- * \note_graph_thread_safety
- * \notefnerr
- *
- * \sa
- * ::cuGraphInstantiateWithFlags,
- * ::cuGraphCreate,
- * ::cuGraphUpload,
- * ::cuGraphLaunch,
- * ::cuGraphExecDestroy
- */
-CUresult CUDAAPI cuGraphInstantiate(CUgraphExec *phGraphExec, CUgraph hGraph, CUgraphNode *phErrorNode, char *logBuffer, size_t bufferSize);
-
-/**
- * \brief Creates an executable graph from a graph
- *
- * Instantiates \p hGraph as an executable graph. The graph is validated for any
- * structural constraints or intra-node constraints which were not previously
- * validated. If instantiation is successful, a handle to the instantiated graph
- * is returned in \p phGraphExec.
- *
  * The \p flags parameter controls the behavior of instantiation and subsequent
  * graph launches.  Valid flags are:
  *
@@ -16064,11 +17999,39 @@ CUresult CUDAAPI cuGraphInstantiate(CUgraphExec *phGraphExec, CUgraph hGraph, CU
  * graph containing memory allocation nodes to automatically free any
  * unfreed memory allocations before the graph is relaunched.
  *
- * If \p hGraph contains any allocation or free nodes, there can be at most one
- * executable graph in existence for that graph at a time.
+ * - ::CUDA_GRAPH_INSTANTIATE_FLAG_DEVICE_LAUNCH, which configures the graph for launch
+ * from the device. If this flag is passed, the executable graph handle returned can be
+ * used to launch the graph from both the host and device. This flag can only be used
+ * on platforms which support unified addressing. This flag cannot be used in
+ * conjunction with ::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH.
  *
- * An attempt to instantiate a second executable graph before destroying the first
- * with ::cuGraphExecDestroy will result in an error.
+ * - ::CUDA_GRAPH_INSTANTIATE_FLAG_USE_NODE_PRIORITY, which causes the graph
+ * to use the priorities from the per-node attributes rather than the priority
+ * of the launch stream during execution. Note that priorities are only available
+ * on kernel nodes, and are copied from stream priority during stream capture.
+ *
+ * If \p hGraph contains any allocation or free nodes, there can be at most one
+ * executable graph in existence for that graph at a time. An attempt to instantiate
+ * a second executable graph before destroying the first with ::cuGraphExecDestroy
+ * will result in an error.
+ *
+ * If \p hGraph contains kernels which call device-side cudaGraphLaunch() from multiple
+ * contexts, this will result in an error.
+ *
+ * Graphs instantiated for launch on the device have additional restrictions which do not
+ * apply to host graphs:
+ *
+ * - The graph's nodes must reside on a single context.
+ * - The graph can only contain kernel nodes, memcpy nodes, memset nodes, and child graph nodes.
+ *   Operation-specific restrictions are outlined below.
+ * - Kernel nodes:
+ *   - Use of CUDA Dynamic Parallelism is not permitted.
+ *   - Cooperative launches are permitted as long as MPS is not in use.
+ * - Memcpy nodes:
+ *   - Only copies involving device memory and/or pinned device-mapped host memory are permitted.
+ *   - Copies involving CUDA arrays are not permitted.
+ *   - Both operands must be accessible from the current context, and the current context must
+ *     match the context of other nodes in the graph.
  *
  * \param phGraphExec - Returns instantiated graph
  * \param hGraph      - Graph to instantiate
@@ -16089,7 +18052,130 @@ CUresult CUDAAPI cuGraphInstantiate(CUgraphExec *phGraphExec, CUgraph hGraph, CU
  * ::cuGraphLaunch,
  * ::cuGraphExecDestroy
  */
-CUresult CUDAAPI cuGraphInstantiateWithFlags(CUgraphExec *phGraphExec, CUgraph hGraph, unsigned long long flags);
+CUresult CUDAAPI cuGraphInstantiate(CUgraphExec *phGraphExec, CUgraph hGraph, unsigned long long flags);
+
+/**
+ * \brief Creates an executable graph from a graph
+ *
+ * Instantiates \p hGraph as an executable graph according to the \p instantiateParams structure.
+ * The graph is validated for any structural constraints or intra-node constraints
+ * which were not previously validated. If instantiation is successful, a handle to
+ * the instantiated graph is returned in \p phGraphExec.
+ *
+ * \p instantiateParams controls the behavior of instantiation and subsequent
+ * graph launches, as well as returning more detailed information in the event of an error.
+ * ::CUDA_GRAPH_INSTANTIATE_PARAMS is defined as:
+ *
+ * \code
+    typedef struct {
+        cuuint64_t flags;
+        CUstream hUploadStream;
+        CUgraphNode hErrNode_out;
+        CUgraphInstantiateResult result_out;
+    } CUDA_GRAPH_INSTANTIATE_PARAMS;
+ * \endcode
+ *
+ * The \p flags field controls the behavior of instantiation and subsequent
+ * graph launches. Valid flags are:
+ *
+ * - ::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH, which configures a
+ * graph containing memory allocation nodes to automatically free any
+ * unfreed memory allocations before the graph is relaunched.
+ *
+ * - ::CUDA_GRAPH_INSTANTIATE_FLAG_UPLOAD, which will perform an upload of the graph
+ * into \p hUploadStream once the graph has been instantiated.
+ *
+ * - ::CUDA_GRAPH_INSTANTIATE_FLAG_DEVICE_LAUNCH, which configures the graph for launch
+ * from the device. If this flag is passed, the executable graph handle returned can be
+ * used to launch the graph from both the host and device. This flag can only be used
+ * on platforms which support unified addressing. This flag cannot be used in
+ * conjunction with ::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH.
+ *
+ * - ::CUDA_GRAPH_INSTANTIATE_FLAG_USE_NODE_PRIORITY, which causes the graph
+ * to use the priorities from the per-node attributes rather than the priority
+ * of the launch stream during execution. Note that priorities are only available
+ * on kernel nodes, and are copied from stream priority during stream capture.
+ *
+ * If \p hGraph contains any allocation or free nodes, there can be at most one
+ * executable graph in existence for that graph at a time. An attempt to instantiate a
+ * second executable graph before destroying the first with ::cuGraphExecDestroy will
+ * result in an error.
+ *
+ * If \p hGraph contains kernels which call device-side cudaGraphLaunch() from multiple
+ * contexts, this will result in an error.
+ *
+ * Graphs instantiated for launch on the device have additional restrictions which do not
+ * apply to host graphs:
+ *
+ * - The graph's nodes must reside on a single context.
+ * - The graph can only contain kernel nodes, memcpy nodes, memset nodes, and child graph nodes.
+ *   Operation-specific restrictions are outlined below.
+ * - Kernel nodes:
+ *   - Use of CUDA Dynamic Parallelism is not permitted.
+ *   - Cooperative launches are permitted as long as MPS is not in use.
+ * - Memcpy nodes:
+ *   - Only copies involving device memory and/or pinned device-mapped host memory are permitted.
+ *   - Copies involving CUDA arrays are not permitted.
+ *   - Both operands must be accessible from the current context, and the current context must
+ *     match the context of other nodes in the graph.
+ *
+ * In the event of an error, the \p result_out and \p hErrNode_out fields will contain more
+ * information about the nature of the error. Possible error reporting includes:
+ *
+ * - ::CUDA_GRAPH_INSTANTIATE_ERROR, if passed an invalid value or if an unexpected error occurred
+ *   which is described by the return value of the function. \p hErrNode_out will be set to NULL.
+ * - ::CUDA_GRAPH_INSTANTIATE_INVALID_STRUCTURE, if the graph structure is invalid. \p hErrNode_out
+ *   will be set to one of the offending nodes.
+ * - ::CUDA_GRAPH_INSTANTIATE_NODE_OPERATION_NOT_SUPPORTED, if the graph is instantiated for device
+ *   launch but contains a node of an unsupported node type, or a node which performs unsupported
+ *   operations, such as use of CUDA dynamic parallelism within a kernel node. \p hErrNode_out will
+ *   be set to this node.
+ * - ::CUDA_GRAPH_INSTANTIATE_MULTIPLE_CTXS_NOT_SUPPORTED, if the graph is instantiated for device
+ *   launch but a node’s context differs from that of another node. This error can also be returned
+ *   if a graph is not instantiated for device launch and it contains kernels which call device-side
+ *   cudaGraphLaunch() from multiple contexts. \p hErrNode_out will be set to this node.
+ *
+ * If instantiation is successful, \p result_out will be set to ::CUDA_GRAPH_INSTANTIATE_SUCCESS,
+ * and \p hErrNode_out will be set to NULL.
+ *
+ * \param phGraphExec       - Returns instantiated graph
+ * \param hGraph            - Graph to instantiate
+ * \param instantiateParams - Instantiation parameters
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * \note_graph_thread_safety
+ * \notefnerr
+ *
+ * \sa
+ * ::cuGraphCreate,
+ * ::cuGraphInstantiate,
+ * ::cuGraphExecDestroy
+ */
+CUresult CUDAAPI cuGraphInstantiateWithParams(CUgraphExec *phGraphExec, CUgraph hGraph, CUDA_GRAPH_INSTANTIATE_PARAMS *instantiateParams);
+
+/**
+ * \brief Query the instantiation flags of an executable graph
+ *
+ * Returns the flags that were passed to instantiation for the given executable graph.
+ * ::CUDA_GRAPH_INSTANTIATE_FLAG_UPLOAD will not be returned by this API as it does
+ * not affect the resulting executable graph.
+ *
+ * \param hGraphExec - The executable graph to query
+ * \param flags      - Returns the instantiation flags
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * \note_graph_thread_safety
+ * \notefnerr
+ *
+ * \sa
+ * ::cuGraphInstantiate,
+ * ::cuGraphInstantiateWithParams
+ */
+CUresult CUDAAPI cuGraphExecGetFlags(CUgraphExec hGraphExec, cuuint64_t *flags);
 
 /**
  * \brief Sets the parameters for a kernel node in the given graphExec
@@ -16104,6 +18190,11 @@ CUresult CUDAAPI cuGraphInstantiateWithFlags(CUgraphExec *phGraphExec, CUgraph h
  *   - The owning context of the function cannot change.
  *   - A node whose function originally did not use CUDA dynamic parallelism cannot be updated
  *     to a function which uses CDP
+ *   - If \p hGraphExec was not instantiated for device launch, a node whose function originally
+ *     did not use device-side cudaGraphLaunch() cannot be updated to a function which uses
+ *     device-side cudaGraphLaunch() unless the node resides on the same context as nodes which
+ *     contained such calls at instantiate-time. If no such calls were present at instantiation,
+ *     these updates cannot be performed at all.
  *
  * The modifications only affect future launches of \p hGraphExec. Already 
  * enqueued or running launches of \p hGraphExec are not affected by this call. 
@@ -16489,7 +18580,7 @@ CUresult CUDAAPI cuGraphExecExternalSemaphoresWaitNodeSetParams(CUgraphExec hGra
  * enqueued or running launches of \p hGraphExec are not affected by this call.
  * \p hNode is also not modified by this call.
  *
- * \note Currently only kernel nodes are supported. 
+ * \note Currently only kernel, memset and memcpy nodes are supported. 
  *
  * \param hGraphExec - The executable graph in which to set the specified node
  * \param hNode      - Node from the graph from which graphExec was instantiated
@@ -16519,7 +18610,7 @@ CUresult CUDAAPI cuGraphNodeSetEnabled(CUgraphExec hGraphExec, CUgraphNode hNode
  *
  * \p hNode must not have been removed from the original graph.
  *
- * \note Currently only kernel nodes are supported. 
+ * \note Currently only kernel, memset and memcpy nodes are supported. 
  *
  * \param hGraphExec - The executable graph in which to set the specified node
  * \param hNode      - Node from the graph from which graphExec was instantiated
@@ -16653,6 +18744,14 @@ CUresult CUDAAPI cuGraphDestroy(CUgraph hGraph);
  *   - A node whose function originally did not use CUDA dynamic parallelism cannot be updated
  *     to a function which uses CDP.
  *   - A cooperative node cannot be updated to a non-cooperative node, and vice-versa.
+ *   - If the graph was instantiated with CUDA_GRAPH_INSTANTIATE_FLAG_USE_NODE_PRIORITY, the
+ *     priority attribute cannot change. Equality is checked on the originally requested
+ *     priority values, before they are clamped to the device's supported range.
+ *   - If \p hGraphExec was not instantiated for device launch, a node whose function originally
+ *     did not use device-side cudaGraphLaunch() cannot be updated to a function which uses
+ *     device-side cudaGraphLaunch() unless the node resides on the same context as nodes which
+ *     contained such calls at instantiate-time. If no such calls were present at instantiation,
+ *     these updates cannot be performed at all.
  * - Memset and memcpy nodes:
  *   - The CUDA device(s) to which the operand(s) was allocated/mapped cannot change.
  *   - The source/destination memory must be allocated from the same contexts as the original
@@ -16666,18 +18765,20 @@ CUresult CUDAAPI cuGraphDestroy(CUgraph hGraph);
  *
  * Note:  The API may add further restrictions in future releases.  The return code should always be checked.
  *
- * cuGraphExecUpdate sets \p updateResult_out to CU_GRAPH_EXEC_UPDATE_ERROR_TOPOLOGY_CHANGED under
- * the following conditions:
+ * cuGraphExecUpdate sets the result member of \p resultInfo to CU_GRAPH_EXEC_UPDATE_ERROR_TOPOLOGY_CHANGED
+ * under the following conditions:
+ * - The count of nodes directly in \p hGraphExec and \p hGraph differ, in which case resultInfo->errorNode
+ *   is set to NULL.
+ * - \p hGraph has more exit nodes than \p hGraph, in which case resultInfo->errorNode is set to one of
+ *   the exit nodes in hGraph. 
+ * - A node in \p hGraph has a different number of dependencies than the node from \p hGraphExec it is paired with,
+ *   in which case resultInfo->errorNode is set to the node from \p hGraph.
+ * - A node in \p hGraph has a dependency that does not match with the corresponding dependency of the paired node
+ *   from \p hGraphExec. resultInfo->errorNode will be set to the node from \p hGraph. resultInfo->errorFromNode
+ *   will be set to the mismatched dependency. The dependencies are paired based on edge order and a dependency
+ *   does not match when the nodes are already paired based on other edges examined in the graph.
  *
- * - The count of nodes directly in \p hGraphExec and \p hGraph differ, in which case \p hErrorNode_out
- *   is NULL.
- * - A node is deleted in \p hGraph but not not its pair from \p hGraphExec, in which case \p hErrorNode_out
- *   is NULL.
- * - A node is deleted in \p hGraphExec but not its pair from \p hGraph, in which case \p hErrorNode_out is
- *   the pairless node from \p hGraph.
- * - The dependent nodes of a pair differ, in which case \p hErrorNode_out is the node from \p hGraph.
- *
- * cuGraphExecUpdate sets \p updateResult_out to:
+ * cuGraphExecUpdate sets the result member of \p resultInfo to: 
  * - CU_GRAPH_EXEC_UPDATE_ERROR if passed an invalid value.
  * - CU_GRAPH_EXEC_UPDATE_ERROR_TOPOLOGY_CHANGED if the graph topology changed
  * - CU_GRAPH_EXEC_UPDATE_ERROR_NODE_TYPE_CHANGED if the type of a node changed, in which case
@@ -16691,10 +18792,8 @@ CUresult CUDAAPI cuGraphDestroy(CUgraph hGraph);
  * - CU_GRAPH_EXEC_UPDATE_ERROR_NOT_SUPPORTED if something about a node is unsupported, like 
  *   the node's type or configuration, in which case \p hErrorNode_out is set to the node from \p hGraph
  *
- * If \p updateResult_out isn't set in one of the situations described above, the update check passes
- * and cuGraphExecUpdate updates \p hGraphExec to match the contents of \p hGraph.  If an error happens
- * during the update, \p updateResult_out will be set to CU_GRAPH_EXEC_UPDATE_ERROR; otherwise,
- * \p updateResult_out is set to CU_GRAPH_EXEC_UPDATE_SUCCESS.
+ * If the update fails for a reason not listed above, the result member of \p resultInfo will be set
+ * to CU_GRAPH_EXEC_UPDATE_ERROR. If the update succeeds, the result member will be set to CU_GRAPH_EXEC_UPDATE_SUCCESS.
  *
  * cuGraphExecUpdate returns CUDA_SUCCESS when the updated was performed successfully.  It returns
  * CUDA_ERROR_GRAPH_EXEC_UPDATE_FAILURE if the graph update was not performed because it included 
@@ -16702,8 +18801,7 @@ CUresult CUDAAPI cuGraphDestroy(CUgraph hGraph);
  *
  * \param hGraphExec The instantiated graph to be updated
  * \param hGraph The graph containing the updated parameters
- * \param hErrorNode_out The node which caused the permissibility check to forbid the update, if any
- * \param updateResult_out Whether the graph update was permitted.  If was forbidden, the reason why
+ * \param resultInfo the error info structure 
  *
  * \return
  * ::CUDA_SUCCESS,
@@ -16712,9 +18810,9 @@ CUresult CUDAAPI cuGraphDestroy(CUgraph hGraph);
  * \notefnerr
  *
  * \sa
- * ::cuGraphInstantiate,
+ * ::cuGraphInstantiate
  */
-CUresult CUDAAPI cuGraphExecUpdate(CUgraphExec hGraphExec, CUgraph hGraph, CUgraphNode *hErrorNode_out, CUgraphExecUpdateResult *updateResult_out);
+CUresult CUDAAPI cuGraphExecUpdate(CUgraphExec hGraphExec, CUgraph hGraph, CUgraphExecUpdateResultInfo *resultInfo);
 
 /**
  * \brief Copies attributes from source node to destination node.
@@ -17138,11 +19236,80 @@ CUresult CUDAAPI cuOccupancyMaxPotentialBlockSizeWithFlags(int *minGridSize, int
  * ::CUDA_ERROR_INVALID_VALUE,
  * ::CUDA_ERROR_UNKNOWN
  * \notefnerr
- *
- * \sa
  */
 CUresult CUDAAPI cuOccupancyAvailableDynamicSMemPerBlock(size_t *dynamicSmemSize, CUfunction func, int numBlocks, int blockSize);
 
+/**
+ * \brief Given the kernel function (\p func) and launch configuration
+ * (\p config), return the maximum cluster size in \p *clusterSize.
+ *
+ * The cluster dimensions in \p config are ignored. If func has a required
+ * cluster size set (see ::cudaFuncGetAttributes / ::cuFuncGetAttribute),\p
+ * *clusterSize will reflect the required cluster size.
+ *
+ * By default this function will always return a value that's portable on
+ * future hardware. A higher value may be returned if the kernel function
+ * allows non-portable cluster sizes.
+ *
+ * This function will respect the compile time launch bounds.
+ *
+ * \param clusterSize - Returned maximum cluster size that can be launched
+ *                      for the given kernel function and launch configuration
+ * \param func        - Kernel function for which maximum cluster
+ *                      size is calculated
+ * \param config      - Launch configuration for the given kernel function
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_UNKNOWN
+ * \notefnerr
+ *
+ * \sa
+ * ::cudaFuncGetAttributes,
+ * ::cuFuncGetAttribute
+ */
+CUresult CUDAAPI cuOccupancyMaxPotentialClusterSize(int *clusterSize, CUfunction func, const CUlaunchConfig *config);
+
+/**
+ * \brief Given the kernel function (\p func) and launch configuration
+ * (\p config), return the maximum number of clusters that could co-exist
+ * on the target device in \p *numClusters.
+ *
+ * If the function has required cluster size already set (see
+ * ::cudaFuncGetAttributes / ::cuFuncGetAttribute), the cluster size
+ * from config must either be unspecified or match the required size.
+ * Without required sizes, the cluster size must be specified in config,
+ * else the function will return an error.
+ *
+ * Note that various attributes of the kernel function may affect occupancy
+ * calculation. Runtime environment may affect how the hardware schedules
+ * the clusters, so the calculated occupancy is not guaranteed to be achievable.
+ *
+ * \param numClusters - Returned maximum number of clusters that
+ *                      could co-exist on the target device
+ * \param func        - Kernel function for which maximum number
+ *                      of clusters are calculated
+ * \param config      - Launch configuration for the given kernel function
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_INVALID_CLUSTER_SIZE,
+ * ::CUDA_ERROR_UNKNOWN
+ * \notefnerr
+ *
+ * \sa
+ * ::cudaFuncGetAttributes,
+ * ::cuFuncGetAttribute
+ */
+CUresult CUDAAPI cuOccupancyMaxActiveClusters(int *numClusters, CUfunction func, const CUlaunchConfig *config);
 /** @} */ /* END CUDA_OCCUPANCY */
 
 /**
@@ -17179,12 +19346,12 @@ CUresult CUDAAPI cuOccupancyAvailableDynamicSMemPerBlock(size_t *dynamicSmemSize
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode,
  * ::cuTexRefSetFilterMode, ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTextureToArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetArray(CUtexref hTexRef, CUarray hArray, unsigned int Flags);
 
@@ -17209,12 +19376,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetArray(CUtexref hTexRef, CUarray hA
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode,
  * ::cuTexRefSetFilterMode, ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTextureToMipmappedArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMipmappedArray(CUtexref hTexRef, CUmipmappedArray hMipmappedArray, unsigned int Flags);
 
@@ -17256,11 +19423,11 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMipmappedArray(CUtexref hTexRef, C
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
+ * \sa
+ * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFilterMode, ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTexture
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetAddress(size_t *ByteOffset, CUtexref hTexRef, CUdeviceptr dptr, size_t bytes);
 
@@ -17310,12 +19477,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetAddress(size_t *ByteOffset, CUtexr
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFilterMode, ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTexture2D
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetAddress2D(CUtexref hTexRef, const CUDA_ARRAY_DESCRIPTOR *desc, CUdeviceptr dptr, size_t Pitch);
 
@@ -17341,16 +19508,13 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetAddress2D(CUtexref hTexRef, const 
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFilterMode, ::cuTexRefSetFlags,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
  * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaCreateChannelDesc,
- * ::cudaBindTexture,
- * ::cudaBindTexture2D,
- * ::cudaBindTextureToArray,
- * ::cudaBindTextureToMipmappedArray
+ * ::cudaCreateChannelDesc
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetFormat(CUtexref hTexRef, CUarray_format fmt, int NumPackedComponents);
 
@@ -17388,15 +19552,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetFormat(CUtexref hTexRef, CUarray_f
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetArray,
  * ::cuTexRefSetFilterMode, ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTexture,
- * ::cudaBindTexture2D,
- * ::cudaBindTextureToArray,
- * ::cudaBindTextureToMipmappedArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetAddressMode(CUtexref hTexRef, int dim, CUaddress_mode am);
 
@@ -17427,12 +19588,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetAddressMode(CUtexref hTexRef, int 
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTextureToArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetFilterMode(CUtexref hTexRef, CUfilter_mode fm);
 
@@ -17463,12 +19624,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetFilterMode(CUtexref hTexRef, CUfil
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTextureToMipmappedArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMipmapFilterMode(CUtexref hTexRef, CUfilter_mode fm);
 
@@ -17492,12 +19653,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMipmapFilterMode(CUtexref hTexRef,
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTextureToMipmappedArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMipmapLevelBias(CUtexref hTexRef, float bias);
 
@@ -17523,12 +19684,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMipmapLevelBias(CUtexref hTexRef, 
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTextureToMipmappedArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMipmapLevelClamp(CUtexref hTexRef, float minMipmapLevelClamp, float maxMipmapLevelClamp);
 
@@ -17552,13 +19713,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMipmapLevelClamp(CUtexref hTexRef,
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFlags, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTextureToArray,
- * ::cudaBindTextureToMipmappedArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMaxAnisotropy(CUtexref hTexRef, unsigned int maxAniso);
 
@@ -17589,12 +19749,9 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetMaxAnisotropy(CUtexref hTexRef, un
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddressMode,
- * ::cuTexRefGetAddressMode, ::cuTexRefGetBorderColor,
- * ::cudaBindTexture,
- * ::cudaBindTexture2D,
- * ::cudaBindTextureToArray,
- * ::cudaBindTextureToMipmappedArray
+ * \sa
+ * ::cuTexRefSetAddressMode,
+ * ::cuTexRefGetAddressMode, ::cuTexRefGetBorderColor
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetBorderColor(CUtexref hTexRef, float *pBorderColor);
 
@@ -17631,15 +19788,12 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetBorderColor(CUtexref hTexRef, floa
  * ::CUDA_ERROR_INVALID_CONTEXT,
  * ::CUDA_ERROR_INVALID_VALUE
  *
- * \sa ::cuTexRefSetAddress,
+ * \sa
+ * ::cuTexRefSetAddress,
  * ::cuTexRefSetAddress2D, ::cuTexRefSetAddressMode, ::cuTexRefSetArray,
  * ::cuTexRefSetFilterMode, ::cuTexRefSetFormat,
  * ::cuTexRefGetAddress, ::cuTexRefGetAddressMode, ::cuTexRefGetArray,
- * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat,
- * ::cudaBindTexture,
- * ::cudaBindTexture2D,
- * ::cudaBindTextureToArray,
- * ::cudaBindTextureToMipmappedArray
+ * ::cuTexRefGetFilterMode, ::cuTexRefGetFlags, ::cuTexRefGetFormat
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefSetFlags(CUtexref hTexRef, unsigned int Flags);
 
@@ -18049,8 +20203,7 @@ __CUDA_DEPRECATED CUresult CUDAAPI cuTexRefDestroy(CUtexref hTexRef);
  *
  * \sa
  * ::cuModuleGetSurfRef,
- * ::cuSurfRefGetArray,
- * ::cudaBindSurfaceToArray
+ * ::cuSurfRefGetArray
  */
 __CUDA_DEPRECATED CUresult CUDAAPI cuSurfRefSetArray(CUsurfref hSurfRef, CUarray hArray, unsigned int Flags);
 
@@ -18486,6 +20639,348 @@ CUresult CUDAAPI cuSurfObjectDestroy(CUsurfObject surfObject);
 CUresult CUDAAPI cuSurfObjectGetResourceDesc(CUDA_RESOURCE_DESC *pResDesc, CUsurfObject surfObject);
 
 /** @} */ /* END CUDA_SURFOBJECT */
+
+/**
+ * \defgroup CUDA_TENSOR_MEMORY Tensor Core Managment
+ *
+ * ___MANBRIEF___ tensor core management functions of the low-level CUDA
+ * driver API (___CURRENT_FILE___) ___ENDMANBRIEF___
+ *
+ * This section describes the tensor core management functions of the
+ * low-level CUDA driver application programming interface. The tensor
+ * core API is only supported on devices of compute capability 9.0 or higher.
+ *
+ * @{
+ */
+
+/**
+ * \brief Create a tensor map descriptor object representing tiled memory region
+ *
+ * Creates a descriptor for Tensor Memory Access (TMA) object specified
+ * by the parameters describing a tiled region and returns it in \p tensorMap.
+ *
+ * Tensor map objects are only supported on devices of compute capability 9.0 or higher.
+ * Additionally, a tensor map object is an opaque value, and, as such, should only be
+ * accessed through CUDA API calls.
+ *
+ * The parameters passed are bound to the following requirements:
+ *
+ * - \p tensorMap address must be aligned to 64 bytes.
+ *
+ * - \p tensorDataType has to be an enum from ::CUtensorMapDataType which is defined as:
+ * \code
+    typedef enum CUtensorMapDataType_enum {
+        CU_TENSOR_MAP_DATA_TYPE_UINT8 = 0,       // 1 byte
+        CU_TENSOR_MAP_DATA_TYPE_UINT16,          // 2 bytes
+        CU_TENSOR_MAP_DATA_TYPE_UINT32,          // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_INT32,           // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_UINT64,          // 8 bytes
+        CU_TENSOR_MAP_DATA_TYPE_INT64,           // 8 bytes
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT16,         // 2 bytes
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT32,         // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT64,         // 8 bytes
+        CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,        // 2 bytes
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ,     // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_TFLOAT32,        // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ     // 4 bytes
+    } CUtensorMapDataType;
+ * \endcode
+ *
+ * - \p tensorRank must be non-zero and less than or equal to the maximum supported dimensionality of 5. If \p interleave is not
+ * ::CU_TENSOR_MAP_INTERLEAVE_NONE, then \p tensorRank must additionally be greater than or equal to 3.
+ *
+ * - \p globalAddress, which specifies the starting address of the memory region described, must be 32 byte aligned when \p interleave is
+ * ::CU_TENSOR_MAP_INTERLEAVE_32B and 16 byte aligned otherwise.
+ *
+ * - \p globalDim array, which specifies tensor size of each of the \p tensorRank dimensions, must be non-zero and less than or
+ * equal to 2^32.
+ *
+ * - \p globalStrides array, which specifies tensor stride of each of the lower \p tensorRank - 1 dimensions in bytes, must be a
+ * multiple of 16 and less than 2^40. Additionally, the stride must be a multiple of 32 when \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_32B.
+ * Each following dimension specified includes previous dimension stride:
+ * \code
+    globalStrides[0] = globalDim[0] * elementSizeInBytes(tensorDataType) + padding[0];
+    for (i = 1; i < tensorRank - 1; i++)
+        globalStrides[i] = globalStrides[i – 1] * globalStrides[i] + padding[i];
+    assert(globalStrides[i] >= globalDim[i]);
+ * \endcode
+ *
+ * - \p boxDim array, which specifies number of elements to be traversed along each of the \p tensorRank dimensions, must be less
+ * than or equal to 8.
+ * When \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_NONE, { \p boxDim[0] * elementSizeInBytes( \p tensorDataType ) } must be a multiple
+ * of 16 bytes.
+ *
+ * - \p elementStrides array, which specifies the iteration step along each of the \p tensorRank dimensions, must be non-zero and less
+ * than or equal to 8. Note that when \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_NONE, the first element of this array is ignored since
+ * TMA doesn’t support the stride for dimension zero.
+ * When all elemets of \p elementStrides array is one, \p boxDim specifies the number of elements to load. However, if the \p elementStrides[i]
+ * is not equal to one, then TMA loads ceil( \p boxDim[i] / \p elementStrides[i]) number of elements along i-th dimension. To load N elements along
+ * i-th dimension, \p boxDim[i] must be set to N * \p elementStrides[i].
+ *
+ * - \p interleave specifies the interleaved layout of type ::CUtensorMapInterleave, which is defined as:
+ * \code
+    typedef enum CUtensorMapInterleave_enum {
+        CU_TENSOR_MAP_INTERLEAVE_NONE = 0,
+        CU_TENSOR_MAP_INTERLEAVE_16B,
+        CU_TENSOR_MAP_INTERLEAVE_32B
+    } CUtensorMapInterleave;
+ * \endcode
+ * TMA supports interleaved layouts like NC/8HWC8 where C8 utilizes 16 bytes in memory assuming 2 byte per channel or NC/16HWC16 where C16
+ * uses 32 bytes.
+ * When \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_NONE and \p swizzle is not ::CU_TENSOR_MAP_SWIZZLE_NONE, the bounding box inner dimension
+ * (computed as \p boxDim[0] multiplied by element size derived from \p tensorDataType) must be less than or equal to the swizzle size.
+ *    - CU_TENSOR_MAP_SWIZZLE_32B implies the bounding box inner dimension will be <= 32.
+ *    - CU_TENSOR_MAP_SWIZZLE_64B implies the bounding box inner dimension will be <= 64.
+ *    - CU_TENSOR_MAP_SWIZZLE_128B implies the bounding box inner dimension will be <= 128.
+ *
+ * - \p swizzle, which specifies the shared memory bank swizzling pattern, has to be of type ::CUtensorMapSwizzle which is defined as:
+ * \code
+    typedef enum CUtensorMapSwizzle_enum {
+        CU_TENSOR_MAP_SWIZZLE_NONE = 0,
+        CU_TENSOR_MAP_SWIZZLE_32B,
+        CU_TENSOR_MAP_SWIZZLE_64B,
+        CU_TENSOR_MAP_SWIZZLE_128B
+    } CUtensorMapSwizzle;
+ * \endcode
+ * Data is organized in specific order in global memory; however, it may not match the order in which data are accessed by application in
+ * the shared memory. This difference in data organization may cause bank conflicts when shared memory is accessed. In order to avoid this
+ * problem, data can be loaded to shard memory with shuffling across shared memory banks.
+ * Note that it’s expected that when \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_32B, \p swizzle should be ::CU_TENSOR_MAP_SWIZZLE_32B mode.
+ * Other interleave modes can have any swizzling patterns.
+ *
+ * - \p l2Promotion specifies L2 fetch size which indicates the byte granurality at which L2 requests is filled from DRAM. It must be of
+ * type ::CUtensorMapL2promotion, which is defined as:
+ * \code
+    typedef enum CUtensorMapL2promotion_enum {
+        CU_TENSOR_MAP_L2_PROMOTION_NONE = 0,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_64B,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_256B
+    } CUtensorMapL2promotion;
+ * \endcode
+ *
+ * - \p oobFill, which indicates whether zero or a special NaN constant should be used to fill out-of-bound elements, must be of type
+ * ::CUtensorMapFloatOOBfill which is defined as:
+ * \code
+    typedef enum CUtensorMapFloatOOBfill_enum {
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE = 0,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
+    } CUtensorMapFloatOOBfill;
+ * \endcode
+ * Note that ::CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA can only be used when \p tensorDataType represents a floating data type.
+ *
+ * \param tensorMap         - Tensor map object to create
+ * \param tensorDataType    - Tensor data type
+ * \param tensorRank        - Dimensionality of tensor
+ * \param globalAddress     - Starting address of memory region described by tensor
+ * \param globalDim         - Array containing tensor size (number of elements) along each of the \p tensorRank dimensions
+ * \param globalStrides     - Array containing stride size (in bytes) along each of the \p tensorRank - 1 dimensions
+ * \param boxDim            - Array containing traversal box size (number of elments) along each of the \p tensorRank dimensions. Specifies how many elements to be traversed along each tensor dimension.
+ * \param elementStrides    - Array containing traversal stride in each of the \p tensorRank dimensions
+ * \param interleave        - Type of interleaved layout the tensor addresses
+ * \param swizzle           - Bank swizzling pattern inside shared memory
+ * \param l2Promotion       - L2 promotion size
+ * \param oobFill           - Indicate whether zero or special NaN constant must be used to fill out-of-bound elements
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE
+ *
+ * \sa
+ * ::cuTensorMapEncodeIm2col,
+ * ::cuTensorMapReplaceAddress
+ */
+CUresult CUDAAPI cuTensorMapEncodeTiled(CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType, cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim, const cuuint64_t *globalStrides, const cuuint32_t *boxDim, const cuuint32_t *elementStrides, CUtensorMapInterleave interleave, CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion, CUtensorMapFloatOOBfill oobFill);
+
+
+/**
+ * \brief Create a tensor map descriptor object representing im2col memory region
+ *
+ * Creates a descriptor for Tensor Memory Access (TMA) object specified
+ * by the parameters describing a im2col memory layout and returns it in \p tensorMap.
+ *
+ * Tensor map objects are only supported on devices of compute capability 9.0 or higher.
+ * Additionally, a tensor map object is an opaque value, and, as such, should only be
+ * accessed through CUDA API calls.
+ *
+ * The parameters passed are bound to the following requirements:
+ *
+ * - \p tensorMap address must be aligned to 64 bytes.
+ *
+ * - \p tensorDataType has to be an enum from ::CUtensorMapDataType which is defined as:
+ * \code
+    typedef enum CUtensorMapDataType_enum {
+        CU_TENSOR_MAP_DATA_TYPE_UINT8 = 0,       // 1 byte
+        CU_TENSOR_MAP_DATA_TYPE_UINT16,          // 2 bytes
+        CU_TENSOR_MAP_DATA_TYPE_UINT32,          // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_INT32,           // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_UINT64,          // 8 bytes
+        CU_TENSOR_MAP_DATA_TYPE_INT64,           // 8 bytes
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT16,         // 2 bytes
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT32,         // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT64,         // 8 bytes
+        CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,        // 2 bytes
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ,     // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_TFLOAT32,        // 4 bytes
+        CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ     // 4 bytes
+    } CUtensorMapDataType;
+ * \endcode
+ *
+ * - \p tensorRank must be one of dimensions 3, 4, or 5.
+ *
+ * - \p globalAddress, which specifies the starting address of the memory region described, must be 32 byte aligned when \p interleave is
+ * ::CU_TENSOR_MAP_INTERLEAVE_32B and 16 byte aligned otherwise.
+ *
+ * - \p globalDim array, which specifies tensor size of each of the \p tensorRank dimensions, must be non-zero and less than or
+ * equal to 2^32.
+ *
+ * - \p globalStrides array, which specifies tensor stride of each of the lower \p tensorRank - 1 dimensions in bytes, must be a
+ * multiple of 16 and less than 2^40. Additionally, the stride must be a multiple of 32 when \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_32B.
+ * Each following dimension specified includes previous dimension stride:
+ * \code
+    globalStrides[0] = globalDim[0] * elementSizeInBytes(tensorDataType) + padding[0];
+    for (i = 1; i < tensorRank - 1; i++)
+        globalStrides[i] = globalStrides[i – 1] * globalStrides[i] + padding[i];
+    assert(globalStrides[i] >= globalDim[i]);
+ * \endcode
+ *
+ * - \p pixelBoxLowerCorner array specifies the coordinate offsets {D, H, W} of the bounding box from top/left/front corner. The number of
+ * offsets and their precision depends on the tensor dimensionality:
+ *    - When \p tensorRank is 3, one signed offset within range [-32768, 32767] is supported.
+ *    - When \p tensorRank is 4, two signed offsets each within range [-128, 127] are supported.
+ *    - When \p tensorRank is 5, three offsets each within range [-16, 15] are supported.
+ *
+ * - \p pixelBoxUpperCorner array specifies the coordinate offsets {D, H, W} of the bounding box from bottom/right/back corner. The number of
+ * offsets and their precision depends on the tensor dimensionality:
+ *    - When \p tensorRank is 3, one signed offset within range [-32768, 32767] is supported.
+ *    - When \p tensorRank is 4, two signed offsets each within range [-128, 127] are supported.
+ *    - When \p tensorRank is 5, three offsets each within range [-16, 15] are supported.
+ * The bounding box specified by \p pixelBoxLowerCorner and \p pixelBoxUpperCorner must have non-zero area.
+ *
+ * - \p channelsPerPixel, which specifies the number of elements which must be accessed along C dimension, must be less than or equal to 256.
+ *
+ * - \p pixelsPerColumn, which specifies the number of elements that must be accessed along the {N, D, H, W} dimensions, must be less than or
+ * equal to 1024.
+ *
+ * - \p elementStrides array, which specifies the iteration step along each of the \p tensorRank dimensions, must be non-zero and less
+ * than or equal to 8. Note that when \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_NONE, the first element of this array is ignored since
+ * TMA doesn’t support the stride for dimension zero.
+ * When all elemets of \p elementStrides array is one, \p boxDim specifies the number of elements to load. However, if the \p elementStrides[i]
+ * is not equal to one, then TMA loads ceil( \p boxDim[i] / \p elementStrides[i]) number of elements along i-th dimension. To load N elements along
+ * i-th dimension, \p boxDim[i] must be set to N * \p elementStrides[i].
+ *
+ * - \p interleave specifies the interleaved layout of type ::CUtensorMapInterleave, which is defined as:
+ * \code
+    typedef enum CUtensorMapInterleave_enum {
+        CU_TENSOR_MAP_INTERLEAVE_NONE = 0,
+        CU_TENSOR_MAP_INTERLEAVE_16B,
+        CU_TENSOR_MAP_INTERLEAVE_32B
+    } CUtensorMapInterleave;
+ * \endcode
+ * TMA supports interleaved layouts like NC/8HWC8 where C8 utilizes 16 bytes in memory assuming 2 byte per channel or NC/16HWC16 where C16
+ * uses 32 bytes.
+ * When \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_NONE and \p swizzle is not ::CU_TENSOR_MAP_SWIZZLE_NONE, the bounding box inner dimension
+ * (computed as \p boxDim[0] multiplied by element size derived from \p tensorDataType) must be less than or equal to the swizzle size.
+ *    - CU_TENSOR_MAP_SWIZZLE_32B implies the bounding box inner dimension will be <= 32.
+ *    - CU_TENSOR_MAP_SWIZZLE_64B implies the bounding box inner dimension will be <= 64.
+ *    - CU_TENSOR_MAP_SWIZZLE_128B implies the bounding box inner dimension will be <= 128.
+ *
+ * - \p swizzle, which specifies the shared memory bank swizzling pattern, has to be of type ::CUtensorMapSwizzle which is defined as:
+ * \code
+    typedef enum CUtensorMapSwizzle_enum {
+        CU_TENSOR_MAP_SWIZZLE_NONE = 0,
+        CU_TENSOR_MAP_SWIZZLE_32B,
+        CU_TENSOR_MAP_SWIZZLE_64B,
+        CU_TENSOR_MAP_SWIZZLE_128B
+    } CUtensorMapSwizzle;
+ * \endcode
+ * Data is organized in specific order in global memory; however, it may not match the order in which data are accessed by application in
+ * the shared memory. This difference in data organization may cause bank conflicts when shared memory is accessed. In order to avoid this
+ * problem, data can be loaded to shard memory with shuffling across shared memory banks.
+ * Note that it’s expected that when \p interleave is ::CU_TENSOR_MAP_INTERLEAVE_32B, \p swizzle should be ::CU_TENSOR_MAP_SWIZZLE_32B mode.
+ * Other interleave modes can have any swizzling patterns.
+ *
+ * - \p l2Promotion specifies L2 fetch size which indicates the byte granurality at which L2 requests is filled from DRAM. It must be of
+ * type ::CUtensorMapL2promotion, which is defined as:
+ * \code
+    typedef enum CUtensorMapL2promotion_enum {
+        CU_TENSOR_MAP_L2_PROMOTION_NONE = 0,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_64B,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+        CU_TENSOR_MAP_L2_PROMOTION_L2_256B
+    } CUtensorMapL2promotion;
+ * \endcode
+ *
+ * - \p oobFill, which indicates whether zero or a special NaN constant should be used to fill out-of-bound elements, must be of type
+ * ::CUtensorMapFloatOOBfill which is defined as:
+ * \code
+    typedef enum CUtensorMapFloatOOBfill_enum {
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE = 0,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
+    } CUtensorMapFloatOOBfill;
+ * \endcode
+ * Note that ::CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA can only be used when \p tensorDataType represents a floating data type.
+ *
+ * \param tensorMap             - Tensor map object to create
+ * \param tensorDataType        - Tensor data type
+ * \param tensorRank            - Dimensionality of tensor, needs to be at least of dimension 3
+ * \param globalAddress         - Starting address of memory region described by tensor
+ * \param globalDim             - Array containing tensor size (number of elements) along each of the \p tensorRank dimensions
+ * \param globalStrides         - Array containing stride size (in bytes) along each of the \p tensorRank - 1 dimensions
+ * \param pixelBoxLowerCorner   - Array containing DHW dimentions of lower box corner
+ * \param pixelBoxUpperCorner   - Array containing DHW dimentions of upper box corner
+ * \param channelsPerPixel      - Number of channels per pixel
+ * \param pixelsPerColumn       - Number of pixels per column
+ * \param elementStrides        - Array containing traversal stride in each of the \p tensorRank dimensions
+ * \param interleave            - Type of interleaved layout the tensor addresses
+ * \param swizzle               - Bank swizzling pattern inside shared memory
+ * \param l2Promotion           - L2 promotion size
+ * \param oobFill               - Indicate whether zero or special NaN constant must be used to fill out-of-bound elements
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE
+ *
+ * \sa
+ * ::cuTensorMapEncodeTiled,
+ * ::cuTensorMapReplaceAddress
+ */
+CUresult CUDAAPI cuTensorMapEncodeIm2col(CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType, cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim, const cuuint64_t *globalStrides, const int *pixelBoxLowerCorner, const int *pixelBoxUpperCorner, cuuint32_t channelsPerPixel, cuuint32_t pixelsPerColumn, const cuuint32_t *elementStrides, CUtensorMapInterleave interleave, CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion, CUtensorMapFloatOOBfill oobFill);
+
+/**
+ * \brief Modify an existing tensor map descriptor with an updated global address
+ *
+ * Modifies the descriptor for Tensor Memory Access (TMA) object passed in \p tensorMap with
+ * an updated \p globalAddress.
+ *
+ * Tensor map objects are only supported on devices of compute capability 9.0 or higher.
+ * Additionally, a tensor map object is an opaque value, and, as such, should only be
+ * accessed through CUDA API calls.
+ *
+ * \param tensorMap             - Tensor map object to modify
+ * \param globalAddress         - Starting address of memory region described by tensor, must follow previous alignment requirements
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_INVALID_VALUE
+ *
+ * \sa
+ * ::cuTensorMapEncodeTiled,
+ * ::cuTensorMapEncodeIm2col
+ */
+CUresult CUDAAPI cuTensorMapReplaceAddress(CUtensorMap *tensorMap, void *globalAddress);
+
+/** @} */
+/* END CUDA_TENSOR_MEMORY */
 
 /**
  * \defgroup CUDA_PEER_ACCESS Peer Context Memory Access
@@ -18945,9 +21440,18 @@ CUresult CUDAAPI cuGraphicsUnmapResources(unsigned int count, CUgraphicsResource
  * typedef can be picked up from the corresponding typedefs header file. For example,
  * cudaTypedefs.h consists of function pointer typedefs for driver APIs defined in cuda.h.
  *
- * The API will return ::CUDA_ERROR_NOT_FOUND if the requested driver function is not
- * supported on the platform, no ABI compatible driver function exists for the specified
- * \p cudaVersion or if the driver symbol is invalid.
+ * The API will return ::CUDA_SUCCESS and set the returned \p pfn to NULL if the 
+ * requested driver function is not supported on the platform, no ABI 
+ * compatible driver function exists for the specified \p cudaVersion or if the 
+ * driver symbol is invalid.
+ *
+ * It will also set the optional \p symbolStatus to one of the values in
+ * ::CUdriverProcAddressQueryResult with the following meanings:
+ * - ::CU_GET_PROC_ADDRESS_SUCCESS - The requested symbol was succesfully found based
+ *   on input arguments and \p pfn is valid
+ * - ::CU_GET_PROC_ADDRESS_SYMBOL_NOT_FOUND - The requested symbol was not found
+ * - ::CU_GET_PROC_ADDRESS_VERSION_NOT_SUFFICIENT - The requested symbol was found but is
+ *   not supported by cudaVersion specified
  *
  * The requested flags can be:
  * - ::CU_GET_PROC_ADDRESS_DEFAULT: This is the default mode. This is equivalent to
@@ -18967,20 +21471,254 @@ CUresult CUDAAPI cuGraphicsUnmapResources(unsigned int count, CUgraphicsResource
  * \param pfn - Location to return the function pointer to the requested driver function
  * \param cudaVersion - The CUDA version to look for the requested driver symbol 
  * \param flags -  Flags to specify search options.
+ * \param symbolStatus - Optional location to store the status of the search for
+ *                       \p symbol based on \p cudaVersion. See ::CUdriverProcAddressQueryResult
+ *                       for possible values.
  *
  * \return
  * ::CUDA_SUCCESS,
  * ::CUDA_ERROR_INVALID_VALUE,
- * ::CUDA_ERROR_NOT_SUPPORTED,
- * ::CUDA_ERROR_NOT_FOUND
+ * ::CUDA_ERROR_NOT_SUPPORTED
  * \note_version_mixing
  *
  * \sa
  * ::cudaGetDriverEntryPoint
  */
-CUresult CUDAAPI cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, cuuint64_t flags);
+CUresult CUDAAPI cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, cuuint64_t flags, CUdriverProcAddressQueryResult *symbolStatus);
 
 /** @} */ /* END CUDA_DRIVER_ENTRY_POINT */
+
+/**
+ * \defgroup CUDA_COREDUMP Coredump Attributes Control API
+ *
+ * ___MANBRIEF___ coredump attribute control functions for the low-level CUDA API
+ * (___CURRENT_FILE___) ___ENDMANBRIEF___
+ *
+ * This section describes the coredump attribute control functions of the low-level CUDA
+ * driver application programming interface.
+ *
+ * @{
+ */
+
+/**
+ * Flags for choosing a coredump attribute to get/set
+ */
+typedef enum CUcoredumpSettings_enum {
+    CU_COREDUMP_ENABLE_ON_EXCEPTION = 1,
+    CU_COREDUMP_TRIGGER_HOST,
+    CU_COREDUMP_LIGHTWEIGHT,
+    CU_COREDUMP_ENABLE_USER_TRIGGER,
+    CU_COREDUMP_FILE,
+    CU_COREDUMP_PIPE,
+    CU_COREDUMP_MAX
+} CUcoredumpSettings;
+
+/**
+ * \brief Allows caller to fetch a coredump attribute value for the current context
+ *
+ * Returns in \p *value the requested value specified by \p attrib. It is up to the caller
+ * to ensure that the data type and size of \p *value matches the request.
+ *
+ * If the caller calls this function with \p *value equal to NULL, the size of the memory
+ * region (in bytes) expected for \p attrib will be placed in \p size.
+ *
+ * The supported attributes are:
+ * - ::CU_COREDUMP_ENABLE_ON_EXCEPTION: Bool where ::true means that GPU exceptions from
+ *      this context will create a coredump at the location specified by ::CU_COREDUMP_FILE.
+ *      The default value is ::false unless set to ::true globally or locally, or the 
+ *      CU_CTX_USER_COREDUMP_ENABLE flag was set during context creation.
+ * - ::CU_COREDUMP_TRIGGER_HOST: Bool where ::true means that the host CPU will
+ *      also create a coredump. The default value is ::true unless set to ::false globally or
+ *      or locally.
+ * - ::CU_COREDUMP_LIGHTWEIGHT: Bool where ::true means that any resulting coredumps
+ *      will not have a dump of GPU memory or non-reloc ELF images. The default value is
+ *      ::false unless set to ::true globally or locally.
+ * - ::CU_COREDUMP_ENABLE_USER_TRIGGER: Bool where ::true means that a coredump can be
+ *      created by writing to the system pipe specified by ::CU_COREDUMP_PIPE. The default
+ *      value is ::false unless set to ::true globally or locally.
+ * - ::CU_COREDUMP_FILE: String of up to 1023 characters that defines the location where
+ *      any coredumps generated by this context will be written. The default value is 
+ *      ::core.cuda.HOSTNAME.PID where ::HOSTNAME is the host name of the machine running
+ *      the CUDA applications and ::PID is the process ID of the CUDA application.
+ * - ::CU_COREDUMP_PIPE: String of up to 1023 characters that defines the name of the pipe
+ *      that will be monitored if user-triggered coredumps are enabled. The default value is
+ *      ::corepipe.cuda.HOSTNAME.PID where ::HOSTNAME is the host name of the machine running
+ *      the CUDA application and ::PID is the process ID of the CUDA application.
+ *
+ * \param attrib - The enum defining which value to fetch. 
+ * \param value - void* containing the requested data.
+ * \param size - The size of the memory region \p value points to.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_NOT_PERMITTED,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_CONTEXT_IS_DESTROYED
+ *
+ * \sa
+ * ::cuCoredumpGetAttributeGlobal,
+ * ::cuCoredumpSetAttribute,
+ * ::cuCoredumpSetAttributeGlobal
+ */
+CUresult CUDAAPI cuCoredumpGetAttribute(CUcoredumpSettings attrib, void* value, size_t *size);
+
+/**
+ * \brief Allows caller to fetch a coredump attribute value for the entire application
+ *
+ * Returns in \p *value the requested value specified by \p attrib. It is up to the caller
+ * to ensure that the data type and size of \p *value matches the request.
+ *
+ * If the caller calls this function with \p *value equal to NULL, the size of the memory
+ * region (in bytes) expected for \p attrib will be placed in \p size.
+ *
+ * The supported attributes are:
+ * - ::CU_COREDUMP_ENABLE_ON_EXCEPTION: Bool where ::true means that GPU exceptions from
+ *      this context will create a coredump at the location specified by ::CU_COREDUMP_FILE.
+ *      The default value is ::false.
+ * - ::CU_COREDUMP_TRIGGER_HOST: Bool where ::true means that the host CPU will
+ *      also create a coredump. The default value is ::true.
+ * - ::CU_COREDUMP_LIGHTWEIGHT: Bool where ::true means that any resulting coredumps
+ *      will not have a dump of GPU memory or non-reloc ELF images. The default value is
+ *      ::false.
+ * - ::CU_COREDUMP_ENABLE_USER_TRIGGER: Bool where ::true means that a coredump can be
+ *      created by writing to the system pipe specified by ::CU_COREDUMP_PIPE. The default
+ *      value is ::false.
+ * - ::CU_COREDUMP_FILE: String of up to 1023 characters that defines the location where
+ *      any coredumps generated by this context will be written. The default value is 
+ *      ::core.cuda.HOSTNAME.PID where ::HOSTNAME is the host name of the machine running
+ *      the CUDA applications and ::PID is the process ID of the CUDA application.
+ * - ::CU_COREDUMP_PIPE: String of up to 1023 characters that defines the name of the pipe
+ *      that will be monitored if user-triggered coredumps are enabled. The default value is
+ *      ::corepipe.cuda.HOSTNAME.PID where ::HOSTNAME is the host name of the machine running
+ *      the CUDA application and ::PID is the process ID of the CUDA application.
+ *
+ * \param attrib - The enum defining which value to fetch. 
+ * \param value - void* containing the requested data.
+ * \param size - The size of the memory region \p value points to.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE
+ *
+ * \sa
+ * ::cuCoredumpGetAttribute,
+ * ::cuCoredumpSetAttribute,
+ * ::cuCoredumpSetAttributeGlobal
+ */
+CUresult CUDAAPI cuCoredumpGetAttributeGlobal(CUcoredumpSettings attrib, void *value, size_t *size);
+
+/**
+ * \brief Allows caller to set a coredump attribute value for the current context
+ *
+ * This function should be considered an alternate interface to the CUDA-GDB environment
+ * variables defined in this document: https://docs.nvidia.com/cuda/cuda-gdb/index.html#gpu-coredump
+ * 
+ * An important design decision to note is that any coredump environment variable values 
+ * set before CUDA initializes will take permanent precedence over any values set with this
+ * this function. This decision was made to ensure no change in behavior for any users that
+ * may be currently using these variables to get coredumps. 
+ *
+ * \p *value shall contain the requested value specified by \p set. It is up to the caller
+ * to ensure that the data type and size of \p *value matches the request.
+ *
+ * If the caller calls this function with \p *value equal to NULL, the size of the memory
+ * region (in bytes) expected for \p set will be placed in \p size.
+ *
+ * ::CU_COREDUMP_ENABLE_USER_TRIGGER and ::CU_COREDUMP_PIPE cannot be set on a per-context basis.
+ *
+ * The supported attributes are:
+ * - ::CU_COREDUMP_ENABLE_ON_EXCEPTION: Bool where ::true means that GPU exceptions from
+ *      this context will create a coredump at the location specified by ::CU_COREDUMP_FILE.
+ *      The default value is ::false.
+ * - ::CU_COREDUMP_TRIGGER_HOST: Bool where ::true means that the host CPU will
+ *      also create a coredump. The default value is ::true.
+ * - ::CU_COREDUMP_LIGHTWEIGHT: Bool where ::true means that any resulting coredumps
+ *      will not have a dump of GPU memory or non-reloc ELF images. The default value is
+ *      ::false.
+ * - ::CU_COREDUMP_FILE: String of up to 1023 characters that defines the location where
+ *      any coredumps generated by this context will be written. The default value is 
+ *      ::core.cuda.HOSTNAME.PID where ::HOSTNAME is the host name of the machine running
+ *      the CUDA applications and ::PID is the process ID of the CUDA application.
+ *
+ * \param attrib - The enum defining which value to set. 
+ * \param value - void* containing the requested data.
+ * \param size - The size of the memory region \p value points to.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_NOT_PERMITTED,
+ * ::CUDA_ERROR_DEINITIALIZED,
+ * ::CUDA_ERROR_NOT_INITIALIZED,
+ * ::CUDA_ERROR_INVALID_CONTEXT,
+ * ::CUDA_ERROR_CONTEXT_IS_DESTROYED
+ *
+ * \sa
+ * ::cuCoredumpGetAttributeGlobal,
+ * ::cuCoredumpGetAttribute,
+ * ::cuCoredumpSetAttributeGlobal
+ */
+CUresult CUDAAPI cuCoredumpSetAttribute(CUcoredumpSettings attrib, void* value, size_t *size);
+
+/**
+ * \brief Allows caller to set a coredump attribute value globally
+ *
+ * This function should be considered an alternate interface to the CUDA-GDB environment
+ * variables defined in this document: https://docs.nvidia.com/cuda/cuda-gdb/index.html#gpu-coredump
+ * 
+ * An important design decision to note is that any coredump environment variable values 
+ * set before CUDA initializes will take permanent precedence over any values set with this
+ * this function. This decision was made to ensure no change in behavior for any users that
+ * may be currently using these variables to get coredumps. 
+ *
+ * \p *value shall contain the requested value specified by \p set. It is up to the caller
+ * to ensure that the data type and size of \p *value matches the request.
+ *
+ * If the caller calls this function with \p *value equal to NULL, the size of the memory
+ * region (in bytes) expected for \p set will be placed in \p size.
+ *
+ * The supported attributes are:
+ * - ::CU_COREDUMP_ENABLE_ON_EXCEPTION: Bool where ::true means that GPU exceptions from
+ *      this context will create a coredump at the location specified by ::CU_COREDUMP_FILE.
+ *      The default value is ::false.
+ * - ::CU_COREDUMP_TRIGGER_HOST: Bool where ::true means that the host CPU will
+ *      also create a coredump. The default value is ::true.
+ * - ::CU_COREDUMP_LIGHTWEIGHT: Bool where ::true means that any resulting coredumps
+ *      will not have a dump of GPU memory or non-reloc ELF images. The default value is
+ *      ::false.
+ * - ::CU_COREDUMP_ENABLE_USER_TRIGGER: Bool where ::true means that a coredump can be
+ *      created by writing to the system pipe specified by ::CU_COREDUMP_PIPE. The default
+ *      value is ::false.
+ * - ::CU_COREDUMP_FILE: String of up to 1023 characters that defines the location where
+ *      any coredumps generated by this context will be written. The default value is 
+ *      ::core.cuda.HOSTNAME.PID where ::HOSTNAME is the host name of the machine running
+ *      the CUDA applications and ::PID is the process ID of the CUDA application.
+ * - ::CU_COREDUMP_PIPE: String of up to 1023 characters that defines the name of the pipe
+ *      that will be monitored if user-triggered coredumps are enabled. This value may not be
+ *      changed after ::CU_COREDUMP_ENABLE_USER_TRIGGER is set to ::true. The default 
+ *      value is ::corepipe.cuda.HOSTNAME.PID where ::HOSTNAME is the host name of the machine
+ *      running the CUDA application and ::PID is the process ID of the CUDA application.
+ *
+ * \param attrib - The enum defining which value to set. 
+ * \param value - void* containing the requested data.
+ * \param size - The size of the memory region \p value points to.
+ *
+ * \return
+ * ::CUDA_SUCCESS,
+ * ::CUDA_ERROR_INVALID_VALUE,
+ * ::CUDA_ERROR_NOT_PERMITTED
+ *
+ * \sa
+ * ::cuCoredumpGetAttribute,
+ * ::cuCoredumpGetAttributeGlobal,
+ * ::cuCoredumpSetAttribute
+ */
+CUresult CUDAAPI cuCoredumpSetAttributeGlobal(CUcoredumpSettings attrib, void *value, size_t *size);
+
+/** @} */ /* END CUDA_COREDUMP */
 
 CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExportTableId);
 
@@ -19053,6 +21791,7 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     #undef cuMemsetD2D16Async
     #undef cuMemsetD2D32Async
     #undef cuStreamGetPriority
+    #undef cuStreamGetId
     #undef cuStreamGetFlags
     #undef cuStreamGetCtx
     #undef cuStreamWaitEvent
@@ -19063,9 +21802,7 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     #undef cuEventRecord
     #undef cuEventRecordWithFlags
     #undef cuLaunchKernel
-
-
-
+    #undef cuLaunchKernelEx
     #undef cuLaunchHostFunc
     #undef cuGraphicsMapResources
     #undef cuGraphicsUnmapResources
@@ -19074,6 +21811,11 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     #undef cuStreamWriteValue64
     #undef cuStreamWaitValue64
     #undef cuStreamBatchMemOp
+    #undef cuStreamWriteValue32_v2
+    #undef cuStreamWaitValue32_v2
+    #undef cuStreamWriteValue64_v2
+    #undef cuStreamWaitValue64_v2
+    #undef cuStreamBatchMemOp_v2
     #undef cuMemPrefetchAsync
     #undef cuLaunchCooperativeKernel
     #undef cuSignalExternalSemaphoresAsync
@@ -19083,6 +21825,8 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     #undef cuStreamIsCapturing
     #undef cuStreamGetCaptureInfo
     #undef cuStreamGetCaptureInfo_v2
+    #undef cuGraphInstantiateWithParams
+    #undef cuGraphExecUpdate
     #undef cuGraphUpload
     #undef cuGraphLaunch
     #undef cuDevicePrimaryCtxRelease
@@ -19093,11 +21837,16 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     #undef cuStreamSetAttribute
     #undef cuStreamGetAttribute
     #undef cuGraphInstantiate
+    #undef cuGraphAddKernelNode
+    #undef cuGraphKernelNodeGetParams
+    #undef cuGraphKernelNodeSetParams
+    #undef cuGraphExecKernelNodeSetParams
     #undef cuMemMapArrayAsync
     #undef cuMemFreeAsync 
     #undef cuMemAllocAsync 
     #undef cuMemAllocFromPoolAsync 
     #undef cuStreamUpdateCaptureDependencies
+    #undef cuGetProcAddress
 
     CUresult CUDAAPI cuMemHostRegister(void *p, size_t bytesize, unsigned int Flags);
     CUresult CUDAAPI cuGraphicsResourceSetMapFlags(CUgraphicsResource resource, unsigned int flags);
@@ -19274,6 +22023,7 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     CUresult CUDAAPI cuMemsetD2D32Async(CUdeviceptr dstDevice, size_t dstPitch, unsigned int ui, size_t Width, size_t Height, CUstream hStream);
 
     CUresult CUDAAPI cuStreamGetPriority(CUstream hStream, int *priority);
+    CUresult CUDAAPI cuStreamGetId(CUstream hStream, unsigned long long *streamId);
     CUresult CUDAAPI cuStreamGetFlags(CUstream hStream, unsigned int *flags);
     CUresult CUDAAPI cuStreamGetCtx(CUstream hStream, CUcontext *pctx);
     CUresult CUDAAPI cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags);
@@ -19284,9 +22034,7 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     CUresult CUDAAPI cuEventRecord(CUevent hEvent, CUstream hStream);
     CUresult CUDAAPI cuEventRecordWithFlags(CUevent hEvent, CUstream hStream, unsigned int flags);
     CUresult CUDAAPI cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, CUstream hStream, void **kernelParams, void **extra);
-
-
-
+    CUresult CUDAAPI cuLaunchKernelEx(const CUlaunchConfig *config, CUfunction f, void **kernelParams, void **extra);
     CUresult CUDAAPI cuLaunchHostFunc(CUstream hStream, CUhostFn fn, void *userData);
     CUresult CUDAAPI cuGraphicsMapResources(unsigned int count, CUgraphicsResource *resources, CUstream hStream);
     CUresult CUDAAPI cuGraphicsUnmapResources(unsigned int count, CUgraphicsResource *resources, CUstream hStream);
@@ -19295,6 +22043,18 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     CUresult CUDAAPI cuStreamWriteValue64(CUstream stream, CUdeviceptr addr, cuuint64_t value, unsigned int flags);
     CUresult CUDAAPI cuStreamWaitValue64(CUstream stream, CUdeviceptr addr, cuuint64_t value, unsigned int flags);
     CUresult CUDAAPI cuStreamBatchMemOp(CUstream stream, unsigned int count, CUstreamBatchMemOpParams *paramArray, unsigned int flags);
+
+    CUresult CUDAAPI cuStreamWriteValue32_ptsz(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamWaitValue32_ptsz(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamWriteValue64_ptsz(CUstream stream, CUdeviceptr addr, cuuint64_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamWaitValue64_ptsz(CUstream stream, CUdeviceptr addr, cuuint64_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamBatchMemOp_ptsz(CUstream stream, unsigned int count, CUstreamBatchMemOpParams *paramArray, unsigned int flags);
+
+    CUresult CUDAAPI cuStreamWriteValue32_v2(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamWaitValue32_v2(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamWriteValue64_v2(CUstream stream, CUdeviceptr addr, cuuint64_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamWaitValue64_v2(CUstream stream, CUdeviceptr addr, cuuint64_t value, unsigned int flags);
+    CUresult CUDAAPI cuStreamBatchMemOp_v2(CUstream stream, unsigned int count, CUstreamBatchMemOpParams *paramArray, unsigned int flags);
     CUresult CUDAAPI cuMemPrefetchAsync(CUdeviceptr devPtr, size_t count, CUdevice dstDevice, CUstream hStream);
     CUresult CUDAAPI cuLaunchCooperativeKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ, unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ, unsigned int sharedMemBytes, CUstream hStream, void **kernelParams);
     CUresult CUDAAPI cuSignalExternalSemaphoresAsync(const CUexternalSemaphore *extSemArray, const CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS *paramsArray, unsigned int numExtSems, CUstream stream);
@@ -19305,7 +22065,14 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     CUresult CUDAAPI cuStreamEndCapture(CUstream hStream, CUgraph *phGraph);
     CUresult CUDAAPI cuStreamIsCapturing(CUstream hStream, CUstreamCaptureStatus *captureStatus);
     CUresult CUDAAPI cuStreamGetCaptureInfo(CUstream hStream, CUstreamCaptureStatus *captureStatus_out, cuuint64_t *id_out);
+    CUresult CUDAAPI cuStreamGetCaptureInfo_ptsz(CUstream hStream, CUstreamCaptureStatus *captureStatus_out, cuuint64_t *id_out);
     CUresult CUDAAPI cuStreamGetCaptureInfo_v2(CUstream hStream, CUstreamCaptureStatus *captureStatus_out, cuuint64_t *id_out, CUgraph *graph_out, const CUgraphNode **dependencies_out, size_t *numDependencies_out);
+    CUresult CUDAAPI cuGraphAddKernelNode(CUgraphNode *phGraphNode, CUgraph hGraph, const CUgraphNode *dependencies, size_t numDependencies, const CUDA_KERNEL_NODE_PARAMS_v1 *nodeParams);
+    CUresult CUDAAPI cuGraphKernelNodeGetParams(CUgraphNode hNode, CUDA_KERNEL_NODE_PARAMS_v1 *nodeParams);
+    CUresult CUDAAPI cuGraphKernelNodeSetParams(CUgraphNode hNode, const CUDA_KERNEL_NODE_PARAMS_v1 *nodeParams);
+    CUresult CUDAAPI cuGraphExecKernelNodeSetParams(CUgraphExec hGraphExec, CUgraphNode hNode, const CUDA_KERNEL_NODE_PARAMS_v1 *nodeParams);
+    CUresult CUDAAPI cuGraphInstantiateWithParams(CUgraphExec *phGraphExec, CUgraph hGraph, CUDA_GRAPH_INSTANTIATE_PARAMS *instantiateParams);
+    CUresult CUDAAPI cuGraphExecUpdate(CUgraphExec hGraphExec, CUgraph hGraph, CUgraphNode *hErrorNode_out, CUgraphExecUpdateResult *updateResult_out);
     CUresult CUDAAPI cuGraphUpload(CUgraphExec hGraph, CUstream hStream);
     CUresult CUDAAPI cuGraphLaunch(CUgraphExec hGraph, CUstream hStream);
     CUresult CUDAAPI cuStreamCopyAttributes(CUstream dstStream, CUstream srcStream);
@@ -19314,6 +22081,8 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
 
     CUresult CUDAAPI cuIpcOpenMemHandle(CUdeviceptr *pdptr, CUipcMemHandle handle, unsigned int Flags);
     CUresult CUDAAPI cuGraphInstantiate(CUgraphExec *phGraphExec, CUgraph hGraph, CUgraphNode *phErrorNode, char *logBuffer, size_t bufferSize);
+    CUresult CUDAAPI cuGraphInstantiate_v2(CUgraphExec *phGraphExec, CUgraph hGraph, CUgraphNode *phErrorNode, char *logBuffer, size_t bufferSize);
+
     CUresult CUDAAPI cuMemMapArrayAsync(CUarrayMapInfo *mapInfoList, unsigned int count, CUstream hStream);
 
     CUresult CUDAAPI cuMemFreeAsync(CUdeviceptr dptr, CUstream hStream);
@@ -19321,16 +22090,18 @@ CUresult CUDAAPI cuGetExportTable(const void **ppExportTable, const CUuuid *pExp
     CUresult CUDAAPI cuMemAllocFromPoolAsync(CUdeviceptr *dptr, size_t bytesize, CUmemoryPool pool, CUstream hStream);
 
     CUresult CUDAAPI cuStreamUpdateCaptureDependencies(CUstream hStream, CUgraphNode *dependencies, size_t numDependencies, unsigned int flags);
+    CUresult CUDAAPI cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, cuuint64_t flags);
+
 #elif defined(__CUDA_API_PER_THREAD_DEFAULT_STREAM)
-static inline CUresult cuGetProcAddress_ptsz(const char *symbol, void **funcPtr, int driverVersion, cuuint64_t flags) {
+static inline CUresult cuGetProcAddress_v2_ptsz(const char *symbol, void **funcPtr, int driverVersion, cuuint64_t flags, CUdriverProcAddressQueryResult *symbolStatus) {
     const int procAddressMask = (CU_GET_PROC_ADDRESS_LEGACY_STREAM|
                                  CU_GET_PROC_ADDRESS_PER_THREAD_DEFAULT_STREAM);
     if ((flags & procAddressMask) == 0) {
         flags |= CU_GET_PROC_ADDRESS_PER_THREAD_DEFAULT_STREAM;
     }
-    return cuGetProcAddress(symbol, funcPtr, driverVersion, flags); 
+    return cuGetProcAddress_v2(symbol, funcPtr, driverVersion, flags, symbolStatus); 
 }
-#define cuGetProcAddress cuGetProcAddress_ptsz
+#define cuGetProcAddress_v2 cuGetProcAddress_v2_ptsz
 #endif
 
 #ifdef __cplusplus

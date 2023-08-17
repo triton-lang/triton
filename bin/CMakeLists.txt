@@ -9,6 +9,7 @@ target_link_libraries(triton-opt PRIVATE
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
+  TritonNvidiaGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
   # tests
@@ -29,6 +30,7 @@ target_link_libraries(triton-reduce PRIVATE
   TritonAnalysis
   TritonTransforms
   TritonGPUTransforms
+  TritonNvidiaGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
   # tests
@@ -48,6 +50,7 @@ llvm_update_compile_flags(triton-translate)
          TritonAnalysis
          TritonTransforms
          TritonGPUTransforms
+         TritonNvidiaGPUTransforms
          TritonLLVMIR
          TritonPTX
          TritonHSACO

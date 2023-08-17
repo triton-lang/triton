@@ -27,15 +27,20 @@ Type PointerType::parse(AsmParser &parser) {
   if (parser.parseType(pointeeType))
     return Type();
 
+  int addressSpace = 1;
+  if (succeeded(parser.parseOptionalComma())) {
+    if (parser.parseInteger(addressSpace))
+      return Type();
+  }
+
   if (parser.parseGreater())
     return Type();
 
-  // TODO: also print address space?
-  return PointerType::get(pointeeType, 1);
+  return PointerType::get(pointeeType, addressSpace);
 }
 
 void PointerType::print(AsmPrinter &printer) const {
-  printer << "<" << getPointeeType() << ">";
+  printer << "<" << getPointeeType() << ", " << getAddressSpace() << ">";
 }
 
 namespace mlir {
@@ -97,6 +102,10 @@ bool isTensorPointerType(Type type) {
   if (auto ptrType = type.dyn_cast<PointerType>())
     return ptrType.getPointeeType().isa<RankedTensorType>();
   return false;
+}
+
+bool isTensorOrTensorPointerType(Type type) {
+  return type.isa<RankedTensorType>() || isTensorPointerType(type);
 }
 
 Type getElementTypeOfTensorPointerType(Type type) {
