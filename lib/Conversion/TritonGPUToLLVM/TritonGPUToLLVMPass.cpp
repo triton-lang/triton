@@ -40,12 +40,16 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
+namespace mlir {
+namespace triton {
+#define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+} // namespace triton
+} // namespace mlir
+
 using namespace mlir;
 using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
-
-#define GEN_PASS_CLASSES
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 
 namespace {
 
@@ -372,15 +376,10 @@ public:
   }
 };
 
-class ConvertTritonGPUToLLVM
-    : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
-
-public:
-  explicit ConvertTritonGPUToLLVM(int computeCapability,
-                                  mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-                                  bool isROCM)
-      : computeCapability(computeCapability), tmaMetadata(tmaMetadata),
-        isROCM(isROCM) {}
+struct ConvertTritonGPUToLLVM
+    : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
+  using ConvertTritonGPUToLLVMBase<
+      ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -568,10 +567,6 @@ private:
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
            CacheKeyDenseMapInfo>
       indexCache;
-
-  int computeCapability{};
-  bool isROCM{};
-  mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
 
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
@@ -862,12 +857,12 @@ private:
 namespace mlir {
 namespace triton {
 
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
+  return std::make_unique<ConvertTritonGPUToLLVM>();
+}
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int computeCapability,
-                                 mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-                                 bool isROCM) {
-  return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability,
-                                                    tmaMetadata, isROCM);
+createConvertTritonGPUToLLVMPass(const ConvertTritonGPUToLLVMOptions &options) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(options);
 }
 
 } // namespace triton
