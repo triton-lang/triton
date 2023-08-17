@@ -1258,7 +1258,7 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", parent = " << getParent();
   if (mmaParent && mmaParent.isAmpere())
-    printer << ", kWidth = " << getMMAv2kWidth();
+    printer << ", kWidth = " << getKWidth();
   printer << "}>";
 }
 
@@ -1496,7 +1496,7 @@ struct TritonGPUInferLayoutInterface
     // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
-    if (aEncoding.getMMAv2kWidth() != bEncoding.getMMAv2kWidth())
+    if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
     return success();
   }
