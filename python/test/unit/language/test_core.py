@@ -1462,8 +1462,6 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
 def get_reduced_dtype(dtype_str, op):
     if op in ('argmin', 'argmax'):
         return 'int32'
-    if dtype_str in ['int8', 'uint8', 'int16', 'uint16']:
-        return 'int32'
     if dtype_str == 'bfloat16':
         return 'float32'
     return dtype_str
