@@ -6,7 +6,7 @@ from functools import wraps
 from typing import Callable, List, Sequence, TypeVar
 
 from .._C.libtriton.triton import ir
-from . import math, semantic
+from . import semantic
 
 T = TypeVar('T')
 

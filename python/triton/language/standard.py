@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..runtime.jit import jit
 from . import core
+from . import math
 
 # -----------------------
 # Standard library
@@ -152,20 +153,20 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
                        return_indices_arg="return_indices",
                        tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
-    input = _promote_reduction_input(input)
+    input = core._promote_reduction_input(input)
     if return_indices:
         if return_indices_tie_break_left:
-            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
+            return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
         else:
-            return _reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
+            return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
     else:
-        if constexpr(input.dtype.primitive_bitwidth) < 32:
-            if constexpr(input.dtype.is_floating()):
+        if core.constexpr(input.dtype.primitive_bitwidth) < 32:
+            if core.constexpr(input.dtype.is_floating()):
                 input = input.to(float32)
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(int32)
-        return reduce(input, axis, maximum)
+        return core.reduce(input, axis, maximum)
 
 
 @jit
@@ -204,20 +205,20 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
                        return_indices_arg="return_indices",
                        tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
-    input = _promote_reduction_input(input)
+    input = core._promote_reduction_input(input)
     if return_indices:
         if return_indices_tie_break_left:
-            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
+            return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
         else:
-            return _reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
+            return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
     else:
-        if constexpr(input.dtype.primitive_bitwidth) < 32:
-            if constexpr(input.dtype.is_floating()):
+        if core.constexpr(input.dtype.primitive_bitwidth) < 32:
+            if core.constexpr(input.dtype.is_floating()):
                 input = input.to(float32)
             else:
                 assert input.dtype.is_integer_type()
                 input = input.to(int32)
-        return reduce(input, axis, minimum)
+        return core.reduce(input, axis, minimum)
 
 
 @jit
@@ -238,8 +239,8 @@ def _sum_combine(a, b):
 @jit
 @core._add_reduction_docstr("sum")
 def sum(input, axis=None):
-    input = _promote_reduction_input(input)
-    return reduce(input, axis, _sum_combine)
+    input = core._promote_reduction_input(input)
+    return core.reduce(input, axis, _sum_combine)
 
 
 @jit
@@ -253,7 +254,7 @@ def _xor_combine(a, b):
 @core._add_scan_docstr("cumsum")
 def cumsum(input, axis=0):
     # todo rename this to a generic function name
-    input = _promote_reduction_input(input)
+    input = core._promote_reduction_input(input)
     return associative_scan(input, axis, _sum_combine)
 
 # cumprod
@@ -268,5 +269,5 @@ def _prod_combine(a, b):
 @core._add_scan_docstr("cumprod")
 def cumprod(input, axis=0):
     # todo rename this to a generic function name
-    input = _promote_reduction_input(input)
+    input = core._promote_reduction_input(input)
     return associative_scan(input, axis, _prod_combine)
