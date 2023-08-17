@@ -154,7 +154,6 @@ const std::string Fp16_to_Fp8E4M3B15x4 =
     "lop3.b32 $0, $0, $2, 0xbf80bf80, 0xf8;  \n"
     "}";
 
-/* ----- FP8E4M3 ------ */
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
 const std::string Fp8E4M3_to_Fp16 = "{ \n"
                                     "cvt.rn.f16x2.e4m3x2 $0, $1; \n"

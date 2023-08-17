@@ -203,8 +203,8 @@ LogicalResult Prefetcher::initialize() {
     auto bType = dot.getB().getType().cast<RankedTensorType>();
     auto aEnc = aType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
     auto bEnc = bType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
-    int aKWidth = aEnc.getMMAv2kWidth();
-    int bKWidth = bEnc.getMMAv2kWidth();
+    int aKWidth = aEnc.getKWidth();
+    int bKWidth = bEnc.getKWidth();
     assert(aKWidth == bKWidth);
 
     auto kSize = aType.getShape()[1];
