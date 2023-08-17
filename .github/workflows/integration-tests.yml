@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: ${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+  # cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
@@ -27,7 +27,7 @@ jobs:
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
             echo '::set-output name=matrix-required::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
-            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"]]'
+            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix-required::["ubuntu-latest"]'
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
