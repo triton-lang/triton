@@ -666,8 +666,9 @@ private:
       SmallVector<Value> vecVals;
       SmallVector<Type> types;
       auto elemSize = elemTy.getIntOrFloatBitWidth();
-      // TODO: Support types other than float16.
-      assert(type::isFloat(elemTy) && elemSize == 16);
+      // TODO: Support types other than float16 and
+      // bf16 (represented as int16 in llvm ir).
+      assert((type::isFloat(elemTy) || type::isInt(elemTy)) && elemSize == 16);
       unsigned vecSize = 4;
       Type vecTy = vec_ty(elemTy, vecSize);
       types = SmallVector<Type>(elems / vecSize, vecTy);
