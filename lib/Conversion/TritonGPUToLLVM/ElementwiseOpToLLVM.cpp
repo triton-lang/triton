@@ -155,13 +155,13 @@ const std::string Fp16_to_Fp8E4M3B15x4 =
     "}";
 
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
-const std::string Fp8E4M3_to_Fp16 = "{ \n"
-                                    "cvt.rn.f16x2.e4m3x2 $0, $1; \n"
-                                    "}";
+const std::string Fp8E4M3Nv_to_Fp16 = "{ \n"
+                                      "cvt.rn.f16x2.e4m3x2 $0, $1; \n"
+                                      "}";
 // Fp16 (x2) -> Fp8E4M3 (x2) (packed)
-const std::string Fp16_to_Fp8E4M3 = "{ \n"
-                                    "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
-                                    "}";
+const std::string Fp16_to_Fp8E4M3Nv = "{ \n"
+                                      "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
+                                      "}";
 
 /* ----- Packed integer to BF16 ------ */
 const std::string S8_to_Bf16 =
@@ -548,12 +548,12 @@ struct FpToFpOpConversion
         // F8 -> F16
         {{F8E4M3B15TyID, F16TyID}, Fp8E4M3B15_to_Fp16},
         {{F8E4M3FNTyID, F16TyID}, Fp8E4M3B15x4_to_Fp16},
-        {{F8E4M3TyID, F16TyID}, Fp8E4M3_to_Fp16},
+        {{F8E4M3TyID, F16TyID}, Fp8E4M3Nv_to_Fp16},
         {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16},
         // F16 -> F8
         {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15},
         {{F16TyID, F8E4M3FNTyID}, Fp16_to_Fp8E4M3B15x4},
-        {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3},
+        {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3Nv},
         {{F16TyID, F8E5M2TyID}, Fp16_to_Fp8E5M2},
         // F8 -> BF16
         {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16},
@@ -579,7 +579,7 @@ struct FpToFpOpConversion
     }
     if (computeCapability < 90 &&
         (srcTy.isFloat8E4M3FNUZ() || dstTy.isFloat8E4M3FNUZ())) {
-      llvm::errs() << "Conversion from/to f8e4m3 is only supported on hopper"
+      llvm::errs() << "Conversion from/to f8e4m3nv is only supported on hopper"
                    << "\n";
       llvm_unreachable("");
     }
