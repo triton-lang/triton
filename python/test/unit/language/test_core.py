@@ -3020,6 +3020,7 @@ def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm(num_ctas, device):
+    check_cuda_only(device)
 
     @triton.jit
     def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
@@ -3045,7 +3046,8 @@ def test_inline_asm(num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
-
+    check_cuda_only(device)
+    
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
