@@ -153,6 +153,16 @@ jobs:
           sudo nvidia-smi -i 0 --lock-gpu-clocks=1280,1280
           python3 -m pytest -vs . --reruns 10
           sudo nvidia-smi -i 0 -rgc
+      - name: Save PR number
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          mkdir -p ./pr
+          echo $PR_NUMBER > ./pr/pr_number
+      - uses: actions/upload-artifact@v3
+        with:
+          name: pr_number
+          path: pr/
 
   Integration-Tests-Third-Party:
     needs: Runner-Preparation
