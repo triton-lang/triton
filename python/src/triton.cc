@@ -81,6 +81,11 @@ void init_triton_runtime(py::module &&m) {
       .value("CUDA", CUDA)
       .value("ROCM", ROCM)
       .export_values();
+
+  py::enum_<mlir::triton::Target>(m, "TARGET")
+      .value("NVVM", mlir::triton::NVVM)
+      .value("ROCDL", mlir::triton::ROCDL)
+      .export_values();
 }
 
 // A custom op builder that keeps track of the last location
@@ -1519,6 +1524,14 @@ void init_triton_ir(py::module &&m) {
              return self.create<mlir::arith::SelectOp>(condition, trueValue,
                                                        falseValue);
            })
+      .def("create_inline_asm",
+           [](TritonOpBuilder &self, const std::string &inlineAsm,
+              const std::string &constraints,
+              const std::vector<mlir::Value> &values, mlir::Type &type,
+              bool isPure, int pack) -> mlir::Value {
+             return self.create<mlir::triton::ElementwiseInlineAsmOp>(
+                 type, inlineAsm, constraints, isPure, pack, values);
+           })
       .def("create_print",
            [](TritonOpBuilder &self, const std::string &prefix,
               const std::vector<mlir::Value> &values) -> void {
@@ -1804,11 +1817,12 @@ void init_triton_translation(py::module &m) {
   m.def(
       "translate_triton_gpu_to_llvmir",
       [](mlir::ModuleOp op, int computeCapability,
-         mlir::triton::gpu::TMAMetadataTy &tmaInfos, bool isROCM) {
+         mlir::triton::gpu::TMAMetadataTy &tmaInfos,
+         mlir::triton::Target target) {
         py::gil_scoped_release allow_threads;
         llvm::LLVMContext llvmContext;
         auto llvmModule = ::mlir::triton::translateTritonGPUToLLVMIR(
-            &llvmContext, op, computeCapability, tmaInfos, isROCM);
+            &llvmContext, op, computeCapability, tmaInfos, target);
         if (!llvmModule)
           llvm::report_fatal_error("Failed to translate TritonGPU to LLVM IR.");
 

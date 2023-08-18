@@ -13,7 +13,7 @@ from typing import Any, Tuple
 
 from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs,
                                    compile_ptx_to_cubin, get_env_vars, get_num_warps,
-                                   get_shared_memory_size, ir,
+                                   get_shared_memory_size, ir, runtime,
                                    translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
                                    translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend, path_to_ptxas
@@ -142,9 +142,9 @@ def ttgir_to_llir(mod, extern_libs, arch, tma_infos):
         _add_external_libs(mod, extern_libs)
     # TODO: separate tritongpu_to_llvmir for different backends
     if _is_cuda(arch):
-        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, False)
+        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, runtime.TARGET.NVVM)
     else:
-        return translate_triton_gpu_to_llvmir(mod, 0, True)
+        return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.ROCDL)
 
 
 # PTX translation
