@@ -811,6 +811,86 @@ private:
   }
 };
 
+struct ElementwiseInlineAsmOpConversion
+    : public ElementwiseOpConversionBase<ElementwiseInlineAsmOp,
+                                         ElementwiseInlineAsmOpConversion> {
+  using Base = ElementwiseOpConversionBase<ElementwiseInlineAsmOp,
+                                           ElementwiseInlineAsmOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+  typedef typename Base::OpAdaptor OpAdaptor;
+
+  // If operand size is smaller than 32bits pack by groups of 32bits.
+  // Otherwise have separate inputs.
+  SmallVector<Value> packOperands(ElementwiseInlineAsmOp op,
+                                  MultipleOperandsRange operands,
+                                  ConversionPatternRewriter &rewriter,
+                                  Location loc) const {
+    SmallVector<Value> packedOperands;
+    unsigned numPackedElements = op.getPackedElement();
+    for (int i = 0, e = op.getNumOperands(); i < e; i++) {
+      unsigned bitWidth =
+          getElementType(op.getOperand(i)).getIntOrFloatBitWidth();
+      unsigned numElementPerReg = bitWidth < 32 ? 32 / bitWidth : 1;
+      numElementPerReg = std::min(numElementPerReg, numPackedElements);
+      for (int j = 0; j < numPackedElements; j += numElementPerReg) {
+        if (numElementPerReg == 1) {
+          packedOperands.push_back(operands[j][i]);
+          continue;
+        }
+        Type t = vec_ty(
+            getTypeConverter()->convertType(getElementType(op.getOperand(i))),
+            numElementPerReg);
+        Value packed = undef(t);
+        for (int k = 0; k < numElementPerReg; k++) {
+          packed = insert_element(packed, operands[j + k][i], i32_val(k));
+        }
+        packedOperands.push_back(packed);
+      }
+    }
+    return packedOperands;
+  }
+
+  SmallVector<Value> createDestOps(ElementwiseInlineAsmOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    int numPackedElements = op.getPackedElement();
+    if (operands.size() % numPackedElements != 0)
+      llvm::report_fatal_error("Inline asm op has more packed elements than "
+                               "number of elements per thread.");
+    SmallVector<Value> packedOperands =
+        packOperands(op, operands, rewriter, loc);
+    Type dstType =
+        getTypeConverter()->convertType(getElementType(op.getResult()));
+    Type retType = dstType;
+    if (numPackedElements > 1)
+      retType = vec_ty(retType, numPackedElements);
+    Value result = rewriter
+                       .create<LLVM::InlineAsmOp>(
+                           loc, retType,
+                           packedOperands,      // operands
+                           op.getAsmString(),   // asm_string
+                           op.getConstraints(), // constraints
+                           !op.getPure(),       // has_side_effects
+                           false,               // is_align_stack
+                           LLVM::AsmDialectAttr::get(
+                               rewriter.getContext(),
+                               LLVM::AsmDialect::AD_ATT), // asm_dialect
+                           ArrayAttr()                    // operand_attrs
+                           )
+                       ->getResult(0);
+    SmallVector<Value> results;
+    if (numPackedElements > 1) {
+      for (int i = 0; i < numPackedElements; i++)
+        results.push_back(extract_element(result, i32_val(i)));
+    } else {
+      results = {result};
+    }
+    return results;
+  }
+};
+
 struct FDivOpConversion
     : ElementwiseOpConversionBase<mlir::arith::DivFOp, FDivOpConversion> {
   using Base =
@@ -1213,6 +1293,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns
       .add<ExternElementwiseOpConversion<triton::ImpureExternElementwiseOp>>(
           typeConverter, benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call

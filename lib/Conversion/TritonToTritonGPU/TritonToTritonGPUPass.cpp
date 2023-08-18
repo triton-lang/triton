@@ -695,26 +695,26 @@ public:
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns, unsigned numCTAs) {
   MLIRContext *context = patterns.getContext();
-  patterns
-      .insert< // TODO: view should have custom pattern that views the layout
-          TritonGenericPattern<triton::AdvanceOp>,
-          TritonGenericPattern<triton::MakeTensorPtrOp>,
-          TritonGenericPattern<triton::ViewOp>,
-          TritonGenericPattern<triton::BitcastOp>,
-          TritonGenericPattern<triton::FpToFpOp>,
-          TritonGenericPattern<triton::IntToPtrOp>,
-          TritonGenericPattern<triton::PtrToIntOp>,
-          TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
-          TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-          TritonReducePattern, TritonReduceReturnPattern, TritonScanPattern,
-          TritonScanReturnPattern, TritonTransPattern, TritonExpandDimsPattern,
-          TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
-          TritonStorePattern,
-          TritonExternElementwisePattern<triton::PureExternElementwiseOp>,
-          TritonExternElementwisePattern<triton::ImpureExternElementwiseOp>,
-          TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern,
-          TritonFuncOpPattern, TritonReturnOpPattern, TritonCallOpPattern>(
-          typeConverter, context);
+  patterns.insert< // TODO: view should have custom pattern that views the
+                   // layout
+      TritonGenericPattern<triton::AdvanceOp>,
+      TritonGenericPattern<triton::MakeTensorPtrOp>,
+      TritonGenericPattern<triton::ViewOp>,
+      TritonGenericPattern<triton::BitcastOp>,
+      TritonGenericPattern<triton::FpToFpOp>,
+      TritonGenericPattern<triton::IntToPtrOp>,
+      TritonGenericPattern<triton::PtrToIntOp>,
+      TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
+      TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
+      TritonGenericPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
+      TritonReduceReturnPattern, TritonScanPattern, TritonScanReturnPattern,
+      TritonTransPattern, TritonExpandDimsPattern, TritonMakeRangePattern,
+      TritonDotPattern, TritonLoadPattern, TritonStorePattern,
+      TritonExternElementwisePattern<triton::PureExternElementwiseOp>,
+      TritonExternElementwisePattern<triton::ImpureExternElementwiseOp>,
+      TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern,
+      TritonFuncOpPattern, TritonReturnOpPattern, TritonCallOpPattern>(
+      typeConverter, context);
 }
 
 //
