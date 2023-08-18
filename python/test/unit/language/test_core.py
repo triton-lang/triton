@@ -2171,12 +2171,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                Y, stride_yk, stride_yn,
                W, stride_wn, stride_wl,
                Z, stride_zm, stride_zn,
-               out_dtype: tl.constexpr,
                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
                ADD_MATRIX: tl.constexpr, ADD_ROWS: tl.constexpr, ADD_COLS: tl.constexpr,
                ALLOW_TF32: tl.constexpr,
                DO_SOFTMAX: tl.constexpr, CHAIN_DOT: tl.constexpr,
-               COL_A: tl.constexpr, COL_B: tl.constexpr):
+               COL_A: tl.constexpr, COL_B: tl.constexpr,
+               out_dtype : tl.constexpr = tl.float32):
         off_m = tl.arange(0, BLOCK_M)
         off_n = tl.arange(0, BLOCK_N)
         off_l = tl.arange(0, BLOCK_N)
@@ -2250,7 +2250,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          y_tri, y_tri.stride(0), y_tri.stride(1),
                          w_tri, w_tri.stride(0), w_tri.stride(1),
                          z_tri, z_tri.stride(0), z_tri.stride(1),
-                         out_dtype,
                          COL_A=col_a, COL_B=col_b,
                          BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
                          ADD_MATRIX=epilogue == 'add-matrix',
@@ -2259,7 +2258,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          DO_SOFTMAX=epilogue == 'softmax',
                          CHAIN_DOT=epilogue == 'chain-dot',
                          ALLOW_TF32=allow_tf32,
-                         num_warps=num_warps, num_ctas=num_ctas)
+                         num_warps=num_warps, num_ctas=num_ctas,
+                         out_dtype=out_dtype)
     if epilogue == 'softmax' and (in_dtype != 'float32' or allow_tf32):
         ptx = pgm.asm["ptx"]
         start = ptx.find("shfl.sync")
@@ -2432,18 +2432,6 @@ def test_dot_without_load(dtype_str, device):
     out = torch.zeros((32, 32), dtype=getattr(torch, dtype_str), device=device)
     kernel[(1,)](out)
     assert torch.all(out == out_ref)
-
-def test_dot_bf16():
-    @triton.jit
-    def _kernel(a, b, out_dtype=tl.float32, trans_a=False, trans_b=False):
-        tl.static_assert(a.dtype.is_standard_floating())
-        tl.static_assert(b.dtype.is_standard_floating())
-        tl.static_assert(out_dtype.value.is_standard_floating())
-        a = a.to(tl.bfloat16)
-        b = b.to(tl.bfloat16)
-        a = tl.trans(a) if trans_a else a
-        b = tl.trans(b) if trans_b else b
-        return tl.dot(a, b, out_dtype=out_dtype)
 
 # ---------------
 # test arange
