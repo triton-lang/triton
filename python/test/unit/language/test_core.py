@@ -3013,6 +3013,58 @@ def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
 
+
+# -----------------------
+# test inline asm
+# -----------------------
+
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_inline_asm(num_ctas, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        s = tl.full([BLOCK], n, tl.int32)
+        z = tl.inline_asm_elementwise("shf.l.wrap.b32 $0, $1, $2, $3;", "=r,r, r, r", [x, y, s], dtype=tl.int32, is_pure=True, pack=1)
+        tl.store(Z + tl.arange(0, BLOCK), z)
+
+    shape = (128, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str='uint32', rs=rs)
+    y = numpy_random(shape, dtype_str='uint32', rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    n = 17
+    z_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    kernel[(1,)](x_tri, y_tri, z_tri, n, BLOCK=shape[0], num_ctas=num_ctas)
+    y_ref = (y << n) | (x >> (32 - n))
+    # compare
+    np.testing.assert_equal(y_ref, to_numpy(z_tri))
+
+
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_inline_asm_packed(num_ctas, device):
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        # shift 4x8bits values together.
+        y = tl.inline_asm_elementwise("and.b32 $0, $1, 0x1F1F1F1F; \
+                                       shl.b32 $0, $0, 3;",
+                                      "=r,r", [x,], dtype=tl.int8, is_pure=True, pack=4)
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    shape = (512, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str='uint8', rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(numpy_random(shape, dtype_str='uint8', rs=rs), device=device)
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], num_ctas=num_ctas)
+    y_ref = x << 3
+    # compare
+    np.testing.assert_equal(y_ref, to_numpy(y_tri))
+
 # -----------------------
 # test control flow
 # -----------------------
