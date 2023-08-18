@@ -463,31 +463,21 @@ def TT_ScanReturnOp: TT_Op<"scan.return",
 //
 // External Elementwise op
 //
-class TT_ExternElementwiseOpBase<string mnemonic, list<Trait> traits = []> :
-    TT_Op<mnemonic,
-         traits # [Elementwise,
-                   SameOperandsAndResultEncoding,
-                   SameVariadicOperandSize]> {
+def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
+                                                            SameOperandsAndResultEncoding,
+                                                            SameVariadicOperandSize,
+                                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
 
     let description = [{
         call an external function $symbol implemented in $libpath/$libname with $args
         return $libpath/$libname:$symbol($args...)
     }];
 
-    let arguments = (ins Variadic<TT_Type>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol);
+    let arguments = (ins Variadic<TT_Type>:$args, StrAttr:$libname, StrAttr:$libpath, StrAttr:$symbol, BoolAttr:$pure);
 
     let results = (outs TT_Type:$result);
 
     let assemblyFormat = "operands attr-dict `:` functional-type(operands, $result)";
-}
-
-def TT_PureExternElementwiseOp : TT_ExternElementwiseOpBase<"pure_extern_elementwise", [Pure, Elementwise]> {
-    let summary = "FFI for pure element-wise extern LLVM bitcode functions";
-}
-
-def TT_ImpureExternElementwiseOp : TT_ExternElementwiseOpBase<"impure_extern_elementwise", [MemoryEffects<[MemRead]>,
-                                                                                            MemoryEffects<[MemWrite]>]> {
-    let summary = "FFI for impure element-wise extern LLVM bitcode functions";
 }
 
 //

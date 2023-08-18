@@ -644,9 +644,10 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 math::RsqrtOp, math::SqrtOp, math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
-                triton::FpToFpOp, triton::AddPtrOp,
-                triton::PureExternElementwiseOp>(op))
+                triton::FpToFpOp, triton::AddPtrOp>(op))
     return true;
+  if (auto externElementwiseOp = dyn_cast<triton::ExternElementwiseOp>(op))
+    return externElementwiseOp.getPure();
   if (llvm::isa<ttg::CmpIOp, ttg::CmpFOp, ttg::SelectOp>(op))
     return true;
   return false;
