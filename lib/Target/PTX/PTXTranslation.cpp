@@ -56,7 +56,7 @@ static void linkExternal(llvm::Module &module) {
   //     std::filesystem::path(__BUILD_DIR__) / "lib" / "Hopper" /
   //     "libhopper_helpers.bc";
   if (mlir::triton::linkExternLib(module, "libhopper_helpers", path.string(),
-                                  /*isROCM*/ false))
+                                  mlir::triton::Target::NVVM))
     llvm::errs() << "Link failed for: libhopper_helpers.bc";
 }
 
