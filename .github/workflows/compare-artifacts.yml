@@ -47,5 +47,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue_number,
-              body: 'Ignore this message. This is to test another workflow posting comment on PR number ${issue_number}.'
+              body: `Ignore this message. This is to test another workflow posting comment on PR number ${issue_number}.`
             });
