@@ -21,17 +21,22 @@ jobs:
                repo: context.repo.repo,
                run_id: context.payload.workflow_run.id,
             });
+            echo "Step 1 done"
             let matchArtifact = allArtifacts.data.artifacts.filter((artifact) => {
               return artifact.name == "pr_number"
             })[0];
+            echo "Step 2 done"
             let download = await github.rest.actions.downloadArtifact({
                owner: context.repo.owner,
                repo: context.repo.repo,
                artifact_id: matchArtifact.id,
                archive_format: 'zip',
             });
+            echo "Step 3 done"
             let fs = require('fs');
+            echo "Step 4 done"
             fs.writeFileSync(`${process.env.GITHUB_WORKSPACE}/pr_number.zip`, Buffer.from(download.data));
+            echo "Step 5 done"
 
       - name: 'Unzip artifact'
         run: unzip pr_number.zip
