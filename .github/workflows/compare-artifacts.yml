@@ -55,8 +55,6 @@ jobs:
             });
             let fs = require('fs');
             fs.writeFileSync(`${process.env.GITHUB_WORKSPACE}/comparison_result.zip`, Buffer.from(download.data));
-            let comparison_result = Number(fs.readFileSync('./comparison_result'));
-            console.log("Comparison result = ", comparison_result);
       - name: Unzip artifacts
         run: |
           unzip pr_number.zip
