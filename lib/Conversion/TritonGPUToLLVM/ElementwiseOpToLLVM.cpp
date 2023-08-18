@@ -579,7 +579,8 @@ struct FpToFpOpConversion
     }
     if (computeCapability < 90 &&
         (srcTy.isFloat8E4M3FNUZ() || dstTy.isFloat8E4M3FNUZ())) {
-      llvm::errs() << "Conversion from/to f8e4m3nv is only supported on hopper"
+      llvm::errs() << "Conversion from/to f8e4m3nv is only supported on "
+                      "compute capability >= 90"
                    << "\n";
       llvm_unreachable("");
     }
