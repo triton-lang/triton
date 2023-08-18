@@ -262,12 +262,12 @@ public:
 
     IRMapping mapping;
     for (size_t i = 0; i < numOps; i++) {
-      auto thenCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-          thenYield.getOperand(i).getDefiningOp());
+      auto thenCvt =
+          thenYield.getOperand(i).getDefiningOp<triton::gpu::ConvertLayoutOp>();
       if (hasElse) {
         auto elseYield = ifOp.elseYield();
-        auto elseCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-            elseYield.getOperand(i).getDefiningOp());
+        auto elseCvt = elseYield.getOperand(i)
+                           .getDefiningOp<triton::gpu::ConvertLayoutOp>();
         if (thenCvt && elseCvt &&
             std::distance(elseCvt->user_begin(), elseCvt->user_end()) == 1 &&
             std::distance(thenCvt->user_begin(), thenCvt->user_end()) == 1 &&
@@ -585,40 +585,26 @@ public:
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
-    auto dotOp =
-        dyn_cast_or_null<triton::DotOp>(dstOp.getSrc().getDefiningOp());
+    auto dotOp = dstOp.getSrc().getDefiningOp<triton::DotOp>();
     if (!dotOp)
       return mlir::failure();
     if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
         std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
       return mlir::failure();
-    auto cvtOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-        dotOp.getOperand(2).getDefiningOp());
+    auto cvtOp =
+        dotOp.getOperand(2).getDefiningOp<triton::gpu::ConvertLayoutOp>();
     if (!cvtOp)
       return mlir::failure();
-    auto loadOp =
-        dyn_cast_or_null<triton::LoadOp>(cvtOp.getSrc().getDefiningOp());
-    if (!loadOp)
-      return mlir::failure();
+    if (!cvtOp.getSrc().getDefiningOp<triton::LoadOp>())
+      return failure();
     auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
     auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
     if (dstTy != srcTy)
       return mlir::failure();
 
-    // TODO: int tensor cores
-    auto out_dtype = dstTy.getElementType().cast<FloatType>();
-    APFloat value(0.0f);
-    if (out_dtype.isBF16())
-      value = APFloat(APFloat::IEEEhalf(), APInt(16, 0));
-    else if (out_dtype.isF16())
-      value = APFloat(APFloat::IEEEhalf(), APInt(16, 0));
-    else if (out_dtype.isF32())
-      value = APFloat(0.0f);
-    else
-      llvm_unreachable("unsupported data type");
-
-    auto _0f =
-        rewriter.create<arith::ConstantFloatOp>(op->getLoc(), value, out_dtype);
+    auto _0f = rewriter.create<arith::ConstantOp>(
+        op->getLoc(), dstTy.getElementType(),
+        rewriter.getZeroAttr(dstTy.getElementType()));
     auto _0 = rewriter.create<triton::SplatOp>(
         op->getLoc(), dotOp.getResult().getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
@@ -658,10 +644,6 @@ public:
     patterns.add<ConvertDotConvert>(context);
 
     if (mlir::applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
-      signalPassFailure();
-    }
-
-    if (fixupLoops(m).failed()) {
       signalPassFailure();
     }
   }
