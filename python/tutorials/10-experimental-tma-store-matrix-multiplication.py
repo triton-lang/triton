@@ -1,5 +1,5 @@
 """
-Matrix Multiplication with TMASTG (Experimental)
+Matrix Multiplication with TMA Store (Experimental)
 ================================================
 In this tutorial, you will write a very short high-performance multiplication kernel that achieves
 performance on parallel with cuBLAS.
