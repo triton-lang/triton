@@ -332,14 +332,5 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   return stringStart;
 }
 
-// Pack two 16-bit values into a 32-bit register.
-Value pack16bitsTo32(Location loc, ConversionPatternRewriter &rewriter,
-                     Value hb, Value lb) {
-  hb = zext(i32_ty, bitcast(hb, i16_ty));
-  lb = zext(i32_ty, bitcast(lb, i16_ty));
-  Value pack = or_(lb, shl(hb, i32_val(16)));
-  return pack;
-}
-
 } // namespace LLVM
 } // namespace mlir

@@ -328,9 +328,6 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
-Value pack16bitsTo32(Location loc, ConversionPatternRewriter &rewriter,
-                     Value hb, Value lb);
-
 } // namespace LLVM
 } // namespace mlir
 
