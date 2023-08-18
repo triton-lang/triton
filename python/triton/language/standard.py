@@ -22,6 +22,24 @@ def cdiv(x, div):
 
 
 @jit
+@core._add_math_1arg_docstr("gelu")
+def gelu(x):
+    return 0.5 * x * (1 + core.math.tanh(0.797884560802865 * (x + 0.044715 * core.math.pow(x, 3))))
+
+
+@jit
+@core._add_math_1arg_docstr("relu")
+def relu(x):
+    return core.where(x > 0, x, 0)
+
+
+@jit
+@core._add_math_1arg_docstr("leaky relu")
+def leaky_relu(x, negative_slope=0.01):
+    return core.where(x > 0, x, 0) + negative_slope * core.where(x < 0, x, 0)
+
+
+@jit
 @core._add_math_1arg_docstr("sigmoid")
 def sigmoid(x):
     return 1 / (1 + core.exp(-x))
