@@ -57,7 +57,7 @@ struct DotOpMFMAConversionHelper {
           loc, TypeRange{resType},
           ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     case MatrixCoreType::FP32_BF16_BF16_FP32:
-      return rewriter.create<ROCDL::mfma_f32_32x32x4bf16>(
+      return rewriter.create<ROCDL::mfma_f32_32x32x8bf16_1k>(
           loc, TypeRange{resType},
           ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     case MatrixCoreType::FP32_FP32_FP32_FP32:

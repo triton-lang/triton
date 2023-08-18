@@ -459,6 +459,7 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
     Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
 
     Type smemPtrTy = getShemPtrTy(aElemTy);
+    Type resElemTy = aElemTy.isBF16() ? i16_ty : aElemTy;
 
     int loadsPerThread = offsets.size() / (numRepM * numRepK);
     const int elemsPerLoad = numOfElems / loadsPerThread;
@@ -466,7 +467,7 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
 
     for (int m = 0; m < numRepM; ++m) {
       for (int k = 0; k < numRepK; ++k) {
-        auto vecTy = vec_ty(aElemTy, numOfElems);
+        auto vecTy = vec_ty(resElemTy, numOfElems);
         Value valVec = undef(vecTy);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           auto loadVecTy = vec_ty(aElemTy, elemsPerLoad);
@@ -479,11 +480,13 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
               Value elemVal =
                   extract_element(aElemTy, vectorValue, i32_val(elemId));
+              elemVal = bitcast(elemVal, resElemTy);
               valVec = insert_element(vecTy, valVec, elemVal,
                                       i32_val(loadId * elemsPerLoad + elemId));
             }
           } else {
             valVec = extract_element(aElemTy, vectorValue, i32_val(0));
+            valVec = bitcast(valVec, resElemTy);
           }
         }
         if (aElemTy == i8_ty)
@@ -497,6 +500,7 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
         numReps, smemObj, sharedLayout);
 
     Value smemBase = computeBasePtr(rewriter, loc, smemObj);
+    Type resElemTy = aElemTy.isBF16() ? i16_ty : aElemTy;
 
     Type smemPtrTy = getShemPtrTy(aElemTy);
 
@@ -505,7 +509,7 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
 
     for (int m = 0; m < numRepM; ++m) {
       for (int k = 0; k < numRepK; ++k) {
-        auto vecTy = vec_ty(aElemTy, numOfElems);
+        auto vecTy = vec_ty(resElemTy, numOfElems);
         Value valVec = undef(vecTy);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           auto loadVecTy = vec_ty(aElemTy, elemsPerLoad);
@@ -518,11 +522,13 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
               Value elemVal =
                   extract_element(aElemTy, vectorValue, i32_val(elemId));
+              elemVal = bitcast(elemVal, resElemTy);
               valVec = insert_element(vecTy, valVec, elemVal,
                                       i32_val(loadId * elemsPerLoad + elemId));
             }
           } else {
             valVec = extract_element(aElemTy, vectorValue, i32_val(0));
+            valVec = bitcast(valVec, resElemTy);
           }
         }
         if (aElemTy == i8_ty)
@@ -602,6 +608,8 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
 
     Value smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
 
+    Type resElemTy = bElemTy.isBF16() ? i16_ty : bElemTy;
+
     Type smemPtrTy = getShemPtrTy(bElemTy);
 
     const int loadsPerThread = offsets.size() / (numRepN * numRepK);
@@ -610,7 +618,7 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
 
     for (int n = 0; n < numRepN; ++n) {
       for (int k = 0; k < numRepK; ++k) {
-        auto vecTy = vec_ty(bElemTy, numOfElems);
+        auto vecTy = vec_ty(resElemTy, numOfElems);
         Value valVec = undef(vecTy);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           auto loadVecTy = vec_ty(bElemTy, elemsPerLoad);
@@ -623,11 +631,13 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
               Value elemVal =
                   extract_element(bElemTy, vectorValue, i32_val(elemId));
+              elemVal = bitcast(elemVal, resElemTy);
               valVec = insert_element(vecTy, valVec, elemVal,
                                       i32_val(loadId * elemsPerLoad + elemId));
             }
           } else {
             valVec = extract_element(bElemTy, vectorValue, i32_val(0));
+            valVec = bitcast(valVec, resElemTy);
           }
         }
         if (bElemTy == i8_ty)
@@ -642,13 +652,15 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
 
     Value smemBase = computeBasePtr(rewriter, loc, smemObj);
 
+    Type resElemTy = bElemTy.isBF16() ? i16_ty : bElemTy;
+
     Type smemPtrTy = getShemPtrTy(bElemTy);
 
     int loadsPerThread = offsets.size() / (numReps[0] * numReps[1]);
     int elemsPerLoad = numOfElems / loadsPerThread;
     for (int n = 0; n < numRepN; ++n) {
       for (int k = 0; k < numRepK; ++k) {
-        auto vecTy = vec_ty(bElemTy, numOfElems);
+        auto vecTy = vec_ty(resElemTy, numOfElems);
         Value valVec = undef(vecTy);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           auto loadVecTy = vec_ty(bElemTy, elemsPerLoad);
@@ -661,11 +673,13 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
               Value elemVal =
                   extract_element(bElemTy, vectorValue, i32_val(elemId));
+              elemVal = bitcast(elemVal, resElemTy);
               valVec = insert_element(vecTy, valVec, elemVal,
                                       i32_val(loadId * elemsPerLoad + elemId));
             }
           } else {
             valVec = extract_element(bElemTy, vectorValue, i32_val(0));
+            valVec = bitcast(valVec, resElemTy);
           }
         }
         if (bElemTy == i8_ty)
