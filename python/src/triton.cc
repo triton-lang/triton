@@ -1424,12 +1424,8 @@ void init_triton_ir(py::module &&m) {
               const std::string &libPath, const std::string &symbol,
               std::vector<mlir::Value> &argList, mlir::Type retType,
               bool isPure) -> mlir::Value {
-             if (isPure)
-               return self.create<mlir::triton::PureExternElementwiseOp>(
-                   retType, argList, libName, libPath, symbol);
-             else
-               return self.create<mlir::triton::ImpureExternElementwiseOp>(
-                   retType, argList, libName, libPath, symbol);
+             return self.create<mlir::triton::ExternElementwiseOp>(
+                 retType, argList, libName, libPath, symbol, isPure);
            })
       // Built-in instruction
       .def("create_get_program_id",
