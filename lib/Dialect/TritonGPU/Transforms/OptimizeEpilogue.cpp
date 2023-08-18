@@ -127,9 +127,6 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
-    if (fixupLoops(m).failed()) {
-      signalPassFailure();
-    }
   }
 };
 
