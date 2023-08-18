@@ -134,7 +134,7 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
       Value tileHOffset = i32_val(tile * elemsPerInstr[1]);
 
       Value laneVOffset = urem(laneId, _32);
-      Value laneHOffset = mul(udiv(laneId, _32), i32_val(numOfElems));
+      Value laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
       for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
         Value elemVOffset = _0;
         Value elemHOffset = i32_val(loadId * loadVecSize);
