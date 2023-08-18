@@ -43,7 +43,6 @@ jobs:
           script: |
             let fs = require('fs');
             let issue_number = Number(fs.readFileSync('./pr_number'));
-            echo $issue_number
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
