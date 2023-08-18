@@ -23,7 +23,7 @@ jobs:
             let allArtifacts = await github.rest.actions.listWorkflowRunArtifacts({
                owner: context.repo.owner,
                repo: context.repo.repo,
-               run_id: context.payload.workflow_run.id,
+               run_id: ${{ github.event.inputs.run_id }},
             });
             let matchArtifact = allArtifacts.data.artifacts.filter((artifact) => {
               return artifact.name == "pr_number"
@@ -51,5 +51,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue_number,
-              body: 'Ignore this message. This is to test another workflow posting comment on PR number ${issue_number}.'
+              body: `Ignore this message. This is to test another workflow posting comment on PR number ${issue_number}.`
             });
