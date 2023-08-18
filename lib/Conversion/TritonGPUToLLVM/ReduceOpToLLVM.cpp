@@ -307,8 +307,10 @@ private:
     Operation *yield = block->getTerminator();
     Operation *reduceOp = yield->getOperand(0).getDefiningOp();
     if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-        reduceOp->getNumResults() != 1 ||
-        !reduceOp->getResultTypes()[0].isInteger(32))
+        reduceOp->getNumResults() != 1)
+      return std::nullopt;
+    auto intType = reduceOp->getResultTypes()[0].dyn_cast<IntegerType>();
+    if (!intType || intType.getWidth() > 32)
       return std::nullopt;
     if (reduceOp->getOperand(0) != block->getArgument(0) ||
         reduceOp->getOperand(1) != block->getArgument(1))
@@ -382,8 +384,19 @@ private:
           mask = shl(i32_val(bitmask),
                      and_(laneId, i32_val(~(numLaneToReduce - 1))));
         }
-        acc[0] = rewriter.create<NVVM::ReduxOp>(loc, acc[0].getType(), acc[0],
-                                                *kind, mask);
+        for (unsigned i = 0; i < acc.size(); ++i) {
+          unsigned bitwidth = acc[i].getType().cast<IntegerType>().getWidth();
+          if (bitwidth < 32) {
+            if (*kind == NVVM::ReduxKind::MIN || *kind == NVVM::ReduxKind::MAX)
+              acc[i] = sext(i32_ty, acc[i]);
+            else
+              acc[i] = zext(i32_ty, acc[i]);
+          }
+          acc[i] = rewriter.create<NVVM::ReduxOp>(loc, acc[i].getType(), acc[0],
+                                                  *kind, mask);
+          if (bitwidth < 32)
+            acc[i] = trunc(int_ty(bitwidth), acc[i]);
+        }
         return;
       }
     }
