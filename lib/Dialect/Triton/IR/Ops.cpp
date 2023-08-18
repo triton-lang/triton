@@ -882,7 +882,7 @@ void ElementwiseInlineAsmOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
-// -- ElementwiseInlineAsmOp --
+// -- ExternElementwiseOp --
 void ExternElementwiseOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
