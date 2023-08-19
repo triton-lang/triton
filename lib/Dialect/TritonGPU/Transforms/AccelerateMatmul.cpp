@@ -43,17 +43,6 @@ static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   return 0;
 }
 
-SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
-  if (version == 1)
-    return {16, 16};
-  else if (version == 2)
-    return {16, 8};
-  else {
-    assert(false && "version not supported");
-    return {0, 0};
-  }
-}
-
 SmallVector<unsigned, 2>
 warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   auto filter = [&dotOp](Operation *op) {
@@ -66,13 +55,11 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
 
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {16, 8};
-  bool changed = false;
   // TODO (@daadaada): double-check.
   // original logic in
   // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
   // seems buggy for shape = [32, 16] ?
   do {
-    changed = false;
     if (ret[0] * ret[1] >= numWarps)
       break;
     if (shape[0] / shapePerWarp[0] / ret[0] >=
