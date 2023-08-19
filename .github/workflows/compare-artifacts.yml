@@ -58,7 +58,7 @@ jobs:
       - name: Unzip artifacts
         run: |
           unzip pr_number.zip
-          unzip comparison_results.zip
+          unzip comparison_result.zip
       - name: Print artifacts
         uses: actions/github-script@v6
         with:
