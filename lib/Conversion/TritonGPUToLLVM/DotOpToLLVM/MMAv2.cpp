@@ -211,7 +211,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = repN * 2;
     PTXBuilder builder;
-    auto &mma = *builder.create(mmaInstrPtx.at(mmaType));
+    auto &mma = *builder.create(mmaInstructions.at(mmaType));
     // using =r for float32 works but leads to less readable ptx.
     bool isIntMMA = dTensorTy.getElementType().isInteger(32);
     bool isAccF16 = dTensorTy.getElementType().isF16();
@@ -254,7 +254,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
       mma(retArgs, aArgs, bArgs, cArgs);
     }
     Value mmaOut =
-      builder.launch(rewriter, loc, getMmaRetType(mmaType, op.getContext()));
+        builder.launch(rewriter, loc, getMmaRetType(mmaType, op.getContext()));
 
     Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
