@@ -350,7 +350,8 @@ class CodeGenerator(ast.NodeVisitor):
                 continue
             else:
                 if i in self.attributes:
-                    fn.set_arg_attr(idx, "tt.divisibility", self.attributes[i][1])
+                    for name, value in self.attributes[i]:
+                        fn.set_arg_attr(idx, name, value)
                 arg_values.append(tensor(fn.args(idx), self.prototype.param_types[idx]))
                 idx += 1
 
@@ -496,7 +497,7 @@ class CodeGenerator(ast.NodeVisitor):
             # check type
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
                 if name in defs:
-                    assert defs[name].type == liveins[name].type,\
+                    assert defs[name].type == liveins[name].type, \
                         f'initial value for `{name}` is of type {liveins[name].type}, '\
                         f'but the {block_name} block redefines it as {defs[name].type}'
             if name in then_defs or name in else_defs:
@@ -516,7 +517,7 @@ class CodeGenerator(ast.NodeVisitor):
                 continue
             then_ty = then_defs[name].type
             else_ty = else_defs[name].type
-            assert then_ty == else_ty,\
+            assert then_ty == else_ty, \
                 f'mismatched type for {name} between then block ({then_ty}) '\
                 f'and else block ({else_ty})'
             names.append(name)
@@ -814,7 +815,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     assert _is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert _is_triton_tensor(liveins[name])
-                    assert self.local_defs[name].type == liveins[name].type,\
+                    assert self.local_defs[name].type == liveins[name].type, \
                         f'Loop-carried variable {name} has initial type {liveins[name].type} '\
                         f'but is re-assigned to {self.local_defs[name].type} in loop! '\
                         f'Please make sure that the type stays consistent.'
@@ -1061,9 +1062,10 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return language.pointer_type(ty)
     tys = {
-        "fp8e4": language.float8e4,
+        "fp8e4nv": language.float8e4nv,
         "fp8e5": language.float8e5,
         "fp8e4b15": language.float8e4b15,
+        "fp8e4b15x4": language.float8e4b15x4,
         "fp16": language.float16,
         "bf16": language.bfloat16,
         "fp32": language.float32,
@@ -1084,7 +1086,7 @@ def str_to_ty(name):
 
 def kernel_suffix(signature, specialization):
     # suffix format:
-    # <argid><'c' if equal to 1><'d' if divisible by 16>
+    # <argid><'c' if equal to 1><'d' if divisible by 16><'e' if divisible by 8>
     suffix = ''
     for i, _ in enumerate(signature):
         suffix += str(i)
@@ -1092,6 +1094,8 @@ def kernel_suffix(signature, specialization):
             suffix += 'c'
         if i in specialization.divisible_by_16:
             suffix += 'd'
+        if i in specialization.divisible_by_8:
+            suffix += 'e'
     return suffix
 
 
@@ -1109,7 +1113,12 @@ def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
     function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
     tys = list(signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
-    new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
+    new_attrs = {k: [("tt.divisibility", 16)] for k in specialization.divisible_by_16}
+    for k in specialization.divisible_by_8:
+        attr = new_attrs[k] if k in new_attrs else []
+        attr.append(("tt.max_divisibility", 8))
+        new_attrs[k] = attr
+
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]

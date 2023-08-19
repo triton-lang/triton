@@ -82,7 +82,7 @@ def _kernel(A, B, C, M, N, K,
             stride_cm, stride_cn,
             dot_out_dtype: tl.constexpr,
             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,
+            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr, AB_DTYPE: tl.constexpr
             ):
     # matrix multiplication
     pid = tl.program_id(0)
@@ -114,8 +114,9 @@ def _kernel(A, B, C, M, N, K,
             _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
             a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
             b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
-        a = a.to(C.dtype.element_ty)
-        b = b.to(C.dtype.element_ty)
+        if AB_DTYPE:
+            a = a.to(C.dtype.element_ty)
+            b = b.to(C.dtype.element_ty)
         acc += tl.dot(a, b, out_dtype=dot_out_dtype)
         A += BLOCK_K * SPLIT_K * stride_ak
         B += BLOCK_K * SPLIT_K * stride_bk
@@ -150,8 +151,8 @@ class _matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
         # allocates output
-        if a.dtype in [tl.float8e4, tl.float8e4b15, tl.float8e5] or\
-           b.dtype in [tl.float8e4, tl.float8e4b15, tl.float8e5]:
+        if a.dtype in [tl.float8e4nv, tl.float8e4b15, tl.float8e5] or\
+           b.dtype in [tl.float8e4nv, tl.float8e4b15, tl.float8e5]:
             c_dtype = torch.float16
         else:
             c_dtype = get_higher_dtype(a.dtype, b.dtype)
@@ -169,6 +170,9 @@ class _matmul(torch.autograd.Function):
                 dot_out_dtype = tl.float32
             else:
                 dot_out_dtype = tl.int32
+        ab_dtype = True
+        if a.dtype in [tl.float8e4nv, tl.float8e5] and b.dtype in [tl.float8e4nv, tl.float8e5]:
+            ab_dtype = False
         # launch kernel
         grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
         _kernel[grid](a, b, c, M, N, K,
@@ -176,7 +180,7 @@ class _matmul(torch.autograd.Function):
                       b.stride(0), b.stride(1),
                       c.stride(0), c.stride(1),
                       dot_out_dtype=dot_out_dtype,
-                      GROUP_M=8)
+                      GROUP_M=8, AB_DTYPE=ab_dtype)
         return c
 
     @staticmethod

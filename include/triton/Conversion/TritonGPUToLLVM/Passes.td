@@ -19,6 +19,7 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                              "mlir::tensor::TensorDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                              "mlir::ROCDL::ROCDLDialect",
                              "mlir::NVVM::NVVMDialect"];
 
@@ -26,9 +27,16 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
         Option<"computeCapability", "compute-capability",
                "int32_t", /*default*/"80",
                "device compute capability">,
-        Option<"isROCM", "is-rocm",
-               "bool", /*default*/"false",
-               "compile for ROCM-compatible LLVM">,
+        Option<"tmaMetadata", "tma-metadata",
+               "mlir::triton::gpu::TMAMetadataTy*", /*default*/"nullptr",
+               "tma metadata to the runtime">,
+        Option<"target", "target", "enum Target", "mlir::triton::Target::Default",
+               "compile for target compatible LLVM",
+               "llvm::cl::values("
+               "clEnumValN(mlir::triton::Target::NVVM, \"nvvm\", \"compile for "
+               "NVVM-compatible LLVM\"), "
+               "clEnumValN(mlir::triton::Target::ROCDL, \"rocdl\", \"compile for "
+               "ROCDL-compatible LLVM\"))">,
     ];
 }
 

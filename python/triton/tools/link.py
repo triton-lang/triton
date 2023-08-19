@@ -32,10 +32,10 @@ class HeaderParser:
         self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+)")
         # [name, suffix]
         self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]+)$")
-        # [(argnum, d|c)]
-        self.kernel_suffix = re.compile("([0-9]+)([c,d])")
         # [(type, name)]
         self.c_sig = re.compile("[\\s]*(\\w+)\\s(\\w+)[,]?")
+        # [d|c]
+        self.arg_suffix = re.compile("[c,d]")
 
         self.kernels = defaultdict(list)
 
@@ -48,7 +48,7 @@ class HeaderParser:
                     ker_name, c_sig = m.group(1), m.group(2)
                     name, sig_hash, suffix = self._match_name(ker_name)
                     c_types, arg_names = self._match_c_sig(c_sig)
-                    num_specs, sizes = self._match_suffix(suffix)
+                    num_specs, sizes = self._match_suffix(suffix, c_sig)
                     self._add_kernel(
                         name,
                         KernelLinkerMeta(
@@ -79,18 +79,27 @@ class HeaderParser:
 
         raise LinkerError(f"{c_sig} is not a valid argument signature")
 
-    def _match_suffix(self, suffix: str):
-        m = self.kernel_suffix.findall(suffix)
-        if not len(m):
-            raise LinkerError(f"{suffix} is not a valid kernel suffix")
-        sizes = []
-        num_specs = len(m)
+    def _match_suffix(self, suffix: str, c_sig: str):
+        args = c_sig.split(',')
         s2i = {"c": 1, "d": 16}
-        for (argnum, arg_size_ann) in m:
-            while len(sizes) < int(argnum):
-                sizes.append(None)
-
-            sizes.append(s2i[arg_size_ann])
+        num_specs = 0
+        sizes = []
+        # scan through suffix, first find the index,
+        # then see if it is followed by d or c
+        for i in range(len(args)):
+            pos = suffix.find(str(i))
+            if pos == -1:
+                raise LinkerError(f"{suffix} is not a valid kernel suffix")
+            pos += len(str(i))
+            if self.arg_suffix.match(suffix, pos):
+                num_specs += 1
+                sizes.extend([None] * (i - len(sizes)))
+                sizes.append(s2i[suffix[pos]])
+                pos += 1
+            if i < len(args) - 1:
+                suffix = suffix[pos:]
+            else:
+                sizes.extend([None] * (len(args) - len(sizes)))
         return num_specs, sizes
 
     def _add_kernel(self, name: str, ker: KernelLinkerMeta):
@@ -106,13 +115,20 @@ class HeaderParser:
         self.kernels[name].append(ker)
 
 
-def gen_signature(m):
+def gen_signature_with_full_args(m):
     return ", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)])
+
+
+def gen_signature(m):
+    arg_types = [ty for ty, hint in zip(m.arg_ctypes, m.sizes) if hint != 1]
+    arg_names = [arg for arg, hint in zip(m.arg_names, m.sizes) if hint != 1]
+    sig = ", ".join([f"{ty} {arg}" for ty, arg in zip(arg_types, arg_names)])
+    return sig
 
 
 def make_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     return f"""
-CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature(metas[-1])});
+CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature_with_full_args(metas[-1])});
 void load_{name}();
 void unload_{name}();
     """
@@ -124,13 +140,16 @@ def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
         src += f"CUresult {name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature(meta)});\n"
     src += "\n"
 
-    src += f"CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature(metas[-1])}){{"
+    src += f"CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature_with_full_args(metas[-1])}){{"
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
         cond_fn = lambda val, hint: f"({val} % {hint} == 0)" if hint == 16 else f"({val} == {hint})" if hint == 1 else None
         conds = " && ".join([cond_fn(val, hint) for val, hint in zip(meta.arg_names, meta.sizes) if hint is not None])
         src += f"  if ({conds})\n"
-        src += f"    return {name}_{meta.sig_hash}_{meta.suffix}(stream, gX, gY, gZ, {', '.join(meta.arg_names)});\n"
+        arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
+        src += f"    return {name}_{meta.sig_hash}_{meta.suffix}(stream, gX, gY, gZ, {', '.join(arg_names)});\n"
+    src += "\n"
+    src += "  return CUDA_ERROR_INVALID_VALUE;\n"
     src += "}\n"
 
     for mode in ["load", "unload"]:

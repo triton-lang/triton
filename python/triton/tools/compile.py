@@ -43,6 +43,7 @@ if __name__ == "__main__":
     parser.add_argument("path", help="Path to Python source containing desired kernel in its scope. File will be executed.")
     parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile", required=True)
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
+    parser.add_argument("--num-stages", "-ns", type=int, default=3, help="Number of stages meta-parameter for the kernel")
     parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
@@ -94,8 +95,15 @@ if __name__ == "__main__":
     divisible_by_16 = [i for i, h in hints.items() if h == 16]
     equal_to_1 = [i for i, h in hints.items() if h == 1]
     config = triton.compiler.instance_descriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
-    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config], num_warps=args.num_warps)
-    arg_names = [kernel.arg_names[i] for i in signature.keys()]
+    for i in equal_to_1:
+        constexprs.update({i: 1})
+    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config], num_warps=args.num_warps, num_stages=args.num_stages)
+    arg_names = []
+    arg_types = []
+    for i in signature.keys():
+        if i not in equal_to_1:
+            arg_names += [kernel.arg_names[i]]
+            arg_types += [signature[i]]
 
     # dump C stub code
     suffix = kernel_suffix(signature.values(), config)
@@ -107,7 +115,8 @@ if __name__ == "__main__":
         "triton_kernel_name": triton_kernel_name,
         "bin_size": len(hex_),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, signature.values())]),
+        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
+        "full_signature": ", ".join([f"{ty_to_cpp(signature[i])} {kernel.arg_names[i]}" for i in signature.keys()]),
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names]),
         "num_args": len(arg_names),
         "kernel_docstring": "",

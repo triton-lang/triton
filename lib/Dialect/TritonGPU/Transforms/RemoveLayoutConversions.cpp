@@ -126,6 +126,13 @@ public:
       return failure();
     }
 
+    // ReduceOp does not support SharedLayout as its src layout, therefore
+    // ConvertLayoutOp and ReduceOp should not be swapped when the conversion is
+    // from SharedLayout to DistributedLayout
+    if (newEncoding.isa<triton::gpu::SharedEncodingAttr>()) {
+      return failure();
+    }
+
     for (unsigned i = 1; i < newOperands.size(); ++i) {
       auto oldTy = newOperands[i].getType().cast<RankedTensorType>();
       RankedTensorType newTy =
@@ -195,7 +202,11 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
     if (arg.getDefiningOp() == cvt)
       mapping.map(arg, cvt.getOperand());
     else {
-      auto oldType = arg.getType().cast<RankedTensorType>();
+      auto oldType = arg.getType().dyn_cast<RankedTensorType>();
+      // TODO: we may be creating block pointer load/store with mismatching
+      // pointer type.
+      if (!oldType)
+        continue;
       auto newType = RankedTensorType::get(
           oldType.getShape(), oldType.getElementType(), srcEncoding);
       auto cvtI = rewriter.create<triton::gpu::ConvertLayoutOp>(arg.getLoc(),
@@ -207,7 +218,7 @@ void pushConversionForward(triton::gpu::ConvertLayoutOp cvt,
   }
   rewriter.setInsertionPoint(op);
   if (op->getNumResults() == 0) {
-    Operation *newOp = rewriter.clone(*op, mapping);
+    Operation *newOp = cloneWithInferType(rewriter, op, mapping);
     rewriter.eraseOp(op);
     return;
   }
@@ -251,12 +262,12 @@ public:
 
     IRMapping mapping;
     for (size_t i = 0; i < numOps; i++) {
-      auto thenCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-          thenYield.getOperand(i).getDefiningOp());
+      auto thenCvt =
+          thenYield.getOperand(i).getDefiningOp<triton::gpu::ConvertLayoutOp>();
       if (hasElse) {
         auto elseYield = ifOp.elseYield();
-        auto elseCvt = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-            elseYield.getOperand(i).getDefiningOp());
+        auto elseCvt = elseYield.getOperand(i)
+                           .getDefiningOp<triton::gpu::ConvertLayoutOp>();
         if (thenCvt && elseCvt &&
             std::distance(elseCvt->user_begin(), elseCvt->user_end()) == 1 &&
             std::distance(thenCvt->user_begin(), thenCvt->user_end()) == 1 &&
@@ -299,7 +310,7 @@ public:
             mapping.map(op.getResult(0), mapping.lookup(op.getOperand(0)));
           continue;
         }
-        rewriter.clone(op, mapping);
+        cloneWithInferType(rewriter, &op, mapping);
       }
     };
     rewriter.setInsertionPointToEnd(newIfOp.thenBlock());
@@ -458,7 +469,7 @@ public:
                        size_t i, RankedTensorType newType,
                        triton::gpu::ConvertLayoutOp origConversion) const {
     // Rewrite init argument
-    Type origType = forOp.getInitArgs()[i].getType();
+    auto origType = forOp.getInitArgs()[i].getType().cast<RankedTensorType>();
     SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
     newInitArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newInitArgs[i].getLoc(), newType, newInitArgs[i]);
@@ -475,13 +486,52 @@ public:
 
     mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (&op == (Operation *)(&origConversion))
+      if (dyn_cast<triton::gpu::ConvertLayoutOp>(op) == origConversion)
         continue;
-      Operation *newOp = rewriter.clone(op, mapping);
+
+      bool convert = llvm::any_of(op.getOperands(), [&](auto operand) {
+        return operand == origConversion.getOperand();
+      });
+      auto convertLayout = [&](Value operand, Value value, Attribute encoding) {
+        auto tensorType = value.getType().cast<RankedTensorType>();
+        auto cvtType = RankedTensorType::get(
+            tensorType.getShape(), tensorType.getElementType(), encoding);
+        auto cvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
+            op.getLoc(), cvtType, value);
+        mapping.map(operand, cvt);
+      };
+      DenseMap<Value, Value> cvtValues;
+      if (convert) {
+        for (auto operand : op.getOperands()) {
+          if (operand == origConversion.getOperand() ||
+              !isa<RankedTensorType>(operand.getType()))
+            continue;
+          auto value = mapping.lookupOrDefault(operand);
+          // Convert to the new type
+          convertLayout(operand, value, newType.getEncoding());
+          // Other ops don't use the converted value and we need to restore
+          cvtValues[operand] = value;
+        }
+      }
+      auto *newOp = cloneWithInferType(rewriter, &op, mapping);
+      if (convert) {
+        for (auto result : op.getResults()) {
+          if (!isa<RankedTensorType>(result.getType()))
+            continue;
+          auto value = mapping.lookupOrDefault(result);
+          auto tensorType = result.getType().cast<RankedTensorType>();
+          // Convert to the original type
+          convertLayout(result, value, tensorType.getEncoding());
+        }
+        // Restore original values
+        for (auto [operand, value] : cvtValues)
+          mapping.map(operand, value);
+      }
     }
     // create yield, inserting conversions if necessary
     auto yieldOp = forOp.getBody()->getTerminator();
     SmallVector<Value, 4> newYieldArgs;
+    // We use the new type for the result of the conversion
     for (Value arg : yieldOp->getOperands())
       newYieldArgs.push_back(mapping.lookup(arg));
     if (newYieldArgs[i].getType() != newType)
@@ -494,6 +544,7 @@ public:
     newResults[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
         newForOp.getLoc(), origType, newForOp->getResult(i));
     newResults[i].getDefiningOp()->moveAfter(newForOp);
+
     return newResults;
   }
 
@@ -534,40 +585,26 @@ public:
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
     auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
-    auto dotOp =
-        dyn_cast_or_null<triton::DotOp>(dstOp.getSrc().getDefiningOp());
+    auto dotOp = dstOp.getSrc().getDefiningOp<triton::DotOp>();
     if (!dotOp)
       return mlir::failure();
     if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
         std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
       return mlir::failure();
-    auto cvtOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
-        dotOp.getOperand(2).getDefiningOp());
+    auto cvtOp =
+        dotOp.getOperand(2).getDefiningOp<triton::gpu::ConvertLayoutOp>();
     if (!cvtOp)
       return mlir::failure();
-    auto loadOp =
-        dyn_cast_or_null<triton::LoadOp>(cvtOp.getSrc().getDefiningOp());
-    if (!loadOp)
-      return mlir::failure();
+    if (!cvtOp.getSrc().getDefiningOp<triton::LoadOp>())
+      return failure();
     auto dstTy = dstOp.getResult().getType().cast<RankedTensorType>();
     auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
     if (dstTy != srcTy)
       return mlir::failure();
 
-    // TODO: int tensor cores
-    auto out_dtype = dstTy.getElementType().cast<FloatType>();
-    APFloat value(0.0f);
-    if (out_dtype.isBF16())
-      value = APFloat(APFloat::IEEEhalf(), APInt(16, 0));
-    else if (out_dtype.isF16())
-      value = APFloat(APFloat::IEEEhalf(), APInt(16, 0));
-    else if (out_dtype.isF32())
-      value = APFloat(0.0f);
-    else
-      llvm_unreachable("unsupported data type");
-
-    auto _0f =
-        rewriter.create<arith::ConstantFloatOp>(op->getLoc(), value, out_dtype);
+    auto _0f = rewriter.create<arith::ConstantOp>(
+        op->getLoc(), dstTy.getElementType(),
+        rewriter.getZeroAttr(dstTy.getElementType()));
     auto _0 = rewriter.create<triton::SplatOp>(
         op->getLoc(), dotOp.getResult().getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
@@ -607,10 +644,6 @@ public:
     patterns.add<ConvertDotConvert>(context);
 
     if (mlir::applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
-      signalPassFailure();
-    }
-
-    if (fixupLoops(m).failed()) {
       signalPassFailure();
     }
   }

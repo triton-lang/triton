@@ -14,7 +14,7 @@ class TritonTypeDef<string name, string _mnemonic>
 }
 
 // Floating-point Type
-def TT_Float : AnyTypeOf<[F8E4M3FNUZ, F8E4M3B11FNUZ, F8E5M2, F16, BF16, F32, F64], "floating-point">;
+def TT_Float : AnyTypeOf<[F8E4M3FNUZ, F8E4M3FN, F8E4M3B11FNUZ, F8E5M2, F16, BF16, F32, F64], "floating-point">;
 def TT_FloatTensor : TensorOf<[TT_Float]>;
 def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
 
@@ -74,7 +74,7 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
 // Scalar Pointer Type: `ptr<>`
 def TT_Ptr : TT_PtrOf<[AnyType]>;
 
-// Tensor of Pointer Type
+// Tensor of Pointer Type: `tensor<ptr<>>`
 def TT_PtrTensor : TensorOf<[TT_Ptr]>;
 
 // Tensor of Pointer Type or Pointer type: `tensor<ptr<>>` or `ptr<>`

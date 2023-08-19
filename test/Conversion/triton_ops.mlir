@@ -2,9 +2,9 @@
 
 tt.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64) {
   // scalar -> scalar
-  // CHECK:  i64 -> !tt.ptr<f32>
+  // CHECK:  i64 -> !tt.ptr<f32, 1>
   %0 = tt.int_to_ptr %scalar_i64 : i64 -> !tt.ptr<f32>
-  // CHECK: !tt.ptr<f32> -> i64
+  // CHECK: !tt.ptr<f32, 1> -> i64
   %1 = tt.ptr_to_int %scalar_ptr : !tt.ptr<f32> -> i64
   // CHECK: f32 to f16
   %2 = arith.truncf %scalar_f32 : f32 to f16
@@ -14,9 +14,9 @@ tt.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64)
   %tensor_f32_0d = tt.splat %scalar_f32 : (f32) -> tensor<f32>
   %tensor_i64_0d = tt.splat %scalar_i64 : (i64) -> tensor<i64>
 
-  // CHECK: tensor<i64> -> tensor<!tt.ptr<f32>>
+  // CHECK: tensor<i64> -> tensor<!tt.ptr<f32, 1>>
   %3 = tt.int_to_ptr %tensor_i64_0d : tensor<i64> -> tensor<!tt.ptr<f32>>
-  // CHECK: tensor<!tt.ptr<f32>> -> tensor<i64>
+  // CHECK: tensor<!tt.ptr<f32, 1>> -> tensor<i64>
   %4 = tt.ptr_to_int %tensor_ptr_0d : tensor<!tt.ptr<f32>> -> tensor<i64>
   // CHECK: tensor<f32> to tensor<f16>
   %5 = arith.truncf %tensor_f32_0d : tensor<f32> to tensor<f16>
@@ -26,9 +26,9 @@ tt.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64)
   %tensor_f32_1d = tt.splat %scalar_f32 : (f32) -> tensor<16xf32>
   %tensor_i64_1d = tt.splat %scalar_i64 : (i64) -> tensor<16xi64>
 
-  // CHECK: tensor<16xi64> -> tensor<16x!tt.ptr<f32>>
+  // CHECK: tensor<16xi64> -> tensor<16x!tt.ptr<f32, 1>>
   %6 = tt.int_to_ptr %tensor_i64_1d : tensor<16xi64> -> tensor<16x!tt.ptr<f32>>
-  // CHECK: tensor<16x!tt.ptr<f32>> -> tensor<16xi64>
+  // CHECK: tensor<16x!tt.ptr<f32, 1>> -> tensor<16xi64>
   %7 = tt.ptr_to_int %tensor_ptr_1d : tensor<16x!tt.ptr<f32>> -> tensor<16xi64>
   // CHECK: tensor<16xf32> to tensor<16xf16>
   %8 = arith.truncf %tensor_f32_1d : tensor<16xf32> to tensor<16xf16>
@@ -37,19 +37,19 @@ tt.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64)
 
 tt.func @addptr_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_i32: i32) {
   // scalar -> scalar
-  // CHECK: !tt.ptr<f32>
+  // CHECK: !tt.ptr<f32, 1>
   %0 = tt.addptr %scalar_ptr, %scalar_i32 : !tt.ptr<f32>, i32
 
   // 0D tensor -> 0D tensor
   %tensor_ptr_0d = tt.splat %scalar_ptr : (!tt.ptr<f32>) -> tensor<!tt.ptr<f32>>
   %tensor_i32_0d = tt.splat %scalar_i32 : (i32) -> tensor<i32>
-  // CHECK: tensor<!tt.ptr<f32>>
+  // CHECK: tensor<!tt.ptr<f32, 1>>
   %1 = tt.addptr %tensor_ptr_0d, %tensor_i32_0d : tensor<!tt.ptr<f32>>, tensor<i32>
 
   // 1D tensor -> 1D tensor
   %tensor_ptr_1d = tt.splat %scalar_ptr : (!tt.ptr<f32>) -> tensor<16x!tt.ptr<f32>>
   %tensor_i32_1d = tt.splat %scalar_i32 : (i32) -> tensor<16xi32>
-  // CHECK: tensor<16x!tt.ptr<f32>>
+  // CHECK: tensor<16x!tt.ptr<f32, 1>>
   %2 = tt.addptr %tensor_ptr_1d, %tensor_i32_1d : tensor<16x!tt.ptr<f32>>, tensor<16xi32>
   tt.return
 }
@@ -201,5 +201,12 @@ tt.func @scan_op(%ptr: tensor<1x2x4x!tt.ptr<f32>>, %v : tensor<1x2x4xf32>) {
   }) : (tensor<1x2x4xf32>) -> tensor<1x2x4xf32>
   tt.store %ptr, %a : tensor<1x2x4xf32>
   tt.return
+}
 
+// CHECK-LABEL: inline_asm
+// CHECK: tt.elementwise_inline_asm "shl.b32 $0, $0, 3;"
+tt.func @inline_asm(%0: tensor<512xi8>) {
+  %1 = tt.elementwise_inline_asm "shl.b32 $0, $0, 3;"
+    {constraints = "=r,r", packed_element = 4 : i32, pure = true} %0 : tensor<512xi8> -> tensor<512xi8>
+  tt.return
 }

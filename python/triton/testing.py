@@ -4,6 +4,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 
+from . import language as tl
 from ._C.libtriton.triton import runtime
 
 
@@ -268,9 +269,15 @@ class Mark:
         y_mean = bench.line_names
         y_min = [f'{x}-min' for x in bench.line_names]
         y_max = [f'{x}-max' for x in bench.line_names]
-        df = pd.DataFrame(columns=[bench.x_names[0]] + y_mean + y_min + y_max)
+        x_names_str = str(bench.x_names)
+        df = pd.DataFrame(columns=[x_names_str] + y_mean + y_min + y_max)
         for x in bench.x_vals:
-            x_args = {x_name: x for x_name in bench.x_names}
+            if not isinstance(x, list):
+                x = [x]
+            if len(x) == 1:
+                x = x * len(bench.x_names)
+            x_str = str(x)
+            x_args = {x_name: x_in for x_name, x_in in zip(bench.x_names, x)}
             row_mean, row_min, row_max = [], [], []
             for y in bench.line_vals:
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args)
@@ -281,17 +288,19 @@ class Mark:
                 row_mean += [y_mean]
                 row_min += [y_min]
                 row_max += [y_max]
-            df.loc[len(df)] = [x] + row_mean + row_min + row_max
+            df.loc[len(df)] = [x_str] + row_mean + row_min + row_max
         if bench.plot_name:
             plt.figure()
             ax = plt.subplot()
-            x = bench.x_names[0]
+            x = x_names_str
             for i, y in enumerate(bench.line_names):
                 y_min, y_max = df[y + '-min'], df[y + '-max']
                 col = bench.styles[i][0] if bench.styles else None
                 sty = bench.styles[i][1] if bench.styles else None
                 ax.plot(df[x], df[y], label=y, color=col, ls=sty)
-                if y_min is not None and y_max is not None:
+                if not y_min.isnull().all() and not y_max.isnull().all():
+                    y_min = y_min.astype(float)
+                    y_max = y_max.astype(float)
                     ax.fill_between(df[x], y_min, y_max, alpha=0.15, color=col)
             ax.legend()
             xlabel = bench.xlabel if bench.xlabel else " = ".join(bench.x_names)
@@ -304,7 +313,7 @@ class Mark:
                 plt.show()
             if save_path:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
-        df = df[[bench.x_names[0]] + bench.line_names]
+        df = df[[x_names_str] + bench.line_names]
         if print_data:
             print(bench.plot_name + ':')
             print(df)
@@ -368,11 +377,11 @@ def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None)
         assert dtype == torch.float16
         ops_per_sub_core = 256  # 2 4x4x4 Tensor Cores
     else:
-        if dtype == torch.float32:
+        if dtype in [torch.float32, torch.int32]:
             ops_per_sub_core = 256
-        elif dtype in [torch.float16, torch.bfloat16]:
+        elif dtype in [torch.float16, torch.bfloat16, torch.int16]:
             ops_per_sub_core = 512
-        elif dtype == torch.int8:
+        elif dtype in [torch.int8, tl.float8e4nv, tl.float8e4b15, tl.float8e5]:
             ops_per_sub_core = 1024
         else:
             raise RuntimeError("dtype not supported")

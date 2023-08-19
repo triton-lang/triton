@@ -1,6 +1,8 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 
-#include "mlir/Conversion/Passes.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -15,8 +17,10 @@
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Conversion/NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Target/LLVMIR/Passes.h"
+#include "triton/Target/PTX/TmaMetadata.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 #include "llvm/ADT/APInt.h"
@@ -51,7 +55,7 @@ struct NVVMMetadata {
 
 // Add the nvvm related metadata to LLVM IR.
 static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata,
-                          bool isROCM) {
+                          Target target) {
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
@@ -81,16 +85,19 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata,
   }
 
   if (metadata.isKernel) {
-    if (isROCM) {
-      func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
-      func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
-    } else {
+    switch (target) {
+    case Target::NVVM: {
       llvm::Metadata *mdArgs[] = {
           llvm::ValueAsMetadata::get(func), llvm::MDString::get(ctx, "kernel"),
           llvm::ValueAsMetadata::get(
               llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 1))};
       module->getOrInsertNamedMetadata("nvvm.annotations")
           ->addOperand(llvm::MDNode::get(ctx, mdArgs));
+    } break;
+    case Target::ROCDL: {
+      func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+      func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
+    } break;
     }
   }
 }
@@ -235,8 +242,8 @@ static void linkLibdevice(llvm::Module &module) {
   module.addModuleFlag(reflect);
 }
 
-static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
-                          llvm::StringRef path, bool isROCM) {
+bool linkExternLib(llvm::Module &module, llvm::StringRef name,
+                   llvm::StringRef path, Target target) {
   llvm::SMDiagnostic err;
   auto &ctx = module.getContext();
 
@@ -255,8 +262,7 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
     return true;
   }
 
-  // check if ROCM
-  if (!isROCM) {
+  if (target == Target::NVVM) {
     if (name == "libdevice") {
       linkLibdevice(module);
     }
@@ -270,12 +276,13 @@ static bool linkExternLib(llvm::Module &module, llvm::StringRef name,
 
 std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
-                      bool isROCM) {
+                      Target target) {
   DialectRegistry registry;
   mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);
   mlir::registerROCDLDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
+
   module->getContext()->appendDialectRegistry(registry);
 
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
@@ -297,7 +304,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
   // dead code.
   auto externLibs = getExternLibs(module);
   for (auto &lib : externLibs) {
-    if (linkExternLib(*llvmModule, lib.first, lib.second, isROCM))
+    if (linkExternLib(*llvmModule, lib.first, lib.second, target))
       return nullptr;
   }
 
@@ -313,7 +320,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
   for (auto &func : llvmModule->functions()) {
     auto it = nvvmMetadata.find(func.getName());
     if (it != nvvmMetadata.end())
-      amendLLVMFunc(&func, it->second, isROCM);
+      amendLLVMFunc(&func, it->second, target);
   }
 
   return llvmModule;
@@ -322,7 +329,8 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
 std::unique_ptr<llvm::Module>
 translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
                            mlir::ModuleOp module, int computeCapability,
-                           bool isROCM) {
+                           mlir::triton::gpu::TMAMetadataTy &tmaInfos,
+                           Target target) {
   mlir::PassManager pm(module->getContext());
   mlir::registerPassManagerCLOptions();
   if (failed(applyPassManagerCLOptions(pm))) {
@@ -344,7 +352,9 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
 
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::createConvertIndexToLLVMPass());
-  pm.addPass(createConvertTritonGPUToLLVMPass(computeCapability, isROCM));
+  pm.addPass(
+      createConvertTritonGPUToLLVMPass({computeCapability, &tmaInfos, target}));
+  pm.addPass(createConvertNVGPUToLLVMPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createCanonicalizerPass());
   // Simplify the IR
@@ -358,7 +368,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
-  auto llvmIR = translateLLVMToLLVMIR(llvmContext, module, isROCM);
+  auto llvmIR = translateLLVMToLLVMIR(llvmContext, module, target);
   if (!llvmIR) {
     llvm::errs() << "Translate to LLVM IR failed";
     return nullptr;

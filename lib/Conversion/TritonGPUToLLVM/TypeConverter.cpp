@@ -27,6 +27,9 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](mlir::Float8E4M3B11FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
+  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
   addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
@@ -41,7 +44,27 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
 
 Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
-  // Recursively translate pointee type
+  auto ctx = type.getContext();
+  auto pointeeType = type.getPointeeType();
+  if (pointeeType.isa<RankedTensorType>()) {
+    auto rankedTensorType = pointeeType.cast<RankedTensorType>();
+    // struct { offset0, offset1, shape0, shape1, stride0,
+    // stride1, base_ptr};
+    auto eleType = rankedTensorType.getElementType();
+    auto shape = rankedTensorType.getShape();
+    SmallVector<Type, 4> types;
+    // offsets
+    for (size_t i = 0; i < shape.size(); ++i)
+      types.push_back(IntegerType::get(ctx, 32));
+    // shapes, strides
+    for (size_t i = 0; i < 2 * shape.size(); ++i)
+      types.push_back(IntegerType::get(ctx, 64));
+
+    types.push_back(
+        LLVM::LLVMPointerType::get(eleType, type.getAddressSpace()));
+
+    return LLVM::LLVMStructType::getLiteral(ctx, types);
+  }
   return LLVM::LLVMPointerType::get(convertType(type.getPointeeType()),
                                     type.getAddressSpace());
 }

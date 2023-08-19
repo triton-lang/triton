@@ -5,64 +5,239 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include <fstream>
 
 namespace mlir {
 
-namespace {
+SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
+                                                const ArrayRef<int64_t> &shape,
+                                                RankedTensorType type) {
+  if (version == 1)
+    return {16, 16};
+  else if (version == 2)
+    return {16, 8};
+  else if (version == 3) {
+    unsigned k = 256 / type.getElementTypeBitWidth();
+    if (shape[0] % 64 != 0 || shape[1] % 8 != 0) {
+      assert(false && "type not supported");
+      return {0, 0, 0};
+    }
+    auto eltType = type.getElementType();
+    SmallVector<unsigned> validN;
 
-class FixupLoop : public mlir::RewritePattern {
+    // MMAv3 with larger instruction shape is preferred.
+    if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FNUZ() ||
+        eltType.isF16() || eltType.isBF16() || eltType.isF32()) {
+      validN.assign({256, 248, 240, 232, 224, 216, 208, 200, 192, 184, 176,
+                     168, 160, 152, 144, 136, 128, 120, 112, 104, 96,  88,
+                     80,  72,  64,  56,  48,  40,  32,  24,  16,  8});
+    }
 
-public:
-  explicit FixupLoop(mlir::MLIRContext *context)
-      : mlir::RewritePattern(scf::ForOp::getOperationName(), 2, context) {}
+    if (eltType.isInteger(8)) {
+      validN.assign({224, 208, 192, 176, 160, 144, 128, 112, 96, 80, 64, 48, 32,
+                     24, 16, 8});
+    }
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto forOp = cast<scf::ForOp>(op);
-
-    // Rewrite init argument
-    SmallVector<Value, 4> newInitArgs = forOp.getInitArgs();
-    bool shouldRematerialize = false;
-    for (size_t i = 0; i < newInitArgs.size(); i++) {
-      if (newInitArgs[i].getType() != forOp.getRegionIterArgs()[i].getType() ||
-          newInitArgs[i].getType() != forOp.getResultTypes()[i]) {
-        shouldRematerialize = true;
-        break;
+    for (auto n : validN) {
+      if (shape[1] % n == 0) {
+        return {16, n, k};
       }
     }
-    if (!shouldRematerialize)
-      return failure();
 
-    scf::ForOp newForOp = rewriter.create<scf::ForOp>(
-        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
-        forOp.getStep(), newInitArgs);
-    newForOp->moveBefore(forOp);
-    rewriter.setInsertionPointToStart(newForOp.getBody());
-    IRMapping mapping;
-    for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
-      mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
-    mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
-
-    for (Operation &op : forOp.getBody()->getOperations()) {
-      rewriter.clone(op, mapping);
-    }
-    rewriter.replaceOp(forOp, newForOp.getResults());
-    return success();
+    assert(false && "type not supported");
+    return {0, 0, 0};
+  } else {
+    assert(false && "version not supported");
+    return {0, 0};
   }
-};
-
-} // namespace
-
-LogicalResult fixupLoops(ModuleOp mod) {
-  auto *ctx = mod.getContext();
-  mlir::RewritePatternSet patterns(ctx);
-  patterns.add<FixupLoop>(ctx);
-  if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
-    return failure();
-  return success();
 }
 
+bool isLoadFromTensorPtr(triton::LoadOp op) {
+  return mlir::triton::isTensorPointerType(op.getPtr().getType());
+}
+
+bool isStoreToTensorPtr(triton::StoreOp op) {
+  return mlir::triton::isTensorPointerType(op.getPtr().getType());
+}
+
+Operation *getFirstUser(Value v) {
+  DenseMap<Operation *, size_t> operationId;
+  v.getParentBlock()->walk<WalkOrder::PostOrder>(
+      [&](Operation *op) { operationId[op] = operationId.size(); });
+  size_t minId = std::numeric_limits<size_t>::max();
+  Operation *firstUser = nullptr;
+  for (Operation *user : v.getUsers()) {
+    assert(operationId.find(user) != operationId.end());
+    size_t userId = operationId[user];
+    if (userId < minId) {
+      minId = userId;
+      firstUser = user;
+    }
+  }
+  assert(firstUser);
+  return firstUser;
+}
+
+triton::gpu::SharedEncodingAttr getSharedEncoding(RankedTensorType tensorTy) {
+  auto blockedLayout =
+      tensorTy.getEncoding().cast<triton::gpu::BlockedEncodingAttr>();
+  return triton::gpu::SharedEncodingAttr::get(
+      tensorTy.getContext(), tensorTy.getShape(), blockedLayout.getOrder(),
+      blockedLayout.getCTALayout(), tensorTy.getElementType());
+}
+
+//===----------------------------------------------------------------------===//
+// GraphDumper
+//===----------------------------------------------------------------------===//
+
+GraphDumper::NodeInfo GraphDumper::onValue(Value value) const {
+  return {{"shape", "box"}, {"style", "filled"}, {"fillcolor", "white"}};
+}
+
+GraphDumper::NodeInfo GraphDumper::onOperation(Operation *op) const {
+  return {{"shape", "ellipse"}, {"style", "filled"}, {"fillcolor", "white"}};
+}
+
+std::string GraphDumper::dump(triton::FuncOp func) const {
+  llvm::SetVector<Value> values;
+  llvm::SetVector<Operation *> operations;
+
+  func.walk([&](Operation *op) {
+    operations.insert(op);
+    for (Value operand : op->getOperands())
+      values.insert(operand);
+    for (Value result : op->getResults())
+      values.insert(result);
+  });
+
+  std::ostringstream oss;
+  oss << "// Generated by Triton GraphDumper\n"
+      << "\n"
+      << "digraph {\n";
+
+  oss << "    // Value Nodes\n";
+  for (Value value : values)
+    oss << "    " << emitValueNode(value) << "\n";
+  oss << "\n";
+
+  oss << "    // Operation Nodes\n";
+  for (Operation *op : operations)
+    oss << "    " << emitOperationNode(op) << "\n";
+  oss << "\n";
+
+  oss << "    // Edges\n";
+  for (Operation *op : operations) {
+    for (Value operand : op->getOperands())
+      oss << "    " << emitEdge(getUniqueId(operand), getUniqueId(op)) << "\n";
+    for (Value result : op->getResults())
+      oss << "    " << emitEdge(getUniqueId(op), getUniqueId(result)) << "\n";
+  }
+
+  oss << "}\n";
+  return oss.str();
+}
+
+void GraphDumper::dumpToFile(triton::FuncOp func,
+                             const std::string &filename) const {
+  std::ofstream ofs(filename);
+  ofs << dump(func);
+}
+
+std::string GraphDumper::getShapeStr(const Type &type) const {
+  std::ostringstream oss;
+  oss << "[";
+  if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
+    auto shape = tensorTy.getShape();
+    for (unsigned i = 0; i < shape.size(); ++i) {
+      if (i > 0)
+        oss << ", ";
+      oss << shape[i];
+    }
+  }
+  oss << "]";
+  return oss.str();
+}
+
+std::string GraphDumper::getUniqueId(Value value) const {
+  std::ostringstream oss;
+  oss << value.getImpl();
+  return oss.str();
+}
+
+std::string GraphDumper::getUniqueId(Operation *op) const {
+  std::ostringstream oss;
+  oss << op;
+  return oss.str();
+}
+
+std::string GraphDumper::emitNode(const std::string &id,
+                                  const GraphDumper::NodeInfo info) const {
+  std::ostringstream oss;
+  oss << "\"" << id << "\" [";
+  for (auto it = info.begin(); it != info.end(); ++it) {
+    if (it != info.begin())
+      oss << ", ";
+    oss << it->first << " = \"" << it->second << "\"";
+  }
+  oss << "];";
+  return oss.str();
+}
+
+std::string GraphDumper::emitEdge(const std::string &srcId,
+                                  const std::string &destId) const {
+  std::ostringstream oss;
+  oss << "\"" << srcId << "\" -> \"" << destId << "\";";
+  return oss.str();
+}
+
+std::string GraphDumper::emitValueNode(Value value) const {
+  NodeInfo info = onValue(value);
+  if (info.find("label") == info.end()) {
+    std::string shapeStr = getShapeStr(value.getType());
+    if (auto arg = value.dyn_cast<BlockArgument>())
+      info["label"] =
+          "BlockArg" + std::to_string(arg.getArgNumber()) + " " + shapeStr;
+    else
+      info["label"] = shapeStr;
+  }
+  return emitNode(getUniqueId(value), info);
+}
+
+std::string GraphDumper::emitOperationNode(Operation *op) const {
+  NodeInfo info = onOperation(op);
+  if (info.find("label") == info.end())
+    info["label"] = op->getName().getStringRef().str();
+  return emitNode(getUniqueId(op), info);
+}
+
+//===----------------------------------------------------------------------===//
+// GraphLayoutMarker
+//===----------------------------------------------------------------------===//
+
+GraphDumper::NodeInfo GraphLayoutMarker::onValue(Value value) const {
+  std::string color = getColor(value.getType());
+  return {{"shape", "box"}, {"style", "filled"}, {"fillcolor", color}};
+}
+
+std::string GraphLayoutMarker::getColor(const Type &type) const {
+  if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
+    auto layout = tensorTy.getEncoding();
+    if (layout.isa<triton::gpu::BlockedEncodingAttr>())
+      return "green";
+    else if (layout.isa<triton::gpu::SliceEncodingAttr>())
+      return "yellow";
+    else if (layout.isa<triton::gpu::MmaEncodingAttr>())
+      return "lightslateblue";
+    else if (layout.isa<triton::gpu::DotOperandEncodingAttr>())
+      return "orange";
+    else if (layout.isa<triton::gpu::SharedEncodingAttr>())
+      return "orangered";
+    else
+      assert(0 && "Unrecognized layout");
+  } else {
+    return "white";
+  }
+}
 // -------------------------------------------------------------------------- //
 
 // TODO: Interface
@@ -89,11 +264,15 @@ LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
 }
 
 bool isExpensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
-  // Case 1: A size 1 tensor is not expensive since all threads will load the
+  // Case 1: Pointer of tensor is always expensive
+  auto operandType = op->getOperand(0).getType();
+  if (triton::isTensorPointerType(operandType))
+    return true;
+  // Case 2a: A size 1 tensor is not expensive since all threads will load the
   // same
   if (isSingleValue(op->getOperand(0)))
     return false;
-  // Case 2: Tensor of pointers has more threads than elements
+  // Case 2b: Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
   auto ptrType = op->getOperand(0).getType().cast<RankedTensorType>();
   auto mod = op->getParentOfType<ModuleOp>();
@@ -121,7 +300,7 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
   return false;
 }
 
-bool canFoldConversion(Operation *op, Attribute &targetEncoding) {
+bool canFoldConversion(Operation *op, Attribute targetEncoding) {
   if (isa<triton::CatOp>(op))
     return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
                                         targetEncoding);
@@ -162,6 +341,12 @@ int simulateBackwardRematerialization(
         return INT_MAX;
       if (toConvert.count(argI) && toConvert[argI] != newEncoding)
         return INT_MAX;
+      if (auto ptrTy = argI.getType().dyn_cast<triton::PointerType>()) {
+        if (ptrTy.getPointeeType().isa<RankedTensorType>()) {
+          return INT_MAX;
+        }
+      }
+
       Operation *opArgI = argI.getDefiningOp();
       toConvert.insert({argI, newEncoding});
       // 1. Only convert RankedTensorType
@@ -222,6 +407,103 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
     }
   }
   return newOp;
+}
+
+namespace {
+
+struct OpUseInfo {
+  Value value;
+  Operation *op;
+  unsigned index;
+};
+
+void getForwardSliceOpUseInfo(Operation *op,
+                              SetVector<Operation *> *forwardSliceOps,
+                              SmallVector<OpUseInfo> *forwardOpUseInfo) {
+  if (!op)
+    return;
+
+  for (Region &region : op->getRegions())
+    for (Block &block : region)
+      for (Operation &blockOp : block)
+        if (forwardSliceOps->count(&blockOp) == 0)
+          getForwardSliceOpUseInfo(&blockOp, forwardSliceOps, forwardOpUseInfo);
+  for (Value result : op->getResults()) {
+    for (OpOperand &operand : result.getUses()) {
+      auto *blockOp = operand.getOwner();
+      forwardOpUseInfo->push_back(
+          {operand.get(), blockOp, operand.getOperandNumber()});
+      if (forwardSliceOps->count(blockOp) == 0)
+        getForwardSliceOpUseInfo(blockOp, forwardSliceOps, forwardOpUseInfo);
+    }
+  }
+
+  forwardSliceOps->insert(op);
+}
+} // namespace
+
+LogicalResult simulateForwardRematerializationInLoop(Operation *startOp,
+                                                     BlockArgument arg,
+                                                     Attribute targetEncoding) {
+  // heuristics for flash attention
+  if (targetEncoding.isa<triton::gpu::SharedEncodingAttr>())
+    return failure();
+  SetVector<Operation *> cvtSliceOps;
+  SmallVector<OpUseInfo> cvtSliceOpUseInfo;
+  getForwardSliceOpUseInfo(startOp, &cvtSliceOps, &cvtSliceOpUseInfo);
+
+  // Check if any additional conversion is needed along the way
+  for (Operation *op : cvtSliceOps) {
+    if (isa<scf::YieldOp>(op))
+      continue;
+    // The first op doesn't push forward any conversion
+    if (op != startOp) {
+      if (isa<triton::ReduceOp>(op) &&
+          !op->getResult(0).getType().isa<RankedTensorType>())
+        return failure();
+      // don't rematerialize anything expensive
+      if (isExpensiveToRemat(op, targetEncoding))
+        return failure();
+      // don't rematerialize non-element-wise
+      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
+          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
+          !isa<triton::StoreOp, triton::AssertOp, triton::PrintOp,
+               triton::ReduceOp>(op))
+        return failure();
+    }
+    // don't rematerialize if it adds an extra conversion that can't
+    // be removed
+    for (Value value : op->getOperands()) {
+      Operation *argOp = arg.getDefiningOp();
+      SetVector<Operation *> processed;
+      SetVector<Attribute> layout;
+      llvm::MapVector<Value, Attribute> toConvert;
+      int numAddedConvs = simulateBackwardRematerialization(
+          argOp, processed, layout, toConvert, targetEncoding);
+      if (argOp && !isa<triton::gpu::ConvertLayoutOp>(argOp) &&
+          cvtSliceOps.count(argOp) == 0 && numAddedConvs > 0)
+        return failure();
+    }
+  }
+
+  // We apply conservative analysis. Only when the final operand's index
+  // matches the argument's index or their encoding match, we can rematerialize.
+  for (auto &opUseInfo : cvtSliceOpUseInfo) {
+    Operation *op = opUseInfo.op;
+    if (isa<scf::YieldOp>(op)) {
+      auto yieldIdx = opUseInfo.index;
+      // 0 is the induction variable
+      auto argIdx = arg.getArgNumber() - 1;
+      if (yieldIdx != argIdx) {
+        auto argType = arg.getType().cast<RankedTensorType>();
+        auto yieldType =
+            op->getOperand(yieldIdx).getType().dyn_cast<RankedTensorType>();
+        if (!yieldType || argType.getEncoding() != yieldType.getEncoding())
+          return failure();
+      }
+    }
+  }
+  return success();
 }
 
 void rematerializeConversionChain(
@@ -311,9 +593,6 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
   if (cvts.empty())
     return success();
   if (cvtTypes.size() == 1) {
-    // Second condition
-    if (others.empty())
-      return success();
     // Third condition - part 1:
     // If the other or the cvt is in the different block, we cannot push the
     // conversion forward or backward
@@ -329,23 +608,96 @@ LogicalResult canMoveOutOfLoop(BlockArgument arg,
       if (other->getBlock() != forOp.getBody())
         return failure();
       // Third condition - part 3:
-      // %0 (enc1) = cvt %arg (enc0)
-      // other %0 (enc1), %1 (enc0) => other %0 (enc1), %1 (enc1)
-      // Check if %2 (enc1) = cvt %1 (enc0) can be eliminated
-      SetVector<Operation *> processed;
-      SetVector<Attribute> layout;
-      llvm::MapVector<Value, Attribute> toConvert;
-      for (auto operand : other->getOperands()) {
-        auto argOp = operand.getDefiningOp();
-        if (argOp && !isa<triton::gpu::ConvertLayoutOp>(argOp) &&
-            simulateBackwardRematerialization(argOp, processed, layout,
-                                              toConvert, targetEncoding) > 0)
-          return failure();
-      }
+      // Check if we can directly use arg without conversion
+      if (simulateForwardRematerializationInLoop(other, arg, targetEncoding)
+              .failed())
+        return failure();
     }
     return success();
   }
   return failure();
+}
+
+// TODO(thomas): this is duplicated with what is in GPUToLLVM
+//  Convert an \param index to a multi-dim coordinate given \param shape and
+//  \param order.
+SmallVector<Value> delinearize(OpBuilder &b, Location loc, Value linear,
+                               ArrayRef<unsigned> shape,
+                               ArrayRef<unsigned> order) {
+  unsigned rank = shape.size();
+  assert(rank == order.size());
+  auto reordered = reorder(shape, order);
+  auto reorderedMultiDim = delinearize(b, loc, linear, reordered);
+  SmallVector<Value> multiDim(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    multiDim[order[i]] = reorderedMultiDim[i];
+  }
+  return multiDim;
+}
+
+SmallVector<Value> delinearize(OpBuilder &b, Location loc, Value linear,
+                               ArrayRef<unsigned> shape) {
+  unsigned rank = shape.size();
+  assert(rank > 0);
+  SmallVector<Value> multiDim(rank);
+  if (rank == 1) {
+    multiDim[0] = linear;
+  } else {
+    Value remained = linear;
+    for (auto &&en : llvm::enumerate(shape.drop_back())) {
+      auto dimSize = b.create<arith::ConstantIntOp>(loc, en.value(), 32);
+      multiDim[en.index()] = b.create<arith::RemSIOp>(loc, remained, dimSize);
+      remained = b.create<arith::DivSIOp>(loc, remained, dimSize);
+    }
+    multiDim[rank - 1] = remained;
+  }
+  return multiDim;
+}
+
+Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
+                ArrayRef<unsigned> shape, ArrayRef<unsigned> order) {
+  return linearize(b, loc, reorder<Value>(multiDim, order),
+                   reorder<unsigned>(shape, order));
+}
+
+Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
+                ArrayRef<unsigned> shape) {
+  auto rank = multiDim.size();
+  Value linear = b.create<arith::ConstantIntOp>(loc, 0, 32);
+  if (rank > 0) {
+    linear = multiDim.back();
+    for (auto [dim, dimShape] :
+         llvm::reverse(llvm::zip(multiDim.drop_back(), shape.drop_back()))) {
+      Value dimSize = b.create<arith::ConstantIntOp>(loc, dimShape, 32);
+      linear = b.create<arith::AddIOp>(
+          loc, b.create<arith::MulIOp>(loc, linear, dimSize), dim);
+    }
+  }
+  return linear;
+}
+
+std::optional<int> getWSAgentId(Operation *op) {
+  int prevAgentId = -1;
+  if (auto attr = op->getAttrOfType<DenseIntElementsAttr>("async_agent")) {
+    for (auto agentId : attr.getValues<int>()) {
+      assert(prevAgentId == -1 && "support at most one agent id");
+      prevAgentId = agentId;
+    }
+  }
+  if (prevAgentId == -1)
+    return std::nullopt;
+  return prevAgentId;
+}
+
+std::optional<int> getWSRoleId(Operation *op) {
+  if (!op->hasAttr("agent.mutex_role"))
+    return std::nullopt;
+  return op->getAttrOfType<IntegerAttr>("agent.mutex_role").getInt();
+}
+
+void setRoleId(Operation *op, int roleId) {
+  auto attr = IntegerAttr::get(IntegerType::get(op->getContext(), 32), roleId);
+  op->setAttr("agent.mutex_role", attr);
 }
 
 } // namespace mlir
