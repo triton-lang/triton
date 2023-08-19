@@ -762,15 +762,16 @@ struct CmpFOpConversion
   }
 };
 
-template <class T>
 struct ExternElementwiseOpConversion
-    : public ElementwiseOpConversionBase<T, ExternElementwiseOpConversion<T>> {
-  using Base = ElementwiseOpConversionBase<T, ExternElementwiseOpConversion<T>>;
+    : public ElementwiseOpConversionBase<ExternElementwiseOp,
+                                         ExternElementwiseOpConversion> {
+  using Base = ElementwiseOpConversionBase<ExternElementwiseOp,
+                                           ExternElementwiseOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
 
-  SmallVector<Value> createDestOps(T op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(ExternElementwiseOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -791,8 +792,9 @@ private:
     return LLVM::LLVMFunctionType::get(resultType, operandTypes);
   }
 
-  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter, T op,
-                                     StringRef funcName, Type funcType) const {
+  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
+                                     ExternElementwiseOp op, StringRef funcName,
+                                     Type funcType) const {
     using LLVM::LLVMFuncOp;
 
     auto funcAttr = StringAttr::get(op->getContext(), funcName);
@@ -1288,11 +1290,7 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<FpToFpOpConversion>(typeConverter, benefit);
 
-  patterns.add<ExternElementwiseOpConversion<triton::PureExternElementwiseOp>>(
-      typeConverter, benefit);
-  patterns
-      .add<ExternElementwiseOpConversion<triton::ImpureExternElementwiseOp>>(
-          typeConverter, benefit);
+  patterns.add<ExternElementwiseOpConversion>(typeConverter, benefit);
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
