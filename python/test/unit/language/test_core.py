@@ -123,6 +123,8 @@ def check_type_supported(dtype, device):
         cc = torch.cuda.get_device_capability()
         if cc[0] < 8 and (dtype is tl.bfloat16 or dtype == "bfloat16" or dtype is torch.bfloat16):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
+        if cc[0] < 9 and (dtype is tl.float8e4nv or dtype == "float8e4"):
+            pytest.skip("float8e4 is only supported on NVGPU with cc >= 90")
 
 
 class MmaLayout:
@@ -847,7 +849,7 @@ def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5])
 def test_abs_fp8(in_dtype, device):
 
     @triton.jit
@@ -1379,8 +1381,8 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
 
     extended_exp = ((1 << (tl.float32.primitive_bitwidth - tl.float32.fp_mantissa_width - 1)) - 1) << tl.float32.fp_mantissa_width
     # special cases, exp is 0b11..1
-    if dtype in [tl.float8e4, tl.float8e4b15]:
-        # float8e4m3 does not have infinities
+    if dtype in [tl.float8e4nv, tl.float8e4b15]:
+        # float8e4m3nv does not have infinities
         output[fp == 0b01111111] = torch.nan
         output[fp == 0b11111111] = torch.nan
     else:
@@ -1439,7 +1441,7 @@ def deserialize_fp8(np_data, in_dtype):
         return np_data
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4b15x4, tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4b15x4, tl.float8e4nv, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
 def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     """
@@ -1448,6 +1450,7 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
         - conversion tri_fp8 = convert(input=tri_fp16, out=out_dtype) matches the original
     this is only possible if both conversions are correct
     """
+    check_type_supported(in_dtype, device)
     check_type_supported(out_dtype, device)
 
     @triton.jit

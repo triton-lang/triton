@@ -760,7 +760,7 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getI64Type();
            })
-      .def("get_fp8e4_ty",
+      .def("get_fp8e4nv_ty",
            [](TritonOpBuilder &self) -> mlir::Type {
              return self.getBuilder().getType<mlir::Float8E4M3FNUZType>();
            })
