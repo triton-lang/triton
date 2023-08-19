@@ -123,6 +123,8 @@ def check_type_supported(dtype, device):
         cc = torch.cuda.get_device_capability()
         if cc[0] < 8 and (dtype is tl.bfloat16 or dtype == "bfloat16" or dtype is torch.bfloat16):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
+        if cc[0] < 9 and (dtype is tl.float8e4nv or dtype == "float8e4"):
+            pytest.skip("float8e4 is only supported on NVGPU with cc >= 90")
 
 
 class MmaLayout:
@@ -350,6 +352,29 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             numpy_expr,
             device=device,
             num_ctas=num_ctas)
+
+
+@pytest.mark.parametrize("dtype, order", [(dtype, order) for dtype in dtypes_with_bfloat16 for order in [0, 1]])
+def test_addptr(dtype, order, device):
+    check_type_supported(dtype, device)
+
+    @triton.jit
+    def kernel(x, y, ORDER: tl.constexpr, SIZE: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        if ORDER == 0:
+            tl.store(y + offs, tl.load(x + offs))
+        else:
+            tl.store(offs + y, tl.load(offs + x))
+
+    SIZE = 1024
+    rs = RandomState(17)
+    x = numpy_random(SIZE, dtype_str=dtype, rs=rs)
+    y = numpy_random(SIZE, dtype_str=dtype, rs=rs)
+    x_tri = to_triton(x, dst_type=dtype, device=device)
+    y_tri = to_triton(y, dst_type=dtype, device=device)
+    y = x
+    kernel[1,](x_tri, y_tri, order, SIZE)
+    np.testing.assert_allclose(y, to_numpy(y_tri))
 
 
 @pytest.mark.parametrize("dtype_x, dtype_y",
@@ -824,7 +849,7 @@ def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5])
 def test_abs_fp8(in_dtype, device):
 
     @triton.jit
@@ -1356,8 +1381,8 @@ def convert_float_to_float32(fp: torch.tensor, dtype=None):
 
     extended_exp = ((1 << (tl.float32.primitive_bitwidth - tl.float32.fp_mantissa_width - 1)) - 1) << tl.float32.fp_mantissa_width
     # special cases, exp is 0b11..1
-    if dtype in [tl.float8e4, tl.float8e4b15]:
-        # float8e4m3 does not have infinities
+    if dtype in [tl.float8e4nv, tl.float8e4b15]:
+        # float8e4m3nv does not have infinities
         output[fp == 0b01111111] = torch.nan
         output[fp == 0b11111111] = torch.nan
     else:
@@ -1416,7 +1441,7 @@ def deserialize_fp8(np_data, in_dtype):
         return np_data
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4b15x4, tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4b15x4, tl.float8e4nv, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
 def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     """
@@ -1425,6 +1450,7 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
         - conversion tri_fp8 = convert(input=tri_fp16, out=out_dtype) matches the original
     this is only possible if both conversions are correct
     """
+    check_type_supported(in_dtype, device)
     check_type_supported(out_dtype, device)
 
     @triton.jit
@@ -1461,8 +1487,6 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
 
 def get_reduced_dtype(dtype_str, op):
     if op in ('argmin', 'argmax'):
-        return 'int32'
-    if dtype_str in ['int8', 'uint8', 'int16', 'uint16']:
         return 'int32'
     if dtype_str == 'bfloat16':
         return 'float32'
@@ -3012,6 +3036,60 @@ def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
     kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], extern_libs={'libdevice': lib_path}, num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
+
+
+# -----------------------
+# test inline asm
+# -----------------------
+
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_inline_asm(num_ctas, device):
+    check_cuda_only(device)
+
+    @triton.jit
+    def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        s = tl.full([BLOCK], n, tl.int32)
+        z = tl.inline_asm_elementwise("shf.l.wrap.b32 $0, $1, $2, $3;", "=r,r, r, r", [x, y, s], dtype=tl.int32, is_pure=True, pack=1)
+        tl.store(Z + tl.arange(0, BLOCK), z)
+
+    shape = (128, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str='uint32', rs=rs)
+    y = numpy_random(shape, dtype_str='uint32', rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    n = 17
+    z_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    kernel[(1,)](x_tri, y_tri, z_tri, n, BLOCK=shape[0], num_ctas=num_ctas)
+    y_ref = (y << n) | (x >> (32 - n))
+    # compare
+    np.testing.assert_equal(y_ref, to_numpy(z_tri))
+
+
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_inline_asm_packed(num_ctas, device):
+    check_cuda_only(device)
+    
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        # shift 4x8bits values together.
+        y = tl.inline_asm_elementwise("and.b32 $0, $1, 0x1F1F1F1F; \
+                                       shl.b32 $0, $0, 3;",
+                                      "=r,r", [x,], dtype=tl.int8, is_pure=True, pack=4)
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    shape = (512, )
+    rs = RandomState(17)
+    x = numpy_random(shape, dtype_str='uint8', rs=rs)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(numpy_random(shape, dtype_str='uint8', rs=rs), device=device)
+    kernel[(1,)](x_tri, y_tri, BLOCK=shape[0], num_ctas=num_ctas)
+    y_ref = x << 3
+    # compare
+    np.testing.assert_equal(y_ref, to_numpy(y_tri))
 
 # -----------------------
 # test control flow

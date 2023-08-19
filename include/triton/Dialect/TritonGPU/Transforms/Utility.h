@@ -19,8 +19,6 @@ class SharedEncodingAttr;
 }
 } // namespace triton
 
-LogicalResult fixupLoops(ModuleOp mod);
-
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 RankedTensorType type);

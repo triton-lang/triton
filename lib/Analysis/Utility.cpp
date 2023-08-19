@@ -361,7 +361,7 @@ bool supportMMA(triton::DotOp op, int version) {
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     if (!(numWarps % 4 == 0 && retShapePerCTA[0] % 64 == 0 &&
           retShapePerCTA[1] % 8 == 0 &&
-          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN() ||
+          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
       return false;
