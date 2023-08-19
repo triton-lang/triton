@@ -528,7 +528,7 @@ struct ConvertTritonGPUToLLVM
     populatePatterns1(populateTritonGPUToLLVMPatterns);
     populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
     populatePatterns2(populateDotOpToLLVMPatterns);
-    populatePatterns2(populateElementwiseOpToLLVMPatterns);
+    populatePatterns4(populateElementwiseOpToLLVMPatterns);
     populatePatterns3(populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(populateReduceOpToLLVMPatterns);
     populatePatterns1(populateScanOpToLLVMPatterns);
@@ -837,9 +837,9 @@ private:
                                       .dyn_cast<MmaEncodingAttr>();
       if (mmaLayout) {
         bool isNativeHopperFP8 =
-            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FN();
+            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
         bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
-                     AElType.isFloat8E4M3FNUZ();
+                     AElType.isFloat8E4M3FN();
         if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
           return;
         promoteType = builder.getF16Type();
