@@ -1,9 +1,5 @@
 name: Compare Artifacts
 on:
-  workflow_dispatch:
-    inputs:
-      run_id:
-        description: Workflow run id
   workflow_run:
     workflows:
       - Integration Tests
@@ -13,6 +9,7 @@ on:
 jobs:
   Compare-artifacts:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Download PR number artifact
@@ -22,7 +19,7 @@ jobs:
             let allArtifacts = await github.rest.actions.listWorkflowRunArtifacts({
                owner: context.repo.owner,
                repo: context.repo.repo,
-               run_id: ${{ github.event.inputs.run_id }},
+               run_id: context.payload.workflow_run.id,
             });
             let matchArtifact = allArtifacts.data.artifacts.filter((artifact) => {
               return artifact.name == "pr_number"
@@ -42,7 +39,7 @@ jobs:
             let allArtifacts = await github.rest.actions.listWorkflowRunArtifacts({
                owner: context.repo.owner,
                repo: context.repo.repo,
-               run_id: ${{ github.event.inputs.run_id }},
+               run_id: context.payload.workflow_run.id,
             });
             let matchArtifact = allArtifacts.data.artifacts.filter((artifact) => {
               return artifact.name == "comparison_result"
@@ -74,7 +71,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             let fs = require('fs');
-            let run_id = ${{ github.event.inputs.run_id }};
+            let run_id = context.payload.workflow_run.id;
             let issue_number = Number(fs.readFileSync('./pr_number'));
             let comparison_result = fs.readFileSync('./comparison_result', 'utf8');
             const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}).`;
