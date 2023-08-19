@@ -1205,6 +1205,10 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 
 bool MmaEncodingAttr::isVolta() const { return getVersionMajor() == 1; }
 
+bool MmaEncodingAttr::isTuring() const {
+  return getVersionMajor() == 2 && getVersionMinor() == 1;
+}
+
 bool MmaEncodingAttr::isAmpere() const { return getVersionMajor() == 2; }
 
 bool MmaEncodingAttr::isHopper() const { return getVersionMajor() == 3; }

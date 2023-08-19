@@ -24,7 +24,7 @@ using ttg::SliceEncodingAttr;
 // supported
 static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   int baseVersion = 0;
-  if (computeCapability < 80) {
+  if (computeCapability < 75) {
     baseVersion = 1;
   } else if (computeCapability < 90) {
     baseVersion = 2;
@@ -255,10 +255,11 @@ public:
           instrShape, oldAType.getShape(), oldBType.getShape(), retShapePerCTA,
           isARow, isBRow, mmaV1Counter++);
     } else if (versionMajor == 2 || versionMajor == 3) {
+      int versionMinor = computeCapability == 75 ? 1 : 0;
       auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
                                           numWarps, instrShape);
       mmaEnc = ttg::MmaEncodingAttr::get(oldRetType.getContext(), versionMajor,
-                                         0 /*versionMinor*/, warpsPerTile,
+                                         versionMinor, warpsPerTile,
                                          CTALayout, instrShape);
     }
     auto newRetType = RankedTensorType::get(
