@@ -81,8 +81,11 @@ def f8_to_f16(x, dtype):
                 (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
                 (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
-            ] for ADTYPE, BDTYPE in [("float8e4", "float8e5"),
-                                     ("float8e4", "float16"),
+            ] for ADTYPE, BDTYPE in [("float8e4nv", "float8e5"),
+                                     ("float8e4nv", "float8e4nv"),
+                                     ("float8e5", "float8e4nv"),
+                                     ("float8e5", "float8e5"),
+                                     ("float8e4nv", "float16"),
                                      ("float16", "float8e5"),
                                      ("float16", "float32"),
                                      ("float32", "float16"),
@@ -97,7 +100,7 @@ def f8_to_f16(x, dtype):
                                      ("float8e4b15", "float16"),
                                      ("float16", "float8e4b15"),
                                      ("float8e5", "float8e5"),
-                                     ("float8e4", "float8e4"),
+                                     ("float8e4nv", "float8e4nv"),
                                      ("int8", "int8")]
         ]
     ),
@@ -108,6 +111,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
     if capability[0] < 8 and (ADTYPE == "bfloat16" or BDTYPE == "bfloat16"):
         pytest.skip("Only test bfloat16 on devices with sm >= 80")
+    if capability[0] < 9 and (ADTYPE == "float8e4nv" or BDTYPE == "float8e4nv"):
+        pytest.skip("Only test float8e4nv on devices with sm >= 90")
     if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
     torch.manual_seed(0)
@@ -131,7 +136,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
 
     def init_input(m, n, dtype):
         if 'float8' in dtype:
-            ewidth = {'float8e4b15': 4, 'float8e4': 4, 'float8e5': 5}[dtype]
+            ewidth = {'float8e4b15': 4, 'float8e4nv': 4, 'float8e5': 5}[dtype]
             sign = torch.randint(2, size=(m, n), device="cuda", dtype=torch.int8) * 128
             val = torch.randint(2**3 - 1, size=(m, n), device="cuda", dtype=torch.int8) << 7 - ewidth
             return sign | val

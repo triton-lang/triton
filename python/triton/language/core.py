@@ -76,7 +76,7 @@ def _to_tensor(x, builder):
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -104,7 +104,7 @@ class dtype:
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
-            elif name == 'fp8e4':
+            elif name == 'fp8e4nv':
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 7
@@ -136,14 +136,17 @@ class dtype:
     def is_fp8(self):
         return 'fp8' in self.name
 
-    def is_fp8e4(self):
-        return self.name == 'fp8e4'
+    def is_fp8e4nv(self):
+        return self.name == 'fp8e4nv'
 
     def is_fp8e4b15(self):
         return self.name == 'fp8e4b15'
 
     def is_fp8e4b15x4(self):
         return self.name == 'fp8e4b15x4'
+
+    def is_fp8e5(self):
+        return self.name == 'fp8e5'
 
     def is_fp16(self):
         return self.name == 'fp16'
@@ -244,8 +247,8 @@ class dtype:
             return builder.get_int64_ty()
         elif self.name == 'fp8e5':
             return builder.get_fp8e5_ty()
-        elif self.name == 'fp8e4':
-            return builder.get_fp8e4_ty()
+        elif self.name == 'fp8e4nv':
+            return builder.get_fp8e4nv_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
         elif self.name == 'fp8e4b15x4':
@@ -382,7 +385,7 @@ uint16 = dtype('uint16')
 uint32 = dtype('uint32')
 uint64 = dtype('uint64')
 float8e5 = dtype('fp8e5')
-float8e4 = dtype('fp8e4')
+float8e4nv = dtype('fp8e4nv')
 float8e4b15 = dtype('fp8e4b15')
 float8e4b15x4 = dtype('fp8e4b15x4')
 float16 = dtype('fp16')
@@ -1786,6 +1789,46 @@ def device_assert(cond, msg="", _builder=None):
         # device_assert is called. Need to enhance this.
         lineno = frame.f_back.f_lineno
     return semantic.device_assert(_to_tensor(cond, _builder), msg, file_name, func_name, lineno, _builder)
+
+
+@builtin
+def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pure: bool, pack: int, _builder=None):
+    '''
+        Execute the inline assembly to a packed of elements of the tensor
+        :param asm: assembly to be inlined, it has to match the target assembly format
+        :param constraints: string representing the mapping of operands to register
+        :param args: the arguments of the operation
+        :param dtype: the element type of the returned variable
+        :param is_pure: whether the operation is pure
+        :param pack: the number of elements to be processed by one instance of inline assembly
+        :param _builder: the builder
+        :return: the return value of the function
+    '''
+    dispatch_args = args.copy()
+    asm = _constexpr_to_value(asm)
+    constraints = _constexpr_to_value(constraints)
+    pack = _constexpr_to_value(pack)
+    is_pure = _constexpr_to_value(is_pure)
+    ret_shape = None
+    arg_types = []
+    for i in range(len(dispatch_args)):
+        dispatch_args[i] = _to_tensor(dispatch_args[i], _builder)
+        arg_types.append(dispatch_args[i].dtype)
+    if len(arg_types) > 0:
+        arg_types = tuple(arg_types)
+        broadcast_arg = dispatch_args[0]
+        # Get the broadcast shape over all the arguments
+        for i, item in enumerate(dispatch_args):
+            _, broadcast_arg = semantic.binary_op_type_checking_impl(
+                item, broadcast_arg, _builder, arithmetic_check=False)
+        # Change the shape of each argument based on the broadcast shape
+        for i in range(len(dispatch_args)):
+            dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
+                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=False)
+    ret_shape = broadcast_arg.shape
+    res_ty = block_type(dtype, ret_shape).to_ir(_builder)
+    call = _builder.create_inline_asm(asm, constraints, [t.handle for t in args], res_ty, is_pure, pack)
+    return tensor(call, block_type(dtype, ret_shape))
 
 
 # -----------------------
