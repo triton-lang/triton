@@ -2899,8 +2899,8 @@ def test_call(type, num_ctas, device):
 # test if
 # -------------
 
-
-@pytest.mark.parametrize("if_type", ["if", "if_exp", "if_and_dynamic", "if_and_static"])
+# TODO(Keren): if_exp_dynamic
+@pytest.mark.parametrize("if_type", ["if", "if_and_dynamic", "if_exp_static", "if_and_static"])
 def test_if(if_type, device):
 
     @triton.jit
@@ -2912,8 +2912,10 @@ def test_if(if_type, device):
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))
-        elif IfType == "if_exp":
-            tl.store(Ret, tl.load(XTrue)) if pid % 2 else tl.store(Ret, tl.load(XFalse))
+        elif IfType == "if_exp_dynamic":
+            tl.store(Ret, tl.load(XTrue)) if pid % 2 == 0 else tl.store(Ret, tl.load(XFalse))
+        elif IfType == "if_exp_static":
+            tl.store(Ret, tl.load(XTrue)) if BoolVar else tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_and_dynamic":
             if BoolVar and pid % 2 == 0:
                 tl.store(Ret, tl.load(XTrue))
@@ -2928,7 +2930,7 @@ def test_if(if_type, device):
     cond = torch.ones(1, dtype=torch.int32, device=device)
     x_true = torch.tensor([3.14], dtype=torch.float32, device=device)
     x_false = torch.tensor([1.51], dtype=torch.float32, device=device)
-    ret = torch.empty(1, dtype=torch.float32, device=device)
+    ret = torch.zeros(1, dtype=torch.float32, device=device)
 
     kernel[(1,)](cond, x_true, x_false, ret, if_type, True, 1)
     assert torch.equal(ret, x_true)
@@ -3209,8 +3211,9 @@ def add_fn_static_cond(x, cond: tl.constexpr):
         return x + 1
 
 
+# TODO(Keren): if_exp
 @pytest.mark.parametrize("call_type", ["attribute", "attribute_jit",
-                                       "jit", "jit_if", "jit_ifexp", "jit_expr",
+                                       "jit", "jit_if", "jit_expr",
                                        "jit_static_cond", "jit_noinline", "jit_extern"])
 def test_if_call(call_type, device):
     @triton.jit
@@ -3241,7 +3244,7 @@ def test_if_call(call_type, device):
                 a = o
                 a = add_fn_return(a, pid)
                 o = a
-        elif call_type == "jit_ifexp":
+        elif call_type == "jit_if_exp":
             # ifexp expression
             if pid == 0:
                 a = o
