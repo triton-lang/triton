@@ -173,6 +173,10 @@ scf::ForOp appendPipelineIdxToLoopArgs(scf::ForOp forOp, int numStages,
     initValue = parentForOp.getBody()->getArguments().back();
     Value numSteps = builder.createWithAgentIds<arith::SubIOp>(
         loc, forOp.getUpperBound(), forOp.getLowerBound());
+    auto one = builder.createWithAgentIds<arith::ConstantIntOp>(loc, 1, 32);
+    numSteps = builder.createWithAgentIds<arith::AddIOp>(loc, numSteps,
+                                                         forOp.getStep());
+    numSteps = builder.createWithAgentIds<arith::SubIOp>(loc, numSteps, one);
     numSteps = builder.createWithAgentIds<arith::DivUIOp>(loc, numSteps,
                                                           forOp.getStep());
     initValue =
