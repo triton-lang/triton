@@ -430,6 +430,9 @@ struct StoreAsyncOpConversion
     auto elemTy = srcTy.getElementType();
 
     auto rank = srcTy.getRank();
+    // The sotre async op only supports tensor with ranke <= 5.
+    // Reference:
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#tensor-dimension-size-and-format
     assert(rank > 0 && rank <= 5);
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
@@ -492,14 +495,14 @@ struct StoreAsyncOpConversion
                            .cast<RankedTensorType>()
                            .getShape();
     auto shapePerCTA = getShapePerCTA(CTASplitNum, tensorShape);
-    // magic 128 bytes
+    const uint32_t bytesPerCacheline = 128;
     uint32_t bytesPerElem = elemTy.getIntOrFloatBitWidth() / 8;
     uint32_t numBox{1};
     for (int i = 0; i < rank; ++i) {
       auto dim = getDimOfOrder(dstOrder, i);
       auto tNumElems = shapePerCTA[dim];
-      if (i == 0 && tNumElems * bytesPerElem > 128) {
-        tNumElems = 128 / bytesPerElem;
+      if (i == 0 && tNumElems * bytesPerElem > bytesPerCacheline) {
+        tNumElems = bytesPerCacheline / bytesPerElem;
         numBox = (shapePerCTA[dim] + tNumElems - 1) / tNumElems;
       }
       boxDims.emplace_back(tNumElems);
@@ -612,6 +615,9 @@ struct StoreAsyncOpConversion
     auto dstElemTy = dstTensorTy.getElementType();
 
     auto rank = srcTy.getRank();
+    // The sotre async op only supports tensor with ranke <= 5.
+    // Reference:
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#tensor-dimension-size-and-format
     assert(rank > 0 && rank <= 5);
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
@@ -683,14 +689,14 @@ struct StoreAsyncOpConversion
         ceil<unsigned>(shapePerCTA[0], instrShape[0] * warpsPerCTA[0]);
     uint32_t numElemsPerRep = numElems / repM;
 
-    // magic 128 bytes
+    const uint32_t bytesPerCacheline = 128;
     uint32_t bytesPerElem = dstElemTy.getIntOrFloatBitWidth() / 8;
     uint32_t numBox{1};
     for (int i = 0; i < rank; ++i) {
       auto dim = getDimOfOrder(dstOrder, i);
       auto tNumElems = shapePerCTA[dim];
-      if (i == 0 && tNumElems * bytesPerElem > 128) {
-        tNumElems = 128 / bytesPerElem;
+      if (i == 0 && tNumElems * bytesPerElem > bytesPerCacheline) {
+        tNumElems = bytesPerCacheline / bytesPerElem;
         numBox = (shapePerCTA[dim] + tNumElems - 1) / tNumElems;
       }
       if (i == 1) {
@@ -757,7 +763,8 @@ struct StoreAsyncOpConversion
 
     // rowStride in bytes
     uint32_t rowStrideInBytes = shapePerCTA[dstOrder[0]] * bytesPerElem;
-    uint32_t swizzlingByteWidth = std::min<uint32_t>(rowStrideInBytes, 128);
+    uint32_t swizzlingByteWidth =
+        std::min<uint32_t>(rowStrideInBytes, bytesPerCacheline);
 
     unsigned numElemsPerSwizzlingRow = swizzlingByteWidth / bytesPerElem;
     unsigned leadingDimOffset =
@@ -1411,6 +1418,9 @@ struct InsertSliceAsyncV2OpConversion
     auto rank = resultTy.getRank() - 1;
 
     // TODO: support any valid rank in (3, 4, 5)
+    // The sotre async op only supports tensor with ranke <= 5.
+    // Reference:
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#tensor-dimension-size-and-format
     assert(rank > 0 && rank <= 5);
     SmallVector<unsigned> shape;
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
