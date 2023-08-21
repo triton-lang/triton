@@ -21,16 +21,8 @@ def mangle_ty(ty):
         SIGNED = language.dtype.SIGNEDNESS.SIGNED
         prefix = 'i' if ty.int_signedness == SIGNED else 'u'
         return prefix + str(ty.int_bitwidth)
-    if ty.is_fp8():
-        return 'fp8'
-    if ty.is_fp16():
-        return 'fp16'
-    if ty.is_bf16():
-        return 'bf16'
-    if ty.is_fp32():
-        return 'fp32'
-    if ty.is_fp64():
-        return 'fp64'
+    if ty.is_floating():
+        return str(ty)
     if ty.is_block():
         elt = mangle_ty(ty.scalar)
         shape = '_'.join(map(str, ty.shape))
