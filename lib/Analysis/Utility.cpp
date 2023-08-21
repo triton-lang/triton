@@ -232,7 +232,8 @@ unsigned ScanLoweringHelper::getAxisNumWarps() {
 
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
   auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
-  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding);
+  auto shapePerCTA = triton::gpu::getShapePerCTA(type);
+  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding, shapePerCTA);
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
   unsigned axis = getAxis();
@@ -243,7 +244,8 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
   auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
-  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding);
+  auto shapePerCTA = triton::gpu::getShapePerCTA(type);
+  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding, shapePerCTA);
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
   unsigned axis = getAxis();
@@ -311,7 +313,8 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   auto order = triton::gpu::getOrder(srcEncoding);
   unsigned stride = 1;
   auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
-  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding);
+  auto shapePerCTA = triton::gpu::getShapePerCTA(type);
+  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding, shapePerCTA);
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
   for (unsigned dim : order) {

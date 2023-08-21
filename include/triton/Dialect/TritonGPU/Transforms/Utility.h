@@ -7,6 +7,7 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace mlir {
 
@@ -22,6 +23,12 @@ class SharedEncodingAttr;
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 RankedTensorType type);
+SmallVector<unsigned, 3>
+mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
+                       const ArrayRef<int64_t> shapePerCTA);
+SmallVector<unsigned, 3>
+mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma, unsigned opIdx,
+                       RankedTensorType type);
 
 /// Returns true if the Load is for TMA
 bool isLoadFromTensorPtr(triton::LoadOp op);

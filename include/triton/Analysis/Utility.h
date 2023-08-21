@@ -333,7 +333,6 @@ protected:
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v);
-
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_UTILITY_H

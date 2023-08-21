@@ -103,19 +103,19 @@ public:
 
 private:
   SmallVector<Value>
-  getMultiDimOffset(Attribute layout, Location loc,
-                    ConversionPatternRewriter &rewriter, unsigned elemId,
-                    RankedTensorType type,
+  getMultiDimOffset(Location loc, ConversionPatternRewriter &rewriter,
+                    unsigned elemId, RankedTensorType type,
                     ArrayRef<unsigned> multiDimCTAInRepId,
                     ArrayRef<unsigned> shapePerCTATile) const {
     auto shape = type.getShape();
     unsigned rank = shape.size();
+    auto layout = type.getEncoding();
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
       auto multiDimOffsetFirstElem =
           emitBaseIndexForLayout(loc, rewriter, blockedLayout, type, false);
       SmallVector<Value> multiDimOffset(rank);
       SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
-          elemId, getSizePerThread(layout), getOrder(layout));
+          elemId, blockedLayout.getSizePerThread(), getOrder(layout));
       for (unsigned d = 0; d < rank; ++d) {
         multiDimOffset[d] =
             add(multiDimOffsetFirstElem[d],
@@ -127,10 +127,11 @@ private:
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
       unsigned dim = sliceLayout.getDim();
       auto parentEncoding = sliceLayout.getParent();
-      auto parentSizePerThread = getSizePerThread(parentEncoding);
       auto parentShape = sliceLayout.paddedShape(shape);
       auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
                                             parentEncoding);
+      auto parentSizePerThread =
+          getSizePerThread(parentEncoding, getShapePerCTA(parentTy));
       auto offsets = emitOffsetForLayout(layout, type);
       auto parentOffset = emitOffsetForLayout(parentEncoding, parentTy);
       SmallVector<int> idxs;
@@ -139,10 +140,10 @@ private:
         auto it = std::find(parentOffset.begin(), parentOffset.end(), off);
         idxs.push_back(std::distance(parentOffset.begin(), it));
       }
-      auto multiDimOffsetParent = getMultiDimOffset(
-          parentEncoding, loc, rewriter, idxs[elemId], parentTy,
-          sliceLayout.paddedShape(multiDimCTAInRepId),
-          sliceLayout.paddedShape(shapePerCTATile));
+      auto multiDimOffsetParent =
+          getMultiDimOffset(loc, rewriter, idxs[elemId], parentTy,
+                            sliceLayout.paddedShape(multiDimCTAInRepId),
+                            sliceLayout.paddedShape(shapePerCTATile));
       SmallVector<Value> multiDimOffset(rank);
       for (unsigned d = 0; d < rank + 1; ++d) {
         if (d == dim)
@@ -154,7 +155,7 @@ private:
     }
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
-      auto instrShape = mmaLayout.getInstrShape();
+      auto instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
       SmallVector<Value> mmaColIdx(4);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
@@ -248,11 +249,11 @@ private:
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
     auto layout = type.getEncoding();
     auto rank = type.getRank();
-    auto sizePerThread = getSizePerThread(layout);
+    auto shapePerCTA = getShapePerCTA(layout, type.getShape());
+    auto sizePerThread = getSizePerThread(layout, shapePerCTA);
     auto accumSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<unsigned> numCTATiles(rank);
     auto shapePerCTATile = getShapePerCTATile(layout);
-    auto shapePerCTA = getShapePerCTA(layout, type.getShape());
     auto order = getOrder(layout);
     for (unsigned d = 0; d < rank; ++d) {
       numCTATiles[d] = ceil<unsigned>(shapePerCTA[d], shapePerCTATile[d]);
@@ -283,9 +284,8 @@ private:
       //       consider of caching the index calculation result in case
       //       of performance issue observed.
       for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
-        SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
-                              multiDimCTAInRepId, shapePerCTATile);
+        SmallVector<Value> multiDimOffset = getMultiDimOffset(
+            loc, rewriter, elemId, type, multiDimCTAInRepId, shapePerCTATile);
         Value offset =
             linearize(rewriter, loc, multiDimOffset, paddedRepShape, outOrd);
         auto elemPtrTy = ptr_ty(llvmElemTy, 3);
@@ -373,9 +373,8 @@ private:
       for (unsigned elemId = 0; elemId < accumSizePerThread; ++elemId) {
         // TODO[Superjomn]: Move the coordinate computation out of loop, it is
         // duplicate in Volta.
-        SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
-                              multiDimCTAInRepId, shapePerCTATile);
+        SmallVector<Value> multiDimOffset = getMultiDimOffset(
+            loc, rewriter, elemId, type, multiDimCTAInRepId, shapePerCTATile);
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
       }
 
@@ -732,7 +731,7 @@ private:
                                                          rewriter, srcTy);
 
       auto srcShapePerCTA = getShapePerCTA(mmaLayout, srcShape);
-      auto instrShape = mmaLayout.getInstrShape();
+      auto instrShape = mmaVersionToInstrShape(mmaLayout, srcShapePerCTA);
       auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
       uint32_t repM =
           ceil<unsigned>(srcShapePerCTA[0], instrShape[0] * warpsPerCTA[0]);

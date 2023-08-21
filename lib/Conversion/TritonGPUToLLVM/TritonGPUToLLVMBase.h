@@ -11,6 +11,7 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include <set>
@@ -545,7 +546,8 @@ public:
       auto layout = tensorTy.getEncoding();
       auto shape = tensorTy.getShape();
       unsigned rank = shape.size();
-      auto sizePerThread = triton::gpu::getSizePerThread(layout);
+      auto shapePerCTA = triton::gpu::getShapePerCTA(tensorTy);
+      auto sizePerThread = triton::gpu::getSizePerThread(layout, shapePerCTA);
       auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
       auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
       auto order = triton::gpu::getOrder(layout);
@@ -1035,10 +1037,11 @@ private:
     auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
     assert(_warpsPerCTA.size() == 2);
     auto order = triton::gpu::getOrder(mmaLayout);
-    ArrayRef<unsigned int> instrShape = mmaLayout.getInstrShape();
+    auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
+    ArrayRef<unsigned int> instrShape =
+        mmaVersionToInstrShape(mmaLayout, shapePerCTA);
     SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
                                       i32_val(_warpsPerCTA[1])};
-    auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
 
     Value threadId = getThreadId(rewriter, loc);
     Value warpSize = i32_val(32);
@@ -1090,7 +1093,8 @@ private:
     auto shape = type.getShape();
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
     SmallVector<SmallVector<unsigned>> ret;
-    ArrayRef<unsigned int> instrShape = mmaLayout.getInstrShape();
+    ArrayRef<unsigned int> instrShape =
+        mmaVersionToInstrShape(mmaLayout, shapePerCTA);
 
     for (unsigned i = 0; i < shapePerCTA[0];
          i += getShapePerCTATile(mmaLayout)[0]) {

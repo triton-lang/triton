@@ -658,7 +658,9 @@ private:
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(
-                mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
+                mod.getContext(), srcType.getShape(),
+                getSizePerThread(srcMma,
+                                 getShapePerCTA(srcMma, srcType.getShape())),
                 getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());

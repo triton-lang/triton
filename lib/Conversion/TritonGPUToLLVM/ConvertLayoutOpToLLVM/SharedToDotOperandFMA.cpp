@@ -10,7 +10,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
@@ -47,7 +46,7 @@ int getShapePerCTATileForMN(BlockedEncodingAttr layout, bool isM) {
 // Get sizePerThread for M or N axis.
 int getSizePerThreadForMN(BlockedEncodingAttr layout, bool isM) {
   auto order = layout.getOrder();
-  auto sizePerThread = getSizePerThread(layout);
+  auto sizePerThread = layout.getSizePerThread();
 
   int mSizePerThread =
       order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
@@ -111,7 +110,7 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
   int M = aShapePerCTA[0];
 
   auto shapePerCTATile = getShapePerCTATile(dLayout);
-  auto sizePerThread = getSizePerThread(dLayout);
+  auto sizePerThread = dLayout.getSizePerThread();
 
   Value _0 = i32_val(0);
 
@@ -175,7 +174,7 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
   int N = bShapePerCTA[1];
 
   auto shapePerCTATile = getShapePerCTATile(dLayout);
-  auto sizePerThread = getSizePerThread(dLayout);
+  auto sizePerThread = dLayout.getSizePerThread();
 
   Value _0 = i32_val(0);
 

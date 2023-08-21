@@ -516,7 +516,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     "unsigned":$versionMinor,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout,
-    ArrayRefParameter<"unsigned">:$instrShape
+    "bool":$isInt8Input
   );
 
   let builders = [
@@ -524,7 +524,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
                      "CTALayoutAttr":$CTALayout,
-                     "ArrayRef<unsigned>":$instrShape,
                      "ArrayRef<int64_t>":$shapeC,
                      "bool":$isARow,
                      "bool":$isBRow,
@@ -562,14 +561,13 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
           wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
       } while (wpt_nm1 != wpt);
 
-      return $_get(context, versionMajor, versionMinor, wpt, CTALayout, instrShape);
+      return $_get(context, versionMajor, versionMinor, wpt, CTALayout, false);
     }]>,
 
 
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
                      "CTALayoutAttr":$CTALayout,
-                     "ArrayRef<unsigned>":$instrShape,
                      "ArrayRef<int64_t>":$shapeA,
                      "ArrayRef<int64_t>":$shapeB,
                      "ArrayRef<int64_t>":$shapeC,
@@ -579,7 +577,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
-      return get(context, versionMajor, numWarps, CTALayout, instrShape, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
+      return get(context, versionMajor, numWarps, CTALayout, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
     }]>
   ];
 
