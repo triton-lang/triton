@@ -171,12 +171,18 @@ private:
     }
   }
 
+  template <BufferT::BufferKind T>
+  void maybeAddScratchBuffer(Operation *op, unsigned bytes) {
+    if (bytes > 0)
+      allocation->addBuffer<T>(op, bytes);
+  }
+
   /// Initializes temporary shared memory for a given operation.
   void getScratchValueSize(Operation *op) {
     if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
       ReduceOpHelper helper(reduceOp);
       unsigned bytes = helper.getScratchSizeInBytes();
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtLayout.getSrc().getType().cast<RankedTensorType>();
       auto dstTy = cvtLayout.getResult().getType().cast<RankedTensorType>();
@@ -200,7 +206,7 @@ private:
           srcTy.getElementType().isa<triton::PointerType>()
               ? elems * kPtrBitWidth / 8
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
       auto value = op->getOperand(0);
       // only scalar requires scratch memory
@@ -217,7 +223,7 @@ private:
             elemTy.isa<triton::PointerType>()
                 ? elems * kPtrBitWidth / 8
                 : elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
-        allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+        maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
       }
     } else if (auto atomicCASOp = dyn_cast<triton::AtomicCASOp>(op)) {
       auto value = op->getOperand(0);
@@ -229,13 +235,13 @@ private:
       auto bytes = elemTy.isa<triton::PointerType>()
                        ? elems * kPtrBitWidth / 8
                        : elems * elemTy.getIntOrFloatBitWidth() / 8;
-      allocation->addBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
     } else if (auto callOp = dyn_cast<CallOpInterface>(op)) {
       auto callable = callOp.resolveCallable();
       auto funcOp = dyn_cast<FunctionOpInterface>(callable);
       auto *funcAlloc = &(*funcAllocMap)[funcOp];
       auto bytes = funcAlloc->getSharedMemorySize();
-      allocation->addBuffer<BufferT::BufferKind::Virtual>(op, bytes);
+      maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, bytes);
     }
   }
 

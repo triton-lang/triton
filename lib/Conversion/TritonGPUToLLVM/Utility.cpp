@@ -139,6 +139,7 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   }
   auto swait = builder.create("s_waitcnt lgkmcnt(0)");
   (*swait)();
+  return builder.launch(rewriter, loc, val.getType(), true);
 #else
   PTXBuilder builder;
   auto &shfl = builder.create("shfl.sync")->o("bfly").o("b32");
@@ -148,8 +149,8 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   auto *cOpr = builder.newConstantOperand("0x1f");
   auto *maskOpr = builder.newConstantOperand("0xffffffff");
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
-#endif
   return builder.launch(rewriter, loc, val.getType(), false);
+#endif
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,

@@ -213,17 +213,23 @@ private:
     // of shared memory and append it to the operands of the callOp.
     auto loc = callOp.getLoc();
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
-    auto base = allocation.getFunctionSharedMemoryBase(caller);
-    auto *funcAllocation = allocation.getFuncData(caller);
-    auto bufferId = funcAllocation->getBufferId(callOp);
-    auto offset = funcAllocation->getOffset(bufferId);
     auto ptrTy = LLVM::LLVMPointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()),
         NVVM::kSharedMemorySpace);
-    auto offsetValue = gep(ptrTy, base, i32_val(offset));
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
+    auto base = allocation.getFunctionSharedMemoryBase(caller);
+    auto *funcAllocation = allocation.getFuncData(caller);
+    auto bufferId = funcAllocation->getBufferId(callOp);
+    // function doesn't have a shared mem buffer
+    if (bufferId == (size_t)-1) {
+      promotedOperands.push_back(base);
+      return promotedOperands;
+    }
+    // function has a shared mem buffer
+    auto offset = funcAllocation->getOffset(bufferId);
+    auto offsetValue = gep(ptrTy, base, i32_val(offset));
     promotedOperands.push_back(offsetValue);
     return promotedOperands;
   }
