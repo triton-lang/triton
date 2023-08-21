@@ -1638,6 +1638,7 @@ def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pur
     is_pure = _constexpr_to_value(is_pure)
     ret_shape = None
     arg_types = []
+    res_ty = dtype
     for i in range(len(dispatch_args)):
         dispatch_args[i] = _to_tensor(dispatch_args[i], _builder)
         arg_types.append(dispatch_args[i].dtype)
@@ -1652,10 +1653,10 @@ def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pur
         for i in range(len(dispatch_args)):
             dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
                 dispatch_args[i], broadcast_arg, _builder, arithmetic_check=False)
-    ret_shape = broadcast_arg.shape
-    res_ty = block_type(dtype, ret_shape).to_ir(_builder)
-    call = _builder.create_inline_asm(asm, constraints, [t.handle for t in args], res_ty, is_pure, pack)
-    return tensor(call, block_type(dtype, ret_shape))
+        ret_shape = broadcast_arg.shape
+        res_ty = block_type(dtype, ret_shape)
+    call = _builder.create_inline_asm(asm, constraints, [t.handle for t in args], res_ty.to_ir(_builder), is_pure, pack)
+    return tensor(call, res_ty)
 
 
 # -----------------------
