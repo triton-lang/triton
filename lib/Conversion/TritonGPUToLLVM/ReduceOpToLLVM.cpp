@@ -93,7 +93,8 @@ private:
   // the full tensor, whereas `writeIdx` is the mapped-to index in the shared
   // memory
   void getWriteIndexBasic(ConversionPatternRewriter &rewriter, Location loc,
-                          Attribute layout, SmallVector<Value> &index,
+                          Attribute layout, ArrayRef<int64_t> shapePerCTA,
+                          SmallVector<Value> &index,
                           SmallVector<Value> &writeIdx,
                           std::map<int, Value> &ints, unsigned originalAxis,
                           unsigned axis) const {
@@ -101,13 +102,14 @@ private:
       // Recover the axis in the parent layout
       auto parentAxis = axis < sliceLayout.getDim() ? axis : axis + 1;
       auto parentLayout = sliceLayout.getParent();
-      getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
-                         originalAxis, parentAxis);
+      auto parentShapePerCTA = sliceLayout.paddedShape(shapePerCTA);
+      getWriteIndexBasic(rewriter, loc, parentLayout, parentShapePerCTA, index,
+                         writeIdx, ints, originalAxis, parentAxis);
       return;
     }
 
     writeIdx = index;
-    auto sizePerThread = triton::gpu::getSizePerThread(layout);
+    auto sizePerThread = triton::gpu::getSizePerThread(layout, shapePerCTA);
     Value axisSizePerThread = ints[sizePerThread[axis]];
     Value _8 = ints[8];
     Value _16 = ints[16];
@@ -153,8 +155,10 @@ private:
     }
     // The order of the axes for the the threads within the warp
     auto srcOrd = triton::gpu::getOrder(srcLayout);
-    auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto srcShape = helper.getSrcShape();
+    auto srcShapePerCTA = triton::gpu::getShapePerCTA(srcLayout, srcShape);
+    auto sizePerThread =
+        triton::gpu::getSizePerThread(srcLayout, srcShapePerCTA);
 
     SmallVector<Type> elemPtrTys(srcTys.size());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -196,8 +200,8 @@ private:
       auto &acc = it.second;
       // get the writeIdx at which to write in smem
       SmallVector<Value> writeIdx;
-      getWriteIndexBasic(rewriter, loc, srcLayout, indices[key], writeIdx, ints,
-                         axis, axis);
+      getWriteIndexBasic(rewriter, loc, srcLayout, srcShapePerCTA, indices[key],
+                         writeIdx, ints, axis, axis);
 
       // calculate the offset in smem for that writeIdx
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);

@@ -7,6 +7,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -173,9 +174,10 @@ getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape) {
   auto warpsPerCTA = getWarpsPerCTA(layout);
   assert(warpsPerCTA.size() == tensorShape.size() &&
          "layout and tensor shape must have the same rank");
+  auto shapePerCTA = getShapePerCTA(layout, tensorShape);
   for (unsigned i = 0; i < warpsPerCTA.size(); i++) {
     auto sizePerWarp =
-        getSizePerThread(layout)[i] * getThreadsPerWarp(layout)[i];
+        getSizePerThread(layout, shapePerCTA)[i] * getThreadsPerWarp(layout)[i];
     auto maxWarpsPerDim = ceil<unsigned>(tensorShape[i], sizePerWarp);
     warpsPerCTA[i] = std::min<unsigned>(warpsPerCTA[i], maxWarpsPerDim);
   }
@@ -183,12 +185,15 @@ getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape) {
   return warpsPerCTA;
 }
 
-SmallVector<unsigned> getSizePerThread(Attribute layout) {
+SmallVector<unsigned> getSizePerThread(Attribute layout,
+                                       ArrayRef<int64_t> shapePerCTA) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     return SmallVector<unsigned>(blockedLayout.getSizePerThread().begin(),
                                  blockedLayout.getSizePerThread().end());
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto sizePerThread = getSizePerThread(sliceLayout.getParent());
+    auto parentShapePerCTA = sliceLayout.paddedShape(shapePerCTA);
+    auto sizePerThread =
+        getSizePerThread(sliceLayout.getParent(), parentShapePerCTA);
     sizePerThread.erase(sizePerThread.begin() + sliceLayout.getDim());
     return sizePerThread;
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
@@ -197,7 +202,7 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
     } else if (mmaLayout.isVolta()) {
       return {1, 2};
     } else if (mmaLayout.isHopper()) {
-      auto instrShape = mmaLayout.getInstrShape();
+      auto instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
       // TODO(thomas): what are those magic numbers?
       return SmallVector<unsigned>{instrShape[0] * 4 / 32, instrShape[1] / 4};
     } else {
@@ -237,7 +242,7 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
     auto parentLayout = sliceLayout.getParent();
     return getContigPerThread(parentLayout);
   } else {
-    return getSizePerThread(layout);
+    return getSizePerThread(layout, {});
   }
 }
 
@@ -308,7 +313,8 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
               static_cast<unsigned>(tensorShape[1])};
     }
     if (mmaLayout.isHopper()) {
-      auto instrShape = mmaLayout.getInstrShape();
+      auto shapePerCTA = getShapePerCTA(layout, tensorShape);
+      auto instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               instrShape[1] * mmaLayout.getWarpsPerCTA()[1]};
     }
@@ -762,7 +768,7 @@ MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
     elemsPerThread[1] = elemsCol;
   } else if (isHopper()) {
     auto wpt = getWarpsPerCTA();
-    auto instrMNK = getInstrShape();
+    auto instrMNK = mmaVersionToInstrShape(*this, shapePerCTA);
     int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * wpt[0]);
     int repN = ceil<unsigned>(shapePerCTA[1], instrMNK[1] * wpt[1]);
     elemsPerThread[0] = 2 * repM;
@@ -789,7 +795,7 @@ MmaEncodingAttr::getElemsPerThreadOfOperand(int opIdx,
         "getElemsPerThreadOfOperand() not supported for version 2");
   } else if (isHopper()) {
     auto wpt = getWarpsPerCTA();
-    auto instrMNK = getInstrShape();
+    auto instrMNK = mmaVersionToInstrShape(*this, shapePerCTA);
     if (opIdx == 0) {
       int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * wpt[0]);
       int repK = ceil<unsigned>(shapePerCTA[1], instrMNK[2]);
@@ -925,7 +931,7 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   if (auto blockedLayout = getParent().dyn_cast<BlockedEncodingAttr>()) {
     auto shapePerCTATile = getShapePerCTATile(blockedLayout);
     auto order = blockedLayout.getOrder();
-    auto sizePerThread = getSizePerThread(blockedLayout);
+    auto sizePerThread = blockedLayout.getSizePerThread();
 
     int K = getOpIdx() == 0 ? shapePerCTA[1] : shapePerCTA[0];
     int otherDim = getOpIdx() == 1 ? shapePerCTA[1] : shapePerCTA[0];
@@ -1047,6 +1053,7 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> CTASplitNum;
   SmallVector<unsigned> CTAOrder;
   SmallVector<unsigned> instrShape;
+  bool isInt8Input = false;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "versionMajor") {
@@ -1073,10 +1080,9 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, CTAOrder, "CTAOrder").failed())
         return {};
     }
-    if (attr.getName() == "instrShape") {
-      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed()) {
+    if (attr.getName() == "isInt8Input") {
+      if (parseBool(parser, attr, isInt8Input, "isInt8Input").failed())
         return {};
-      }
     }
   }
 
@@ -1085,7 +1091,7 @@ Attribute MmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<MmaEncodingAttr>(parser.getContext(), versionMajor,
                                             versionMinor, warpsPerCTA,
-                                            CTALayout, instrShape);
+                                            CTALayout, isInt8Input);
 }
 
 void MmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1096,8 +1102,7 @@ void MmaEncodingAttr::print(AsmPrinter &printer) const {
           << "CTAsPerCGA = [" << getCTALayout().getCTAsPerCGA() << "], "
           << "CTASplitNum = [" << getCTALayout().getCTASplitNum() << "], "
           << "CTAOrder = [" << getCTALayout().getCTAOrder() << "], "
-          << "instrShape = [" << getInstrShape() << "]"
-          << "}>";
+          << "isInt8Input = " << getIsInt8Input() << "}>";
 }
 
 //===----------------------------------------------------------------------===//

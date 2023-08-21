@@ -239,15 +239,15 @@ public:
 
       mmaEnc = ttg::MmaEncodingAttr::get(
           oldRetType.getContext(), versionMajor, numWarps, CTALayout,
-          instrShape, oldAType.getShape(), oldBType.getShape(), retShapePerCTA,
-          isARow, isBRow, mmaV1Counter++);
+          oldAType.getShape(), oldBType.getShape(), retShapePerCTA, isARow,
+          isBRow, mmaV1Counter++);
     } else if (versionMajor == 2 || versionMajor == 3) {
       int versionMinor = computeCapability == 75 ? 1 : 0;
       auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
                                           numWarps, instrShape);
       mmaEnc = ttg::MmaEncodingAttr::get(oldRetType.getContext(), versionMajor,
                                          versionMinor, warpsPerTile, CTALayout,
-                                         instrShape);
+                                         AType.getElementType().isInteger(8));
     }
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mmaEnc);
