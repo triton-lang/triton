@@ -3403,8 +3403,7 @@ def test_globaltimer(device):
     out2 = to_triton(np.zeros((1,), dtype=np.int64), device=device)
     h = kernel[(1,)](out1, out2)
     assert out2[0] > 0
-    # 2 inlined globaltimers + one extra in the wrapper extern function
-    assert h.asm["ptx"].count("%globaltimer") == 3
+    assert h.asm["ptx"].count("%globaltimer") == 2
 
 
 def test_smid(device):
@@ -3417,7 +3416,7 @@ def test_smid(device):
     out = to_triton(np.zeros((1024,), dtype=np.int32), device=device)
     h = kernel[(out.shape[0],)](out)
     assert out.sort()[0].unique().shape[0] > 0
-    assert h.asm["ptx"].count("%smid") == 2
+    assert h.asm["ptx"].count("%smid") == 1
 
 # -----------------------
 # test layout conversions

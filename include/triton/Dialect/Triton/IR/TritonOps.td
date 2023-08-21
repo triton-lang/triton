@@ -514,7 +514,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
   }];
 
   let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type]>>:$args);
-  let results = (outs TT_Tensor:$result);
+  let results = (outs TT_Type:$result);
 
 
   let assemblyFormat = [{
