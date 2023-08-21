@@ -150,9 +150,34 @@ void MaterializeLoadStorePass::materializeStoreTilePtr(
     return;
   auto loc = store.getLoc();
   OpBuilder builder(store);
-  auto *ctx = store.getContext();
   auto value = store.getValue();
   auto dst = store.getPtr();
+
+  auto cvtOp = llvm::dyn_cast_or_null<mlir::triton::gpu::ConvertLayoutOp>(
+      value.getDefiningOp());
+  if (cvtOp) {
+    auto srcTy = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    auto dstTy = cvtOp.getResult().getType().cast<RankedTensorType>();
+    auto elemTy = srcTy.getElementType();
+    auto srcMmaLayout = srcTy.getEncoding().dyn_cast<MmaEncodingAttr>();
+    auto dstBlockedLayout = dstTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
+    auto truncFOP = llvm::dyn_cast_or_null<arith::TruncFOp>(
+        cvtOp.getOperand().getDefiningOp());
+    unsigned numElems = ttg::getTotalElemsPerThread(srcTy);
+    auto inOrd = ttg::getOrder(srcTy.getEncoding());
+    auto outOrd = ttg::getOrder(dstTy.getEncoding());
+    if (srcMmaLayout && srcMmaLayout.isHopper() && dstBlockedLayout &&
+        truncFOP && elemTy.getIntOrFloatBitWidth() == 16 && numElems >= 16 &&
+        inOrd == outOrd) {
+      builder.create<ttng::StoreAsyncOp>(loc, dst, cvtOp.getOperand());
+      builder.create<ttg::AsyncBulkCommitGroupOp>(loc);
+      builder.create<ttg::AsyncBulkWaitOp>(loc, 0);
+      store->erase();
+      return;
+    }
+  }
+
+  auto *ctx = store.getContext();
   auto storeTy = value.getType().dyn_cast<RankedTensorType>();
   assert(storeTy);
   auto storeElemTy = storeTy.getElementType();
