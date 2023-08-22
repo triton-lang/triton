@@ -191,5 +191,10 @@ def benchmark(M, N, K, TRANS_A, TRANS_B, provider):
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
+if torch.cuda.get_device_capability()[0] < 9:
+    import sys
+    print("Skipping TMA test for GPU with compute capability < 9")
+    sys.exit(0)
+
 test_matmul()
 benchmark.run(show_plots=False, print_data=True)
