@@ -161,7 +161,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto shapePerCTA = getShapePerCTA(aTensorTy);
-  auto instrShape = mmaVersionToInstrShape(mmaEncoding, 0, aTensorTy);
+  auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA, 0);
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto aOrd = aSharedLayout.getOrder();
   bool transA = aOrd[0] == 0;
@@ -191,11 +191,11 @@ DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
   auto bTensorTy = tensor.getType().cast<RankedTensorType>();
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   assert(bSharedLayout && "only support load B from shared.");
-  auto instrShape = mmaVersionToInstrShape(mmaEncoding, 1, bTensorTy);
+  auto shapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
+  auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA, 1);
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto bOrd = bSharedLayout.getOrder();
   bool transB = bOrd[0] == 1;
-  auto shapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
 
   int numRepK = ceil<unsigned>(shapePerCTA[0], instrShape[2]);
   int numRepN = ceil<unsigned>(shapePerCTA[1], instrShape[1] * wpt[1]);
@@ -284,7 +284,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   int N = instrShape[1];
   int K = instrShape[2];
 
-  auto shapePerCTATile = getShapePerCTATile(mmaEncoding);
+  auto shapePerCTATile = getShapePerCTATile(mmaEncoding, dTensorTy.getShape());
   int numRepM = ceil<unsigned>(dShapePerCTA[0], shapePerCTATile[0]);
   int numRepN = ceil<unsigned>(dShapePerCTA[1], shapePerCTATile[1]);
   int numRepK = ceil<unsigned>(aTensorTy.getShape()[1], instrShape[2]);
@@ -362,7 +362,7 @@ Value loadC(Value tensor, Value llTensor) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
   auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA);
   auto wpt = mmaEncoding.getWarpsPerCTA();
-  auto shapePerCTATile = getShapePerCTATile(mmaEncoding);
+  auto shapePerCTATile = getShapePerCTATile(mmaEncoding, tensorTy.getShape());
 
   int numRepM = ceil<unsigned>(shapePerCTA[0], shapePerCTATile[0]);
   int numRepN = ceil<unsigned>(shapePerCTA[1], shapePerCTATile[1]);
