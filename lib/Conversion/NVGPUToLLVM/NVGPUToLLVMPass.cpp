@@ -116,6 +116,92 @@ public:
   }
 };
 
+class ClusterArriveOpPattern
+    : public NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern> {
+public:
+  using Base = NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern>;
+  using Base::Base;
+
+  std::string getPtxAsm(ttn::ClusterArriveOp op) const {
+    auto relaxed = op.getRelaxed();
+    if (relaxed)
+      return "barrier.cluster.arrive.relaxed.aligned;";
+    else
+      return "barrier.cluster.arrive.aligned;";
+  }
+};
+
+class ClusterWaitOpPattern
+    : public NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern> {
+public:
+  using Base = NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern>;
+  using Base::Base;
+  std::string getPtxAsm(ttn::ClusterWaitOp op) const {
+    return "barrier.cluster.wait.aligned;";
+  }
+};
+
+class FenceMBarrierInitOpPattern
+    : public NVGPUOpPatternBase<ttn::FenceMBarrierInitOp,
+                                FenceMBarrierInitOpPattern> {
+public:
+  using Base =
+      NVGPUOpPatternBase<ttn::FenceMBarrierInitOp, FenceMBarrierInitOpPattern>;
+  using Base::Base;
+
+  std::string getPtxAsm(ttn::FenceMBarrierInitOp op) const {
+    return "fence.mbarrier_init.release.cluster;";
+  }
+};
+
+class CGABarrierArriveOpPattern
+    : public NVGPUOpPatternBase<ttn::CGABarrierArriveOp,
+                                CGABarrierArriveOpPattern> {
+public:
+  using Base =
+      NVGPUOpPatternBase<ttn::CGABarrierArriveOp, CGABarrierArriveOpPattern>;
+  using Base::Base;
+  std::string getPtxAsm(ttn::CGABarrierArriveOp op) const {
+    return "barrier.cluster.arrive;";
+  }
+};
+
+class CGABarrierWaitOpPattern
+    : public NVGPUOpPatternBase<ttn::CGABarrierWaitOp,
+                                CGABarrierWaitOpPattern> {
+public:
+  using Base =
+      NVGPUOpPatternBase<ttn::CGABarrierWaitOp, CGABarrierWaitOpPattern>;
+  using Base::Base;
+  std::string getPtxAsm(ttn::CGABarrierWaitOp op) const {
+    return "barrier.cluster.wait;";
+  }
+};
+
+class RegAllocOpPattern
+    : public NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern> {
+public:
+  using Base = NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern>;
+  using Base::Base;
+
+  std::string getPtxAsm(ttn::RegAllocOp op) const {
+    auto regCount = op.getRegCount();
+    return "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
+  }
+};
+
+class RegDeallocOpPattern
+    : public NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern> {
+public:
+  using Base = NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern>;
+  using Base::Base;
+
+  std::string getPtxAsm(ttn::RegDeallocOp op) const {
+    auto regCount = op.getRegCount();
+    return "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
+  }
+};
+
 class StoreMatrixOpPattern : public mlir::RewritePattern {
 public:
   StoreMatrixOpPattern(mlir::MLIRContext *context)
@@ -295,31 +381,6 @@ public:
     ptxBuilder.launch(rewriter, loc, asmReturnTy);
     rewriter.eraseOp(op);
     return mlir::success();
-  }
-};
-
-class ClusterArriveOpPattern
-    : public NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::ClusterArriveOp op) const {
-    auto relaxed = op.getRelaxed();
-    if (relaxed)
-      return "barrier.cluster.arrive.relaxed.aligned;";
-    else
-      return "barrier.cluster.arrive.aligned;";
-  }
-};
-
-class ClusterWaitOpPattern
-    : public NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern>;
-  using Base::Base;
-  std::string getPtxAsm(ttn::ClusterWaitOp op) const {
-    return "barrier.cluster.wait.aligned;";
   }
 };
 
@@ -711,19 +772,6 @@ public:
   }
 };
 
-class FenceMBarrierInitOpPattern
-    : public NVGPUOpPatternBase<ttn::FenceMBarrierInitOp,
-                                FenceMBarrierInitOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::FenceMBarrierInitOp, FenceMBarrierInitOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::FenceMBarrierInitOp op) const {
-    return "fence.mbarrier_init.release.cluster;";
-  }
-};
-
 class NamedBarrierArriveOpPattern : public mlir::RewritePattern {
 public:
   NamedBarrierArriveOpPattern(mlir::MLIRContext *context)
@@ -781,30 +829,6 @@ public:
     ptxBuilder.launch(rewriter, loc, asmReturnTy);
     rewriter.eraseOp(op);
     return mlir::success();
-  }
-};
-
-class CGABarrierArriveOpPattern
-    : public NVGPUOpPatternBase<ttn::CGABarrierArriveOp,
-                                CGABarrierArriveOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::CGABarrierArriveOp, CGABarrierArriveOpPattern>;
-  using Base::Base;
-  std::string getPtxAsm(ttn::CGABarrierArriveOp op) const {
-    return "barrier.cluster.arrive;";
-  }
-};
-
-class CGABarrierWaitOpPattern
-    : public NVGPUOpPatternBase<ttn::CGABarrierWaitOp,
-                                CGABarrierWaitOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::CGABarrierWaitOp, CGABarrierWaitOpPattern>;
-  using Base::Base;
-  std::string getPtxAsm(ttn::CGABarrierWaitOp op) const {
-    return "barrier.cluster.wait;";
   }
 };
 
@@ -912,30 +936,6 @@ public:
     ptxBuilder.launch(rewriter, loc, asmReturnTy);
     rewriter.eraseOp(op);
     return mlir::success();
-  }
-};
-
-class RegAllocOpPattern
-    : public NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::RegAllocOp op) const {
-    auto regCount = op.getRegCount();
-    return "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
-  }
-};
-
-class RegDeallocOpPattern
-    : public NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::RegDeallocOp op) const {
-    auto regCount = op.getRegCount();
-    return "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
   }
 };
 
