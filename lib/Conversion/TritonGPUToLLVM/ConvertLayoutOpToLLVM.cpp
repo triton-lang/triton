@@ -130,8 +130,6 @@ private:
       auto parentShape = sliceLayout.paddedShape(shape);
       auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
                                             parentEncoding);
-      auto parentSizePerThread =
-          getSizePerThread(parentEncoding, getShapePerCTA(parentTy));
       auto offsets = emitOffsetForLayout(layout, type);
       auto parentOffset = emitOffsetForLayout(parentEncoding, parentTy);
       SmallVector<int> idxs;
@@ -253,7 +251,7 @@ private:
     auto sizePerThread = getSizePerThread(layout, shapePerCTA);
     auto accumSizePerThread = product<unsigned>(sizePerThread);
     SmallVector<unsigned> numCTATiles(rank);
-    auto shapePerCTATile = getShapePerCTATile(layout);
+    auto shapePerCTATile = getShapePerCTATile(layout, type.getShape());
     auto order = getOrder(layout);
     for (unsigned d = 0; d < rank; ++d) {
       numCTATiles[d] = ceil<unsigned>(shapePerCTA[d], shapePerCTATile[d]);
@@ -534,9 +532,9 @@ private:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
+    auto shapePerCTA = getShapePerCTA(srcLayout, shape);
     auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
     auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
-    auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
     // For Volta, all the coords for a CTA are calculated.
     bool isSrcMmaV1{}, isDstMmaV1{};
@@ -749,7 +747,7 @@ private:
       auto ptrI8SharedTy = LLVM::LLVMPointerType::get(
           typeConverter->convertType(rewriter.getI8Type()), 3);
 
-      uint32_t rowsPerRep = getShapePerCTATile(mmaLayout)[0];
+      uint32_t rowsPerRep = getShapePerCTATile(mmaLayout, srcShape)[0];
 
       Value threadId = getThreadId(rewriter, loc);
       Value warpId = udiv(threadId, i32_val(32));

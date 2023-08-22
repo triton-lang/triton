@@ -289,45 +289,67 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
   return threads;
 }
 
+SmallVector<unsigned> getShapePerCTATile(BlockedEncodingAttr blockedLayout) {
+  SmallVector<unsigned> shape;
+  for (unsigned d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
+    shape.push_back(blockedLayout.getSizePerThread()[d] *
+                    blockedLayout.getThreadsPerWarp()[d] *
+                    blockedLayout.getWarpsPerCTA()[d]);
+
+  return shape;
+}
+
+static SmallVector<unsigned>
+getShapePerCTATileOfMma(MmaEncodingAttr mmaLayout,
+                        ArrayRef<int64_t> tensorShape, int opIdx) {
+  if (mmaLayout.isAmpere())
+    return {16 * mmaLayout.getWarpsPerCTA()[0],
+            8 * mmaLayout.getWarpsPerCTA()[1]};
+  if (mmaLayout.isVolta()) {
+    assert(!tensorShape.empty() && "Volta needs the tensorShape");
+    if (tensorShape.size() == 1) // must be SliceEncoding
+      return {static_cast<unsigned>(tensorShape[0]),
+              static_cast<unsigned>(tensorShape[0])};
+    return {static_cast<unsigned>(tensorShape[0]),
+            static_cast<unsigned>(tensorShape[1])};
+  }
+  if (mmaLayout.isHopper()) {
+    auto shapePerCTA = getShapePerCTA(mmaLayout, tensorShape);
+    SmallVector<unsigned, 3> instrShape;
+    if (opIdx < 0)
+      instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
+    else
+      instrShape =
+          mmaVersionToInstrShape(mmaLayout, shapePerCTA, (unsigned)opIdx);
+
+    return {16 * mmaLayout.getWarpsPerCTA()[0],
+            instrShape[1] * mmaLayout.getWarpsPerCTA()[1]};
+  }
+
+  assert(0 && "Unexpected MMA layout version found");
+  return {};
+}
+
 SmallVector<unsigned> getShapePerCTATile(Attribute layout,
                                          ArrayRef<int64_t> tensorShape) {
   SmallVector<unsigned> shape;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    for (unsigned d = 0, n = blockedLayout.getOrder().size(); d < n; ++d)
-      shape.push_back(blockedLayout.getSizePerThread()[d] *
-                      blockedLayout.getThreadsPerWarp()[d] *
-                      blockedLayout.getWarpsPerCTA()[d]);
+    return getShapePerCTATile(blockedLayout);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    shape = getShapePerCTATile(sliceLayout.getParent(), tensorShape);
+    auto parentTensorShape = sliceLayout.paddedShape(tensorShape);
+    shape = getShapePerCTATile(sliceLayout.getParent(), parentTensorShape);
     shape.erase(shape.begin() + sliceLayout.getDim());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    if (mmaLayout.isAmpere())
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              8 * mmaLayout.getWarpsPerCTA()[1]};
-    if (mmaLayout.isVolta()) {
-      assert(!tensorShape.empty() && "Volta needs the tensorShape");
-      if (tensorShape.size() == 1) // must be SliceEncoding
-        return {static_cast<unsigned>(tensorShape[0]),
-                static_cast<unsigned>(tensorShape[0])};
-      return {static_cast<unsigned>(tensorShape[0]),
-              static_cast<unsigned>(tensorShape[1])};
-    }
-    if (mmaLayout.isHopper()) {
-      auto shapePerCTA = getShapePerCTA(layout, tensorShape);
-      auto instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
-      return {16 * mmaLayout.getWarpsPerCTA()[0],
-              instrShape[1] * mmaLayout.getWarpsPerCTA()[1]};
-    }
-    assert(0 && "Unexpected MMA layout version found");
+    return getShapePerCTATileOfMma(mmaLayout, tensorShape, -1);
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
     if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingAttr>()) {
       assert(parentMmaLayout.isAmpere() &&
              "mmaLayout version = 1 is not implemented yet");
+      int opIdx = dotLayout.getOpIdx();
       auto parentShapePerCTATile =
-          getShapePerCTATile(parentLayout, tensorShape);
-      auto opIdx = dotLayout.getOpIdx();
+          getShapePerCTATileOfMma(parentMmaLayout, tensorShape, opIdx);
       if (opIdx == 0) {
         return {parentShapePerCTATile[0], 16};
       } else if (opIdx == 1) {

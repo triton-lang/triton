@@ -51,12 +51,12 @@ mmaVersionToInstrShapeImpl(int version, const ArrayRef<int64_t> &shape,
 }
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
-                                                const ArrayRef<int64_t> &shape,
+                                                ArrayRef<int64_t> shapePerCTA,
                                                 RankedTensorType type) {
   auto instrShape =
-      mmaVersionToInstrShapeImpl(version, shape, type.getElementType());
+      mmaVersionToInstrShapeImpl(version, shapePerCTA, type.getElementType());
   if (version == 3) {
-    if (shape[0] % 64 != 0 || shape[1] % 8 != 0) {
+    if (shapePerCTA[0] % 64 != 0 || shapePerCTA[1] % 8 != 0) {
       assert(false && "type not supported");
       return {0, 0, 0};
     }
@@ -67,7 +67,7 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 
 SmallVector<unsigned, 3>
 mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
-                       const ArrayRef<int64_t> shapePerCTA) {
+                       ArrayRef<int64_t> shapePerCTA) {
   Type eltType;
   auto ctx = mma.getContext();
   OpBuilder builder(ctx);
@@ -80,12 +80,18 @@ mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
       RankedTensorType::get({1, 1}, eltType, mma));
 }
 SmallVector<unsigned, 3>
-mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma, unsigned opIdx,
-                       RankedTensorType type) {
-  auto shapePerCTA =
-      triton::gpu::getShapePerCTA(type.getEncoding(), type.getShape());
-  auto instrShape = mmaVersionToInstrShapeImpl(
-      mma.getVersionMajor(), shapePerCTA, type.getElementType());
+mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
+                       ArrayRef<int64_t> shapePerCTA, unsigned opIdx) {
+  Type eltType;
+  auto ctx = mma.getContext();
+  OpBuilder builder(ctx);
+  if (mma.getIsInt8Input())
+    eltType = builder.getIntegerType(8);
+  else
+    eltType = builder.getF16Type();
+  auto instrShape =
+      mmaVersionToInstrShapeImpl(mma.getVersionMajor(), shapePerCTA, eltType);
+
   if (opIdx == 0) {
     instrShape[1] = 0;
     assert(shapePerCTA[0] % 64 == 0 && "M direction not compatible");
