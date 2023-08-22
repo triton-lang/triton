@@ -887,6 +887,12 @@ def broadcast_to(input, shape, _builder=None):
 
 @builtin
 def trans(input, _builder=None):
+    """
+    Returns a transposed tensor.
+
+    :param input: The input tensor.
+    :type input:
+    """
     return semantic.trans(input, _builder)
 
 
@@ -925,6 +931,15 @@ def view(input, shape, _builder=None):
 
 @builtin
 def reshape(input, shape, _builder=None):
+    """
+    Returns a tensor with the same number of elements as input but with the
+    provided shape.
+
+    :param input: The input tensor.
+    :type input:
+    :param shape: The new shape.
+    :type shape: Tuple[int]
+    """
     shape = _shape_check_impl(shape)
     return semantic.reshape(input, shape, _builder)
 
@@ -1223,6 +1238,14 @@ def where(condition, x, y, _builder=None):
 
 @builtin
 def umulhi(x, y, _builder=None):
+    """
+    Returns the most significant 32 bits of the product of x and y.
+
+    :param x: the input tensor
+    :type x: int32
+    :param y: the input tensor
+    :type y: int32
+    """
     x = _to_tensor(x, _builder)
     y = _to_tensor(y, _builder)
     return semantic.umulhi(x, y, _builder)
@@ -1230,6 +1253,15 @@ def umulhi(x, y, _builder=None):
 
 @builtin
 def fdiv(x, y, ieee_rounding=False, _builder=None):
+    """
+    Returns a floating-point resultant tensor of dividing x by y.
+
+    :param x: the input numerator value.
+    :param y: the input denominator value.
+    :param ieee_rounding: To follow IEEE-754 floating point number
+    rounding mechanism
+    :type ieee_rounding: bool
+    """
     ieee_rounding = _constexpr_to_value(ieee_rounding)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
