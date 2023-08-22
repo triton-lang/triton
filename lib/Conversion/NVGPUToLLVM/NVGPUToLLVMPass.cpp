@@ -27,6 +27,53 @@ public:
   explicit NVGPUOpPatternBase(mlir::MLIRContext *context)
       : mlir::RewritePattern(SourceOp::getOperationName(), 1, context) {}
 
+  std::string getConstraint(std::string type) const {
+    std::string constraint;
+    static std::map<std::string, std::string> typeMap = {
+        {"i16", "h"}, {"i32", "r"}, {"i64", "l"}, {"f32", "f"}, {"f64", "d"}};
+    if (typeMap.count(type) == 0) {
+      llvm::errs() << "Unsupported type " << type << "\n";
+      llvm_unreachable("");
+    }
+    return typeMap[type];
+  }
+
+  mlir::Value convertToType(mlir::Value val, std::string type, Location &loc,
+                            mlir::PatternRewriter &rewriter) const {
+    if (val.getType().isa<PointerType>()) {
+      if (type == "ptr") {
+        return val;
+      } else if (type == "i32") {
+        return ptrtoint(i32_ty, val);
+      } else if (type == "i64") {
+        return ptrtoint(i64_ty, val);
+      } else {
+        assert(false && "Unsupported type conversion");
+      }
+    }
+    return val;
+  }
+
+  SmallVector<PTXBuilder::Operand *> getPtxOperands(
+      std::vector<std::pair<mlir::Value, std::string>> &operandsAndTypes,
+      PTXBuilder &ptxBuilder, Location &loc,
+      mlir::PatternRewriter &rewriter) const {
+    SmallVector<PTXBuilder::Operand *> ptxOperands;
+    for (auto &operandAndType : operandsAndTypes) {
+      auto constraint = getConstraint(operandAndType.second);
+      auto operand = convertToType(operandAndType.first, operandAndType.second,
+                                   loc, rewriter);
+      auto *ptxOperand = ptxBuilder.newAddrOperand(operand, constraint);
+      ptxOperands.push_back(ptxOperand);
+    }
+    return ptxOperands;
+  }
+
+  virtual std::vector<std::pair<mlir::Value, std::string>>
+  getOperandsAndTypes(SourceOp op) const {
+    return {};
+  }
+
   LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -35,15 +82,22 @@ public:
     auto sourceOp = llvm::dyn_cast<SourceOp>(op);
     if (!sourceOp)
       return mlir::failure();
-    auto ptxAsm = static_cast<const ConcreteT *>(this)->getPtxAsm(sourceOp);
+    auto concrete = static_cast<const ConcreteT *>(this);
+    auto ptxAsm = concrete->getPtxAsm(sourceOp);
     auto hasSideEffects = !isMemoryEffectFree(sourceOp);
+    auto operandsAndTypes = concrete->getOperandsAndTypes(sourceOp);
     PTXBuilder ptxBuilder;
+    auto ptxOperands =
+        getPtxOperands(operandsAndTypes, ptxBuilder, loc, rewriter);
     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    ptxInstr({}, /*onlyAttachMLIRArgs=*/true);
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy,
-                      /*hasSideEffects*/ hasSideEffects);
-    rewriter.eraseOp(op);
+    ptxInstr(ptxOperands, /*onlyAttachMLIRArgs=*/true);
+    mlir::Type resTy;
+    if (op->getResultTypes().empty()) {
+      resTy = void_ty(ctx);
+    }
+    auto res = ptxBuilder.launch(rewriter, loc, resTy,
+                                 /*hasSideEffects*/ hasSideEffects);
+    rewriter.replaceOp(op, res);
     return mlir::success();
   }
 };
@@ -202,45 +256,83 @@ public:
   }
 };
 
-class StoreMatrixOpPattern : public mlir::RewritePattern {
+class StoreMatrixOpPattern
+    : public NVGPUOpPatternBase<ttn::StoreMatrixOp, StoreMatrixOpPattern> {
 public:
-  StoreMatrixOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::StoreMatrixOp::getOperationName(), 1,
-                             context) {}
+  using Base = NVGPUOpPatternBase<ttn::StoreMatrixOp, StoreMatrixOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto storeMatrixOp = llvm::dyn_cast<ttn::StoreMatrixOp>(op);
-    if (!storeMatrixOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto addr = storeMatrixOp.getAddr();
-    auto datas = storeMatrixOp.getDatas();
-
-    assert(datas.size() == 1 || datas.size() == 2 ||
-           datas.size() == 4 && "Invalid size for StoreMatrixOp");
-    PTXBuilder ptxBuilder;
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
-        "stmatrix.sync.aligned.m8n8.x" + std::to_string(datas.size()) +
-        ".shared.b16");
-    auto *addrOpr = ptxBuilder.newAddrOperand(ptrtoint(i32_ty, addr), "r");
-
-    SmallVector<std::pair<Value, std::string>> args;
-    for (unsigned i = 0; i < datas.size(); ++i) {
-      args.push_back({datas[i], "r"});
+  std::vector<std::pair<mlir::Value, std::string>>
+  getOperandsAndTypes(ttn::StoreMatrixOp op) const {
+    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    auto addr = op.getAddr();
+    auto datas = op.getDatas();
+    operandsAndTypes.push_back({addr, "i32"});
+    for (unsigned i = 0; i < datas.size(); i++) {
+      operandsAndTypes.push_back({datas[i], "i32"});
     }
-    auto *operands = ptxBuilder.newListOperand(args);
+    return operandsAndTypes;
+  }
 
-    ptxInstr(addrOpr, operands);
-
-    auto asmReturnTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, asmReturnTy);
-    rewriter.eraseOp(op);
-    return mlir::success();
+  std::string getPtxAsm(ttn::StoreMatrixOp op) const {
+    auto datas = op.getDatas();
+    std::string ptx;
+    switch (datas.size()) {
+    case 1:
+      ptx = "stmatrix.sync.aligned.m8n8.x1.shared.b16 [$0], {$1};";
+      break;
+    case 2:
+      ptx = "stmatrix.sync.aligned.m8n8.x2.shared.b16 [$0], {$1, $2};";
+      break;
+    case 4:
+      ptx = "stmatrix.sync.aligned.m8n8.x4.shared.b16 [$0], {$1, $2, $3, $4};";
+      break;
+    default:
+      assert(false && "Invalid size");
+    }
+    return ptx;
   }
 };
+
+// class StoreMatrixOpPattern : public mlir::RewritePattern {
+// public:
+//   StoreMatrixOpPattern(mlir::MLIRContext *context)
+//       : mlir::RewritePattern(ttn::StoreMatrixOp::getOperationName(), 1,
+//                              context) {}
+
+//   mlir::LogicalResult
+//   matchAndRewrite(mlir::Operation *op,
+//                   mlir::PatternRewriter &rewriter) const override {
+//     auto ctx = rewriter.getContext();
+//     auto storeMatrixOp = llvm::dyn_cast<ttn::StoreMatrixOp>(op);
+//     if (!storeMatrixOp)
+//       return mlir::failure();
+//     auto loc = op->getLoc();
+//     auto addr = storeMatrixOp.getAddr();
+//     auto datas = storeMatrixOp.getDatas();
+
+//     assert(datas.size() == 1 || datas.size() == 2 ||
+//            datas.size() == 4 && "Invalid size for StoreMatrixOp");
+//     PTXBuilder ptxBuilder;
+//     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(
+//         "stmatrix.sync.aligned.m8n8.x" + std::to_string(datas.size()) +
+//         ".shared.b16");
+//     auto *addrOpr = ptxBuilder.newAddrOperand(ptrtoint(i32_ty, addr), "r");
+
+//     SmallVector<std::pair<Value, std::string>> args;
+//     for (unsigned i = 0; i < datas.size(); ++i) {
+//       args.push_back({datas[i], "r"});
+//     }
+//     auto *operands = ptxBuilder.newListOperand(args);
+
+//     ptxInstr(addrOpr, operands);
+
+//     auto asmReturnTy = void_ty(ctx);
+//     ptxBuilder.launch(rewriter, loc, asmReturnTy);
+//     rewriter.eraseOp(op);
+//     return mlir::success();
+//   }
+// };
 
 class MBarrierInitOpPattern : public mlir::RewritePattern {
 public:
