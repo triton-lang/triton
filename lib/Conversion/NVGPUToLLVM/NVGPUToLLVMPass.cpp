@@ -862,17 +862,16 @@ public:
       // both input and outputs
       PTXBuilder::Operand *opr;
       if (structTypeC.getBody().front().isF32())
-        opr = ptxBuilder.newOperand(
-            extract_val(structTypeC.getBody()[i], opC, i), "=f");
+        opr = ptxBuilder.newOperand("=f");
       else
-        opr = ptxBuilder.newOperand(
-            extract_val(structTypeC.getBody()[i], opC, i), "=r");
+        opr = ptxBuilder.newOperand("=r");
       oprs.push_back(opr);
     }
     args += "}, ";
 
     for (uint32_t i = asmOpIdx - numCRegs; i < asmOpIdx; ++i) {
-      auto *opr = ptxBuilder.newOperand(i);
+      auto *opr = ptxBuilder.newOperand(
+          extract_val(structTypeC.getBody()[i], opC, i), std::to_string(i));
       oprs.push_back(opr);
     }
 
