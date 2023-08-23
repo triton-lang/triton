@@ -54,6 +54,16 @@ public:
     }
     return val;
   }
+  SmallVector<PTXBuilder::Operand *>
+  getPtxOutputs(std::vector<std::string> &outputConstraints,
+                PTXBuilder &ptxBuilder) const {
+    SmallVector<PTXBuilder::Operand *> ptxOutputs;
+    for (unsigned i = 0; i < outputConstraints.size(); i++) {
+      auto *ptxOutput = ptxBuilder.newOperand(outputConstraints[i]);
+      ptxOutputs.push_back(ptxOutput);
+    }
+    return ptxOutputs;
+  }
 
   SmallVector<PTXBuilder::Operand *> getPtxOperands(
       std::vector<std::pair<mlir::Value, std::string>> &operandsAndTypes,
@@ -70,9 +80,56 @@ public:
     return ptxOperands;
   }
 
+  virtual std::vector<std::string> getOutputConstraints(SourceOp op) const {
+    return {};
+  }
+
   virtual std::vector<std::pair<mlir::Value, std::string>>
   getOperandsAndTypes(SourceOp op) const {
     return {};
+  }
+
+  Type getReturnType(std::vector<std::string> outputConstraints,
+                     mlir::PatternRewriter &rewriter) const {
+    auto ctx = rewriter.getContext();
+    Type resTy;
+    if (outputConstraints.empty()) {
+      resTy = void_ty(ctx);
+    } else {
+      SmallVector<Type> retTys;
+      for (auto &outputConstraint : outputConstraints) {
+        assert(outputConstraint[0] == '=' &&
+               "Constraint must be for an output");
+        Type retTy;
+        switch (outputConstraint[1]) {
+        case 'h':
+          retTy = IntegerType::get(ctx, 16);
+          break;
+        case 'r':
+          retTy = IntegerType::get(ctx, 32);
+          break;
+        case 'l':
+          retTy = IntegerType::get(ctx, 64);
+          break;
+        case 'f':
+          retTy = FloatType::getF32(ctx);
+          break;
+        case 'd':
+          retTy = FloatType::getF64(ctx);
+          break;
+        default:
+          assert(false && "Unsupported output constraint");
+          break;
+        }
+        retTys.push_back(retTy);
+      }
+      if (retTys.size() == 1) {
+        resTy = retTys[1];
+      } else {
+        resTy = struct_ty(retTys);
+      }
+    }
+    return resTy;
   }
 
   LogicalResult
@@ -87,16 +144,18 @@ public:
     auto ptxAsm = concrete->getPtxAsm(sourceOp);
     auto hasSideEffects = !isMemoryEffectFree(sourceOp);
     auto operandsAndTypes = concrete->getOperandsAndTypes(sourceOp);
+    auto outputConstraints = concrete->getOutputConstraints(sourceOp);
+
     PTXBuilder ptxBuilder;
+    auto ptxOutputs = getPtxOutputs(outputConstraints, ptxBuilder);
     auto ptxOperands =
         getPtxOperands(operandsAndTypes, ptxBuilder, loc, rewriter);
+    SmallVector<PTXBuilder::Operand *> outputsAndOperands = ptxOutputs;
+    outputsAndOperands.append(ptxOperands.begin(), ptxOperands.end());
     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    ptxInstr(ptxOperands, /*onlyAttachMLIRArgs=*/true);
-    mlir::Type resTy;
-    if (op->getResultTypes().empty()) {
-      resTy = void_ty(ctx);
-    }
-    auto res = ptxBuilder.launch(rewriter, loc, resTy,
+    ptxInstr(outputsAndOperands, /*onlyAttachMLIRArgs=*/true);
+    auto retTy = getReturnType(outputConstraints, rewriter);
+    auto res = ptxBuilder.launch(rewriter, loc, retTy,
                                  /*hasSideEffects*/ hasSideEffects);
     rewriter.replaceOp(op, res);
     return mlir::success();
@@ -676,30 +735,39 @@ public:
   }
 };
 
-class LoadDSmemOpPattern : public mlir::RewritePattern {
+class LoadDSmemOpPattern
+    : public NVGPUOpPatternBase<ttn::LoadDSmemOp, LoadDSmemOpPattern> {
 public:
-  LoadDSmemOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::LoadDSmemOp::getOperationName(), 1, context) {
+  using Base = NVGPUOpPatternBase<ttn::LoadDSmemOp, LoadDSmemOpPattern>;
+  using Base::Base;
+
+  std::vector<std::string> getOutputConstraints(ttn::LoadDSmemOp op) const {
+    auto bitwidth = op.getBitwidth();
+    std::string c = bitwidth == 16 ? "=h" : (bitwidth == 32 ? "=r" : "=l");
+    auto vec = op.getVec();
+    return std::vector<std::string>(vec, c);
+  }
+  std::vector<std::pair<mlir::Value, std::string>>
+  getOperandsAndTypes(ttn::LoadDSmemOp op) const {
+    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    auto addr = op.getAddr();
+    auto ctaId = op.getCtaId();
+
+    operandsAndTypes.push_back({addr, "i32"});
+    operandsAndTypes.push_back({ctaId, "i32"});
+    return operandsAndTypes;
   }
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto loadDSmemOp = llvm::dyn_cast<ttn::LoadDSmemOp>(op);
-    if (!loadDSmemOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto addr = loadDSmemOp.getAddr();
-    auto ctaId = loadDSmemOp.getCtaId();
-    auto bitwidth = loadDSmemOp.getBitwidth();
-    auto vec = loadDSmemOp.getVec();
+  std::string getPtxAsm(ttn::LoadDSmemOp op) const {
+    auto addr = op.getAddr();
+    auto ctaId = op.getCtaId();
+    auto bitwidth = op.getBitwidth();
+    auto vec = op.getVec();
 
     assert(
         (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
         "invalid bitwidth");
     assert((vec == 1 || vec == 2 || vec == 4) && "invalid vec size");
-    PTXBuilder ptxBuilder;
 
     std::string o1 = vec > 1 ? ".v.u" : ".u";
     std::string vecStr = vec == 1   ? "$0"
@@ -715,30 +783,7 @@ public:
                   o1 + std::to_string(bitwidth) + " " + vecStr +
                   ", [remoteAddr];\n"
                   "}\n";
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    std::string c = bitwidth == 16 ? "=h" : (bitwidth == 32 ? "=r" : "=l");
-    SmallVector<PTXBuilder::Operand *> oprs;
-    for (unsigned i = 0; i < vec; ++i) {
-      auto *ret = ptxBuilder.newOperand(c);
-      oprs.push_back(ret);
-    }
-    auto *addrOpr = ptxBuilder.newOperand(addr, "r");
-    auto *ctaIdOpr = ptxBuilder.newOperand(ctaId, "r");
-    oprs.push_back(addrOpr);
-    oprs.push_back(ctaIdOpr);
-
-    Type retTy = IntegerType::get(rewriter.getContext(), bitwidth);
-    SmallVector<Type> retTys(vec, retTy);
-    if (vec > 1)
-      retTy = struct_ty(retTys);
-
-    ptxInstr(oprs,
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto res = ptxBuilder.launch(rewriter, loc, retTy);
-    rewriter.replaceOp(op, {res});
-    return mlir::success();
+    return ptxAsm;
   }
 };
 
