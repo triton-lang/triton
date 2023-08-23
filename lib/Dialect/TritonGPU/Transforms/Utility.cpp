@@ -50,38 +50,22 @@ mmaVersionToInstrShapeImpl(int version, const ArrayRef<int64_t> &shape,
   }
 }
 
-SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
-                                                ArrayRef<int64_t> shapePerCTA,
-                                                RankedTensorType type) {
-  auto instrShape =
-      mmaVersionToInstrShapeImpl(version, shapePerCTA, type.getElementType());
+SmallVector<unsigned, 3>
+mmaVersionToInstrShape(int version, ArrayRef<int64_t> outputShapePerCTA,
+                       RankedTensorType inputType) {
   if (version == 3) {
-    if (shapePerCTA[0] % 64 != 0 || shapePerCTA[1] % 8 != 0) {
+    if (outputShapePerCTA[0] % 64 != 0 || outputShapePerCTA[1] % 8 != 0) {
       assert(false && "type not supported");
       return {0, 0, 0};
     }
   }
-  assert(instrShape[1] > 0 && "type not supported");
-  return instrShape;
+  return mmaVersionToInstrShapeImpl(version, outputShapePerCTA,
+                                    inputType.getElementType());
 }
 
-SmallVector<unsigned, 3>
-mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
-                       ArrayRef<int64_t> shapePerCTA) {
-  Type eltType;
-  auto ctx = mma.getContext();
-  OpBuilder builder(ctx);
-  if (mma.getIsInt8Input())
-    eltType = builder.getIntegerType(8);
-  else
-    eltType = builder.getF16Type();
-  return mmaVersionToInstrShapeImpl(
-      mma.getVersionMajor(), shapePerCTA,
-      RankedTensorType::get({1, 1}, eltType, mma));
-}
-SmallVector<unsigned, 3>
-mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
-                       ArrayRef<int64_t> shapePerCTA, unsigned opIdx) {
+SmallVector<unsigned, 2>
+mmaVersionToInstrShapeOfMN(triton::gpu::MmaEncodingAttr mma,
+                           ArrayRef<int64_t> outputShapePerCTA) {
   Type eltType;
   auto ctx = mma.getContext();
   OpBuilder builder(ctx);
@@ -90,16 +74,25 @@ mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
   else
     eltType = builder.getF16Type();
   auto instrShape =
-      mmaVersionToInstrShapeImpl(mma.getVersionMajor(), shapePerCTA, eltType);
+      mmaVersionToInstrShape(mma.getVersionMajor(), outputShapePerCTA,
+                             RankedTensorType::get({1, 1}, eltType, mma));
 
-  if (opIdx == 0) {
-    instrShape[1] = 0;
-    assert(shapePerCTA[0] % 64 == 0 && "M direction not compatible");
-  } else {
-    instrShape[0] = 0;
-    assert(shapePerCTA[1] % 8 == 0 && "N direction not compatible");
-  }
-  return instrShape;
+  return {instrShape[0], instrShape[1]};
+}
+
+SmallVector<unsigned, 2> mmav3ToInstrShapeOfMK(triton::gpu::MmaEncodingAttr mma,
+                                               RankedTensorType inputType) {
+  unsigned k = 256 / inputType.getElementType().getIntOrFloatBitWidth();
+  return {16, k};
+}
+
+SmallVector<unsigned, 2> mmav3ToInstrShapeOfNK(triton::gpu::MmaEncodingAttr mma,
+                                               RankedTensorType inputType) {
+  unsigned k = 256 / inputType.getElementType().getIntOrFloatBitWidth();
+  auto shapePerCTA = triton::gpu::getShapePerCTA(inputType.getEncoding(),
+                                                 inputType.getShape());
+  unsigned n = getValidNOfMmaV3(shapePerCTA[1], inputType.getElementType());
+  return {n, k};
 }
 
 bool isLoadFromTensorPtr(triton::LoadOp op) {

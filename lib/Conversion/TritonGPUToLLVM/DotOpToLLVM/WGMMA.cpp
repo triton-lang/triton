@@ -161,13 +161,13 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
   auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto shapePerCTA = getShapePerCTA(aTensorTy);
-  auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA, 0);
+  auto instrShape = mmav3ToInstrShapeOfMK(mmaEncoding, aTensorTy);
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto aOrd = aSharedLayout.getOrder();
   bool transA = aOrd[0] == 0;
 
   int numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0] * wpt[0]);
-  int numRepK = ceil<unsigned>(shapePerCTA[1], instrShape[2]);
+  int numRepK = ceil<unsigned>(shapePerCTA[1], instrShape[1]);
 
   Value warp = udiv(thread, i32_val(32));
   Value warpM = urem(warp, i32_val(wpt[0]));
@@ -179,7 +179,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
           warpId,
           wpt[0],
           transA,
-          {instrShape[0], instrShape[2]},
+          {instrShape[0], instrShape[1]},
           rewriter,
           loc};
 }
@@ -192,18 +192,18 @@ DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
   auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   assert(bSharedLayout && "only support load B from shared.");
   auto shapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
-  auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA, 1);
+  auto instrShape = mmav3ToInstrShapeOfNK(mmaEncoding, bTensorTy);
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto bOrd = bSharedLayout.getOrder();
   bool transB = bOrd[0] == 1;
 
-  int numRepK = ceil<unsigned>(shapePerCTA[0], instrShape[2]);
-  int numRepN = ceil<unsigned>(shapePerCTA[1], instrShape[1] * wpt[1]);
+  int numRepK = ceil<unsigned>(shapePerCTA[0], instrShape[1]);
+  int numRepN = ceil<unsigned>(shapePerCTA[1], instrShape[0] * wpt[1]);
 
   Value warp = udiv(thread, i32_val(32));
   Value warpMN = udiv(warp, i32_val(wpt[0]));
   Value warpN = urem(warpMN, i32_val(wpt[1]));
-  Value warpId = urem(warpN, i32_val(shapePerCTA[1] / instrShape[1]));
+  Value warpId = urem(warpN, i32_val(shapePerCTA[1] / instrShape[0]));
 
   return {tensor,
           smemObj,
@@ -211,7 +211,7 @@ DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
           warpId,
           wpt[1],
           transB,
-          {instrShape[1], instrShape[2]},
+          {instrShape[0], instrShape[1]},
           rewriter,
           loc};
 }
@@ -278,7 +278,8 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   bool transA = aOrd[0] == 0;
   bool transB = bOrd[0] == 1;
   auto dShapePerCTA = getShapePerCTA(dTensorTy);
-  auto instrShape = mmaVersionToInstrShape(mmaEncoding, dShapePerCTA);
+  auto instrShape = mmaVersionToInstrShape(mmaEncoding.getVersionMajor(),
+                                           dShapePerCTA, aTensorTy);
   auto accSize = 2 * (instrShape[1] / 4);
   int M = 4 * instrShape[0];
   int N = instrShape[1];
@@ -360,7 +361,7 @@ Value loadC(Value tensor, Value llTensor) {
   auto mmaEncoding = tensorTy.getEncoding().dyn_cast<MmaEncodingAttr>();
   assert(mmaEncoding && "Currently, we only support $c with a mma layout.");
   auto shapePerCTA = getShapePerCTA(tensorTy);
-  auto instrShape = mmaVersionToInstrShape(mmaEncoding, shapePerCTA);
+  auto instrShape = mmaVersionToInstrShapeOfMN(mmaEncoding, shapePerCTA);
   auto wpt = mmaEncoding.getWarpsPerCTA();
   auto shapePerCTATile = getShapePerCTATile(mmaEncoding, tensorTy.getShape());
 

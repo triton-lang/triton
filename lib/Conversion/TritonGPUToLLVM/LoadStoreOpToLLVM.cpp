@@ -683,7 +683,7 @@ struct StoreAsyncOpConversion
 
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
 
-    auto instrShape = mmaVersionToInstrShape(
+    auto instrShape = mmaVersionToInstrShapeOfMN(
         mmaLayout, getShapePerCTA(mmaLayout, srcTy.getShape()));
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
     uint32_t repM =

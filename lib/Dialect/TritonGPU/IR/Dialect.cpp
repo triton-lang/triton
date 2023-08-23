@@ -202,7 +202,7 @@ SmallVector<unsigned> getSizePerThread(Attribute layout,
     } else if (mmaLayout.isVolta()) {
       return {1, 2};
     } else if (mmaLayout.isHopper()) {
-      auto instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
+      auto instrShape = mmaVersionToInstrShapeOfMN(mmaLayout, shapePerCTA);
       // TODO(thomas): what are those magic numbers?
       return SmallVector<unsigned>{instrShape[0] * 4 / 32, instrShape[1] / 4};
     } else {
@@ -301,7 +301,7 @@ SmallVector<unsigned> getShapePerCTATile(BlockedEncodingAttr blockedLayout) {
 
 static SmallVector<unsigned>
 getShapePerCTATileOfMma(MmaEncodingAttr mmaLayout,
-                        ArrayRef<int64_t> tensorShape, int opIdx) {
+                        ArrayRef<int64_t> tensorShape) {
   if (mmaLayout.isAmpere())
     return {16 * mmaLayout.getWarpsPerCTA()[0],
             8 * mmaLayout.getWarpsPerCTA()[1]};
@@ -315,13 +315,7 @@ getShapePerCTATileOfMma(MmaEncodingAttr mmaLayout,
   }
   if (mmaLayout.isHopper()) {
     auto shapePerCTA = getShapePerCTA(mmaLayout, tensorShape);
-    SmallVector<unsigned, 3> instrShape;
-    if (opIdx < 0)
-      instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
-    else
-      instrShape =
-          mmaVersionToInstrShape(mmaLayout, shapePerCTA, (unsigned)opIdx);
-
+    auto instrShape = mmaVersionToInstrShapeOfMN(mmaLayout, shapePerCTA);
     return {16 * mmaLayout.getWarpsPerCTA()[0],
             instrShape[1] * mmaLayout.getWarpsPerCTA()[1]};
   }
@@ -340,7 +334,7 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
     shape = getShapePerCTATile(sliceLayout.getParent(), parentTensorShape);
     shape.erase(shape.begin() + sliceLayout.getDim());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-    return getShapePerCTATileOfMma(mmaLayout, tensorShape, -1);
+    return getShapePerCTATileOfMma(mmaLayout, tensorShape);
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
@@ -349,7 +343,7 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
              "mmaLayout version = 1 is not implemented yet");
       int opIdx = dotLayout.getOpIdx();
       auto parentShapePerCTATile =
-          getShapePerCTATileOfMma(parentMmaLayout, tensorShape, opIdx);
+          getShapePerCTATileOfMma(parentMmaLayout, tensorShape);
       if (opIdx == 0) {
         return {parentShapePerCTATile[0], 16};
       } else if (opIdx == 1) {
@@ -790,11 +784,11 @@ MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
     elemsPerThread[1] = elemsCol;
   } else if (isHopper()) {
     auto wpt = getWarpsPerCTA();
-    auto instrMNK = mmaVersionToInstrShape(*this, shapePerCTA);
-    int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * wpt[0]);
-    int repN = ceil<unsigned>(shapePerCTA[1], instrMNK[1] * wpt[1]);
+    auto instrMN = mmaVersionToInstrShapeOfMN(*this, shapePerCTA);
+    int repM = ceil<unsigned>(shapePerCTA[0], instrMN[0] * wpt[0]);
+    int repN = ceil<unsigned>(shapePerCTA[1], instrMN[1] * wpt[1]);
     elemsPerThread[0] = 2 * repM;
-    elemsPerThread[1] = (instrMNK[1] / 4) * repN;
+    elemsPerThread[1] = (instrMN[1] / 4) * repN;
   } else {
     llvm_unreachable("Unexpected mma version");
   }
@@ -817,17 +811,17 @@ MmaEncodingAttr::getElemsPerThreadOfOperand(int opIdx,
         "getElemsPerThreadOfOperand() not supported for version 2");
   } else if (isHopper()) {
     auto wpt = getWarpsPerCTA();
-    auto instrMNK = mmaVersionToInstrShape(*this, shapePerCTA);
+    auto instrMN = mmaVersionToInstrShapeOfMN(*this, shapePerCTA);
     if (opIdx == 0) {
-      int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * wpt[0]);
-      int repK = ceil<unsigned>(shapePerCTA[1], instrMNK[2]);
+      int repM = ceil<unsigned>(shapePerCTA[0], instrMN[0] * wpt[0]);
+      int repK = ceil<unsigned>(shapePerCTA[1], instrMN[2]);
       return 8 * repM * repK;
 
     } else if (opIdx == 1) {
-      int repK = ceil<unsigned>(shapePerCTA[0], instrMNK[2]);
-      int repN = ceil<unsigned>(shapePerCTA[1], instrMNK[1] * wpt[1]);
+      int repK = ceil<unsigned>(shapePerCTA[0], instrMN[2]);
+      int repN = ceil<unsigned>(shapePerCTA[1], instrMN[1] * wpt[1]);
       // benzh@ here need more check
-      return 4 * std::max<int>(instrMNK[1] / 32, 1) * repK * repN;
+      return 4 * std::max<int>(instrMN[1] / 32, 1) * repK * repN;
     }
   }
   return res;

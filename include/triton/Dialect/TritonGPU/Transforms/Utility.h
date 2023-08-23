@@ -20,15 +20,18 @@ class SharedEncodingAttr;
 }
 } // namespace triton
 
-SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
-                                                ArrayRef<int64_t> shapePerCTA,
-                                                RankedTensorType type);
 SmallVector<unsigned, 3>
-mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
-                       ArrayRef<int64_t> shapePerCTA);
-SmallVector<unsigned, 3>
-mmaVersionToInstrShape(triton::gpu::MmaEncodingAttr mma,
-                       ArrayRef<int64_t> shapePerCTA, unsigned opIdx);
+mmaVersionToInstrShape(int version, ArrayRef<int64_t> outputShapePerCTA,
+                       RankedTensorType inputType);
+SmallVector<unsigned, 2>
+mmaVersionToInstrShapeOfMN(triton::gpu::MmaEncodingAttr mma,
+                           ArrayRef<int64_t> outputShapePerCTA);
+
+SmallVector<unsigned, 2> mmav3ToInstrShapeOfMK(triton::gpu::MmaEncodingAttr mma,
+                                               RankedTensorType inputType);
+
+SmallVector<unsigned, 2> mmav3ToInstrShapeOfNK(triton::gpu::MmaEncodingAttr mma,
+                                               RankedTensorType inputType);
 
 /// Returns true if the Load is for TMA
 bool isLoadFromTensorPtr(triton::LoadOp op);
