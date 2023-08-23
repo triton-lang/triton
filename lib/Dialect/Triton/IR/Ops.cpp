@@ -80,6 +80,16 @@ void LoadOp::print(OpAsmPrinter &printer) {
   printer.printStrippedAttrOrType(getResult().getType());
 }
 
+void LoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getPtr(),
+                       SideEffects::DefaultResource::get());
+  if (getIsVolatile())
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         SideEffects::DefaultResource::get());
+}
+
 ParseResult StoreOp::parse(OpAsmParser &parser, OperationState &result) {
   // Parse operands
   SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
