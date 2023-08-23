@@ -1038,7 +1038,7 @@ private:
     assert(_warpsPerCTA.size() == 2);
     auto order = triton::gpu::getOrder(mmaLayout);
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
-    auto instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
+    auto instrShape = mmaVersionToInstrShapeOfMN(mmaLayout, shapePerCTA);
     SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
                                       i32_val(_warpsPerCTA[1])};
 
@@ -1092,7 +1092,7 @@ private:
     auto shape = type.getShape();
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
     SmallVector<SmallVector<unsigned>> ret;
-    auto instrShape = mmaVersionToInstrShape(mmaLayout, shapePerCTA);
+    auto instrShape = mmaVersionToInstrShapeOfMN(mmaLayout, shapePerCTA);
 
     for (unsigned i = 0; i < shapePerCTA[0];
          i += getShapePerCTATile(mmaLayout, shape)[0]) {
