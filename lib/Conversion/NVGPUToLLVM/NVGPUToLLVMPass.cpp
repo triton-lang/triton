@@ -145,7 +145,12 @@ public:
     auto retTy = getReturnType(outputConstraints, rewriter);
     auto res = ptxBuilder.launch(rewriter, loc, retTy,
                                  /*hasSideEffects*/ hasSideEffects);
-    rewriter.replaceOp(op, res);
+    if (op->getNumResults() == 0) {
+      rewriter.eraseOp(op);
+    } else {
+      rewriter.replaceOp(op, res);
+    }
+
     return mlir::success();
   }
 };
