@@ -124,7 +124,7 @@ public:
         retTys.push_back(retTy);
       }
       if (retTys.size() == 1) {
-        resTy = retTys[1];
+        resTy = retTys[0];
       } else {
         resTy = struct_ty(retTys);
       }
