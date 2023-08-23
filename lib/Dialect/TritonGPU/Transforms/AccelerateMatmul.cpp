@@ -246,8 +246,8 @@ public:
       auto warpsPerTile = getWarpsPerTile(dotOp, retShapePerCTA, versionMajor,
                                           numWarps, instrShape);
       mmaEnc = ttg::MmaEncodingAttr::get(oldRetType.getContext(), versionMajor,
-                                         versionMinor, warpsPerTile,
-                                         CTALayout, instrShape);
+                                         versionMinor, warpsPerTile, CTALayout,
+                                         instrShape);
     }
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mmaEnc);
