@@ -683,7 +683,8 @@ struct StoreAsyncOpConversion
 
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
 
-    auto instrShape = mmaLayout.getInstrShape();
+    auto instrShape = mmaVersionToInstrShape(
+        mmaLayout, getShapePerCTA(mmaLayout, srcTy.getShape()));
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
     uint32_t repM =
         ceil<unsigned>(shapePerCTA[0], instrShape[0] * warpsPerCTA[0]);
@@ -770,7 +771,7 @@ struct StoreAsyncOpConversion
     unsigned leadingDimOffset =
         numElemsPerSwizzlingRow * shapePerCTA[dstOrder[1]];
 
-    uint32_t rowsPerRep = getShapePerCTATile(mmaLayout)[0];
+    uint32_t rowsPerRep = getShapePerCTATile(mmaLayout, srcTy.getShape())[0];
 
     Value warpId = udiv(threadId, i32_val(32));
     Value warpId0 = urem(urem(warpId, i32_val(warpsPerCTA[0])),
