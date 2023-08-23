@@ -53,12 +53,6 @@ mmaVersionToInstrShapeImpl(int version, const ArrayRef<int64_t> &shape,
 SmallVector<unsigned, 3>
 mmaVersionToInstrShape(int version, ArrayRef<int64_t> outputShapePerCTA,
                        RankedTensorType inputType) {
-  if (version == 3) {
-    if (outputShapePerCTA[0] % 64 != 0 || outputShapePerCTA[1] % 8 != 0) {
-      assert(false && "type not supported");
-      return {0, 0, 0};
-    }
-  }
   return mmaVersionToInstrShapeImpl(version, outputShapePerCTA,
                                     inputType.getElementType());
 }
@@ -73,9 +67,8 @@ mmaVersionToInstrShapeOfMN(triton::gpu::MmaEncodingAttr mma,
     eltType = builder.getIntegerType(8);
   else
     eltType = builder.getF16Type();
-  auto instrShape =
-      mmaVersionToInstrShape(mma.getVersionMajor(), outputShapePerCTA,
-                             RankedTensorType::get({1, 1}, eltType, mma));
+  auto instrShape = mmaVersionToInstrShapeImpl(mma.getVersionMajor(),
+                                               outputShapePerCTA, eltType);
 
   return {instrShape[0], instrShape[1]};
 }
