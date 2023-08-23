@@ -712,5 +712,4 @@ triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
 
   llvm_unreachable("Unable to getMakeTensorPtr()");
 }
-
 } // namespace mlir

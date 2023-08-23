@@ -771,6 +771,30 @@ public:
       return result;
     }
   }
+  SmallVector<int64_t>
+  fixShapePerCTAForMmaV3(ConversionPatternRewriter &rewriter,
+                         triton::gpu::MmaEncodingAttr mma,
+                         ArrayRef<int64_t> currentShape) const {
+    if (mma.getVersionMajor() < 3 || currentShape[1] > 1)
+      return {currentShape.begin(), currentShape.end()};
+    ModuleOp moduleOp =
+        rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+    std::set<int64_t> ns;
+    moduleOp.walk([&](Operation *op) {
+      for (auto result : op->getResults()) {
+        if (auto type = result.getType().dyn_cast<RankedTensorType>()) {
+          if (type.getEncoding() == mma) {
+            auto shapePerCTA = triton::gpu::getShapePerCTA(type.getEncoding(),
+                                                           type.getShape());
+            if (shapePerCTA[1] > 1)
+              ns.insert(shapePerCTA[1]);
+          }
+        }
+      }
+    });
+    assert(ns.size() == 1 && "too many mma encoding with different N size");
+    return {currentShape[0], *ns.begin()};
+  }
 
 private:
   void restoreInsertionPointIfSet(OpBuilder::InsertPoint *insertPt,
@@ -1038,7 +1062,8 @@ private:
     assert(_warpsPerCTA.size() == 2);
     auto order = triton::gpu::getOrder(mmaLayout);
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
-    auto instrShape = mmaVersionToInstrShapeOfMN(mmaLayout, shapePerCTA);
+    auto instrShape = mmaVersionToInstrShapeOfMN(
+        mmaLayout, fixShapePerCTAForMmaV3(rewriter, mmaLayout, shapePerCTA));
     SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
                                       i32_val(_warpsPerCTA[1])};
 

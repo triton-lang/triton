@@ -153,7 +153,8 @@ private:
     }
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
-      auto instrShape = mmaVersionToInstrShapeOfMN(mmaLayout, shapePerCTA);
+      auto instrShape = mmaVersionToInstrShapeOfMN(
+          mmaLayout, fixShapePerCTAForMmaV3(rewriter, mmaLayout, shapePerCTA));
       SmallVector<Value> mmaColIdx(4);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
@@ -729,7 +730,9 @@ private:
                                                          rewriter, srcTy);
 
       auto srcShapePerCTA = getShapePerCTA(mmaLayout, srcShape);
-      auto instrShape = mmaVersionToInstrShapeOfMN(mmaLayout, srcShapePerCTA);
+      auto instrShape = mmaVersionToInstrShapeOfMN(
+          mmaLayout,
+          fixShapePerCTAForMmaV3(rewriter, mmaLayout, srcShapePerCTA));
       auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
       uint32_t repM =
           ceil<unsigned>(srcShapePerCTA[0], instrShape[0] * warpsPerCTA[0]);
