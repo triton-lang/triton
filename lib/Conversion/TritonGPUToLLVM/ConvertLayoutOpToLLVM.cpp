@@ -758,9 +758,8 @@ private:
                            i32_val(srcShape[0] / instrShape[0]));
 
       unsigned inVec =
-          inOrd == outOrd
-              ? triton::gpu::getContigPerThread(mmaLayout)[inOrd[0]]
-              : 1;
+          inOrd == outOrd ? triton::gpu::getContigPerThread(mmaLayout)[inOrd[0]]
+                          : 1;
       unsigned outVec = dstSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       assert(minVec == 2);

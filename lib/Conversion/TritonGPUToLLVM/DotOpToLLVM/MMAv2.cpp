@@ -237,9 +237,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           {ha[{m, k + 1}], "r"},
           {ha[{m + 1, k + 1}], "r"},
       });
-      auto bArgs2 = builder.newListOperand({
-          {hb[{n, k + 1}], "r"}
-      });
+      auto bArgs2 = builder.newListOperand({{hb[{n, k + 1}], "r"}});
       mma(retArgs, aArgs1, bArgs1, cArgs);
       mma(retArgs, aArgs2, bArgs2, cArgs);
     } else {
@@ -333,4 +331,3 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               ConversionPatternRewriter &rewriter) {
   return convertMMA(op, adaptor, typeConverter, rewriter, false /*isTuring*/);
 }
-
