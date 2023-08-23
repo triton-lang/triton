@@ -27,26 +27,15 @@ public:
   explicit NVGPUOpPatternBase(mlir::MLIRContext *context)
       : mlir::RewritePattern(SourceOp::getOperationName(), 1, context) {}
 
-  std::string getConstraint(std::string type) const {
-    std::string constraint;
-    static std::map<std::string, std::string> typeMap = {
-        {"i1", "b"},  {"i16", "h"}, {"i32", "r"},
-        {"i64", "l"}, {"f32", "f"}, {"f64", "d"}};
-    if (typeMap.count(type) == 0) {
-      llvm::errs() << "Unsupported type " << type << "\n";
-      llvm_unreachable("");
-    }
-    return typeMap[type];
-  }
-
-  mlir::Value convertToType(mlir::Value val, std::string type, Location &loc,
+  mlir::Value convertToType(mlir::Value val, std::string constraint,
+                            Location &loc,
                             mlir::PatternRewriter &rewriter) const {
     if (val.getType().isa<PointerType>()) {
-      if (type == "ptr") {
+      if (constraint == "ptr") {
         return val;
-      } else if (type == "i32") {
+      } else if (constraint == "r") {
         return ptrtoint(i32_ty, val);
-      } else if (type == "i64") {
+      } else if (constraint == "l") {
         return ptrtoint(i64_ty, val);
       } else {
         assert(false && "Unsupported type conversion");
@@ -66,15 +55,14 @@ public:
   }
 
   SmallVector<PTXBuilder::Operand *> getPtxOperands(
-      std::vector<std::pair<mlir::Value, std::string>> &operandsAndTypes,
+      std::vector<std::pair<mlir::Value, std::string>> &operandsAndConstraints,
       PTXBuilder &ptxBuilder, Location &loc,
       mlir::PatternRewriter &rewriter) const {
     SmallVector<PTXBuilder::Operand *> ptxOperands;
-    for (auto &operandAndType : operandsAndTypes) {
-      auto constraint = getConstraint(operandAndType.second);
-      auto operand = convertToType(operandAndType.first, operandAndType.second,
-                                   loc, rewriter);
-      auto *ptxOperand = ptxBuilder.newAddrOperand(operand, constraint);
+    for (auto &[operand, constraint] : operandsAndConstraints) {
+      auto convertedOperand = convertToType(operand, constraint, loc, rewriter);
+      auto *ptxOperand =
+          ptxBuilder.newAddrOperand(convertedOperand, constraint);
       ptxOperands.push_back(ptxOperand);
     }
     return ptxOperands;
@@ -85,7 +73,7 @@ public:
   }
 
   virtual std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(SourceOp op) const {
+  getOperandsAndConstraints(SourceOp op) const {
     return {};
   }
 
@@ -143,13 +131,13 @@ public:
     auto concrete = static_cast<const ConcreteT *>(this);
     auto ptxAsm = concrete->getPtxAsm(sourceOp);
     auto hasSideEffects = !isMemoryEffectFree(sourceOp);
-    auto operandsAndTypes = concrete->getOperandsAndTypes(sourceOp);
+    auto operandsAndConstraints = concrete->getOperandsAndConstraints(sourceOp);
     auto outputConstraints = concrete->getOutputConstraints(sourceOp);
 
     PTXBuilder ptxBuilder;
     auto ptxOutputs = getPtxOutputs(outputConstraints, ptxBuilder);
     auto ptxOperands =
-        getPtxOperands(operandsAndTypes, ptxBuilder, loc, rewriter);
+        getPtxOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
     SmallVector<PTXBuilder::Operand *> outputsAndOperands = ptxOutputs;
     outputsAndOperands.append(ptxOperands.begin(), ptxOperands.end());
     auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
@@ -323,13 +311,13 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::StoreMatrixOp op) const {
+  getOperandsAndConstraints(ttn::StoreMatrixOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     auto addr = op.getAddr();
     auto datas = op.getDatas();
-    operandsAndTypes.push_back({addr, "i32"});
+    operandsAndTypes.push_back({addr, "r"});
     for (unsigned i = 0; i < datas.size(); i++) {
-      operandsAndTypes.push_back({datas[i], "i32"});
+      operandsAndTypes.push_back({datas[i], "r"});
     }
     return operandsAndTypes;
   }
@@ -362,12 +350,12 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::MBarrierInitOp op) const {
+  getOperandsAndConstraints(ttn::MBarrierInitOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     Value mbarrier = op.getMbarrier();
     Value pred = op.getPred();
-    operandsAndTypes.push_back({mbarrier, "i32"});
-    operandsAndTypes.push_back({pred, "i1"});
+    operandsAndTypes.push_back({mbarrier, "r"});
+    operandsAndTypes.push_back({pred, "b"});
     return operandsAndTypes;
   }
 
@@ -388,7 +376,7 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::MBarrierArriveOp op) const {
+  getOperandsAndConstraints(ttn::MBarrierArriveOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     Value mbarrier = op.getMbarrier();
     Value pred = op.getPred();
@@ -399,13 +387,13 @@ public:
     case ttn::MBarriveType::normal:
     case ttn::MBarriveType::cp_async:
     case ttn::MBarriveType::expect_tx:
-      operandsAndTypes.push_back({mbarrier, "i32"});
-      operandsAndTypes.push_back({pred, "i1"});
+      operandsAndTypes.push_back({mbarrier, "r"});
+      operandsAndTypes.push_back({pred, "b"});
       break;
     case ttn::MBarriveType::remote:
-      operandsAndTypes.push_back({mbarrier, "i32"});
-      operandsAndTypes.push_back({ctaId, "i32"});
-      operandsAndTypes.push_back({pred, "i1"});
+      operandsAndTypes.push_back({mbarrier, "r"});
+      operandsAndTypes.push_back({ctaId, "r"});
+      operandsAndTypes.push_back({pred, "b"});
       break;
     default:
       llvm::errs() << "Unsupported mbarrier arrive type " << arriveType << "\n";
@@ -455,12 +443,12 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::MBarrierWaitOp op) const {
+  getOperandsAndConstraints(ttn::MBarrierWaitOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     Value mbarrier = op.getMbarrier();
     Value phase = op.getPhase();
-    operandsAndTypes.push_back({mbarrier, "i32"});
-    operandsAndTypes.push_back({phase, "i32"});
+    operandsAndTypes.push_back({mbarrier, "r"});
+    operandsAndTypes.push_back({phase, "r"});
     return operandsAndTypes;
   }
 
@@ -485,7 +473,7 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::TMALoadTiledOp op) const {
+  getOperandsAndConstraints(ttn::TMALoadTiledOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     auto dst = op.getDst();
     auto mbarrier = op.getMbarrier();
@@ -499,20 +487,17 @@ public:
     assert(dimSize == 2 || (dimSize == 4 && mcastMask == nullptr) &&
                                "Does not support TMA configuration");
 
-    operandsAndTypes.push_back({dst, "i32"});
-    operandsAndTypes.push_back({tmaDesc, "i64"});
-    operandsAndTypes.push_back({coords[0], "i32"});
-    operandsAndTypes.push_back({coords[1], "i32"});
-    if (dimSize == 4) {
-      operandsAndTypes.push_back({coords[2], "i32"});
-      operandsAndTypes.push_back({coords[3], "i32"});
+    operandsAndTypes.push_back({dst, "r"});
+    operandsAndTypes.push_back({tmaDesc, "l"});
+    for (unsigned i = 0; i < coords.size(); i++) {
+      operandsAndTypes.push_back({coords[i], "r"});
     }
-    operandsAndTypes.push_back({mbarrier, "i64"});
+    operandsAndTypes.push_back({mbarrier, "l"});
     if (mcastMask) {
-      operandsAndTypes.push_back({mcastMask, "i16"});
+      operandsAndTypes.push_back({mcastMask, "h"});
     }
-    operandsAndTypes.push_back({l2Desc, "i64"});
-    operandsAndTypes.push_back({pred, "i1"});
+    operandsAndTypes.push_back({l2Desc, "l"});
+    operandsAndTypes.push_back({pred, "b"});
 
     return operandsAndTypes;
   }
@@ -554,7 +539,7 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::TMAStoreTiledOp op) const {
+  getOperandsAndConstraints(ttn::TMAStoreTiledOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     auto src = op.getSrc();
     auto tmaDesc = op.getTmaDesc();
@@ -566,12 +551,12 @@ public:
       llvm::errs() << "Unsupported dimSize " << dimSize << "\n";
       llvm_unreachable("");
     }
-    operandsAndTypes.push_back({tmaDesc, "i64"});
-    operandsAndTypes.push_back({src, "i32"});
+    operandsAndTypes.push_back({tmaDesc, "l"});
+    operandsAndTypes.push_back({src, "r"});
     for (unsigned i = 0; i < dimSize; i++) {
-      operandsAndTypes.push_back({coords[i], "i32"});
+      operandsAndTypes.push_back({coords[i], "r"});
     }
-    operandsAndTypes.push_back({pred, "i1"});
+    operandsAndTypes.push_back({pred, "b"});
 
     return operandsAndTypes;
   }
@@ -605,12 +590,12 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::NamedBarrierArriveOp op) const {
+  getOperandsAndConstraints(ttn::NamedBarrierArriveOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     auto bar = op.getBar();
     auto numThreads = op.getNumThreads();
-    operandsAndTypes.push_back({bar, "i32"});
-    operandsAndTypes.push_back({numThreads, "i32"});
+    operandsAndTypes.push_back({bar, "r"});
+    operandsAndTypes.push_back({numThreads, "r"});
     return operandsAndTypes;
   }
 
@@ -628,12 +613,12 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::NamedBarrierWaitOp op) const {
+  getOperandsAndConstraints(ttn::NamedBarrierWaitOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     auto bar = op.getBar();
     auto numThreads = op.getNumThreads();
-    operandsAndTypes.push_back({bar, "i32"});
-    operandsAndTypes.push_back({numThreads, "i32"});
+    operandsAndTypes.push_back({bar, "r"});
+    operandsAndTypes.push_back({numThreads, "r"});
     return operandsAndTypes;
   }
 
@@ -649,17 +634,17 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::StoreDSmemOp op) const {
+  getOperandsAndConstraints(ttn::StoreDSmemOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     auto addr = op.getAddr();
     auto ctaId = op.getCtaId();
     auto values = op.getValues();
     auto pred = op.getPred();
     auto bitwidth = op.getBitwidth();
-    operandsAndTypes.push_back({addr, "i32"});
-    operandsAndTypes.push_back({ctaId, "i32"});
-    operandsAndTypes.push_back({pred, "i1"});
-    std::string c = bitwidth == 16 ? "i16" : (bitwidth == 32 ? "i32" : "i64");
+    operandsAndTypes.push_back({addr, "r"});
+    operandsAndTypes.push_back({ctaId, "r"});
+    operandsAndTypes.push_back({pred, "b"});
+    std::string c = bitwidth == 16 ? "h" : (bitwidth == 32 ? "r" : "l");
     for (unsigned i = 0; i < values.size(); i++) {
       operandsAndTypes.push_back({values[i], c});
     }
@@ -719,14 +704,14 @@ public:
   using Base::Base;
 
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::Sts64Op op) const {
+  getOperandsAndConstraints(ttn::Sts64Op op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     auto offset = op.getOffset();
     auto d0 = op.getD0();
     auto d1 = op.getD1();
-    operandsAndTypes.push_back({offset, "i32"});
-    operandsAndTypes.push_back({d0, "i32"});
-    operandsAndTypes.push_back({d1, "i32"});
+    operandsAndTypes.push_back({offset, "r"});
+    operandsAndTypes.push_back({d0, "r"});
+    operandsAndTypes.push_back({d1, "r"});
     return operandsAndTypes;
   }
 
@@ -748,13 +733,13 @@ public:
     return std::vector<std::string>(vec, c);
   }
   std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndTypes(ttn::LoadDSmemOp op) const {
+  getOperandsAndConstraints(ttn::LoadDSmemOp op) const {
     std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
     auto addr = op.getAddr();
     auto ctaId = op.getCtaId();
 
-    operandsAndTypes.push_back({addr, "i32"});
-    operandsAndTypes.push_back({ctaId, "i32"});
+    operandsAndTypes.push_back({addr, "r"});
+    operandsAndTypes.push_back({ctaId, "r"});
     return operandsAndTypes;
   }
 
