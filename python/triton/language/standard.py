@@ -133,8 +133,8 @@ def _argmax_combine(value1, index1, value2, index2, tie_break_left):
     else:
         tie = False
     gt = value1 > value2 or tie
-    v_ret = where(gt, value1, value2)
-    i_ret = where(gt, index1, index2)
+    v_ret = core.where(gt, value1, value2)
+    i_ret = core.where(gt, index1, index2)
     return v_ret, i_ret
 
 
@@ -162,10 +162,10 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
     else:
         if core.constexpr(input.dtype.primitive_bitwidth) < 32:
             if core.constexpr(input.dtype.is_floating()):
-                input = input.to(float32)
+                input = input.to(core.float32)
             else:
                 assert input.dtype.is_integer_type()
-                input = input.to(int32)
+                input = input.to(core.int32)
         return core.reduce(input, axis, maximum)
 
 
@@ -185,8 +185,8 @@ def _argmin_combine(value1, index1, value2, index2, tie_break_left):
     else:
         tie = False
     lt = value1 < value2 or tie
-    value_ret = where(lt, value1, value2)
-    index_ret = where(lt, index1, index2)
+    value_ret = core.where(lt, value1, value2)
+    index_ret = core.where(lt, index1, index2)
     return value_ret, index_ret
 
 
@@ -214,10 +214,10 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
     else:
         if core.constexpr(input.dtype.primitive_bitwidth) < 32:
             if core.constexpr(input.dtype.is_floating()):
-                input = input.to(float32)
+                input = input.to(core.float32)
             else:
                 assert input.dtype.is_integer_type()
-                input = input.to(int32)
+                input = input.to(core.int32)
         return core.reduce(input, axis, minimum)
 
 
@@ -255,7 +255,7 @@ def _xor_combine(a, b):
 def cumsum(input, axis=0):
     # todo rename this to a generic function name
     input = core._promote_reduction_input(input)
-    return associative_scan(input, axis, _sum_combine)
+    return core.associative_scan(input, axis, _sum_combine)
 
 # cumprod
 
@@ -270,4 +270,4 @@ def _prod_combine(a, b):
 def cumprod(input, axis=0):
     # todo rename this to a generic function name
     input = core._promote_reduction_input(input)
-    return associative_scan(input, axis, _prod_combine)
+    return core.associative_scan(input, axis, _prod_combine)
