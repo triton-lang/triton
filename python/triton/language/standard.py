@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core
-from . import math
+from . import core, math
 
 # -----------------------
 # Standard library
@@ -98,6 +97,7 @@ def zeros(shape, dtype):
 def zeros_like(input):
     return zeros(input.shape, input.dtype)
 
+
 @jit
 def minimum(x, y):
     """
@@ -150,8 +150,8 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 
 @jit
 @core._add_reduction_docstr("maximum",
-                       return_indices_arg="return_indices",
-                       tie_break_arg="return_indices_tie_break_left")
+                            return_indices_arg="return_indices",
+                            tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = core._promote_reduction_input(input)
     if return_indices:
@@ -202,8 +202,8 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 
 @jit
 @core._add_reduction_docstr("minimum",
-                       return_indices_arg="return_indices",
-                       tie_break_arg="return_indices_tie_break_left")
+                            return_indices_arg="return_indices",
+                            tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
     input = core._promote_reduction_input(input)
     if return_indices:
@@ -223,7 +223,7 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
 
 @jit
 @core._add_reduction_docstr("minimum index",
-                       tie_break_arg="tie_break_left")
+                            tie_break_arg="tie_break_left")
 def argmin(input, axis, tie_break_left=True):
     _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left)
     return ret
@@ -259,7 +259,7 @@ def xor_sum(input, axis=None, _builder=None, _generator=None):
 
     input = core._promote_reduction_input(input, _builder=_builder)
     return core.reduce(input, axis, _xor_combine,
-                  _builder=_builder, _generator=_generator)
+                       _builder=_builder, _generator=_generator)
 
 # cumsum
 
