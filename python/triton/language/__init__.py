@@ -18,6 +18,7 @@ from .standard import (
     sum,
     ravel,
     swizzle2d,
+    xor_sum,
     zeros,
     zeros_like,
 )
@@ -94,7 +95,6 @@ from .core import (
     view,
     void,
     where,
-    xor_sum,
 )
 from .random import (
     pair_uniform_to_normal,
