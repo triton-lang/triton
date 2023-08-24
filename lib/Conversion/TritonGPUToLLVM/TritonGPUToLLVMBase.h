@@ -541,6 +541,7 @@ public:
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Value mask = int_val(1, 1);
     auto tid = tid_val();
+    auto clusterCTAId = getClusterCTAId(rewriter, loc);
     if (tensorTy) {
       auto layout = tensorTy.getEncoding();
       auto shape = tensorTy.getShape();
@@ -576,7 +577,6 @@ public:
         auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
         auto CTAOrder = triton::gpu::getCTAOrder(layout);
 
-        auto clusterCTAId = getClusterCTAId(rewriter, loc);
         auto multiDimClusterCTAId =
             delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
@@ -586,14 +586,23 @@ public:
             continue;
           // This wrapping rule must be consistent with emitCTAOffsetForLayout
           unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
-          multiDimClusterCTAId[dim] =
-              urem(multiDimClusterCTAId[dim], i32_val(splitNum));
-          mask = and_(mask, icmp_eq(multiDimClusterCTAId[dim], _0));
+          Value repId = udiv(multiDimClusterCTAId[dim], i32_val(splitNum));
+          // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
+          //     CTA0 and CTA2 holds data of block0,
+          //     CTA1 and CTA3 holds data of block1.
+          // Only CTA0 and CTA1 are expected to write while CTA2 and CTA3 should
+          // be masked. We add the following mask:
+          //     multiDimClusterCTAId[dim] / splitNum == 0
+          // Actually in all existing cases of multicast, splitNum is always 1.
+          // The mask is equivalent to:
+          //     multiDimClusterCTAId[dim] == 0
+          mask = and_(mask, icmp_eq(repId, _0));
         }
       }
     } else {
-      // If the tensor is not ranked, then it is a scalar and only thread 0 can
-      // write
+      // If the tensor is not ranked, then it is a scalar and only thread 0 of
+      // CTA0 can write
+      mask = and_(mask, icmp_eq(clusterCTAId, i32_val(0)));
       mask = and_(mask, icmp_eq(tid, i32_val(0)));
     }
     return mask;
