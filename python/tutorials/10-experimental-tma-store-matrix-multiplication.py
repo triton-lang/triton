@@ -1,5 +1,5 @@
 """
-Matrix Multiplication with TMASTG (Experimental)
+Matrix Multiplication with TMA Store (Experimental)
 ================================================
 In this tutorial, you will write a very short high-performance multiplication kernel that achieves
 performance on parallel with cuBLAS.
@@ -170,5 +170,10 @@ def benchmark(M, N, K, provider):
         return 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
+
+if torch.cuda.get_device_capability()[0] < 9:
+    import sys
+    print("Skipping TMA benchmark for GPU with compute capability < 9")
+    sys.exit(0)
 
 benchmark.run(show_plots=False, print_data=True)
