@@ -32,18 +32,24 @@ public:
   mlir::Value convertToType(mlir::Value val, Constraint constraint,
                             Location &loc,
                             mlir::PatternRewriter &rewriter) const {
-    if (val.getType().isa<PointerType>()) {
+    if (val.getType().isa<LLVM::LLVMPointerType>()) {
+      std::cout << "Pointer found" << std::endl;
       if (std::holds_alternative<std::string>(constraint)) {
         auto constraintStr = std::get<std::string>(constraint);
-        if (constraintStr == "ptr") {
-          return val;
-        } else if (constraintStr == "r") {
+        if (constraintStr == "r") {
           return ptrtoint(i32_ty, val);
         } else if (constraintStr == "l") {
           return ptrtoint(i64_ty, val);
         } else {
-          assert(false && "Unsupported type conversion");
+          return val;
         }
+      }
+      return val;
+    } else {
+      if (std::holds_alternative<std::string>(constraint)) {
+        auto bitwidth = val.getType().getIntOrFloatBitWidth();
+        auto constraintStr = std::get<std::string>(constraint);
+        return zext(IntegerType::get(rewriter.getContext(), bitwidth), val);
       }
     }
     return val;
@@ -965,75 +971,83 @@ public:
   }
 };
 
-class ClusterCTAIdOpPattern : public mlir::RewritePattern {
+class ClusterCTAIdOpPattern
+    : public NVGPUOpPatternBase<ttn::ClusterCTAIdOp, ClusterCTAIdOpPattern> {
 public:
-  ClusterCTAIdOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::ClusterCTAIdOp::getOperationName(), 1,
-                             context) {}
+  using Base = NVGPUOpPatternBase<ttn::ClusterCTAIdOp, ClusterCTAIdOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto clusterCTAIdOp = llvm::dyn_cast<ttn::ClusterCTAIdOp>(op);
-    if (!clusterCTAIdOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
+  std::vector<std::string> getOutputConstraints(ttn::ClusterCTAIdOp op) const {
+    return {"=r"};
+  }
 
-    auto x = getSRegValue(rewriter, loc, "%cluster_ctaid.x");
-    auto y = getSRegValue(rewriter, loc, "%cluster_ctaid.y");
-    auto z = getSRegValue(rewriter, loc, "%cluster_ctaid.z");
-    auto nx = getSRegValue(rewriter, loc, "%cluster_nctaid.x");
-    auto ny = getSRegValue(rewriter, loc, "%cluster_nctaid.y");
-    auto res = add(x, mul(add(y, mul(z, ny)), nx));
-    rewriter.replaceOp(op, {res});
-    return mlir::success();
+  std::string getPtxAsm(ttn::ClusterCTAIdOp op) const {
+    auto ptxAsm = "{\n"
+                  ".reg .u32 a<5>;              \n"
+                  "mov.u32 a0, %cluster_ctaid.x;\n"  // x
+                  "mov.u32 a1, %cluster_ctaid.y;\n"  // y
+                  "mov.u32 a2, %cluster_ctaid.z;\n"  // z
+                  "mov.u32 a3, %cluster_nctaid.x;\n" // nx
+                  "mov.u32 a4, %cluster_nctaid.y;\n" // ny
+                  "mad.lo.u32 a1, a2, a4, a1;     \n"
+                  "mad.lo.u32 $0, a1, a3, a0;     \n"
+                  "}";
+    return ptxAsm;
   }
 };
 
-class WGMMADescCreateOpPattern : public mlir::RewritePattern {
+class WGMMADescCreateOpPattern
+    : public NVGPUOpPatternBase<ttn::WGMMADescCreateOp,
+                                WGMMADescCreateOpPattern> {
 public:
-  WGMMADescCreateOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::WGMMADescCreateOp::getOperationName(), 1,
-                             context) {}
+  using Base =
+      NVGPUOpPatternBase<ttn::WGMMADescCreateOp, WGMMADescCreateOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto wgmmaDescCreateOp = llvm::dyn_cast<ttn::WGMMADescCreateOp>(op);
-    if (!wgmmaDescCreateOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto buffer = wgmmaDescCreateOp.getBuffer();
-    auto height = wgmmaDescCreateOp.getHeight();
-    uint32_t mode = static_cast<uint32_t>(wgmmaDescCreateOp.getMode());
+  std::vector<std::string>
+  getOutputConstraints(ttn::WGMMADescCreateOp op) const {
+    return {"=l"};
+  }
 
-    auto smem_nvvm_pointer = ptrtoint(i64_ty, buffer);
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::WGMMADescCreateOp op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    auto buffer = op.getBuffer();
+    auto height = op.getHeight();
 
-    Value desc = int_val(64, 0);
+    operandsAndConstraints.push_back({buffer, "l"});
+    operandsAndConstraints.push_back({height, "l"});
+
+    return operandsAndConstraints;
+  }
+
+  std::string getPtxAsm(ttn::WGMMADescCreateOp op) const {
+    uint32_t mode = static_cast<uint32_t>(op.getMode());
     uint64_t swizzling = (mode == 1 ? 128 : mode == 2 ? 64 : 32);
-    Value swizzling_ = int_val(64, swizzling);
-    Value smem_address_bit = smem_nvvm_pointer;
-
-    Value strideDimension =
-        lshr(shl(swizzling_, int_val(64, 3)), int_val(64, 4));
-    Value height64 = zext(i64_ty, height);
-    Value leadingDimension = lshr(mul(height64, swizzling_), int_val(64, 4));
-
-    // Value baseOffset = int_val(64, 0);
-    Value startAddr =
-        lshr(shl(smem_address_bit, int_val(64, 46)), int_val(64, 50));
-
-    Value mode_ = int_val(64, mode);
-    desc = or_(desc, shl(mode_, int_val(64, 62)));
-    desc = or_(desc, shl(strideDimension, int_val(64, 32)));
-    desc = or_(desc, shl(leadingDimension, int_val(64, 16)));
-    // desc = or_(desc, shl(baseOffset, int_val(64, 49)));
-    desc = or_(desc, startAddr);
-
-    rewriter.replaceOp(op, {desc});
-    return mlir::success();
+    auto ptxAsm = "{\n"
+                  ".reg .u64 a<5>;                              \n"
+                  "mov.u64 a0, " +
+                  std::to_string(swizzling) +
+                  ";\n"
+                  "shl.b64 a1, a0, 3;\n" // stride dimension
+                  "shr.b64 a1, a1, 4;\n" // stride dimension
+                  "mul.lo.u64 a2, $2, " +
+                  std::to_string(swizzling) +
+                  ";\n"                    // leadingDimension
+                  "shr.b64 a2, a2, 4;\n"   // leadingDimension
+                  "shl.b64 a3, $1, 46; \n" // startAddr
+                  "shr.b64 a3, a3, 50; \n" // startAddr
+                  "mov.u64 a4, " +
+                  std::to_string(mode) +
+                  "; \n" // mode
+                  "shl.b64 a4, a4, 62; \n"
+                  "shl.b64 a1, a1, 32; \n"
+                  "or.b64 a1, a4, a1; \n"
+                  "shl.b64 a2, a2, 16; \n"
+                  "or.b64 a1, a1, a2; \n"
+                  "or.b64 $0, a1, a3; \n"
+                  "}";
+    return ptxAsm;
   }
 };
 
