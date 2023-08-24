@@ -19,7 +19,7 @@ Tentative Agenda for the conference (subject to change):
 |Time    |Title  |Speaker
 |--------|-------|-------|
 |10:00 AM|Welcome|Microsoft|
-|10:20 AM|The Triton Compiler: Past, Present and Future|Phil Tillet (Open AI)|
+|10:20 AM|The Triton Compiler: Past, Present and Future|Phil Tillet (OpenAI)|
 |11:00 AM|**Break**||
 |11:20 AM|Hopper support in Triton|Gustav Zhu (Nvidia)|
 |11:40 AM|Bringing Triton to AMD GPUs|Jason Furmanek, Lixun Zhang (AMD)|
@@ -28,7 +28,7 @@ Tentative Agenda for the conference (subject to change):
 |12:30 PM|**Lunch**||
 |1:40 PM |Triton for MTIA|Roman Levenstein et al, (Meta)|
 |2:00 PM |Using Triton IR for high-performance fusions in XLA|George Karpenkov (Google)|
-|2:20 PM |Triton for All: Triton as a device-independent language|Ian Bearman (Microsoft)|		
+|2:20 PM |Triton for All: Triton as a device-independent language|Ian Bearman (Microsoft)|
 |2:40 PM|**Break**||
 |3:00 PM|PyTorch 2.0 and TorchInductor|Jason Ansel, Horace He (Meta)|
 |3:20 PM|Pallas: A JAX Kernel Language|Sharad Vikram (Google)|
