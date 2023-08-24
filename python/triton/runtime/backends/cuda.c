@@ -17,9 +17,7 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {
 
 #define CUDA_CHECK(ans)                                                        \
   {                                                                            \
-    gpuAssert((ans), __FILE__, __LINE__);                                      \
-    if (PyErr_Occurred())                                                      \
-      return NULL;                                                             \
+    { gpuAssert((ans), __FILE__, __LINE__); }                                  \
   }
 
 #define ADD_ENUM_ITEM(value)                                                   \
