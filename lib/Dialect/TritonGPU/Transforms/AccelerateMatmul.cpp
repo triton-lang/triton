@@ -102,6 +102,7 @@ warpsPerTileV3(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
 class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
   mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
+  mutable unsigned mmaV3InstrN{};
 
   static bool bwdFilter(Operation *op) {
     return op->getNumOperands() == 1 &&
@@ -142,6 +143,29 @@ public:
       assert(false && "not supported version");
       return {0, 0};
     }
+  }
+
+  unsigned getMmaV3InstrN(tt::DotOp dotOp, unsigned currN) const {
+    if (mmaV3InstrN > 0)
+      return mmaV3InstrN;
+
+    mmaV3InstrN = currN;
+    SetVector<Operation *> slices;
+    mlir::getForwardSlice(dotOp.getResult(), &slices);
+    auto iter =
+        llvm::find_if(slices, [](Operation *op) { return isa<tt::DotOp>(op); });
+
+    if (iter != slices.end()) {
+      tt::DotOp nextDotOp = dyn_cast<tt::DotOp>(*iter);
+      auto type = nextDotOp.getResult().getType().cast<RankedTensorType>();
+      auto AType = nextDotOp.getOperand(0).getType().cast<RankedTensorType>();
+      auto shapePerCTA = ttg::getShapePerCTA(type);
+      auto instrShape = mmaVersionToInstrShape(3, shapePerCTA, AType);
+
+      if (instrShape[1] < currN)
+        mmaV3InstrN = instrShape[1];
+    }
+    return mmaV3InstrN;
   }
 
   static Value getMMAv3Operand(Value v, mlir::PatternRewriter &rewriter,
@@ -201,6 +225,8 @@ public:
 
     auto instrShape =
         mmaVersionToInstrShape(versionMajor, retShapePerCTA, AType);
+    if (versionMajor == 3)
+      instrShape[1] = getMmaV3InstrN(dotOp, instrShape[1]);
 
     // operands
     Value a = dotOp.getA();
