@@ -21,24 +21,29 @@ using ::mlir::LLVM::getSRegValue;
 
 namespace {
 
+using Constraint = std::variant<int, std::string>;
+using OperandsAndConstraints = std::vector<std::pair<mlir::Value, Constraint>>;
 template <typename SourceOp, typename ConcreteT>
 class NVGPUOpPatternBase : public mlir::RewritePattern {
 public:
   explicit NVGPUOpPatternBase(mlir::MLIRContext *context)
       : mlir::RewritePattern(SourceOp::getOperationName(), 1, context) {}
 
-  mlir::Value convertToType(mlir::Value val, std::string constraint,
+  mlir::Value convertToType(mlir::Value val, Constraint constraint,
                             Location &loc,
                             mlir::PatternRewriter &rewriter) const {
     if (val.getType().isa<PointerType>()) {
-      if (constraint == "ptr") {
-        return val;
-      } else if (constraint == "r") {
-        return ptrtoint(i32_ty, val);
-      } else if (constraint == "l") {
-        return ptrtoint(i64_ty, val);
-      } else {
-        assert(false && "Unsupported type conversion");
+      if (std::holds_alternative<std::string>(constraint)) {
+        auto constraintStr = std::get<std::string>(constraint);
+        if (constraintStr == "ptr") {
+          return val;
+        } else if (constraintStr == "r") {
+          return ptrtoint(i32_ty, val);
+        } else if (constraintStr == "l") {
+          return ptrtoint(i64_ty, val);
+        } else {
+          assert(false && "Unsupported type conversion");
+        }
       }
     }
     return val;
@@ -54,16 +59,47 @@ public:
     return ptxOutputs;
   }
 
-  SmallVector<PTXBuilder::Operand *> getPtxOperands(
-      std::vector<std::pair<mlir::Value, std::string>> &operandsAndConstraints,
-      PTXBuilder &ptxBuilder, Location &loc,
-      mlir::PatternRewriter &rewriter) const {
-    SmallVector<PTXBuilder::Operand *> ptxOperands;
+  OperandsAndConstraints
+  unpackOperands(OperandsAndConstraints &operandsAndConstraints,
+                 PTXBuilder &ptxBuilder, Location &loc,
+                 mlir::PatternRewriter &rewriter) const {
+    OperandsAndConstraints unpackedOperands;
     for (auto &[operand, constraint] : operandsAndConstraints) {
+      auto llvmStruct = llvm::dyn_cast<LLVM::LLVMStructType>(operand.getType());
+      if (llvmStruct) {
+        for (unsigned i = 0; i < llvmStruct.getBody().size(); i++) {
+          if (std::holds_alternative<int>(constraint)) {
+            auto constraintInt = std::get<int>(constraint);
+            unpackedOperands.push_back(
+                {extract_val(llvmStruct.getBody()[i], operand, i),
+                 constraintInt + i});
+          }
+        }
+      } else {
+        unpackedOperands.push_back({operand, constraint});
+      }
+    }
+    return unpackedOperands;
+  }
+
+  SmallVector<PTXBuilder::Operand *>
+  getPtxOperands(OperandsAndConstraints &operandsAndConstraints,
+                 PTXBuilder &ptxBuilder, Location &loc,
+                 mlir::PatternRewriter &rewriter) const {
+    SmallVector<PTXBuilder::Operand *> ptxOperands;
+    auto unpackedOperandsAndConstraints =
+        unpackOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
+    for (auto &[operand, constraint] : unpackedOperandsAndConstraints) {
       auto convertedOperand = convertToType(operand, constraint, loc, rewriter);
-      auto *ptxOperand =
-          ptxBuilder.newAddrOperand(convertedOperand, constraint);
-      ptxOperands.push_back(ptxOperand);
+      if (std::holds_alternative<int>(constraint)) {
+        auto *ptxOperand = ptxBuilder.newOperand(
+            convertedOperand, std::to_string(std::get<int>(constraint)));
+        ptxOperands.push_back(ptxOperand);
+      } else {
+        auto *ptxOperand = ptxBuilder.newOperand(
+            convertedOperand, std::get<std::string>(constraint));
+        ptxOperands.push_back(ptxOperand);
+      }
     }
     return ptxOperands;
   }
@@ -72,8 +108,7 @@ public:
     return {};
   }
 
-  virtual std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndConstraints(SourceOp op) const {
+  virtual OperandsAndConstraints getOperandsAndConstraints(SourceOp op) const {
     return {};
   }
 
@@ -315,9 +350,9 @@ public:
   using Base = NVGPUOpPatternBase<ttn::StoreMatrixOp, StoreMatrixOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
+  OperandsAndConstraints
   getOperandsAndConstraints(ttn::StoreMatrixOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    OperandsAndConstraints operandsAndTypes;
     auto addr = op.getAddr();
     auto datas = op.getDatas();
     operandsAndTypes.push_back({addr, "r"});
@@ -354,9 +389,9 @@ public:
   using Base = NVGPUOpPatternBase<ttn::MBarrierInitOp, MBarrierInitOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
+  OperandsAndConstraints
   getOperandsAndConstraints(ttn::MBarrierInitOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    OperandsAndConstraints operandsAndTypes;
     Value mbarrier = op.getMbarrier();
     Value pred = op.getPred();
     operandsAndTypes.push_back({mbarrier, "r"});
@@ -380,9 +415,9 @@ public:
       NVGPUOpPatternBase<ttn::MBarrierArriveOp, MBarrierArriveOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
+  OperandsAndConstraints
   getOperandsAndConstraints(ttn::MBarrierArriveOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    OperandsAndConstraints operandsAndTypes;
     Value mbarrier = op.getMbarrier();
     Value pred = op.getPred();
     Value ctaId = op.getCtaId();
@@ -447,9 +482,9 @@ public:
   using Base = NVGPUOpPatternBase<ttn::MBarrierWaitOp, MBarrierWaitOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
+  OperandsAndConstraints
   getOperandsAndConstraints(ttn::MBarrierWaitOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    OperandsAndConstraints operandsAndTypes;
     Value mbarrier = op.getMbarrier();
     Value phase = op.getPhase();
     operandsAndTypes.push_back({mbarrier, "r"});
@@ -477,9 +512,9 @@ public:
   using Base = NVGPUOpPatternBase<ttn::TMALoadTiledOp, TMALoadTiledOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
+  OperandsAndConstraints
   getOperandsAndConstraints(ttn::TMALoadTiledOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    OperandsAndConstraints operandsAndTypes;
     auto dst = op.getDst();
     auto mbarrier = op.getMbarrier();
     auto tmaDesc = op.getTmaDesc();
@@ -543,9 +578,9 @@ public:
   using Base = NVGPUOpPatternBase<ttn::TMAStoreTiledOp, TMAStoreTiledOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
+  OperandsAndConstraints
   getOperandsAndConstraints(ttn::TMAStoreTiledOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    OperandsAndConstraints operandsAndTypes;
     auto src = op.getSrc();
     auto tmaDesc = op.getTmaDesc();
     auto pred = op.getPred();
@@ -594,9 +629,9 @@ public:
                                   NamedBarrierArriveOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
+  OperandsAndConstraints
   getOperandsAndConstraints(ttn::NamedBarrierArriveOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    OperandsAndConstraints operandsAndTypes;
     auto bar = op.getBar();
     auto numThreads = op.getNumThreads();
     operandsAndTypes.push_back({bar, "r"});
@@ -617,9 +652,9 @@ public:
       NVGPUOpPatternBase<ttn::NamedBarrierWaitOp, NamedBarrierWaitOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
+  OperandsAndConstraints
   getOperandsAndConstraints(ttn::NamedBarrierWaitOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+    OperandsAndConstraints operandsAndTypes;
     auto bar = op.getBar();
     auto numThreads = op.getNumThreads();
     operandsAndTypes.push_back({bar, "r"});
@@ -638,9 +673,8 @@ public:
   using Base = NVGPUOpPatternBase<ttn::StoreDSmemOp, StoreDSmemOpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndConstraints(ttn::StoreDSmemOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+  OperandsAndConstraints getOperandsAndConstraints(ttn::StoreDSmemOp op) const {
+    OperandsAndConstraints operandsAndTypes;
     auto addr = op.getAddr();
     auto ctaId = op.getCtaId();
     auto values = op.getValues();
@@ -708,9 +742,8 @@ public:
   using Base = NVGPUOpPatternBase<ttn::Sts64Op, Sts64OpPattern>;
   using Base::Base;
 
-  std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndConstraints(ttn::Sts64Op op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+  OperandsAndConstraints getOperandsAndConstraints(ttn::Sts64Op op) const {
+    OperandsAndConstraints operandsAndTypes;
     auto offset = op.getOffset();
     auto d0 = op.getD0();
     auto d1 = op.getD1();
@@ -737,9 +770,8 @@ public:
     auto vec = op.getVec();
     return std::vector<std::string>(vec, c);
   }
-  std::vector<std::pair<mlir::Value, std::string>>
-  getOperandsAndConstraints(ttn::LoadDSmemOp op) const {
-    std::vector<std::pair<mlir::Value, std::string>> operandsAndTypes;
+  OperandsAndConstraints getOperandsAndConstraints(ttn::LoadDSmemOp op) const {
+    OperandsAndConstraints operandsAndTypes;
     auto addr = op.getAddr();
     auto ctaId = op.getCtaId();
 
@@ -777,31 +809,60 @@ public:
   }
 };
 
-class WGMMAOpPattern : public mlir::RewritePattern {
+class WGMMAOpPattern : public NVGPUOpPatternBase<ttn::WGMMAOp, WGMMAOpPattern> {
 public:
-  WGMMAOpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::WGMMAOp::getOperationName(), 1, context) {}
+  using Base = NVGPUOpPatternBase<ttn::WGMMAOp, WGMMAOpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
+  std::vector<std::string> getOutputConstraints(ttn::WGMMAOp op) const {
+    // TODO (zahi): Return type must always be a struct for wgmma, currently
+    // we rely on the size of output constraints vector to determine whether
+    // the output is a struct or not. We should find a way to pass this info
+    auto opC = op.getOpC();
+    auto typeC = opC.getType();
+
+    auto structTypeC = typeC.dyn_cast<LLVM::LLVMStructType>();
+    uint32_t numCRegs = structTypeC.getBody().size();
+    std::string c = structTypeC.getBody().front().isF32() ? "=f" : "=r";
+    return std::vector<std::string>(numCRegs, c);
+  }
+
+  OperandsAndConstraints getOperandsAndConstraints(ttn::WGMMAOp op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    auto opA = op.getOpA();
+    auto opB = op.getOpB();
+    auto opC = op.getOpC();
+    auto typeA = opA.getType();
+
+    auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
+
+    // TODO (zahi): is this the best way to tie inputs/outputs ?
+    operandsAndConstraints.push_back({opC, 0});
+
+    if (structTypeA) {
+      operandsAndConstraints.push_back({opA, "f"});
+    } else {
+      operandsAndConstraints.push_back({opA, "l"});
+    }
+
+    // Operand B (must be `desc`)
+    operandsAndConstraints.push_back({opB, "l"});
+    return operandsAndConstraints;
+  }
+
+  std::string getPtxAsm(ttn::WGMMAOp op) const {
     using namespace ttn;
-    auto ctx = rewriter.getContext();
-    auto wgmmaOp = llvm::dyn_cast<ttn::WGMMAOp>(op);
-    if (!wgmmaOp)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto opA = wgmmaOp.getOpA();
-    auto opB = wgmmaOp.getOpB();
-    auto opC = wgmmaOp.getOpC();
-    auto m = wgmmaOp.getM();
-    auto n = wgmmaOp.getN();
-    auto k = wgmmaOp.getK();
-    auto eltTypeC = wgmmaOp.getEltTypeC();
-    auto eltTypeA = wgmmaOp.getEltTypeA();
-    auto eltTypeB = wgmmaOp.getEltTypeB();
-    auto layoutA = wgmmaOp.getLayoutA();
-    auto layoutB = wgmmaOp.getLayoutB();
+    auto opA = op.getOpA();
+    auto opB = op.getOpB();
+    auto opC = op.getOpC();
+    auto m = op.getM();
+    auto n = op.getN();
+    auto k = op.getK();
+    auto eltTypeC = op.getEltTypeC();
+    auto eltTypeA = op.getEltTypeA();
+    auto eltTypeB = op.getEltTypeB();
+    auto layoutA = op.getLayoutA();
+    auto layoutB = op.getLayoutB();
 
     // Register checks
     auto typeA = opA.getType();
@@ -850,8 +911,6 @@ public:
                    (m == 64 && 8 <= n && n <= 224 && k == 32);
     }
     assert(supported && "WGMMA type or shape is not supported");
-    PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *> oprs;
 
     // Operands
     uint32_t asmOpIdx = 0;
@@ -863,24 +922,9 @@ public:
     args += "{";
     for (uint32_t i = 0; i < numCRegs; ++i) {
       args += "$" + std::to_string(asmOpIdx++) + (i == numCRegs - 1 ? "" : ",");
-      // LLVM does not support `+` semantic, we must repeat the arguments for
-      // both input and outputs
-      PTXBuilder::Operand *opr;
-      if (structTypeC.getBody().front().isF32())
-        opr = ptxBuilder.newOperand("=f");
-      else
-        opr = ptxBuilder.newOperand("=r");
-      oprs.push_back(opr);
     }
     args += "}, ";
 
-    for (uint32_t i = asmOpIdx - numCRegs; i < asmOpIdx; ++i) {
-      auto *opr = ptxBuilder.newOperand(
-          extract_val(structTypeC.getBody()[i], opC, i), std::to_string(i));
-      oprs.push_back(opr);
-    }
-
-    // Note that LLVM will not skip the indexed repeating placeholders
     asmOpIdx += numCRegs;
     // Operand A
     if (structTypeA) {
@@ -890,21 +934,14 @@ public:
       for (uint32_t i = 0; i < numARegs; ++i) {
         args +=
             "$" + std::to_string(asmOpIdx++) + (i == numARegs - 1 ? "" : ",");
-        auto *opr = ptxBuilder.newOperand(
-            extract_val(structTypeA.getBody()[i], opA, i), "f");
-        oprs.push_back(opr);
       }
       args += "}, ";
     } else {
       args += "$" + std::to_string(asmOpIdx++) + ", ";
-      auto *opr = ptxBuilder.newOperand(opA, "l");
-      oprs.push_back(opr);
     }
 
     // Operand B (must be `desc`)
     args += "$" + std::to_string(asmOpIdx++) + ", ";
-    auto *opr = ptxBuilder.newOperand(opB, "l");
-    oprs.push_back(opr);
 
     // `scale-d` is 1 by default
     args += "1";
@@ -924,15 +961,7 @@ public:
                   std::to_string(k) + "." + stringifyEnum(eltTypeC).str() +
                   "." + stringifyEnum(eltTypeA).str() + "." +
                   stringifyEnum(eltTypeB).str() + " " + args + ";";
-
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
-    ptxInstr(oprs,
-             /*onlyAttachMLIRArgs=*/true);
-
-    auto res =
-        ptxBuilder.launch(rewriter, loc, structTypeC, /*hasSideEffect*/ true);
-    rewriter.replaceOp(op, {res});
-    return mlir::success();
+    return ptxAsm;
   }
 };
 
