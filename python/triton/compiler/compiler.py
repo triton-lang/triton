@@ -45,7 +45,12 @@ def ttir_compute_capability_rewrite(mod, arch):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     if _is_cuda(arch):
-        pm.add_rewrite_tensor_pointer_pass(arch)
+        pm.add_rewrite_tensor_pointer_pass(arch, False)
+    elif is_hip():
+        capability = 90
+        pm.add_rewrite_tensor_pointer_pass(capability, True)
+    else:
+        assert(False, "unsupported target")
     pm.run(mod)
     return mod
 

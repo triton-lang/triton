@@ -1637,9 +1637,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createCombineOpsPass());
            })
       .def("add_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self, int computeCapability) {
+           [](mlir::PassManager &self, int computeCapability, bool isROCM) {
              self.addPass(mlir::triton::createRewriteTensorPointerPass(
-                 computeCapability));
+                 computeCapability, isROCM));
            })
       .def(
           "add_convert_triton_to_tritongpu_pass",

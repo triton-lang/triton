@@ -8,8 +8,8 @@ namespace triton {
 
 std::unique_ptr<Pass> createCombineOpsPass();
 
-std::unique_ptr<Pass>
-createRewriteTensorPointerPass(int computeCapability = 80);
+std::unique_ptr<Pass> createRewriteTensorPointerPass(int computeCapability = 80,
+                                                     bool isROCM = false);
 
 } // namespace triton
 

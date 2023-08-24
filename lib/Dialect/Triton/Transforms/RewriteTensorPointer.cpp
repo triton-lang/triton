@@ -190,11 +190,12 @@ class RewriteTensorPointerPass
     : public TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
 private:
   int computeCapability;
+  bool isROCM;
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
 public:
-  explicit RewriteTensorPointerPass(int computeCapability)
-      : computeCapability(computeCapability) {}
+  explicit RewriteTensorPointerPass(int computeCapability, bool isROCM)
+      : computeCapability(computeCapability), isROCM(isROCM) {}
 
   static bool needRewrite(Operation *op) {
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
@@ -470,7 +471,7 @@ public:
 
   void runOnOperation() override {
     // Only rewrite if the hardware does not support
-    if (computeCapability >= 90)
+    if (!isROCM && computeCapability >= 90)
       return;
 
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
@@ -499,6 +500,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-triton::createRewriteTensorPointerPass(int computeCapability) {
-  return std::make_unique<RewriteTensorPointerPass>(computeCapability);
+triton::createRewriteTensorPointerPass(int computeCapability, bool isROCM) {
+  return std::make_unique<RewriteTensorPointerPass>(computeCapability, isROCM);
 }
