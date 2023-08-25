@@ -202,17 +202,18 @@ def generate_launcher(constants, signature, ids):
         return NULL;
       }}
 
-      if (launch_enter_hook != Py_None) {{
-        PyObject_CallObject(launch_enter_hook, args);
+      if (launch_enter_hook != Py_None && !PyObject_CallObject(launch_enter_hook, args)) {{
+        return NULL;
       }}
 
       // raise exception asap
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
       _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
-      if (launch_exit_hook != Py_None) {{
-        PyObject_CallObject(launch_exit_hook, args);
-      }}
+
       if (PyErr_Occurred()) {{
+        return NULL;
+      }}
+      if (launch_exit_hook != Py_None && !PyObject_CallObject(launch_exit_hook, args)) {{
         return NULL;
       }}
 
@@ -386,8 +387,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     return NULL;
   }}
 
-  if (launch_enter_hook != Py_None) {{
-    PyObject_CallObject(launch_enter_hook, args);
+  if (launch_enter_hook != Py_None && !PyObject_CallObject(launch_enter_hook, args)) {{
+    return NULL;
   }}
 
 
@@ -395,13 +396,13 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
 
-  if (launch_exit_hook != Py_None) {{
-    PyObject_CallObject(launch_exit_hook, args);
-  }}
-
-  if(PyErr_Occurred()) {{
+ if (PyErr_Occurred()) {{
     return NULL;
   }}
+  if (launch_exit_hook != Py_None && !PyObject_CallObject(launch_exit_hook, args)) {{
+    return NULL;
+  }}
+
   // return None
   Py_INCREF(Py_None);
   return Py_None;
