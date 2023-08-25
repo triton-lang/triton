@@ -100,8 +100,8 @@ sphinx_gallery_conf = {
     'examples_dirs': '../python/tutorials/',
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
-    # XXX: Temporarily disable fused attention tutorial on V100
-    'ignore_pattern': r'__init__\.py',
+    # Disable TMA tutorials, which don't build with sphinx_gallery
+    'ignore_pattern': r'(__init__\.py|09.*\.py|10.*\.py)',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {
         'sphinx_gallery': None,
