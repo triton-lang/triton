@@ -13,6 +13,7 @@ from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union,
 
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
+from ..language.core import dtype
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
@@ -358,10 +359,11 @@ class JITFunction(KernelInterface[T]):
 
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
-        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
+        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = triton.language.dtype(\'{dflt}\')' if dtype.is_dtype(f'{dflt}') else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
         args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
 
         src = f"""
+import triton
 def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
     from ..compiler import compile, CompiledKernel, get_arch_default_num_warps, get_arch_default_num_stages
     sig_key = {f'{sig_keys},' if len(sig_keys) > 0 else ()}
