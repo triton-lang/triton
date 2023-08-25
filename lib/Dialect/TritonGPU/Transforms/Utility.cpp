@@ -561,7 +561,20 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         markLive(nestedYieldOperand);
         continue;
       }
+      if (auto nestedIf = value.getDefiningOp<scf::IfOp>()) {
+        auto result = value.cast<OpResult>();
+        for (scf::YieldOp nestedYieldOp :
+             {nestedIf.thenYield(), nestedIf.elseYield()}) {
+          Value nestedYieldOperand =
+              nestedYieldOp.getOperand(result.getResultNumber());
+          markLive(nestedYieldOperand);
+        }
+        continue;
+      }
       if (Operation *def = value.getDefiningOp()) {
+        // TODO: support while ops.
+        if (isa<scf::WhileOp>(def))
+          return failure();
         for (Value operand : def->getOperands())
           markLive(operand);
         continue;
