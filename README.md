@@ -18,7 +18,7 @@ Tentative Agenda for the conference (subject to change):
 
 |Time    |Title  |Speaker
 |--------|-------|-------|
-|10:00 AM|Welcome|Microsoft|
+|10:00 AM|Welcome|Kevin Scott (Microsoft)|
 |10:20 AM|The Triton Compiler: Past, Present and Future|Phil Tillet (OpenAI)|
 |11:00 AM|**Break**||
 |11:20 AM|Hopper support in Triton|Gustav Zhu (Nvidia)|
@@ -34,6 +34,7 @@ Tentative Agenda for the conference (subject to change):
 |3:20 PM|Pallas: A JAX Kernel Language|Sharad Vikram (Google)|
 |3:40 PM|Writing Grouped GEMMs in Triton|Vinod Grover (Nvidia)|
 |4:00 PM|**Reception**||
+
 
 # Triton
 
