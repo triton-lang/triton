@@ -652,10 +652,12 @@ void LoopPipeliner::createBufferTypes() {
                             .getEncoding()
                             .dyn_cast<ttg::DotOperandEncodingAttr>()) {
       // MMAv1 and MMAv2
+      bool needTrans = dyn_cast_or_null<tt::TransOp>(
+          cvt.getDefiningOp()->getOperand(0).getDefiningOp());
       unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
       sharedEnc = ttg::SharedEncodingAttr::get(
           ty.getContext(), dotOpEnc, ty.getShape(),
-          ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth);
+          ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
     } else {
       // MMAv3
       sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
