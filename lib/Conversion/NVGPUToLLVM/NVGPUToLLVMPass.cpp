@@ -33,7 +33,6 @@ public:
                             Location &loc,
                             mlir::PatternRewriter &rewriter) const {
     if (val.getType().isa<LLVM::LLVMPointerType>()) {
-      std::cout << "Pointer found" << std::endl;
       if (std::holds_alternative<std::string>(constraint)) {
         auto constraintStr = std::get<std::string>(constraint);
         if (constraintStr == "r") {
@@ -1051,26 +1050,33 @@ public:
   }
 };
 
-class OffsetOfSts64OpPattern : public mlir::RewritePattern {
+class OffsetOfSts64OpPattern
+    : public NVGPUOpPatternBase<ttn::OffsetOfSts64Op, OffsetOfSts64OpPattern> {
 public:
-  OffsetOfSts64OpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::OffsetOfSts64Op::getOperationName(), 1,
-                             context) {}
+  using Base = NVGPUOpPatternBase<ttn::OffsetOfSts64Op, OffsetOfSts64OpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto offsetOfSts64Op = llvm::dyn_cast<ttn::OffsetOfSts64Op>(op);
-    if (!offsetOfSts64Op)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto threadId = offsetOfSts64Op.getThreadId();
-    auto rowOfWarp = offsetOfSts64Op.getRowOfWarp();
-    auto elemIdx = offsetOfSts64Op.getElemIdx();
-    auto leadingDimOffset = offsetOfSts64Op.getLeadingDimOffset();
-    auto rowStride = offsetOfSts64Op.getRowStride();
-    auto swizzleEnabled = offsetOfSts64Op.getSwizzleEnabled();
+  std::vector<std::string> getOutputConstraints(ttn::OffsetOfSts64Op op) const {
+    return {"=r"};
+  }
+
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::OffsetOfSts64Op op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    auto threadId = op.getThreadId();
+    auto rowOfWarp = op.getRowOfWarp();
+    auto elemIdx = op.getElemIdx();
+
+    operandsAndConstraints.push_back({threadId, "r"});
+    operandsAndConstraints.push_back({elemIdx, "r"});
+    operandsAndConstraints.push_back({rowOfWarp, "r"});
+
+    return operandsAndConstraints;
+  }
+
+  std::string getPtxAsm(ttn::OffsetOfSts64Op op) const {
+    auto rowStride = op.getRowStride();
+    auto swizzleEnabled = op.getSwizzleEnabled();
 
     if (swizzleEnabled) {
       assert((rowStride == 32 || rowStride == 64 || rowStride == 128) &&
@@ -1090,49 +1096,77 @@ public:
       maxPhase = 2;
     }
 
-    auto laneId = and_(threadId, i32_val(0x1f));
-    auto myRow =
-        add(mul(and_(lshr(elemIdx, i32_val(1)), i32_val(0x1)), i32_val(8)),
-            udiv(laneId, i32_val(4)));
-    auto myCol = add(mul(udiv(elemIdx, i32_val(4)), i32_val(8)),
-                     mul(urem(laneId, i32_val(4)), i32_val(2)));
-    myRow = add(myRow, rowOfWarp);
-    auto phase = urem(udiv(myRow, i32_val(perPhase)), i32_val(maxPhase));
-    auto lineOffset =
-        add(mul(urem(myRow, i32_val(perPhase)), i32_val(rowStride)),
-            mul(myCol, i32_val(4)));
-    auto colOffset =
-        add(mul(xor_(udiv(lineOffset, i32_val(16)), phase), i32_val(16)),
-            urem(lineOffset, i32_val(16)));
-    auto offset =
-        add(mul(udiv(myRow, i32_val(perPhase)), i32_val(128)), colOffset);
-
-    rewriter.replaceOp(op, {offset});
-    return mlir::success();
+    auto ptxAsm = "{\n"
+                  ".reg .u32 a<9>;      \n"
+                  "and.b32 a0, $1, 0x1f;\n" // laneid
+                  "shr.b32 a1, $2, 4; \n"
+                  "and.b32 a1, a1, 0x1; \n"
+                  "div.u32 a2, a0, 4; \n"
+                  "mad.lo.u32 a2, a1, 8, a2; \n" // myRow
+                  "div.u32 a3, $2, 4; \n"
+                  "rem.u32 a4, a0, 4; \n"
+                  "mul.lo.u32 a4, a4, 2; \n"
+                  "mad.lo.u32 a4, a3, 8, a4; \n" // myCol
+                  "add.u32 a2, a2, $3; \n"       // myRow = myRow + rowOfWarp
+                  "div.u32 a3, a2, " +
+                  std::to_string(perPhase) +
+                  "; \n"
+                  "rem.u32 a3, a3, " +
+                  std::to_string(maxPhase) +
+                  "; \n" // phase
+                  "rem.u32 a5, a2, " +
+                  std::to_string(perPhase) +
+                  "; \n" // lineOffset
+                  "mul.lo.u32 a5, a5, " +
+                  std::to_string(rowStride) +
+                  "; \n"
+                  "mad.lo.u32 a5, a4, 4, a5; \n" // lineOffset
+                  "div.u32 a6, a5, 16; \n"
+                  "xor.b32 a6, a6, a3; \n" // colOffset
+                  "rem.u32 a7, a5, 16; \n"
+                  "mad.lo.u32 a7, a6, 16, a7; \n" // colOffset
+                  "div.u32 a8, a2, " +
+                  std::to_string(perPhase) +
+                  "; \n"
+                  "mad.lo.u32 $0, a8, 128, a7; \n" // offset
+                  "}";
+    return ptxAsm;
   }
 };
 
-class OffsetOfStmatrixV4OpPattern : public mlir::RewritePattern {
+class OffsetOfStmatrixV4OpPattern
+    : public NVGPUOpPatternBase<ttn::OffsetOfStmatrixV4Op,
+                                OffsetOfStmatrixV4OpPattern> {
 public:
-  OffsetOfStmatrixV4OpPattern(mlir::MLIRContext *context)
-      : mlir::RewritePattern(ttn::OffsetOfStmatrixV4Op::getOperationName(), 1,
-                             context) {}
+  using Base = NVGPUOpPatternBase<ttn::OffsetOfStmatrixV4Op,
+                                  OffsetOfStmatrixV4OpPattern>;
+  using Base::Base;
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto offsetOfStmatrixV4Op = llvm::dyn_cast<ttn::OffsetOfStmatrixV4Op>(op);
-    if (!offsetOfStmatrixV4Op)
-      return mlir::failure();
-    auto loc = op->getLoc();
-    auto threadId = offsetOfStmatrixV4Op.getThreadId();
-    auto rowOfWarp = offsetOfStmatrixV4Op.getRowOfWarp();
-    auto elemIdx = offsetOfStmatrixV4Op.getElemIdx();
-    auto leadingDimOffset = offsetOfStmatrixV4Op.getLeadingDimOffset();
-    auto rowStride = offsetOfStmatrixV4Op.getRowStride();
-    auto swizzleEnabled = offsetOfStmatrixV4Op.getSwizzleEnabled();
+  std::vector<std::string>
+  getOutputConstraints(ttn::OffsetOfStmatrixV4Op op) const {
+    return {"=r"};
+  }
 
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::OffsetOfStmatrixV4Op op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    auto threadId = op.getThreadId();
+    auto rowOfWarp = op.getRowOfWarp();
+    auto elemIdx = op.getElemIdx();
+
+    operandsAndConstraints.push_back({threadId, "r"});
+    operandsAndConstraints.push_back({elemIdx, "r"});
+    operandsAndConstraints.push_back({rowOfWarp, "r"});
+
+    return operandsAndConstraints;
+  }
+
+  std::string getPtxAsm(ttn::OffsetOfStmatrixV4Op op) const {
+    auto leadingDimOffset = op.getLeadingDimOffset();
+    auto rowStride = op.getRowStride();
+    auto swizzleEnabled = op.getSwizzleEnabled();
+
+    std::string ptxAsm;
     if (swizzleEnabled) {
       uint32_t perPhase = 0;
       uint32_t maxPhase = 0;
@@ -1147,41 +1181,73 @@ public:
         maxPhase = 2;
       }
 
-      Value iterOfCol = udiv(elemIdx, i32_val(8));
-      Value myRow = add(rowOfWarp, and_(threadId, i32_val(0xf)));
-      Value myCol =
-          mul(and_(lshr(threadId, i32_val(4)), i32_val(0x1)), i32_val(8));
-      myCol = add(myCol, mul(iterOfCol, i32_val(16)));
-
-      Value offset0 =
-          mul(udiv(myCol, i32_val(rowStride)), i32_val(leadingDimOffset));
-      myCol = urem(myCol, i32_val(rowStride));
-
-      Value phase = urem(udiv(myRow, i32_val(perPhase)), i32_val(maxPhase));
-
-      Value lineOffset =
-          add(mul(urem(myRow, i32_val(perPhase)), i32_val(rowStride)), myCol);
-      Value colOffset =
-          add(mul(xor_(udiv(lineOffset, i32_val(8)), phase), i32_val(8)),
-              urem(lineOffset, i32_val(8)));
-      Value offset1 =
-          add(mul(udiv(myRow, i32_val(perPhase)), i32_val(64)), colOffset);
-
-      Value res = add(offset1, offset0);
-
-      rewriter.replaceOp(op, {res});
+      ptxAsm =
+          "{\n"
+          ".reg .u32 a<10>;      \n"
+          "div.u32 a0, $2, 8; \n"    // iterOfCol = udiv(elemIdx, i32_val(8))
+          "and.b32 a1, $1, 0xf; \n"  // myRow = and_(threadId, i32_val(0xf))
+          "add.u32 a1, a1, $3; \n"   // myRow = myRow + rowOfWarp
+          "shr.b32 a2, $1, 4; \n"    // myCol = lshr(threadId, i32_val(4))
+          "and.b32 a2, a2, 0x1; \n"  // myCol = and_(myCol, i32_val(0x1))
+          "mul.lo.u32 a2, a2, 8; \n" // myCol = mul(myCol, i32_val(8))
+          "mad.lo.u32 a2, a0, 16, a2; \n" // myCol = add(myCol,
+                                          // mul(iterOfCol, i32_val(16)))
+          "div.u32 a3, a2, " +
+          std::to_string(rowStride) +
+          "; \n" // offset0 = udiv(myCol, i32_val(rowStride))
+          "mul.lo.u32 a3, a3, " +
+          std::to_string(leadingDimOffset) +
+          "; \n" // offset0 = mul(offset0, i32_val(leadingDimOffset))
+          "rem.u32 a2, a2, " +
+          std::to_string(rowStride) +
+          "; \n" // myCol = myCol % rowStride
+          "div.u32 a4, a1, " +
+          std::to_string(perPhase) +
+          "; \n" // phase =  myrow // perPhase
+          "rem.u32 a4, a4, " +
+          std::to_string(maxPhase) +
+          "; \n" // phase = phase % maxPhase
+          "rem.u32 a5, a1, " +
+          std::to_string(perPhase) +
+          "; \n" // lineOffset = urem(myRow, i32_val(perPhase))
+          "mad.lo.u32 a5, a5, " +
+          std::to_string(rowStride) +
+          ", a2; \n" // lineOffset = add(mul(lineOffset, rowStride), myCol)
+          "div.u32 a6, a5, 8; \n"  // colOffset = udiv(lineOffset, i32_val(8)
+          "xor.b32 a6, a6, a4; \n" // colOffset = xor_(colOffset, phase)
+          "rem.u32 a7, a5, 8; \n"  // temp = urem(lineOffset, i32_val(8)
+          "mad.lo.u32 a7, a6, 8, a7; \n" // colOffset = add(mul(colOffset,
+                                         // i32_val(8)), temp)
+          "div.u32 a8, a1, " +
+          std::to_string(perPhase) +
+          "; \n" // offset1 = udiv(myRow, i32_val(perPhase))
+          "mad.lo.u32 a9, a8, 64, a7; \n" // offset1 = add(mul(offset1,
+                                          // i32_val(64)), colOffset)
+          "add.u32 $0, a9, a3; \n"        // result = add(offset1, offset0)
+          "}";
     } else {
-      Value iterOfCol = udiv(elemIdx, i32_val(4));
-      Value myRow = add(rowOfWarp, and_(threadId, i32_val(0xf)));
-      Value myCol =
-          mul(and_(lshr(threadId, i32_val(4)), i32_val(0x1)), i32_val(8));
-      myCol = add(myCol, mul(iterOfCol, i32_val(16)));
-
-      Value offset =
-          add(mul(myRow, i32_val(rowStride)), mul(myCol, i32_val(2)));
-      rewriter.replaceOp(op, {offset});
+      ptxAsm = "{\n"
+               ".reg .u64 a<5>;      \n"
+               "div.u32 a0, $2, 4; \n"    // iterOfCol = udiv(elemIdx,
+                                          // i32_val(4))
+               "and.b32 a1, $1, 0xf; \n"  // myRow = and_(threadId,
+                                          // i32_val(0xf))
+               "add.u32 a1, a1, $3; \n"   // myRow = myRow + rowOfWarp
+               "shr.b32 a2, $1, 4; \n"    // myCol = lshr(threadId,
+                                          // i32_val(4))
+               "and.b32 a2, a2, 0x1; \n"  // myCol = and_(myCol,
+                                          // i32_val(0x1))
+               "mul.lo.u32 a2, a2, 8; \n" // myCol = mul(myCol,
+                                          // i32_val(8))
+               "mul.u32 a3, a1, " +
+               std::to_string(rowStride) +
+               "; \n"                         // offset = myRow * rowStride
+               "mad.lo.u32 $0, a2, 2, a3; \n" // result = add(mul(myCol,
+                                              // i32_val(2)), offset)
+               "}\n";
     }
-    return mlir::success();
+
+    return ptxAsm;
   }
 };
 
