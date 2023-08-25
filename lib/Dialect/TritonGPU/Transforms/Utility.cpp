@@ -240,30 +240,57 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
 }
 // -------------------------------------------------------------------------- //
 
-// TODO: Interface
-LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
-                             Attribute &ret) {
-  ret = targetEncoding;
-  if (auto expand_dims = dyn_cast<triton::ExpandDimsOp>(op)) {
-    ret = triton::gpu::SliceEncodingAttr::get(
-        op->getContext(), expand_dims.getAxis(), targetEncoding);
-  }
-  if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
-    auto sliceEncoding =
-        targetEncoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
-    if (!sliceEncoding)
-      return failure();
-    if (sliceEncoding.getDim() != reduce.getAxis())
-      return failure();
-    ret = sliceEncoding.getParent();
-  }
-  if (isa<triton::ViewOp, triton::CatOp>(op)) {
-    return failure();
-  }
-  return success();
+static std::optional<Attribute> inferDstEncoding(triton::ReduceOp op,
+                                                 Attribute encoding) {
+  return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
+                                             encoding);
 }
 
-bool isExpensiveLoadOrStore(Operation *op, Attribute &targetEncoding) {
+static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
+                                                 Attribute encoding) {
+  auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
+  if (!sliceEncoding)
+    return std::nullopt;
+  assert(op.getAxis() == sliceEncoding.getDim());
+  return sliceEncoding.getParent();
+}
+
+static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
+                                                 Attribute encoding) {
+  auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
+  if (!sliceEncoding)
+    return std::nullopt;
+  assert(op.getAxis() == sliceEncoding.getDim());
+  return sliceEncoding.getParent();
+}
+
+static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
+                                                 Attribute encoding) {
+  return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
+                                             encoding);
+}
+
+std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+  if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
+    return inferSrcEncoding(reduceOp, encoding);
+  if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
+    return inferSrcEncoding(expand, encoding);
+  if (isa<triton::ViewOp, triton::CatOp>(op))
+    return std::nullopt;
+  return encoding;
+}
+
+std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
+  if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
+    return inferDstEncoding(reduceOp, encoding);
+  if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
+    return inferDstEncoding(expand, encoding);
+  if (isa<triton::ViewOp, triton::CatOp>(op))
+    return std::nullopt;
+  return encoding;
+}
+
+bool isExpensiveLoadOrStore(Operation *op) {
   // Case 1: Pointer of tensor is always expensive
   auto operandType = op->getOperand(0).getType();
   if (triton::isTensorPointerType(operandType))
@@ -287,7 +314,7 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
   if (!op)
     return true;
   if (isa<triton::LoadOp, triton::StoreOp>(op))
-    return isExpensiveLoadOrStore(op, targetEncoding);
+    return isExpensiveLoadOrStore(op);
   if (isa<triton::CatOp>(op))
     return triton::gpu::isExpensiveCat(cast<triton::CatOp>(op), targetEncoding);
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
@@ -300,75 +327,21 @@ bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding) {
   return false;
 }
 
-bool canFoldConversion(Operation *op, Attribute targetEncoding) {
+bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
   if (isa<triton::CatOp>(op))
     return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
                                         targetEncoding);
+  if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+    if (targetEncoding.isa<triton::gpu::MmaEncodingAttr>()) {
+      auto srcEncoding =
+          convert.getOperand().getType().cast<RankedTensorType>().getEncoding();
+      if (targetEncoding != srcEncoding)
+        return false;
+    }
+    return true;
+  }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
              triton::MakeRangeOp, triton::SplatOp, triton::ViewOp>(op);
-}
-
-int simulateBackwardRematerialization(
-    Operation *initOp, SetVector<Operation *> &processed,
-    SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
-    Attribute targetEncoding) {
-  // DFS
-  std::vector<std::pair<Operation *, Attribute>> queue;
-  queue.emplace_back(initOp, targetEncoding);
-  // We want to see the effect of converting `initOp` to a new layout
-  // so we initialize `numCvts = 1`.
-  int numCvts = 1;
-  while (!queue.empty()) {
-    Operation *currOp;
-    Attribute currLayout;
-    std::tie(currOp, currLayout) = queue.back();
-    queue.pop_back();
-    // If the current operation is expensive to rematerialize,
-    // we stop everything
-    if (isExpensiveToRemat(currOp, currLayout))
-      break;
-    // A conversion will be removed here (i.e. transferred to operands)
-    numCvts -= 1;
-    // Done processing
-    processed.insert(currOp);
-    layout.insert(currLayout);
-    // Add all operands to the queue
-    for (Value argI : currOp->getOperands()) {
-      Attribute newEncoding;
-      // Cannot invert the current encoding for this operand
-      // we stop everything
-      if (failed(invertEncoding(currLayout, currOp, newEncoding)))
-        return INT_MAX;
-      if (toConvert.count(argI) && toConvert[argI] != newEncoding)
-        return INT_MAX;
-      if (auto ptrTy = argI.getType().dyn_cast<triton::PointerType>()) {
-        if (ptrTy.getPointeeType().isa<RankedTensorType>()) {
-          return INT_MAX;
-        }
-      }
-
-      Operation *opArgI = argI.getDefiningOp();
-      toConvert.insert({argI, newEncoding});
-      // 1. Only convert RankedTensorType
-      // 2. Skip if there's no defining op
-      // 3. Skip if the defining op has already been processed
-      // 4. Skip or the defining op is in a different block
-      if (!argI.getType().isa<RankedTensorType>() || !opArgI ||
-          processed.contains(opArgI) ||
-          opArgI->getBlock() != currOp->getBlock())
-        continue;
-      // If the conversion can be folded into opArgI then
-      // we don't count this conversion as expensive
-      if (canFoldConversion(opArgI, newEncoding))
-        continue;
-
-      // We add one expensive conversion for the current operand
-      numCvts += 1;
-      queue.emplace_back(opArgI, newEncoding);
-    }
-  }
-  // return net number of conversions
-  return numCvts;
 }
 
 //
@@ -409,213 +382,48 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   return newOp;
 }
 
-namespace {
-
-struct OpUseInfo {
-  Value value;
-  Operation *op;
-  unsigned index;
-};
-
-void getForwardSliceOpUseInfo(Operation *op,
-                              SetVector<Operation *> *forwardSliceOps,
-                              SmallVector<OpUseInfo> *forwardOpUseInfo) {
-  if (!op)
-    return;
-
-  for (Region &region : op->getRegions())
-    for (Block &block : region)
-      for (Operation &blockOp : block)
-        if (forwardSliceOps->count(&blockOp) == 0)
-          getForwardSliceOpUseInfo(&blockOp, forwardSliceOps, forwardOpUseInfo);
-  for (Value result : op->getResults()) {
-    for (OpOperand &operand : result.getUses()) {
-      auto *blockOp = operand.getOwner();
-      forwardOpUseInfo->push_back(
-          {operand.get(), blockOp, operand.getOperandNumber()});
-      if (forwardSliceOps->count(blockOp) == 0)
-        getForwardSliceOpUseInfo(blockOp, forwardSliceOps, forwardOpUseInfo);
-    }
-  }
-
-  forwardSliceOps->insert(op);
-}
-} // namespace
-
-LogicalResult simulateForwardRematerializationInLoop(Operation *startOp,
-                                                     BlockArgument arg,
-                                                     Attribute targetEncoding) {
-  // heuristics for flash attention
-  if (targetEncoding.isa<triton::gpu::SharedEncodingAttr>())
-    return failure();
-  SetVector<Operation *> cvtSliceOps;
-  SmallVector<OpUseInfo> cvtSliceOpUseInfo;
-  getForwardSliceOpUseInfo(startOp, &cvtSliceOps, &cvtSliceOpUseInfo);
-
-  // Check if any additional conversion is needed along the way
-  for (Operation *op : cvtSliceOps) {
-    if (isa<scf::YieldOp>(op))
+LogicalResult getConvertBackwardSlice(Value root, SetVector<Value> &slice,
+                                      Attribute rootEncoding,
+                                      DenseMap<Value, Attribute> &layout) {
+  SmallVector<std::pair<Value, Attribute>> queue = {{root, rootEncoding}};
+  while (!queue.empty()) {
+    auto [currentValue, encoding] = queue.back();
+    queue.pop_back();
+    if (!currentValue.getType().isa<RankedTensorType>())
       continue;
-    // The first op doesn't push forward any conversion
-    if (op != startOp) {
-      if (isa<triton::ReduceOp>(op) &&
-          !op->getResult(0).getType().isa<RankedTensorType>())
-        return failure();
-      // don't rematerialize anything expensive
-      if (isExpensiveToRemat(op, targetEncoding))
-        return failure();
-      // don't rematerialize non-element-wise
-      if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
-          !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp, triton::AssertOp, triton::PrintOp,
-               triton::ReduceOp>(op))
-        return failure();
-    }
-    // don't rematerialize if it adds an extra conversion that can't
-    // be removed
-    for (Value value : op->getOperands()) {
-      Operation *argOp = arg.getDefiningOp();
-      SetVector<Operation *> processed;
-      SetVector<Attribute> layout;
-      llvm::MapVector<Value, Attribute> toConvert;
-      int numAddedConvs = simulateBackwardRematerialization(
-          argOp, processed, layout, toConvert, targetEncoding);
-      if (argOp && !isa<triton::gpu::ConvertLayoutOp>(argOp) &&
-          cvtSliceOps.count(argOp) == 0 && numAddedConvs > 0)
-        return failure();
-    }
-  }
-
-  // We apply conservative analysis. Only when the final operand's index
-  // matches the argument's index or their encoding match, we can rematerialize.
-  for (auto &opUseInfo : cvtSliceOpUseInfo) {
-    Operation *op = opUseInfo.op;
-    if (isa<scf::YieldOp>(op)) {
-      auto yieldIdx = opUseInfo.index;
-      // 0 is the induction variable
-      auto argIdx = arg.getArgNumber() - 1;
-      if (yieldIdx != argIdx) {
-        auto argType = arg.getType().cast<RankedTensorType>();
-        auto yieldType =
-            op->getOperand(yieldIdx).getType().dyn_cast<RankedTensorType>();
-        if (!yieldType || argType.getEncoding() != yieldType.getEncoding())
+    // Skip propagating through for op results for now.
+    // TODO: enable this based on needs.
+    if (currentValue.getDefiningOp<scf::ForOp>())
+      return failure();
+    slice.insert(currentValue);
+    layout[currentValue] = encoding;
+    if (auto *definingOp = currentValue.getDefiningOp()) {
+      if (canFoldIntoConversion(definingOp, encoding))
+        continue;
+      for (Value operand : definingOp->getOperands()) {
+        auto srcEncoding = inferSrcEncoding(definingOp, encoding);
+        if (!srcEncoding)
           return failure();
+        if (slice.count(operand) == 0)
+          queue.push_back({operand, *srcEncoding});
       }
+      continue;
     }
+    auto blockArg = cast<BlockArgument>(currentValue);
+    Block *block = blockArg.getOwner();
+    Operation *parentOp = block->getParentOp();
+    if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      OpOperand &initOperand = forOp.getOpOperandForRegionIterArg(blockArg);
+      Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
+          blockArg.getArgNumber() - forOp.getNumInductionVars());
+      queue.push_back({initOperand.get(), encoding});
+      queue.push_back({yieldOperand, encoding});
+      continue;
+    }
+    // TODO: add support for WhileOp and other region types.
+    return failure();
   }
   return success();
-}
-
-void rematerializeConversionChain(
-    const llvm::MapVector<Value, Attribute> &toConvert,
-    mlir::PatternRewriter &rewriter, SetVector<Operation *> &processed,
-    IRMapping &mapping) {
-  SmallVector<Value, 4> sortedValues;
-  SetVector<Operation *> tmp;
-  for (auto &item : toConvert) {
-    Value v = item.first;
-    if (v.getDefiningOp())
-      tmp.insert(v.getDefiningOp());
-    else
-      sortedValues.push_back(v);
-  }
-  tmp = mlir::multiRootTopologicalSort(tmp);
-  for (Operation *op : tmp)
-    sortedValues.push_back(op->getResult(0));
-
-  for (Value currOperand : sortedValues) {
-    Value origOperand = currOperand;
-    // unpack information
-    Attribute targetLayout = toConvert.lookup(currOperand);
-    // rematerialize the operand if necessary
-    Operation *currOperation = currOperand.getDefiningOp();
-    if (processed.contains(currOperation)) {
-      Operation *newOperation =
-          cloneWithInferType(rewriter, currOperation, mapping);
-      newOperation->moveAfter(currOperation);
-      currOperation = newOperation;
-      currOperand = currOperation->getResult(0);
-    }
-    // compute target type for the layout cast
-    auto currType = currOperand.getType().cast<RankedTensorType>();
-    auto newType = RankedTensorType::get(
-        currType.getShape(), currType.getElementType(), targetLayout);
-    auto newOperand = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        currOperand.getLoc(), newType, currOperand);
-    if (currOperation)
-      newOperand->moveAfter(currOperation);
-    else {
-      Block *block = currOperand.cast<BlockArgument>().getOwner();
-      newOperand->moveBefore(block, block->begin());
-    }
-    mapping.map(origOperand, newOperand);
-  }
-}
-
-LogicalResult canMoveOutOfLoop(BlockArgument arg,
-                               SmallVector<Operation *> &cvts) {
-  auto parentOp = arg.getOwner()->getParentOp();
-  // Don't move if arg is defined in a while loop
-  if (isa<scf::WhileOp>(parentOp))
-    return failure();
-  // Skip if arg is not defined in scf.for
-  if (!isa<scf::ForOp>(parentOp))
-    return success();
-  auto forOp = cast<scf::ForOp>(parentOp);
-  // We only move `iterArg` out of the loop if
-  // 1. There is no conversion
-  // 2. There is only a single conversion
-  // 3. Moving this conversion out of the loop will not generate any extra
-  // non-removable conversion
-  SetVector<RankedTensorType> cvtTypes;
-  SetVector<Operation *> others;
-  auto oldType = arg.getType().cast<RankedTensorType>();
-  for (auto user : arg.getUsers()) {
-    if (isa<triton::gpu::ConvertLayoutOp>(user)) {
-      // Don't move if the conversion target is a dot operand or shared memory
-      auto newType = user->getResults()[0].getType().cast<RankedTensorType>();
-      if (oldType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-          newType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>()) {
-        continue;
-      }
-      if (newType.getEncoding().isa<triton::gpu::SharedEncodingAttr>()) {
-        if (newType.getEncoding()
-                .cast<triton::gpu::SharedEncodingAttr>()
-                .getVec() == 1)
-          continue;
-      }
-      cvts.emplace_back(user);
-      cvtTypes.insert(newType);
-    } else
-      others.insert(user);
-  }
-  // First condition
-  if (cvts.empty())
-    return success();
-  if (cvtTypes.size() == 1) {
-    // Third condition - part 1:
-    // If the other or the cvt is in the different block, we cannot push the
-    // conversion forward or backward
-    for (auto *cvt : cvts) {
-      if (cvt->getBlock() != forOp.getBody())
-        return failure();
-    }
-    auto targetEncoding = cvtTypes.front().getEncoding();
-    for (auto *other : others) {
-      // Third condition - part 2:
-      // If the other non-cvt op is in the different block, we cannot push the
-      // conversion forward or backward
-      if (other->getBlock() != forOp.getBody())
-        return failure();
-      // Third condition - part 3:
-      // Check if we can directly use arg without conversion
-      if (simulateForwardRematerializationInLoop(other, arg, targetEncoding)
-              .failed())
-        return failure();
-    }
-    return success();
-  }
-  return failure();
 }
 
 // TODO(thomas): this is duplicated with what is in GPUToLLVM
@@ -698,6 +506,106 @@ std::optional<int> getWSRoleId(Operation *op) {
 void setRoleId(Operation *op, int roleId) {
   auto attr = IntegerAttr::get(IntegerType::get(op->getContext(), 32), roleId);
   op->setAttr("agent.mutex_role", attr);
+}
+
+namespace {
+
+/// Detect dead arguments in scf.for op by assuming all the values are dead and
+/// propagate liveness property.
+struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
+  using OpRewritePattern<scf::ForOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(scf::ForOp forOp,
+                                PatternRewriter &rewriter) const final {
+    Block &block = *forOp.getBody();
+    auto yieldOp = cast<scf::YieldOp>(block.getTerminator());
+    // Assume that nothing is live at the beginning and mark values as live
+    // based on uses.
+    DenseSet<Value> aliveValues;
+    SmallVector<Value> queue;
+    // Helper to mark values as live and add them to the queue of value to
+    // propagate if it is the first time we detect the value as live.
+    auto markLive = [&](Value val) {
+      if (!forOp->isAncestor(val.getParentRegion()->getParentOp()))
+        return;
+      if (aliveValues.insert(val).second)
+        queue.push_back(val);
+    };
+    // Mark all yield operands as live if the associated forOp result has any
+    // use.
+    for (auto result : llvm::enumerate(forOp.getResults())) {
+      if (!result.value().use_empty())
+        markLive(yieldOp.getOperand(result.index()));
+    }
+    if (aliveValues.size() == forOp.getNumResults())
+      return failure();
+    // Operations with side-effects are always live. Mark all theirs operands as
+    // live.
+    block.walk([&](Operation *op) {
+      if (!isa<scf::YieldOp, scf::ForOp>(op) && !wouldOpBeTriviallyDead(op)) {
+        for (Value operand : op->getOperands())
+          markLive(operand);
+      }
+    });
+    // Propagate live property until reaching a fixed point.
+    while (!queue.empty()) {
+      Value value = queue.pop_back_val();
+      if (auto nestedFor = value.getDefiningOp<scf::ForOp>()) {
+        auto result = value.cast<OpResult>();
+        OpOperand &forOperand = nestedFor.getOpOperandForResult(result);
+        markLive(forOperand.get());
+        auto nestedYieldOp =
+            cast<scf::YieldOp>(nestedFor.getBody()->getTerminator());
+        Value nestedYieldOperand =
+            nestedYieldOp.getOperand(result.getResultNumber());
+        markLive(nestedYieldOperand);
+        continue;
+      }
+      if (Operation *def = value.getDefiningOp()) {
+        for (Value operand : def->getOperands())
+          markLive(operand);
+        continue;
+      }
+      // If an argument block is live then the associated yield operand and
+      // forOp operand are live.
+      auto arg = value.cast<BlockArgument>();
+      if (auto forOwner = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
+        if (arg.getArgNumber() < forOwner.getNumInductionVars())
+          continue;
+        unsigned iterIdx = arg.getArgNumber() - forOwner.getNumInductionVars();
+        Value yieldOperand =
+            forOwner.getBody()->getTerminator()->getOperand(iterIdx);
+        markLive(yieldOperand);
+        markLive(forOwner.getIterOperands()[iterIdx]);
+      }
+    }
+    SmallVector<unsigned> deadArg;
+    for (auto yieldOperand : llvm::enumerate(yieldOp->getOperands())) {
+      if (aliveValues.contains(yieldOperand.value()))
+        continue;
+      if (yieldOperand.value() == block.getArgument(yieldOperand.index() + 1))
+        continue;
+      deadArg.push_back(yieldOperand.index());
+    }
+    if (deadArg.empty())
+      return failure();
+    rewriter.updateRootInPlace(forOp, [&]() {
+      // For simplicity we just change the dead yield operand to use the
+      // associated argument and leave the operations and argument removal to
+      // dead code elimination.
+      for (unsigned deadArgIdx : deadArg) {
+        BlockArgument arg = block.getArgument(deadArgIdx + 1);
+        yieldOp.setOperand(deadArgIdx, arg);
+      }
+    });
+    return success();
+  }
+};
+
+} // namespace
+
+void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
+  patterns.add<ForOpDeadArgElimination>(patterns.getContext());
 }
 
 } // namespace mlir

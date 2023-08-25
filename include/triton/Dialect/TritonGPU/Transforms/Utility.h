@@ -101,31 +101,27 @@ protected:
   std::string getColor(const Type &type) const;
 };
 
-// TODO: Interface
-LogicalResult invertEncoding(Attribute targetEncoding, Operation *op,
-                             Attribute &ret);
+// Infers the encoding of the result of op given the source encoding.
+std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding);
 
-bool isExpensiveLoadOrStore(Operation *op, Attribute &targetEncoding);
+// Infers the encoding of the source of op given the result encoding.
+std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
 
-bool isExpensiveToRemat(Operation *op, Attribute &targetEncoding);
+bool isExpensiveLoadOrStore(Operation *op);
 
-// skipInit is True when we only consider the operands of the initOp but
-// not the initOp itself.
-int simulateBackwardRematerialization(
-    Operation *initOp, SetVector<Operation *> &processed,
-    SetVector<Attribute> &layout, llvm::MapVector<Value, Attribute> &toConvert,
-    Attribute targetEncoding);
+bool canFoldIntoConversion(Operation *op, Attribute targetEncoding);
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
 
-void rematerializeConversionChain(
-    const llvm::MapVector<Value, Attribute> &toConvert,
-    mlir::PatternRewriter &rewriter, SetVector<Operation *> &processed,
-    IRMapping &mapping);
+// Get backward slice of tensor values starting from the root node along with
+// encoding propagation.
+LogicalResult getConvertBackwardSlice(Value root, SetVector<Value> &slice,
+                                      Attribute rootEncoding,
+                                      DenseMap<Value, Attribute> &layout);
 
-LogicalResult canMoveOutOfLoop(BlockArgument arg,
-                               SmallVector<Operation *> &cvts);
+// Populate pattern to remove dead cycles in ForOp.
+void populateForOpDeadArgumentElimination(RewritePatternSet &patterns);
 
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.

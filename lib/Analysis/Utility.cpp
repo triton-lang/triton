@@ -473,9 +473,9 @@ struct DFSState {
   SmallVector<Operation *, 16> topologicalCounts;
   DenseSet<Operation *> seen;
 
-  /// We mark each op as ready if all its operands are seen. If an op is ready,
-  /// we add it to the queue. Otherwise, we keep adding its operands to the
-  /// ancestors set.
+  /// We mark each op as ready if all its operands and parents ops are seen. If
+  /// an op is ready, we add it to the queue. Otherwise, we keep adding its
+  /// operands to the ancestors set.
   void addToReadyQueue(Operation *op, DFSSubgraphState &subGraph,
                        SmallVector<Operation *, 4> &readyQueue) {
     bool ready = true;
@@ -485,6 +485,14 @@ struct DFSState {
         subGraph.push_back(def);
         ready = false;
       }
+    }
+    Operation *parent = op->getParentOp();
+    while (parent) {
+      if (!seen.count(parent)) {
+        subGraph.push_back(parent);
+        ready = false;
+      }
+      parent = parent->getParentOp();
     }
     if (ready)
       readyQueue.push_back(op);
