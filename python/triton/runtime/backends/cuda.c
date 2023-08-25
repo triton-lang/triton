@@ -16,9 +16,7 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {
 
 #define CUDA_CHECK(ans)                                                        \
   {                                                                            \
-    gpuAssert((ans), __FILE__, __LINE__);                                      \
-    if (PyErr_Occurred())                                                      \
-      return NULL;                                                             \
+    { gpuAssert((ans), __FILE__, __LINE__); }                                  \
   }
 
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
@@ -70,6 +68,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   int32_t n_spills = 0;
   // create driver handles
   CUcontext pctx = 0;
+
+  Py_BEGIN_ALLOW_THREADS;
   CUDA_CHECK(cuCtxGetCurrent(&pctx));
   if (!pctx) {
     CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
@@ -100,6 +100,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
         cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                            shared_optin - shared_static));
   }
+  Py_END_ALLOW_THREADS;
 
   if (PyErr_Occurred()) {
     return NULL;
