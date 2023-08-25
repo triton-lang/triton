@@ -30,7 +30,7 @@ def sigmoid(x):
 @jit
 @core._add_math_1arg_docstr("softmax")
 def softmax(x, ieee_rounding=False):
-    z = x - core.max(x, 0)
+    z = x - max(x, 0)
     num = core.exp(z)
     den = core.sum(num, 0)
     return core.fdiv(num, den, ieee_rounding)
@@ -73,7 +73,7 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     # row-index of the first element of this group
     off_i = group_id * size_g
     # last group may have fewer rows
-    size_g = core.minimum(size_i - off_i, size_g)
+    size_g = minimum(size_i - off_i, size_g)
     # new row and column indices
     new_i = off_i + (ij % size_g)
     new_j = (ij % size_gj) // size_g
