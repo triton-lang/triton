@@ -321,6 +321,7 @@ public:
     }
 
     rewriter.setInsertionPointAfter(newIfOp);
+    // extra comment
     SmallVector<Value> newRetValues = newIfOp.getResults();
     for (size_t i = 0; i < numOps; i++) {
       if (newIfOp.getResult(i).getType() != ifOp.getResult(i).getType()) {
