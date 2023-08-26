@@ -183,6 +183,7 @@ def generate_launcher(constants, signature, ids):
       }}
 
       PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+      ptr_info.valid = false;
       return ptr_info;
     }}
 
@@ -208,11 +209,10 @@ def generate_launcher(constants, signature, ids):
 
       // raise exception asap
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+      Py_BEGIN_ALLOW_THREADS;
       _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+      Py_END_ALLOW_THREADS;
 
-      if (PyErr_Occurred()) {{
-        return NULL;
-      }}
       if (launch_exit_hook != Py_None && !PyObject_CallObject(launch_exit_hook, args)) {{
         return NULL;
       }}
@@ -366,6 +366,7 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
     return ptr_info;
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  ptr_info.valid = false;
   return ptr_info;
 }}
 
@@ -394,11 +395,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  Py_BEGIN_ALLOW_THREADS;
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
+  Py_END_ALLOW_THREADS;
 
- if (PyErr_Occurred()) {{
-    return NULL;
-  }}
   if (launch_exit_hook != Py_None && !PyObject_CallObject(launch_exit_hook, args)) {{
     return NULL;
   }}
