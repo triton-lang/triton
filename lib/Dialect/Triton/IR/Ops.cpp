@@ -428,6 +428,16 @@ LogicalResult mlir::triton::DotOp::verify() {
                                                      bEncoding);
 }
 
+//-- MakeRangeOp --
+OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
+  // make_range(start, start + 1) -> constant(start)
+  if (adaptor.getStart() + 1 == adaptor.getEnd()) {
+    auto shapedType = getType().cast<ShapedType>();
+    return SplatElementsAttr::get(shapedType, adaptor.getStartAttr());
+  }
+  return {};
+}
+
 //-- ReduceOp --
 static mlir::LogicalResult
 inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
