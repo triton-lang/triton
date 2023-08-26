@@ -23,6 +23,45 @@ namespace {
 
 using Constraint = std::variant<int, std::string>;
 using OperandsAndConstraints = std::vector<std::pair<mlir::Value, Constraint>>;
+
+const std::string Reg_Alloc_Op = "setmaxnreg.inc.sync.aligned.u32 #regCount;";
+const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
+const std::string Cga_Barrier_Sync_op = "barrier.cluster.sync.aligned;";
+const std::string Wgmma_Commit_Group_Op = "wgmma.commit_group.sync.aligned;";
+const std::string Wgmma_Wait_Group_Op =
+    "wgmma.wait_group.sync.aligned #pendings;";
+const std::string Cluster_Wait_Op = "barrier.cluster.wait.aligned;";
+const std::string Fence_Mbarrier_Init_Op =
+    "fence.mbarrier_init.release.cluster;";
+const std::string Cga_Barrier_Arrive_Op = "barrier.cluster.arrive;";
+const std::string Cga_Barrier_Wait_Op = "barrier.cluster.wait;";
+const std::string Reg_Dealloc_Op = "setmaxnreg.dec.sync.aligned.u32 #regCount;";
+
+const std::string Mbarrier_Init_Op =
+    "@$1 mbarrier.init.shared.b64 [$0], #count;";
+const std::string Mbarrier_Wait_Op =
+    "{                                                           \n"
+    ".reg .pred P1;                                              \n"
+    "LAB_WAIT:                                                   \n"
+    "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, 0x989680; \n"
+    "@P1 bra.uni DONE;                                           \n"
+    "bra.uni LAB_WAIT;                                           \n"
+    "DONE:                                                       \n"
+    "}                                                           \n";
+const std::string Named_Barrier_Arrive_Op = "bar.arrive $0, $1;";
+const std::string Named_Barrier_Wait_Op = "bar.sync $0, $1;";
+const std::string Sts64_Op = "st.shared.v2.b32 [$0], {$1, $2};";
+const std::string Cluster_Cta_Id_Op = "{\n"
+                                      ".reg .u32 a<5>;              \n"
+                                      "mov.u32 a0, %cluster_ctaid.x;\n"  // x
+                                      "mov.u32 a1, %cluster_ctaid.y;\n"  // y
+                                      "mov.u32 a2, %cluster_ctaid.z;\n"  // z
+                                      "mov.u32 a3, %cluster_nctaid.x;\n" // nx
+                                      "mov.u32 a4, %cluster_nctaid.y;\n" // ny
+                                      "mad.lo.u32 a1, a2, a4, a1;     \n"
+                                      "mad.lo.u32 $0, a1, a3, a0;     \n"
+                                      "}";
+
 template <typename SourceOp, typename ConcreteT>
 class NVGPUOpPatternBase : public mlir::RewritePattern {
 public:
@@ -235,17 +274,35 @@ public:
   }
 };
 
-class CGABarrierSyncOpPattern
-    : public NVGPUOpPatternBase<ttn::CGABarrierSyncOp,
-                                CGABarrierSyncOpPattern> {
+template <typename SourceOp>
+class NVGPUOpGenericPattern
+    : public NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>> {
 public:
-  using Base =
-      NVGPUOpPatternBase<ttn::CGABarrierSyncOp, CGABarrierSyncOpPattern>;
-  using Base::Base;
+  using Base = NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>>;
+  explicit NVGPUOpGenericPattern(mlir::MLIRContext *context, std::string ptxAsm,
+                                 std::vector<std::string> outputConstraints,
+                                 std::vector<std::string> inputConstraints)
+      : NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>>(context),
+        ptxAsm(ptxAsm), outputConstraints(outputConstraints),
+        inputConstraints(inputConstraints) {}
 
-  std::string getPtxAsm(ttn::CGABarrierSyncOp op) const {
-    return "barrier.cluster.sync.aligned;";
+  std::vector<std::string> getOutputConstraints(SourceOp op) const {
+    return outputConstraints;
   }
+  OperandsAndConstraints getOperandsAndConstraints(SourceOp op) const {
+    OperandsAndConstraints operandsAndConstraints;
+    for (unsigned i = 0; i < inputConstraints.size(); i++) {
+      operandsAndConstraints.push_back(
+          {op->getOperand(i), inputConstraints[i]});
+    }
+    return operandsAndConstraints;
+  }
+  std::string getPtxAsm(SourceOp op) const { return ptxAsm; }
+
+private:
+  std::string ptxAsm;
+  std::vector<std::string> outputConstraints;
+  std::vector<std::string> inputConstraints;
 };
 
 class FenceAsyncSharedOpPattern
@@ -265,43 +322,6 @@ public:
   }
 };
 
-class WGMMAFenceOpPattern
-    : public NVGPUOpPatternBase<ttn::WGMMAFenceOp, WGMMAFenceOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::WGMMAFenceOp, WGMMAFenceOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::WGMMAFenceOp op) const {
-    return "wgmma.fence.sync.aligned;";
-  }
-};
-
-class WGMMACommitGroupOpPattern
-    : public NVGPUOpPatternBase<ttn::WGMMACommitGroupOp,
-                                WGMMACommitGroupOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::WGMMACommitGroupOp, WGMMACommitGroupOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::WGMMACommitGroupOp op) const {
-    return "wgmma.commit_group.sync.aligned;";
-  }
-};
-
-class WGMMAWaitGroupOpPattern
-    : public NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp,
-                                WGMMAWaitGroupOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp, WGMMAWaitGroupOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
-    return "wgmma.wait_group.sync.aligned #pendings;";
-  }
-};
-
 class ClusterArriveOpPattern
     : public NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern> {
 public:
@@ -314,75 +334,6 @@ public:
       return "barrier.cluster.arrive.relaxed.aligned;";
     else
       return "barrier.cluster.arrive.aligned;";
-  }
-};
-
-class ClusterWaitOpPattern
-    : public NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::ClusterWaitOp, ClusterWaitOpPattern>;
-  using Base::Base;
-  std::string getPtxAsm(ttn::ClusterWaitOp op) const {
-    return "barrier.cluster.wait.aligned;";
-  }
-};
-
-class FenceMBarrierInitOpPattern
-    : public NVGPUOpPatternBase<ttn::FenceMBarrierInitOp,
-                                FenceMBarrierInitOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::FenceMBarrierInitOp, FenceMBarrierInitOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::FenceMBarrierInitOp op) const {
-    return "fence.mbarrier_init.release.cluster;";
-  }
-};
-
-class CGABarrierArriveOpPattern
-    : public NVGPUOpPatternBase<ttn::CGABarrierArriveOp,
-                                CGABarrierArriveOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::CGABarrierArriveOp, CGABarrierArriveOpPattern>;
-  using Base::Base;
-  std::string getPtxAsm(ttn::CGABarrierArriveOp op) const {
-    return "barrier.cluster.arrive;";
-  }
-};
-
-class CGABarrierWaitOpPattern
-    : public NVGPUOpPatternBase<ttn::CGABarrierWaitOp,
-                                CGABarrierWaitOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::CGABarrierWaitOp, CGABarrierWaitOpPattern>;
-  using Base::Base;
-  std::string getPtxAsm(ttn::CGABarrierWaitOp op) const {
-    return "barrier.cluster.wait;";
-  }
-};
-
-class RegAllocOpPattern
-    : public NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::RegAllocOp, RegAllocOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::RegAllocOp op) const {
-    return "setmaxnreg.inc.sync.aligned.u32 #regCount;";
-  }
-};
-
-class RegDeallocOpPattern
-    : public NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::RegDeallocOp, RegDeallocOpPattern>;
-  using Base::Base;
-
-  std::string getPtxAsm(ttn::RegDeallocOp op) const {
-    return "setmaxnreg.dec.sync.aligned.u32 #regCount;";
   }
 };
 
@@ -421,28 +372,6 @@ public:
     default:
       assert(false && "Invalid size");
     }
-    return ptxAsm;
-  }
-};
-
-class MBarrierInitOpPattern
-    : public NVGPUOpPatternBase<ttn::MBarrierInitOp, MBarrierInitOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::MBarrierInitOp, MBarrierInitOpPattern>;
-  using Base::Base;
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::MBarrierInitOp op) const {
-    OperandsAndConstraints operandsAndTypes;
-    Value mbarrier = op.getMbarrier();
-    Value pred = op.getPred();
-    operandsAndTypes.push_back({mbarrier, "r"});
-    operandsAndTypes.push_back({pred, "b"});
-    return operandsAndTypes;
-  }
-
-  std::string getPtxAsm(ttn::MBarrierInitOp op) const {
-    std::string ptxAsm = "@$1 mbarrier.init.shared.b64 [$0], #count;";
     return ptxAsm;
   }
 };
@@ -512,36 +441,6 @@ public:
       llvm_unreachable("");
       break;
     }
-    return ptxAsm;
-  }
-};
-
-class MBarrierWaitOpPattern
-    : public NVGPUOpPatternBase<ttn::MBarrierWaitOp, MBarrierWaitOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::MBarrierWaitOp, MBarrierWaitOpPattern>;
-  using Base::Base;
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::MBarrierWaitOp op) const {
-    OperandsAndConstraints operandsAndTypes;
-    Value mbarrier = op.getMbarrier();
-    Value phase = op.getPhase();
-    operandsAndTypes.push_back({mbarrier, "r"});
-    operandsAndTypes.push_back({phase, "r"});
-    return operandsAndTypes;
-  }
-
-  std::string getPtxAsm(ttn::MBarrierWaitOp op) const {
-    auto ptxAsm =
-        "{                                                           \n"
-        ".reg .pred P1;                                              \n"
-        "LAB_WAIT:                                                   \n"
-        "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1, 0x989680; \n"
-        "@P1 bra.uni DONE;                                           \n"
-        "bra.uni LAB_WAIT;                                           \n"
-        "DONE:                                                       \n"
-        "}                                                           \n";
     return ptxAsm;
   }
 };
@@ -661,51 +560,6 @@ public:
     return ptxAsm;
   }
 };
-class NamedBarrierArriveOpPattern
-    : public NVGPUOpPatternBase<ttn::NamedBarrierArriveOp,
-                                NamedBarrierArriveOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::NamedBarrierArriveOp,
-                                  NamedBarrierArriveOpPattern>;
-  using Base::Base;
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::NamedBarrierArriveOp op) const {
-    OperandsAndConstraints operandsAndTypes;
-    auto bar = op.getBar();
-    auto numThreads = op.getNumThreads();
-    operandsAndTypes.push_back({bar, "r"});
-    operandsAndTypes.push_back({numThreads, "r"});
-    return operandsAndTypes;
-  }
-
-  std::string getPtxAsm(ttn::NamedBarrierArriveOp op) const {
-    return "bar.arrive $0, $1;";
-  }
-};
-
-class NamedBarrierWaitOpPattern
-    : public NVGPUOpPatternBase<ttn::NamedBarrierWaitOp,
-                                NamedBarrierWaitOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::NamedBarrierWaitOp, NamedBarrierWaitOpPattern>;
-  using Base::Base;
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::NamedBarrierWaitOp op) const {
-    OperandsAndConstraints operandsAndTypes;
-    auto bar = op.getBar();
-    auto numThreads = op.getNumThreads();
-    operandsAndTypes.push_back({bar, "r"});
-    operandsAndTypes.push_back({numThreads, "r"});
-    return operandsAndTypes;
-  }
-
-  std::string getPtxAsm(ttn::NamedBarrierWaitOp op) const {
-    return "bar.sync $0, $1;";
-  }
-};
 
 class StoreDSmemOpPattern
     : public NVGPUOpPatternBase<ttn::StoreDSmemOp, StoreDSmemOpPattern> {
@@ -769,27 +623,6 @@ public:
                "}\n";
     }
     return ptxAsm;
-  }
-};
-
-class Sts64OpPattern : public NVGPUOpPatternBase<ttn::Sts64Op, Sts64OpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::Sts64Op, Sts64OpPattern>;
-  using Base::Base;
-
-  OperandsAndConstraints getOperandsAndConstraints(ttn::Sts64Op op) const {
-    OperandsAndConstraints operandsAndTypes;
-    auto offset = op.getOffset();
-    auto d0 = op.getD0();
-    auto d1 = op.getD1();
-    operandsAndTypes.push_back({offset, "r"});
-    operandsAndTypes.push_back({d0, "r"});
-    operandsAndTypes.push_back({d1, "r"});
-    return operandsAndTypes;
-  }
-
-  std::string getPtxAsm(ttn::Sts64Op op) const {
-    return "st.shared.v2.b32 [$0], {$1, $2};";
   }
 };
 
@@ -996,31 +829,6 @@ public:
                   std::to_string(k) + "." + stringifyEnum(eltTypeC).str() +
                   "." + stringifyEnum(eltTypeA).str() + "." +
                   stringifyEnum(eltTypeB).str() + " " + args + ";";
-    return ptxAsm;
-  }
-};
-
-class ClusterCTAIdOpPattern
-    : public NVGPUOpPatternBase<ttn::ClusterCTAIdOp, ClusterCTAIdOpPattern> {
-public:
-  using Base = NVGPUOpPatternBase<ttn::ClusterCTAIdOp, ClusterCTAIdOpPattern>;
-  using Base::Base;
-
-  std::vector<std::string> getOutputConstraints(ttn::ClusterCTAIdOp op) const {
-    return {"=r"};
-  }
-
-  std::string getPtxAsm(ttn::ClusterCTAIdOp op) const {
-    auto ptxAsm = "{\n"
-                  ".reg .u32 a<5>;              \n"
-                  "mov.u32 a0, %cluster_ctaid.x;\n"  // x
-                  "mov.u32 a1, %cluster_ctaid.y;\n"  // y
-                  "mov.u32 a2, %cluster_ctaid.z;\n"  // z
-                  "mov.u32 a3, %cluster_nctaid.x;\n" // nx
-                  "mov.u32 a4, %cluster_nctaid.y;\n" // ny
-                  "mad.lo.u32 a1, a2, a4, a1;     \n"
-                  "mad.lo.u32 $0, a1, a3, a0;     \n"
-                  "}";
     return ptxAsm;
   }
 };
@@ -1279,35 +1087,52 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<CGABarrierSyncOpPattern>(context);
     patterns.add<FenceAsyncSharedOpPattern>(context);
-    patterns.add<WGMMAFenceOpPattern>(context);
-    patterns.add<WGMMACommitGroupOpPattern>(context);
-    patterns.add<WGMMAWaitGroupOpPattern>(context);
     patterns.add<StoreMatrixOpPattern>(context);
     patterns.add<OffsetOfStmatrixV4OpPattern>(context);
     patterns.add<WGMMADescCreateOpPattern>(context);
-    patterns.add<MBarrierInitOpPattern>(context);
     patterns.add<MBarrierArriveOpPattern>(context);
-    patterns.add<MBarrierWaitOpPattern>(context);
     patterns.add<ClusterArriveOpPattern>(context);
-    patterns.add<ClusterWaitOpPattern>(context);
     patterns.add<TMALoadTiledOpPattern>(context);
     patterns.add<TMAStoreTiledOpPattern>(context);
     patterns.add<LoadDSmemOpPattern>(context);
-    patterns.add<ClusterCTAIdOpPattern>(context);
-    patterns.add<RegAllocOpPattern>(context);
-    patterns.add<RegDeallocOpPattern>(context);
     patterns.add<WGMMAOpPattern>(context);
-    patterns.add<NamedBarrierWaitOpPattern>(context);
-    patterns.add<NamedBarrierArriveOpPattern>(context);
-
-    patterns.add<FenceMBarrierInitOpPattern>(context);
     patterns.add<StoreDSmemOpPattern>(context);
-    patterns.add<Sts64OpPattern>(context);
     patterns.add<OffsetOfSts64OpPattern>(context);
-    patterns.add<CGABarrierWaitOpPattern>(context);
-    patterns.add<CGABarrierArriveOpPattern>(context);
+
+#define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
+  patterns.add<NVGPUOpGenericPattern<SRC_OP>>(                                 \
+      context, ASM, std::vector<std::string>(), std::vector<std::string>());
+    POPULATE_NVGPU_OP(ttn::RegAllocOp, Reg_Alloc_Op)
+    POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, Wgmma_Fence_Op)
+    POPULATE_NVGPU_OP(ttn::CGABarrierSyncOp, Cga_Barrier_Sync_op)
+    POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, Wgmma_Commit_Group_Op)
+    POPULATE_NVGPU_OP(ttn::WGMMAWaitGroupOp, Wgmma_Wait_Group_Op)
+    POPULATE_NVGPU_OP(ttn::ClusterWaitOp, Cluster_Wait_Op)
+    POPULATE_NVGPU_OP(ttn::FenceMBarrierInitOp, Fence_Mbarrier_Init_Op)
+    POPULATE_NVGPU_OP(ttn::CGABarrierArriveOp, Cga_Barrier_Arrive_Op)
+    POPULATE_NVGPU_OP(ttn::CGABarrierWaitOp, Cga_Barrier_Wait_Op)
+    POPULATE_NVGPU_OP(ttn::RegDeallocOp, Reg_Dealloc_Op)
+#undef POPULATE_NVGPU_OP
+    patterns.add<NVGPUOpGenericPattern<ttn::MBarrierInitOp>>(
+        context, Mbarrier_Init_Op, std::vector<std::string>(),
+        std::vector<std::string>({"r", "b"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::MBarrierWaitOp>>(
+        context, Mbarrier_Wait_Op, std::vector<std::string>(),
+        std::vector<std::string>({"r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::NamedBarrierArriveOp>>(
+        context, Named_Barrier_Arrive_Op, std::vector<std::string>(),
+        std::vector<std::string>({"r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::NamedBarrierWaitOp>>(
+        context, Named_Barrier_Wait_Op, std::vector<std::string>(),
+        std::vector<std::string>({"r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::Sts64Op>>(
+        context, Sts64_Op, std::vector<std::string>(),
+        std::vector<std::string>({"r", "r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
+        context, Cluster_Cta_Id_Op, std::vector<std::string>({"=r"}),
+        std::vector<std::string>());
+
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
