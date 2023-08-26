@@ -160,6 +160,45 @@ public:
     return resTy;
   }
 
+  std::string patchPtxAsm(mlir::Operation *op, std::string ptxAsm) const {
+    std::vector<std::pair<int, int>> patchLocations;
+    std::vector<std::string> patchValues;
+    auto start = ptxAsm.find("#", 0);
+    while (start != std::string::npos) {
+      auto endIterator =
+          std::find_if(ptxAsm.begin() + start + 1, ptxAsm.end(),
+                       [](unsigned char c) { return !std::isalnum(c); });
+
+      assert(endIterator != ptxAsm.end() && "unexpected asm format");
+
+      auto end = std::distance(ptxAsm.begin(), endIterator);
+      auto patchLocation = std::make_pair(start, end);
+      patchLocations.push_back(patchLocation);
+      auto patchValue = ptxAsm.substr(start + 1, end - start - 1);
+      patchValues.push_back(patchValue);
+      start = ptxAsm.find("#", end);
+    }
+    assert(patchLocations.size() == patchValues.size() &&
+           "patchLocations and patchValues should have the same size");
+    if (patchLocations.size() == 0) {
+      return ptxAsm;
+    }
+    std::string res = "";
+    size_t prevStart = 0;
+    unsigned i = 0;
+    for (auto &[start, end] : patchLocations) {
+      res += ptxAsm.substr(prevStart, start - prevStart);
+      auto integerAttr = op->getAttrOfType<IntegerAttr>(patchValues[i]);
+      auto attr = integerAttr.getInt();
+      res += std::to_string(attr);
+      prevStart = end;
+      i++;
+    }
+    if (prevStart < ptxAsm.size())
+      res += ptxAsm.substr(prevStart, ptxAsm.size() - prevStart);
+    return res;
+  }
+
   LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
@@ -170,6 +209,7 @@ public:
       return mlir::failure();
     auto concrete = static_cast<const ConcreteT *>(this);
     auto ptxAsm = concrete->getPtxAsm(sourceOp);
+    auto ptxAsmPatched = patchPtxAsm(sourceOp, ptxAsm);
     auto hasSideEffects = !isMemoryEffectFree(sourceOp);
     auto operandsAndConstraints = concrete->getOperandsAndConstraints(sourceOp);
     auto outputConstraints = concrete->getOutputConstraints(sourceOp);
@@ -180,7 +220,7 @@ public:
         getPtxOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
     SmallVector<PTXBuilder::Operand *> outputsAndOperands = ptxOutputs;
     outputsAndOperands.append(ptxOperands.begin(), ptxOperands.end());
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsmPatched);
     ptxInstr(outputsAndOperands, /*onlyAttachMLIRArgs=*/true);
     auto retTy = getReturnType(outputConstraints, rewriter);
     auto res = ptxBuilder.launch(rewriter, loc, retTy,
@@ -258,8 +298,7 @@ public:
   using Base::Base;
 
   std::string getPtxAsm(ttn::WGMMAWaitGroupOp op) const {
-    auto pendings = op.getPendings();
-    return "wgmma.wait_group.sync.aligned " + std::to_string(pendings) + ";";
+    return "wgmma.wait_group.sync.aligned #pendings;";
   }
 };
 
@@ -332,8 +371,7 @@ public:
   using Base::Base;
 
   std::string getPtxAsm(ttn::RegAllocOp op) const {
-    auto regCount = op.getRegCount();
-    return "setmaxnreg.inc.sync.aligned.u32 " + std::to_string(regCount) + ";";
+    return "setmaxnreg.inc.sync.aligned.u32 #regCount;";
   }
 };
 
@@ -344,8 +382,7 @@ public:
   using Base::Base;
 
   std::string getPtxAsm(ttn::RegDeallocOp op) const {
-    auto regCount = op.getRegCount();
-    return "setmaxnreg.dec.sync.aligned.u32 " + std::to_string(regCount) + ";";
+    return "setmaxnreg.dec.sync.aligned.u32 #regCount;";
   }
 };
 
@@ -405,9 +442,7 @@ public:
   }
 
   std::string getPtxAsm(ttn::MBarrierInitOp op) const {
-    uint32_t count = op.getCount();
-    std::string ptxAsm =
-        "@$1 mbarrier.init.shared.b64 [$0], " + std::to_string(count) + ";";
+    std::string ptxAsm = "@$1 mbarrier.init.shared.b64 [$0], #count;";
     return ptxAsm;
   }
 };
@@ -711,9 +746,7 @@ public:
                "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
                ".reg .pred p;                               \n"
                "mov.pred p, $2;                             \n"
-               "@p st.shared::cluster.u" +
-               std::to_string(bitwidth) +
-               " [remoteAddr], $3; \n"
+               "@p st.shared::cluster.u#bitwidth [remoteAddr], $3; \n"
                "}\n";
     }
     if (vec == 2) {
@@ -722,9 +755,7 @@ public:
                "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
                ".reg .pred p;                               \n"
                "mov.pred p, $2;                             \n"
-               "@p st.shared::cluster.v.u" +
-               std::to_string(bitwidth) +
-               " [remoteAddr], {$3, $4}; \n"
+               "@p st.shared::cluster.v.u#bitwidth [remoteAddr], {$3, $4}; \n"
                "}\n";
     }
     if (vec == 4) {
@@ -733,9 +764,8 @@ public:
                "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
                ".reg .pred p;                               \n"
                "mov.pred p, $2;                             \n"
-               "@p st.shared::cluster.v.u" +
-               std::to_string(bitwidth) +
-               " [remoteAddr], {$3, $4, $5, $6}; \n"
+               "@p st.shared::cluster.v.u#bitwidth [remoteAddr], {$3, $4, $5, "
+               "$6}; \n"
                "}\n";
     }
     return ptxAsm;
@@ -1036,9 +1066,7 @@ public:
                   "shr.b64 a2, a2, 4;\n"   // leadingDimension
                   "shl.b64 a3, $1, 46; \n" // startAddr
                   "shr.b64 a3, a3, 50; \n" // startAddr
-                  "mov.u64 a4, " +
-                  std::to_string(mode) +
-                  "; \n" // mode
+                  "mov.u64 a4, #mode; \n"  // mode
                   "shl.b64 a4, a4, 62; \n"
                   "shl.b64 a1, a1, 32; \n"
                   "or.b64 a1, a4, a1; \n"
@@ -1117,17 +1145,13 @@ public:
                   "rem.u32 a5, a2, " +
                   std::to_string(perPhase) +
                   "; \n" // lineOffset
-                  "mul.lo.u32 a5, a5, " +
-                  std::to_string(rowStride) +
-                  "; \n"
+                  "mul.lo.u32 a5, a5, #rowStride; \n"
                   "mad.lo.u32 a5, a4, 4, a5; \n" // lineOffset
                   "div.u32 a6, a5, 16; \n"
                   "xor.b32 a6, a6, a3; \n" // colOffset
                   "rem.u32 a7, a5, 16; \n"
                   "mad.lo.u32 a7, a6, 16, a7; \n" // colOffset
-                  "div.u32 a8, a2, " +
-                  std::to_string(perPhase) +
-                  "; \n"
+                  "div.u32 a8, a2, #perPhase; \n"
                   "mad.lo.u32 $0, a8, 128, a7; \n" // offset
                   "}";
     return ptxAsm;
@@ -1190,17 +1214,13 @@ public:
           "shr.b32 a2, $1, 4; \n"    // myCol = lshr(threadId, i32_val(4))
           "and.b32 a2, a2, 0x1; \n"  // myCol = and_(myCol, i32_val(0x1))
           "mul.lo.u32 a2, a2, 8; \n" // myCol = mul(myCol, i32_val(8))
-          "mad.lo.u32 a2, a0, 16, a2; \n" // myCol = add(myCol,
-                                          // mul(iterOfCol, i32_val(16)))
-          "div.u32 a3, a2, " +
-          std::to_string(rowStride) +
-          "; \n" // offset0 = udiv(myCol, i32_val(rowStride))
-          "mul.lo.u32 a3, a3, " +
-          std::to_string(leadingDimOffset) +
-          "; \n" // offset0 = mul(offset0, i32_val(leadingDimOffset))
-          "rem.u32 a2, a2, " +
-          std::to_string(rowStride) +
-          "; \n" // myCol = myCol % rowStride
+          "mad.lo.u32 a2, a0, 16, a2; \n"  // myCol = add(myCol,
+                                           // mul(iterOfCol, i32_val(16)))
+          "div.u32 a3, a2, #rowStride; \n" // offset0 = udiv(myCol,
+                                           // i32_val(rowStride))
+          "mul.lo.u32 a3, a3, #leadingDimOffset; \n" // offset0 = mul(offset0,
+                                                     // i32_val(leadingDimOffset))
+          "rem.u32 a2, a2, #rowStride; \n" // myCol = myCol % rowStride
           "div.u32 a4, a1, " +
           std::to_string(perPhase) +
           "; \n" // phase =  myrow // perPhase
@@ -1210,9 +1230,9 @@ public:
           "rem.u32 a5, a1, " +
           std::to_string(perPhase) +
           "; \n" // lineOffset = urem(myRow, i32_val(perPhase))
-          "mad.lo.u32 a5, a5, " +
-          std::to_string(rowStride) +
-          ", a2; \n" // lineOffset = add(mul(lineOffset, rowStride), myCol)
+          "mad.lo.u32 a5, a5, #rowStride, a2; \n" // lineOffset =
+                                                  // add(mul(lineOffset,
+                                                  // rowStride), myCol)
           "div.u32 a6, a5, 8; \n"  // colOffset = udiv(lineOffset, i32_val(8)
           "xor.b32 a6, a6, a4; \n" // colOffset = xor_(colOffset, phase)
           "rem.u32 a7, a5, 8; \n"  // temp = urem(lineOffset, i32_val(8)
@@ -1228,22 +1248,20 @@ public:
     } else {
       ptxAsm = "{\n"
                ".reg .u64 a<5>;      \n"
-               "div.u32 a0, $2, 4; \n"    // iterOfCol = udiv(elemIdx,
-                                          // i32_val(4))
-               "and.b32 a1, $1, 0xf; \n"  // myRow = and_(threadId,
-                                          // i32_val(0xf))
-               "add.u32 a1, a1, $3; \n"   // myRow = myRow + rowOfWarp
-               "shr.b32 a2, $1, 4; \n"    // myCol = lshr(threadId,
-                                          // i32_val(4))
-               "and.b32 a2, a2, 0x1; \n"  // myCol = and_(myCol,
-                                          // i32_val(0x1))
-               "mul.lo.u32 a2, a2, 8; \n" // myCol = mul(myCol,
-                                          // i32_val(8))
-               "mul.u32 a3, a1, " +
-               std::to_string(rowStride) +
-               "; \n"                         // offset = myRow * rowStride
-               "mad.lo.u32 $0, a2, 2, a3; \n" // result = add(mul(myCol,
-                                              // i32_val(2)), offset)
+               "div.u32 a0, $2, 4; \n"          // iterOfCol = udiv(elemIdx,
+                                                // i32_val(4))
+               "and.b32 a1, $1, 0xf; \n"        // myRow = and_(threadId,
+                                                // i32_val(0xf))
+               "add.u32 a1, a1, $3; \n"         // myRow = myRow + rowOfWarp
+               "shr.b32 a2, $1, 4; \n"          // myCol = lshr(threadId,
+                                                // i32_val(4))
+               "and.b32 a2, a2, 0x1; \n"        // myCol = and_(myCol,
+                                                // i32_val(0x1))
+               "mul.lo.u32 a2, a2, 8; \n"       // myCol = mul(myCol,
+                                                // i32_val(8))
+               "mul.u32 a3, a1, #rowStride; \n" // offset = myRow * rowStride
+               "mad.lo.u32 $0, a2, 2, a3; \n"   // result = add(mul(myCol,
+                                                // i32_val(2)), offset)
                "}\n";
     }
 
