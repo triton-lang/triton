@@ -58,8 +58,8 @@ class Package(NamedTuple):
 
 
 def get_pybind11_package_info():
-    name = "pybind11-2.10.0"
-    url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
+    name = "pybind11-2.11.1"
+    url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.11.1.tar.gz"
     return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 # llvm

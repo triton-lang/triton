@@ -268,10 +268,6 @@ class JITFunction(KernelInterface[T]):
             tys[v] = v
         return key if isinstance(key, str) else f"*{tys[dtype_str]}"
 
-    def _make_signature(self, sig_key):
-        signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
-        return signature
-
     def _make_constants(self, constexpr_key):
         constants = dict(zip(self.constexprs, constexpr_key))
         return constants
@@ -588,17 +584,17 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        if interpret:
-            from ..interpreter.interpreter import GridSelector
-            return GridSelector(fn)
-        else:
-            return JITFunction(
-                fn,
-                version=version,
-                do_not_specialize=do_not_specialize,
-                debug=debug,
-                noinline=noinline,
-            )
+        # if interpret:
+        from ..interpreter.new_interpreter import InterpretedFunction
+        return InterpretedFunction(fn)
+        # else:
+        #     return JITFunction(
+        #         fn,
+        #         version=version,
+        #         do_not_specialize=do_not_specialize,
+        #         debug=debug,
+        #         noinline=noinline,
+        #     )
     if fn is not None:
         return decorator(fn)
 

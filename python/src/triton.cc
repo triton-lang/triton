@@ -65,6 +65,7 @@
 #include <stdexcept>
 #include <string>
 
+#include <pybind11/numpy.h>
 namespace py = pybind11;
 
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
@@ -1978,11 +1979,42 @@ void init_triton_translation(py::module &m) {
       ret::take_ownership);
 }
 
+void init_triton_interpreter(py::module &&m) {
+  using ret = py::return_value_policy;
+
+  m.def("load_ptrs",
+        [](py::array_t<uint64_t> ptrs, py::dtype ret_dtype) -> py::array {
+          py::gil_scoped_release allow_threads;
+          int numel = ptrs.size();
+          auto shape =
+              std::vector<ptrdiff_t>(ptrs.shape(), ptrs.shape() + ptrs.ndim());
+          py::array ret(ret_dtype, py::array::ShapeContainer{numel});
+          py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
+          for (size_t i = 0; i < ptrs.size(); ++i)
+            memcpy(ret.mutable_data(i),
+                   reinterpret_cast<void *>(reshaped_ptrs.at(i)),
+                   ret_dtype.itemsize());
+          return ret.reshape(shape);
+        });
+
+  m.def("store_ptrs", [](py::array_t<uint64_t> ptrs, py::array values) {
+    py::gil_scoped_release allow_threads;
+    int numel = ptrs.size();
+    py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
+    auto reshaped_values = values.reshape({numel});
+    for (size_t i = 0; i < ptrs.size(); ++i) {
+      memcpy(reinterpret_cast<void *>(reshaped_ptrs.at(i)),
+             reshaped_values.mutable_data(i), values.dtype().itemsize());
+    }
+  });
+}
+
 void init_triton(py::module &m) {
   py::module subm = m.def_submodule("triton");
   init_triton_env_vars(subm);
   // init_triton_codegen(subm.def_submodule("code_gen"));
   init_triton_runtime(subm.def_submodule("runtime"));
   init_triton_ir(subm.def_submodule("ir"));
+  init_triton_interpreter(subm.def_submodule("interpreter"));
   init_triton_translation(subm);
 }
