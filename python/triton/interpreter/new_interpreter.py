@@ -4,6 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
+from .._C.libtriton.triton import interpreter as _interpreter
 
 
 # TODO: duplicate
@@ -35,6 +36,18 @@ def str_to_ty(name):
     return tys[name]
 
 
+def to_numpy_ty(ty):
+    typemap = {
+        tl.float16: np.float16,
+        tl.bfloat16: np.float16,
+        tl.float32: np.float32,
+        tl.float64: np.float64,
+        tl.int8: np.int8,
+        tl.uint8: np.uint8,
+    }
+    return typemap[ty]
+
+
 def make_handle(arg, ty):
     if ty.is_ptr():
         return np.array([arg.data_ptr()], dtype=np.uint64)
@@ -46,6 +59,15 @@ class Builder:
     def __init__(self) -> None:
         pass
 
+    def create_load(self, ptr, _0, _1, isVolatile):
+        return _interpreter.load_ptrs(ptr, np.dtype(np.float32))
+
+    def create_store(self, ptr, val, _0, _1):
+        return _interpreter.store_ptrs(ptr, val)
+
+    def create_fadd(self, lhs, rhs):
+        return lhs + rhs
+
 
 class Interpreter:
 
@@ -55,15 +77,21 @@ class Interpreter:
         handle = make_handle(arg, ty)
         return tl.tensor(handle, ty)
 
+    def patch_member(sef, obj, name, member, builder):
+        new_member = lambda *args, member=member, **kwargs: (member(*args, **kwargs, _builder=builder))
+        setattr(obj, name, new_member)
+
     def _patch_triton_functions(self, fn):
         builder = Builder()
         for key, obj in fn.__globals__.items():
             if obj is not tl:
                 continue
+            for name, member in inspect.getmembers(getattr(obj, 'tensor')):
+                if tl.core.is_builtin(member):
+                    self.patch_member(getattr(obj, 'tensor'), name, member, builder)
             for name, member in inspect.getmembers(obj):
                 if tl.core.is_builtin(member):
-                    new_member = lambda *args, member=member, **kwargs: (member(*args, **kwargs, _builder=builder))
-                    setattr(obj, name, new_member)
+                    self.patch_member(obj, name, member, builder)
             fn.__globals__[key] = obj
         return fn
 
@@ -72,8 +100,11 @@ class Interpreter:
         self.grid = grid
 
     def __call__(self, *args, **kwargs):
-        args = [self._make_wrapper(arg) for arg in args]
-        self.fn(*args, **kwargs)
+        cpu_args = [arg.cpu() for arg in args]
+        wrapped_args = [self._make_wrapper(arg) for arg in cpu_args]
+        self.fn(*wrapped_args, **kwargs)
+        for arg, new_arg in zip(args, cpu_args):
+            arg.copy_(new_arg.to(arg.device))
 
 
 class InterpretedFunction:

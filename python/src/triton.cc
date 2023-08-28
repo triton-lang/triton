@@ -1984,7 +1984,6 @@ void init_triton_interpreter(py::module &&m) {
 
   m.def("load_ptrs",
         [](py::array_t<uint64_t> ptrs, py::dtype ret_dtype) -> py::array {
-          py::gil_scoped_release allow_threads;
           int numel = ptrs.size();
           auto shape =
               std::vector<ptrdiff_t>(ptrs.shape(), ptrs.shape() + ptrs.ndim());
@@ -1998,7 +1997,6 @@ void init_triton_interpreter(py::module &&m) {
         });
 
   m.def("store_ptrs", [](py::array_t<uint64_t> ptrs, py::array values) {
-    py::gil_scoped_release allow_threads;
     int numel = ptrs.size();
     py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
     auto reshaped_values = values.reshape({numel});
