@@ -89,176 +89,72 @@ class Builder:
     # casting ops
     def cast_impl(self, src, dst_type):
         return TensorHandle(src.data.astype(self.np_dtype(dst_type)), dst_type)
+    create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
+    create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
+    create_fp_to_si = lambda self, src, dst_type: self.cast_impl(src, dst_type)
+    create_fp_to_ui = lambda self, src, dst_type: self.cast_impl(src, dst_type)
+    create_fp_ext = lambda self, src, dst_type: self.cast_impl(src, dst_type)
+    create_fp_trunc = lambda self, src, dst_type: self.cast_impl(src, dst_type)
+    create_int_cast = lambda self, src, dst_type, is_signed: self.cast_impl(src, dst_type)
 
     def create_fp_to_fp(self, src, dst_type):
-        pass
-
-    def create_si_to_fp(self, src, dst_type):
-        return self.cast_impl(src, dst_type)
-
-    def create_ui_to_fp(self, src, dst_type):
-        pass
-
-    def create_fp_to_si(self, src, dst_type):
-        pass
-
-    def create_fp_to_ui(self, src, dst_type):
-        pass
-
-    def create_fp_ext(self, src, dst_type):
-        pass
-
-    def create_fp_trunc(self, src, dst_type):
-        pass
-
-    def create_int_cast(self, src, dst_type, is_signed):
-        pass
+        assert "float8 not NotImplemented yet"
 
     def create_bitcast(self, src, dst_type):
-        pass
+        return TensorHandle(src.data.view(self.np_dtype(dst_type)), dst_type)
 
-    def create_to_index(self, input):
-        pass
+    # binary operators
+    def binary_op(self, lhs, rhs, op):
+        return TensorHandle(op(lhs.data, rhs.data), lhs.dtype)
+    create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
+    create_fdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
+    create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
+    create_fsub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
+    create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
+    create_sdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
+    create_udiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
+    create_srem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
+    create_urem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
+    create_add = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
+    create_sub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
+    create_shl = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.left_shift)
+    create_lshr = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.right_shift)
+    create_ashr = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.right_shift)
+    create_minsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
+    create_minui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
+    create_minf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
+    create_maxsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
+    create_maxui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
+    create_maxf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
+    create_icmpSLE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
+    create_icmpSLT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
+    create_icmpSGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
+    create_icmpSGT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater)
+    create_icmpULE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
+    create_icmpULT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
+    create_icmpUGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
+    create_icmpUGT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater)
+    create_icmpEQ = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.equal)
+    create_icmpNE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.not_equal)
+    create_fcmpOLT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
+    create_fcmpOGT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater)
+    create_fcmpOLE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
+    create_fcmpOGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
+    create_fcmpOEQ = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.equal)
+    create_fcmpONE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.not_equal)
+    create_fcmpULT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
+    create_fcmpUGT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater)
+    create_fcmpULE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
+    create_fcmpUGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
+    create_fcmpUEQ = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.equal)
+    create_fcmpUNE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.not_equal)
+    create_and = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_and)
+    create_xor = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_xor)
+    create_or = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_or)
 
-    def create_index_to_si(self, input):
-        pass
-
-    def create_fmul(self, lhs, rhs):
-        pass
-
-    def create_fdiv(self, lhs, rhs):
-        pass
-
-    def create_frem(self, lhs, rhs):
-        pass
-
-    def create_fsub(self, lhs, rhs):
-        pass
-
-    def create_mul(self, lhs, rhs):
-        pass
-
-    def create_sdiv(self, lhs, rhs):
-        pass
-
-    def create_udiv(self, lhs, rhs):
-        pass
-
-    def create_srem(self, lhs, rhs):
-        pass
-
-    def create_urem(self, lhs, rhs):
-        pass
-
-    def create_add(self, lhs, rhs):
-        pass
-
-    def create_sub(self, lhs, rhs):
-        pass
-
-    def create_shl(self, lhs, rhs):
-        pass
-
-    def create_lshr(self, lhs, rhs):
-        pass
-
-    def create_ashr(self, lhs, rhs):
-        pass
-
-    def create_minsi(self, lhs, rhs):
-        pass
-
-    def create_minui(self, lhs, rhs):
-        pass
-
-    def create_minf(self, lhs, rhs):
-        pass
-
-    def create_maxsi(self, lhs, rhs):
-        pass
-
-    def create_maxui(self, lhs, rhs):
-        pass
-
-    def create_maxf(self, lhs, rhs):
-        pass
+    # pointer arithmetic
 
     def create_addptr(self, ptr, offset):
-        pass
-
-    def create_icmpSLE(self, lhs, rhs):
-        pass
-
-    def create_icmpSLT(self, lhs, rhs):
-        pass
-
-    def create_icmpSGE(self, lhs, rhs):
-        pass
-
-    def create_icmpSGT(self, lhs, rhs):
-        pass
-
-    def create_icmpULE(self, lhs, rhs):
-        pass
-
-    def create_icmpULT(self, lhs, rhs):
-        pass
-
-    def create_icmpUGE(self, lhs, rhs):
-        pass
-
-    def create_icmpUGT(self, lhs, rhs):
-        pass
-
-    def create_icmpEQ(self, lhs, rhs):
-        pass
-
-    def create_icmpNE(self, lhs, rhs):
-        pass
-
-    def create_fcmpOLT(self, lhs, rhs):
-        pass
-
-    def create_fcmpOGT(self, lhs, rhs):
-        pass
-
-    def create_fcmpOLE(self, lhs, rhs):
-        pass
-
-    def create_fcmpOGE(self, lhs, rhs):
-        pass
-
-    def create_fcmpOEQ(self, lhs, rhs):
-        pass
-
-    def create_fcmpONE(self, lhs, rhs):
-        pass
-
-    def create_fcmpULT(self, lhs, rhs):
-        pass
-
-    def create_fcmpUGT(self, lhs, rhs):
-        pass
-
-    def create_fcmpULE(self, lhs, rhs):
-        pass
-
-    def create_fcmpUGE(self, lhs, rhs):
-        pass
-
-    def create_fcmpUEQ(self, lhs, rhs):
-        pass
-
-    def create_fcmpUNE(self, lhs, rhs):
-        pass
-
-    def create_and(self, lhs, rhs):
-        pass
-
-    def create_xor(self, lhs, rhs):
-        pass
-
-    def create_or(self, lhs, rhs):
         pass
 
     def create_tensor_pointer_load(self, ptr, boundaryCheck, paddingOption, cacheModifier, evictionPolicy, isVolatile):
