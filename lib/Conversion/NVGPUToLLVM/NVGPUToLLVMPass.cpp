@@ -35,6 +35,24 @@ const std::string Fence_Mbarrier_Init_Op =
 const std::string Cga_Barrier_Arrive_Op = "barrier.cluster.arrive;";
 const std::string Cga_Barrier_Wait_Op = "barrier.cluster.wait;";
 const std::string Reg_Dealloc_Op = "setmaxnreg.dec.sync.aligned.u32 #regCount;";
+const std::string Wgmma_Desc_Create_op =
+    "{\n"
+    ".reg .u64 a<5>;                              \n"
+    "mov.u64 a0, #swizzling;\n"
+    "shl.b64 a1, a0, 3;\n"             // stride dimension
+    "shr.b64 a1, a1, 4;\n"             // stride dimension
+    "mul.lo.u64 a2, $2, #swizzling;\n" // leadingDimension
+    "shr.b64 a2, a2, 4;\n"             // leadingDimension
+    "shl.b64 a3, $1, 46; \n"           // startAddr
+    "shr.b64 a3, a3, 50; \n"           // startAddr
+    "mov.u64 a4, #mode; \n"            // mode
+    "shl.b64 a4, a4, 62; \n"
+    "shl.b64 a1, a1, 32; \n"
+    "or.b64 a1, a4, a1; \n"
+    "shl.b64 a2, a2, 16; \n"
+    "or.b64 a1, a1, a2; \n"
+    "or.b64 $0, a1, a3; \n"
+    "}";
 
 const std::string Mbarrier_Init_Op =
     "@$1 mbarrier.init.shared.b64 [$0], #count;";
@@ -835,59 +853,6 @@ public:
   }
 };
 
-class WGMMADescCreateOpPattern
-    : public NVGPUOpPatternBase<ttn::WGMMADescCreateOp,
-                                WGMMADescCreateOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::WGMMADescCreateOp, WGMMADescCreateOpPattern>;
-  using Base::Base;
-
-  std::vector<std::string>
-  getOutputConstraints(ttn::WGMMADescCreateOp op) const {
-    return {"=l"};
-  }
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::WGMMADescCreateOp op) const {
-    OperandsAndConstraints operandsAndConstraints;
-    auto buffer = op.getBuffer();
-    auto height = op.getHeight();
-
-    operandsAndConstraints.push_back({buffer, "l"});
-    operandsAndConstraints.push_back({height, "l"});
-
-    return operandsAndConstraints;
-  }
-
-  std::string getPtxAsm(ttn::WGMMADescCreateOp op) const {
-    uint32_t mode = static_cast<uint32_t>(op.getMode());
-    uint64_t swizzling = (mode == 1 ? 128 : mode == 2 ? 64 : 32);
-    auto ptxAsm = "{\n"
-                  ".reg .u64 a<5>;                              \n"
-                  "mov.u64 a0, " +
-                  std::to_string(swizzling) +
-                  ";\n"
-                  "shl.b64 a1, a0, 3;\n" // stride dimension
-                  "shr.b64 a1, a1, 4;\n" // stride dimension
-                  "mul.lo.u64 a2, $2, " +
-                  std::to_string(swizzling) +
-                  ";\n"                    // leadingDimension
-                  "shr.b64 a2, a2, 4;\n"   // leadingDimension
-                  "shl.b64 a3, $1, 46; \n" // startAddr
-                  "shr.b64 a3, a3, 50; \n" // startAddr
-                  "mov.u64 a4, #mode; \n"  // mode
-                  "shl.b64 a4, a4, 62; \n"
-                  "shl.b64 a1, a1, 32; \n"
-                  "or.b64 a1, a4, a1; \n"
-                  "shl.b64 a2, a2, 16; \n"
-                  "or.b64 a1, a1, a2; \n"
-                  "or.b64 $0, a1, a3; \n"
-                  "}";
-    return ptxAsm;
-  }
-};
-
 class OffsetOfSts64OpPattern
     : public NVGPUOpPatternBase<ttn::OffsetOfSts64Op, OffsetOfSts64OpPattern> {
 public:
@@ -1015,6 +980,8 @@ public:
       } else if (rowStride == 16) {
         perPhase = 4;
         maxPhase = 2;
+      } else {
+        assert(false && "Unsupported rowStride");
       }
 
       ptxAsm =
@@ -1123,11 +1090,13 @@ public:
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, Cluster_Cta_Id_Op, std::vector<std::string>({"=r"}),
         std::vector<std::string>());
+    patterns.add<NVGPUOpGenericPattern<ttn::WGMMADescCreateOp>>(
+        context, Wgmma_Desc_Create_op, std::vector<std::string>({"=l"}),
+        std::vector<std::string>({"l", "l"}));
 
     patterns.add<FenceAsyncSharedOpPattern>(context);
     patterns.add<StoreMatrixOpPattern>(context);
     patterns.add<OffsetOfStmatrixV4OpPattern>(context);
-    patterns.add<WGMMADescCreateOpPattern>(context);
     patterns.add<MBarrierArriveOpPattern>(context);
     patterns.add<ClusterArriveOpPattern>(context);
     patterns.add<TMALoadTiledOpPattern>(context);
