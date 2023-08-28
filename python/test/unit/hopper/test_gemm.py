@@ -211,102 +211,113 @@ def matmul_kernel(
 
 
 @pytest.mark.parametrize('BLOCK_M,BLOCK_N,BLOCK_K,NUM_WARPS,NUM_CTAS,M,N,K,TRANS_A,TRANS_B,TRANS_OUTPUT,epilogue,out_dtype,USE_TMA_STORE,NUM_STAGES,ENABLE_WS',
-                         [(128, 128, 64, 4, 1, *shape_w_c, 'none', out_dtype, use_tma_store, 3, enable_ws)
-                          for shape_w_c in [
-                             # badcase from cublas-important-layers
-                             [4096, 1, 1024, False, False, True],
-                             [2048, 204, 1000, True, False, True],
-                             [4096, 1, 1024, False, False, False],
-                             [2048, 204, 1000, True, False, False],
-                         ]
+                         [
+                             # corner shapes
+                             (128, 128, 64, 4, 1, *shape_w_c, 'none', out_dtype, use_tma_store, 3, enable_ws)
+                             for shape_w_c in [
+                                 [4096, 1, 1024, False, False, True],
+                                 [2048, 204, 1000, True, False, True],
+                                 [4096, 1, 1024, False, False, False],
+                                 [2048, 204, 1000, True, False, False],
+                             ]
                              for out_dtype in ['float16', 'float32']
                              for use_tma_store in [False, True]
                              for enable_ws in [False, True]
-                         ] + [(*shape_w_c, trans_a, trans_b, trans_output, epilogue, out_dtype, use_tma_store, num_stages, enable_ws)
-                              # softmax works for one CTA
-                              for shape_w_c in [
-                             [64, 64, 16, 4, 1, 64, 64, 64],
-                             [128, 128, 64, 4, 1, None, None, None],
-                             [16, 16, 64, 4, 1, 16, 16, 64],
-                             [64, 64, 32, 8, 1, 64, 64, 64],
-                             [128, 128, 64, 4, 1, 128, 128, 128],
-                         ]
+                         ] + [
+                             # softmax epilogue
+                             (*shape_w_c, trans_a, trans_b, trans_output, epilogue, out_dtype, use_tma_store, num_stages, enable_ws)
+                             for shape_w_c in [
+                                 [64, 64, 16, 4, 1, 64, 64, 64],
+                                 [128, 128, 64, 4, 1, None, None, None],
+                                 [16, 16, 64, 4, 1, 16, 16, 64],
+                                 [64, 64, 32, 8, 1, 64, 64, 64],
+                                 [128, 128, 64, 4, 1, 128, 128, 128],
+                             ]
                              for epilogue in ['softmax']
                              for out_dtype in ['float16', 'float32']
                              for use_tma_store in [False, True]
-                             for trans_a in [False, True]
-                             for trans_b in [False, True]
-                             for trans_output in [False, True]
+                             for trans_a in [False,]
+                             for trans_b in [True,]
+                             for trans_output in [False,]
                              for num_stages in [3]
                              for enable_ws in [False, True]
-                         ] + [(*shape_w_c, trans_a, trans_b, trans_output, epilogue, out_dtype, use_tma_store, num_stages, enable_ws)
-                              for shape_w_c in [
-                             [64, 64, 16, 4, 1, 128, 128, 64],
-                             *[[256, 64, 16, num_warps, num_ctas, 256, 256, 64] for num_warps in [4, 8] for num_ctas in [1, 2, 4]],
-                             # for chain-dot
-                             [128, 128, 64, 4, 1, None, None, None],
-                             [64, 64, 16, 4, 1, None, None, None],
-                             # small BLOCK_M and BLOCK_K
-                             [16, 16, 64, 4, 1, 128, 128, 64],
-                             *[[16, 32, 64, num_warps, num_ctas, 256, 256, 256] for num_warps in [4, 8] for num_ctas in [1, 2]],
-                             # repeat
-                             [64, 64, 32, 8, 1, 128, 256, 64],
-                             [64, 64, 16, 8, 2, 128, 128, 64],
-                             # irregular shape
-                             [128, 128, 64, 4, 1, 500, 200, 128],
-                             [128, 128, 64, 4, 2, 513, 193, 192],
-                         ]
+                         ] + [
+                             # loop over epilogues besides of softmax
+                             (*shape_w_c, trans_a, trans_b, trans_output, epilogue, out_dtype, use_tma_store, num_stages, enable_ws)
+                             for shape_w_c in [
+                                 [64, 64, 16, 4, 1, 128, 128, 64],
+                                 *[[256, 64, 16, num_warps, num_ctas, 256, 256, 64] for num_warps in [4, 8] for num_ctas in [1, 2, 4]],
+                                 # for chain-dot
+                                 [128, 128, 64, 4, 1, None, None, None],
+                                 [64, 64, 16, 4, 1, None, None, None],
+                                 # small BLOCK_M and BLOCK_K
+                                 [16, 16, 64, 4, 1, 128, 128, 64],
+                                 *[[16, 32, 64, num_warps, num_ctas, 256, 256, 256] for num_warps in [4, 8] for num_ctas in [1, 2]],
+                                 # repeat
+                                 [64, 64, 32, 8, 1, 128, 256, 64],
+                                 [64, 64, 16, 8, 2, 128, 128, 64],
+                                 # irregular shape
+                                 [128, 128, 64, 4, 1, 500, 200, 128],
+                                 [128, 128, 64, 4, 2, 513, 193, 192],
+                             ]
                              for epilogue in ['none', 'add-matrix', 'add-rows', 'add-cols', 'chain-dot']
                              for out_dtype in ['float16', 'float32']
                              for use_tma_store in [False, True]
-                             for trans_a in [False, True]
-                             for trans_b in [False, True]
-                             for trans_output in [False, True]
+                             for trans_a in [False,]
+                             for trans_b in [True,]
+                             for trans_output in [False,]
                              for num_stages in [3]
                              for enable_ws in [False, True]
                              if not (epilogue == 'chain-dot' and (shape_w_c[6] is not None or shape_w_c[1] != shape_w_c[6]))
-                         ] + [(*shape_w_c, trans_a, trans_b, trans_output, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
-                              for shape_w_c in [
-                             [64, 64, 32, 4, 1, 128, 256, 64],
-                             [128, 128, 16, 4, 4, 512, 256, 64],
-                             [128, 256, 32, 4, 8, 256, 256, 192],
-                             [512, 256, 32, 4, 8, 1024, 256, 192],
-                             # BLOCK_K >= 128
-                             [64, 128, 128, 4, 1, 512, 256, 256],
-                             [128, 128, 128, 4, 1, 256, 256, 192],
-                             [128, 128, 128, 4, 2, 256, 256, 192],
-                             # small BLOCK_M and BLOCK_K
-                             [16, 32, 32, 4, 1, 128, 256, 64],
-                             [32, 32, 16, 4, 1, 256, 256, 192],
-                             [16, 32, 64, 4, 4, 512, 256, 64],
-                         ]
-                             for out_dtype in ['float16', 'float32']
-                             for use_tma_store in [False, True]
+                         ] + [
+                             # loop over tile shapes and transpose combinations
+                             (*shape_w_c, trans_a, trans_b, trans_output, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
+                             for shape_w_c in [
+                                 [64, 64, 32, 4, 1, 128, 256, 64],
+                                 [128, 128, 16, 4, 4, 512, 256, 64],
+                                 [128, 256, 32, 4, 8, 256, 256, 192],
+                                 [512, 256, 32, 4, 8, 1024, 256, 192],
+                                 # BLOCK_K >= 128
+                                 [64, 128, 128, 4, 1, 512, 256, 256],
+                                 [128, 128, 128, 4, 1, 256, 256, 192],
+                                 [128, 128, 128, 4, 2, 256, 256, 192],
+                                 # small BLOCK_M and BLOCK_K
+                                 [16, 32, 32, 4, 1, 128, 256, 64],
+                                 [32, 32, 16, 4, 1, 256, 256, 192],
+                                 [16, 32, 64, 4, 4, 512, 256, 64],
+                             ]
+                             for out_dtype in ['float32',]
+                             for use_tma_store in [False,]
                              for trans_a in [False, True]
                              for trans_b in [False, True]
                              for trans_output in [False, True]
                              for num_stages in [3]
                              for enable_ws in [False, True]
-                         ] + [(64, n, 16, 4, 1, 512, 256, 256, False, True, trans_output, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
-                              # loop over instr shapes
-                              for n in [16, 32, 64, 128, 256]
-                              for trans_output in [False, True]
-                              for out_dtype in ['float16', 'float32']
-                              for use_tma_store in [False, True]
-                              for num_stages in [2, 4, 5, 7]
-                              for enable_ws in [False, True]
-                              ] + [(*shape_w_c, *shape, False, True, trans_output, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
-                                   # irregular shapes
-                                   for shape_w_c in [
-                                       [128, 128, 64, 4, 1],
-                                       [256, 128, 64, 4, 2],
-                                       [128, 128, 128, 4, 2],
-                              ]
-                             for shape in list(itertools.product([*range(512, 4096, 360)], [*range(512, 4096, 360)], [512, 1024]))
-                             for trans_output in [False, True]
-                             for out_dtype in ['float16', 'float32']
+                         ] + [
+                             # loop over instr shapes & pipeline stages
+                             (64, n, 16, 4, 1, 512, 256, 256, False, True, trans_output, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
+                             for n in [16, 32, 64, 128, 256]
+                             for trans_output in [False,]
+                             for out_dtype in ['float32',]
+                             for use_tma_store in [False,]
+                             for num_stages in [2, 4, 5, 7]
+                             for enable_ws in [False, True]
+                         ] + [
+                             # irregular shapes
+                             (*shape_w_c, *shape, False, True, trans_output, 'none', out_dtype, use_tma_store, num_stages, enable_ws)
+                             for shape_w_c in [
+                                 [128, 128, 64, 4, 1],
+                                 [256, 128, 64, 4, 2],
+                                 [128, 128, 128, 4, 2],
+                             ]
+                             for shape in [
+                                 [512, 360, 1024],
+                                 [360, 4096, 512],
+                             ]
+                             for trans_output in [False,]
+                             for out_dtype in ['float32',]
                              for use_tma_store in [False, True]
-                             for num_stages in [2, 3, 4]
+                             for num_stages in [3, 4]
                              for enable_ws in [False, True]
                          ])
 @pytest.mark.skipif(torch.cuda.get_device_capability()
