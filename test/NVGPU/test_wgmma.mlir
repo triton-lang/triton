@@ -5,36 +5,10 @@ module attributes {"triton_gpu.num-warps" = 4 : i32,  "triton_gpu.num-ctas" = 2 
     %buffer = llvm.mlir.null : !llvm.ptr<i64, 3>
     %height = arith.constant 16 : i32
     // CHECK: llvm.ptrtoint
-    // CHECK: llvm.shl
-    // CHECK: llvm.lshr
-    // CHECK: llvm.zext
-    // CHECK: llvm.mul
-    // CHECK: llvm.lshr
-    // CHECK: llvm.shl
-    // CHECK: llvm.lshr
-    // CHECK: llvm.shl
-    // CHECK: llvm.or
-    // CHECK: llvm.shl
-    // CHECK: llvm.or
-    // CHECK: llvm.shl
-    // CHECK: llvm.or
-    // CHECK: llvm.or
+    // CHECK: llvm.inline_asm
     %descA = nvgpu.wgmma_desc_create %buffer, %height {mode = 2 : i32}: (!llvm.ptr<i64, 3>, i32) -> (i64)
     // CHECK: llvm.ptrtoint
-    // CHECK: llvm.shl
-    // CHECK: llvm.lshr
-    // CHECK: llvm.zext
-    // CHECK: llvm.mul
-    // CHECK: llvm.lshr
-    // CHECK: llvm.shl
-    // CHECK: llvm.lshr
-    // CHECK: llvm.shl
-    // CHECK: llvm.or
-    // CHECK: llvm.shl
-    // CHECK: llvm.or
-    // CHECK: llvm.shl
-    // CHECK: llvm.or
-    // CHECK: llvm.or
+    // CHECK: llvm.inline_asm
     %descB = nvgpu.wgmma_desc_create %buffer, %height {mode = 2 : i32}: (!llvm.ptr<i64, 3>, i32) -> (i64)
 
     // CHECK-COUNT-32: llvm.extractvalue
