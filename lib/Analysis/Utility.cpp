@@ -476,6 +476,8 @@ struct DFSState {
   /// We mark each op as ready if all its operands and parents ops are seen. If
   /// an op is ready, we add it to the queue. Otherwise, we keep adding its
   /// operands to the ancestors set.
+  /// We always want an op to be scheduled after all its parents to handle
+  /// correctly cases with scf operations.
   void addToReadyQueue(Operation *op, DFSSubgraphState &subGraph,
                        SmallVector<Operation *, 4> &readyQueue) {
     bool ready = true;
