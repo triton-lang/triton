@@ -170,9 +170,7 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
   for (int i = 0; i < numPtrs; ++i) {
     Value contiguousIndex =
         add(contiguousMatIndex, i32_val(i * contiguousLoadMatOffset));
-    if (warpsPerCTA[order[0]] > contiguousTileNumMats ||
-        contiguousTileNumMats % warpsPerCTA[order[0]] != 0)
-      contiguousIndex = urem(contiguousIndex, i32_val(contiguousTileNumMats));
+    contiguousIndex = urem(contiguousIndex, i32_val(contiguousTileNumMats));
     contiguousIndex = add(contiguousIndex, contiguousSliceMatOffset);
     Value contiguousIndexSwizzled = xor_(contiguousIndex, phase);
     offs[i] = add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
