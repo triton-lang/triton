@@ -21,8 +21,7 @@ using ::mlir::LLVM::getSRegValue;
 
 namespace {
 
-using Constraint = std::variant<int, std::string>;
-using OperandsAndConstraints = std::vector<std::pair<mlir::Value, Constraint>>;
+using OperandsAndConstraints = std::vector<std::pair<mlir::Value, std::string>>;
 
 const std::string Reg_Alloc_Op = "setmaxnreg.inc.sync.aligned.u32 #regCount;";
 const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
@@ -62,36 +61,59 @@ const std::string Cluster_Cta_Id_Op = "{\n"
                                       "mad.lo.u32 $0, a1, a3, a0;     \n"
                                       "}";
 
+bool isNumber(const std::string &s) {
+  return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) {
+                         return !std::isdigit(c);
+                       }) == s.end();
+}
+
+Type getTypeFromConstraint(char constraint, mlir::PatternRewriter &rewriter) {
+  Type ty;
+  if (constraint == 'b')
+    ty = IntegerType::get(rewriter.getContext(), 1);
+  else if (constraint == 'h')
+    ty = IntegerType::get(rewriter.getContext(), 16);
+  else if (constraint == 'r')
+    ty = IntegerType::get(rewriter.getContext(), 32);
+  else if (constraint == 'l')
+    ty = IntegerType::get(rewriter.getContext(), 64);
+  else if (constraint == 'f')
+    ty = FloatType::getF32(rewriter.getContext());
+  else if (constraint == 'd')
+    ty = FloatType::getF64(rewriter.getContext());
+  else {
+    assert(false && "Unsupported constraint");
+  }
+  return ty;
+}
+
 template <typename SourceOp, typename ConcreteT>
 class NVGPUOpPatternBase : public mlir::RewritePattern {
 public:
   explicit NVGPUOpPatternBase(mlir::MLIRContext *context)
       : mlir::RewritePattern(SourceOp::getOperationName(), 1, context) {}
 
-  mlir::Value convertToType(mlir::Value val, Constraint constraint,
+  // Converts the given value to the type represented by the constraint
+  // E.g. if val is of type llvmptr and constraint is 'r', then we convert
+  // val to i32 using ptrtoint(i32_ty, val)
+  mlir::Value convertToType(mlir::Value val, std::string constraint,
                             Location &loc,
                             mlir::PatternRewriter &rewriter) const {
-    if (val.getType().isa<LLVM::LLVMPointerType>()) {
-      if (std::holds_alternative<std::string>(constraint)) {
-        auto constraintStr = std::get<std::string>(constraint);
-        if (constraintStr == "r") {
-          return ptrtoint(i32_ty, val);
-        } else if (constraintStr == "l") {
-          return ptrtoint(i64_ty, val);
-        } else {
-          return val;
-        }
-      }
-      return val;
-    } else {
-      if (std::holds_alternative<std::string>(constraint)) {
-        auto bitwidth = val.getType().getIntOrFloatBitWidth();
-        auto constraintStr = std::get<std::string>(constraint);
-        return zext(IntegerType::get(rewriter.getContext(), bitwidth), val);
+    auto isConstraintNumber = isNumber(constraint);
+    if (!isConstraintNumber) {
+      auto ty = getTypeFromConstraint(constraint[0], rewriter);
+      if (val.getType().isa<LLVM::LLVMPointerType>()) {
+        return ptrtoint(ty, val);
+      } else {
+        assert(val.getType().getIntOrFloatBitWidth() <=
+                   ty.getIntOrFloatBitWidth() &&
+               "Cannot convert to a smaller type");
+        return zext(ty, val);
       }
     }
     return val;
   }
+
   SmallVector<PTXBuilder::Operand *>
   getPtxOutputs(std::vector<std::string> &outputConstraints,
                 PTXBuilder &ptxBuilder) const {
@@ -110,13 +132,21 @@ public:
     OperandsAndConstraints unpackedOperands;
     for (auto &[operand, constraint] : operandsAndConstraints) {
       auto llvmStruct = llvm::dyn_cast<LLVM::LLVMStructType>(operand.getType());
+      // if a constraint is a number, then we are doing input/output tying
+      // if the operand is a struct, then we need to unpack it, and
+      // add the constraint to each of the unpacked operands uses the constraint
+      // as an offset
+      auto isConstraintNumber = isNumber(constraint);
       if (llvmStruct) {
         for (unsigned i = 0; i < llvmStruct.getBody().size(); i++) {
-          if (std::holds_alternative<int>(constraint)) {
-            auto constraintInt = std::get<int>(constraint);
+          if (isConstraintNumber) {
+            auto constraintInt = std::stoi(constraint) + i;
             unpackedOperands.push_back(
                 {extract_val(llvmStruct.getBody()[i], operand, i),
-                 constraintInt + i});
+                 std::to_string(constraintInt)});
+          } else {
+            unpackedOperands.push_back(
+                {extract_val(llvmStruct.getBody()[i], operand, i), constraint});
           }
         }
       } else {
@@ -135,15 +165,8 @@ public:
         unpackOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
     for (auto &[operand, constraint] : unpackedOperandsAndConstraints) {
       auto convertedOperand = convertToType(operand, constraint, loc, rewriter);
-      if (std::holds_alternative<int>(constraint)) {
-        auto *ptxOperand = ptxBuilder.newOperand(
-            convertedOperand, std::to_string(std::get<int>(constraint)));
-        ptxOperands.push_back(ptxOperand);
-      } else {
-        auto *ptxOperand = ptxBuilder.newOperand(
-            convertedOperand, std::get<std::string>(constraint));
-        ptxOperands.push_back(ptxOperand);
-      }
+      auto *ptxOperand = ptxBuilder.newOperand(convertedOperand, constraint);
+      ptxOperands.push_back(ptxOperand);
     }
     return ptxOperands;
   }
@@ -167,27 +190,7 @@ public:
       for (auto &outputConstraint : outputConstraints) {
         assert(outputConstraint[0] == '=' &&
                "Constraint must be for an output");
-        Type retTy;
-        switch (outputConstraint[1]) {
-        case 'h':
-          retTy = IntegerType::get(ctx, 16);
-          break;
-        case 'r':
-          retTy = IntegerType::get(ctx, 32);
-          break;
-        case 'l':
-          retTy = IntegerType::get(ctx, 64);
-          break;
-        case 'f':
-          retTy = FloatType::getF32(ctx);
-          break;
-        case 'd':
-          retTy = FloatType::getF64(ctx);
-          break;
-        default:
-          assert(false && "Unsupported output constraint");
-          break;
-        }
+        Type retTy = getTypeFromConstraint(outputConstraint[1], rewriter);
         retTys.push_back(retTy);
       }
       if (retTys.size() == 1) {
@@ -278,7 +281,6 @@ template <typename SourceOp>
 class NVGPUOpGenericPattern
     : public NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>> {
 public:
-  using Base = NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>>;
   explicit NVGPUOpGenericPattern(mlir::MLIRContext *context, std::string ptxAsm,
                                  std::vector<std::string> outputConstraints,
                                  std::vector<std::string> inputConstraints)
@@ -705,7 +707,7 @@ public:
     auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
 
     // TODO (zahi): is this the best way to tie inputs/outputs ?
-    operandsAndConstraints.push_back({opC, 0});
+    operandsAndConstraints.push_back({opC, "0"});
 
     if (structTypeA) {
       operandsAndConstraints.push_back({opA, "f"});
@@ -930,6 +932,8 @@ public:
     } else if (rowStride == 32) {
       perPhase = 4;
       maxPhase = 2;
+    } else {
+      assert(false && "Unsupported rowStride");
     }
 
     auto ptxAsm = "{\n"
@@ -1087,19 +1091,6 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-    patterns.add<FenceAsyncSharedOpPattern>(context);
-    patterns.add<StoreMatrixOpPattern>(context);
-    patterns.add<OffsetOfStmatrixV4OpPattern>(context);
-    patterns.add<WGMMADescCreateOpPattern>(context);
-    patterns.add<MBarrierArriveOpPattern>(context);
-    patterns.add<ClusterArriveOpPattern>(context);
-    patterns.add<TMALoadTiledOpPattern>(context);
-    patterns.add<TMAStoreTiledOpPattern>(context);
-    patterns.add<LoadDSmemOpPattern>(context);
-    patterns.add<WGMMAOpPattern>(context);
-    patterns.add<StoreDSmemOpPattern>(context);
-    patterns.add<OffsetOfSts64OpPattern>(context);
-
 #define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
   patterns.add<NVGPUOpGenericPattern<SRC_OP>>(                                 \
       context, ASM, std::vector<std::string>(), std::vector<std::string>());
@@ -1132,6 +1123,19 @@ public:
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, Cluster_Cta_Id_Op, std::vector<std::string>({"=r"}),
         std::vector<std::string>());
+
+    patterns.add<FenceAsyncSharedOpPattern>(context);
+    patterns.add<StoreMatrixOpPattern>(context);
+    patterns.add<OffsetOfStmatrixV4OpPattern>(context);
+    patterns.add<WGMMADescCreateOpPattern>(context);
+    patterns.add<MBarrierArriveOpPattern>(context);
+    patterns.add<ClusterArriveOpPattern>(context);
+    patterns.add<TMALoadTiledOpPattern>(context);
+    patterns.add<TMAStoreTiledOpPattern>(context);
+    patterns.add<LoadDSmemOpPattern>(context);
+    patterns.add<WGMMAOpPattern>(context);
+    patterns.add<StoreDSmemOpPattern>(context);
+    patterns.add<OffsetOfSts64OpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
