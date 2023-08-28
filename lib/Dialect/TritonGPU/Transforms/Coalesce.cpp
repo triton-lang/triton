@@ -21,6 +21,19 @@ template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
   return ret;
 }
 
+unsigned getElementBitWidth(const Value &val) {
+  auto valType = val.getType();
+  if (valType.isa<PointerType>())
+    valType = valType.cast<PointerType>().getPointeeType();
+  auto tensorType = valType.cast<RankedTensorType>();
+
+  auto typeForMem =
+      tensorType.getElementType().isa<PointerType>()
+          ? tensorType.getElementType().cast<PointerType>().getPointeeType()
+          : tensorType.getElementType();
+  return typeForMem.getIntOrFloatBitWidth();
+}
+
 typedef DenseMap<Value, std::function<Type(Type)>> LayoutMap;
 
 struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
@@ -74,6 +87,18 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       order = argSort(queryAxisInfo(ptr).getContiguity());
     }
 
+    auto matchesOrder = [&refTensorType](const Value &val) {
+      if (val.getType() == refTensorType) {
+        return true;
+      }
+
+      auto rttType = val.getType().dyn_cast<RankedTensorType>();
+      if (!rttType) {
+        return false;
+      }
+      return rttType.getShape() == refTensorType.getShape();
+    };
+
     // The desired divisibility is the maximum divisibility
     // among all dependent pointers who have the same order as
     // `ptr`.
@@ -83,7 +108,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     if (refType.isa<RankedTensorType>() && ptr.getDefiningOp()) {
       for (Operation *op : mlir::multiRootGetSlice(ptr.getDefiningOp())) {
         for (Value val : op->getResults()) {
-          if (val.getType() != refTensorType)
+          if (!matchesOrder(val))
             continue;
           auto currOrder =
               argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
@@ -109,11 +134,11 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
 
     // Thread tile size depends on memory alignment
     SmallVector<unsigned, 4> sizePerThread(refTensorType.getRank(), 1);
-    unsigned elemNumBits = typeForMem.getIntOrFloatBitWidth();
-    unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
     unsigned perThread = 1;
     for (Value val : withSameOrder) {
       auto valInfo = queryAxisInfo(val);
+      unsigned elemNumBits = getElementBitWidth(val);
+      unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
       unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
       unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
       unsigned maxContig =
