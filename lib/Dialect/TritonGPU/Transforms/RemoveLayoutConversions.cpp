@@ -175,8 +175,8 @@ public:
   Operation *rewriteOp(Operation *op);
   // Rewrite a for op based on the layout picked by the analysis.
   Operation *rewriteForOp(scf::ForOp forOp);
+  Operation *rewriteIfOp(scf::IfOp ifOp);
   Operation *rewriteYieldOp(scf::YieldOp yieldOp);
-  // Dump the current stage of layout information.
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -184,6 +184,7 @@ public:
   // Return the mapped value in the given encoding. This will insert a convert
   // if the encoding is different than the encoding decided at resolve time.
   Value getValueAs(Value value, Attribute encoding);
+  // Dump the current stage of layout information.
   void dump();
 
 private:
@@ -264,13 +265,11 @@ void LayoutPropagation::initAnchorLayout() {
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
                                     SmallVector<Value> &changed,
                                     Operation *op) {
-  SmallVector<Attribute> encodings(info.encodings.begin(),
-                                   info.encodings.end());
   for (Value value : values) {
     if (!value.getType().isa<RankedTensorType>())
       continue;
     bool hasChanged = false;
-    for (auto encoding : encodings) {
+    for (auto encoding : info.encodings) {
       auto dstEncoding = inferDstEncoding(op, encoding);
       if (dstEncoding)
         hasChanged |= layouts[value].encodings.insert(*dstEncoding);
@@ -295,12 +294,12 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       auto parent = yieldOp->getParentOp();
       SmallVector<Value> valuesToPropagate = {
           parent->getResult(use.getOperandNumber())};
-      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+      if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
             forOp.getRegionIterArg(use.getOperandNumber()));
+      if (isa<scf::ForOp, scf::IfOp>(parent))
         setEncoding({valuesToPropagate}, info, changed, user);
-      }
-      // TODO: handle scf.if and while.
+      // TODO: handle while.
       continue;
     }
     // Workaround: don't propagate through truncI
@@ -324,7 +323,7 @@ void LayoutPropagation::propagateLayout() {
   }
   while (!queue.empty()) {
     Value currentValue = queue.back();
-    LayoutInfo &info = layouts[currentValue];
+    LayoutInfo info = layouts[currentValue];
     queue.pop_back();
     SmallVector<Value> changed = propagateToUsers(currentValue, info);
     queue.insert(queue.end(), changed.begin(), changed.end());
@@ -520,8 +519,35 @@ Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
     }
     map(oldArg, newArg);
   }
-  opToDelete.push_back(forOp.getOperation());
   return newForOp.getOperation();
+}
+
+Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
+  SmallVector<Value> operands;
+  OpBuilder rewriter(ifOp);
+  SmallVector<Type> newResultTypes(ifOp->getResultTypes());
+  for (unsigned i = 0, e = ifOp->getNumResults(); i < e; ++i) {
+    auto it = layouts.find(ifOp->getResult(i));
+    if (it == layouts.end())
+      continue;
+    auto origType = ifOp->getResult(i).getType().cast<RankedTensorType>();
+    Attribute encoding = *(it->second.encodings.begin());
+    newResultTypes[i] = RankedTensorType::get(
+        origType.getShape(), origType.getElementType(), encoding);
+  }
+  auto newIfOp = rewriter.create<scf::IfOp>(ifOp.getLoc(), newResultTypes,
+                                            ifOp.getCondition(), true, true);
+  newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
+  newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());
+  for (auto [oldResult, newResult] :
+       llvm::zip(ifOp.getResults(), newIfOp.getResults())) {
+    if (oldResult.getType() == newResult.getType()) {
+      oldResult.replaceAllUsesWith(newResult);
+      continue;
+    }
+    map(oldResult, newResult);
+  }
+  return newIfOp.getOperation();
 }
 
 Operation *LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
@@ -529,8 +555,10 @@ Operation *LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
   Operation *newYield = rewriter.clone(*yieldOp.getOperation());
   Operation *parentOp = yieldOp->getParentOp();
   for (OpOperand &operand : yieldOp->getOpOperands()) {
-    Value result = parentOp->getResult(operand.getOperandNumber());
-    auto tensorType = result.getType().dyn_cast<RankedTensorType>();
+    Type yieldType = operand.get().getType();
+    if (isa<scf::ForOp, scf::IfOp>(parentOp))
+      yieldType = parentOp->getResult(operand.getOperandNumber()).getType();
+    auto tensorType = yieldType.dyn_cast<RankedTensorType>();
     if (!tensorType)
       continue;
     Value newOperand = getValueAs(operand.get(), tensorType.getEncoding());
@@ -541,13 +569,19 @@ Operation *LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
-  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+  opToDelete.push_back(op);
+  if (auto forOp = dyn_cast<scf::ForOp>(op))
     return rewriteForOp(forOp);
-  }
+  if (auto ifOp = dyn_cast<scf::IfOp>(op))
+    return rewriteIfOp(ifOp);
   OpBuilder rewriter(op);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
   if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-    Attribute srcEncoding = *layouts[convertOp.getOperand()].encodings.begin();
+    Attribute srcEncoding =
+        convertOp.getOperand().getType().cast<RankedTensorType>().getEncoding();
+    auto it = layouts.find(convertOp.getOperand());
+    if (it != layouts.end())
+      srcEncoding = *(it->second.encodings.begin());
     Value src = getValueAs(convertOp.getOperand(), srcEncoding);
     auto tensorType = op->getResult(0).getType().cast<RankedTensorType>();
     auto newType = RankedTensorType::get(tensorType.getShape(),
@@ -555,7 +589,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     auto cvt = rewriter.create<triton::gpu::ConvertLayoutOp>(op->getLoc(),
                                                              newType, src);
     map(op->getResult(0), cvt.getResult());
-    opToDelete.push_back(op);
     return cvt.getOperation();
   }
   if (canFoldIntoConversion(op, encoding)) {
@@ -566,7 +599,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     auto cvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), newType, newOp->getResult(0));
     map(op->getResult(0), cvt.getResult());
-    opToDelete.push_back(op);
     return cvt.getOperation();
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
@@ -577,7 +609,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults()))
       map(oldResult, newResult);
-    opToDelete.push_back(op);
     return newOp;
   }
   assert(0 && "unexpected op in rewrite");
@@ -587,8 +618,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
 static bool canBeRemat(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return !isExpensiveLoadOrStore(op);
-  if (isa<triton::CatOp, triton::ViewOp>(op))
-    return false;
   if (isa<tensor::ExtractSliceOp, triton::gpu::AllocTensorOp,
           triton::gpu::InsertSliceAsyncOp, triton::AtomicRMWOp,
           triton::AtomicCASOp, triton::DotOp>(op))

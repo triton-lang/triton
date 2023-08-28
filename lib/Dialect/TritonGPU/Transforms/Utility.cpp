@@ -400,6 +400,8 @@ LogicalResult getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     if (auto *definingOp = currentValue.getDefiningOp()) {
       if (canFoldIntoConversion(definingOp, encoding))
         continue;
+      if (isa<triton::CatOp>(definingOp))
+        return failure();
       for (Value operand : definingOp->getOperands()) {
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
