@@ -48,12 +48,6 @@ def to_numpy_ty(ty):
     return typemap[ty]
 
 
-def make_handle(arg, ty):
-    if ty.is_ptr():
-        return np.array([arg.data_ptr()], dtype=np.uint64)
-    assert False
-
-
 class Builder:
 
     def __init__(self) -> None:
@@ -71,40 +65,53 @@ class Builder:
 
 class Interpreter:
 
-    def _make_wrapper(self, arg):
-        ty_str = triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg))
-        ty = str_to_ty(ty_str)
-        handle = make_handle(arg, ty)
-        return tl.tensor(handle, ty)
-
-    def patch_member(sef, obj, name, member, builder):
+    @staticmethod
+    def patch_attr(obj, name, member, builder):
         new_member = lambda *args, member=member, **kwargs: (member(*args, **kwargs, _builder=builder))
         setattr(obj, name, new_member)
 
-    def _patch_triton_functions(self, fn):
+    @staticmethod
+    def _patch_lang_tensor(tensor, builder):
+        for name, member in inspect.getmembers(tensor):
+            if tl.core.is_builtin(member):
+                Interpreter.patch_attr(tensor, name, member, builder)
+
+    @staticmethod
+    def _patch_lang_core(lang, builder):
+        for name, member in inspect.getmembers(lang):
+            if tl.core.is_builtin(member):
+                Interpreter.patch_attr(lang, name, member, builder)
+
+    @staticmethod
+    def _patch_lang(fn):
         builder = Builder()
-        for key, obj in fn.__globals__.items():
-            if obj is not tl:
-                continue
-            for name, member in inspect.getmembers(getattr(obj, 'tensor')):
-                if tl.core.is_builtin(member):
-                    self.patch_member(getattr(obj, 'tensor'), name, member, builder)
-            for name, member in inspect.getmembers(obj):
-                if tl.core.is_builtin(member):
-                    self.patch_member(obj, name, member, builder)
-            fn.__globals__[key] = obj
-        return fn
+        lang = [value for key, value in fn.__globals__.items() if value is tl]
+        assert len(lang) == 1, "triton.language must be visible from within jit'd function"
+        Interpreter._patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
+        Interpreter._patch_lang_core(lang[0], builder)
 
     def __init__(self, fn, grid) -> None:
-        self.fn = self._patch_triton_functions(fn)
         self.grid = grid
+        self.fn = fn
+        Interpreter._patch_lang(fn)
 
-    def __call__(self, *args, **kwargs):
-        cpu_args = [arg.cpu() for arg in args]
-        wrapped_args = [self._make_wrapper(arg) for arg in cpu_args]
+    @staticmethod
+    def _implicit_cvt(arg):
+        if hasattr(arg, 'data_ptr'):
+            ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
+            return tl.tensor(np.array([arg.data_ptr()], dtype=np.uint64), ty)
+        return arg
+
+    def __call__(self, *args_dev, **kwargs):
+        # we need to copy arguments to the host for the interpreter
+        args_hst = [arg.cpu() for arg in args_dev]
+        # implicitly convert tensor arguments to their base pointers
+        wrapped_args = [self._implicit_cvt(arg) for arg in args_hst]
+        # run function
         self.fn(*wrapped_args, **kwargs)
-        for arg, new_arg in zip(args, cpu_args):
-            arg.copy_(new_arg.to(arg.device))
+        # copy arguments back to propagate side-effects
+        for arg_dev, arg_hst in zip(args_dev, args_hst):
+            arg_dev.copy_(arg_hst.to(arg_dev.device))
 
 
 class InterpretedFunction:
