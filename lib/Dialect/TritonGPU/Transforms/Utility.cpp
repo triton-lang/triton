@@ -382,9 +382,11 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   return newOp;
 }
 
-LogicalResult getConvertBackwardSlice(Value root, SetVector<Value> &slice,
-                                      Attribute rootEncoding,
-                                      DenseMap<Value, Attribute> &layout) {
+LogicalResult
+getConvertBackwardSlice(Value root, SetVector<Value> &slice,
+                        Attribute rootEncoding,
+                        DenseMap<Value, Attribute> &layout,
+                        std::function<bool(Operation *)> stopPropagation) {
   SmallVector<std::pair<Value, Attribute>> queue = {{root, rootEncoding}};
   while (!queue.empty()) {
     auto [currentValue, encoding] = queue.back();
@@ -399,6 +401,8 @@ LogicalResult getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     layout[currentValue] = encoding;
     if (auto *definingOp = currentValue.getDefiningOp()) {
       if (canFoldIntoConversion(definingOp, encoding))
+        continue;
+      if (stopPropagation && stopPropagation(definingOp))
         continue;
       if (isa<triton::CatOp>(definingOp))
         return failure();

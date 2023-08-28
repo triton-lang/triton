@@ -77,6 +77,20 @@ tt.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   tt.return
 }
 
+// Hoist the convert on top of ext to make it cheaper.
+// CHECK-LABEL: hoist_above_ext
+tt.func @hoist_above_ext(%arg0: tensor<1024xf16, #layout0>, %arg1: f32) -> tensor<1024xf32, #layout1> {
+// CHECK: %[[CVT:.+]] = triton_gpu.convert_layout
+// CHECK: arith.extf %[[CVT]]
+// CHECK-NOT: triton_gpu.convert_layout
+// CHECK: tt.return
+  %0 = arith.extf %arg0 : tensor<1024xf16, #layout0> to tensor<1024xf32, #layout0>
+  %1 = tt.splat %arg1 : (f32) -> tensor<1024xf32, #layout1>
+  %2 = triton_gpu.convert_layout %0 : (tensor<1024xf32, #layout0>) -> tensor<1024xf32, #layout1>
+  %3 = arith.addf %1, %2 : tensor<1024xf32, #layout1>
+  tt.return %3 : tensor<1024xf32, #layout1>
+}
+
 // CHECK-LABEL: if
 tt.func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: triton_gpu.convert_layout
@@ -278,6 +292,19 @@ tt.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, 
 }
 
 // CHECK-LABEL: loop_if
+// CHECK-NOT: triton_gpu.convert_layout
+//     CHECK: scf.for
+// CHECK-NOT: triton_gpu.convert_layout
+//     CHECK:   scf.if
+// CHECK-NOT: triton_gpu.convert_layout
+//     CHECK:     scf.yield
+//     CHECK:   else
+//     CHECK:     scf.yield
+// CHECK-NOT: triton_gpu.convert_layout
+//     CHECK:   scf.yield
+//     CHECK: triton_gpu.convert_layout
+// CHECK-NOT: triton_gpu.convert_layout
+//     CHECK: tt.store
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 tt.func @loop_if(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {
   %cst = arith.constant dense<true> : tensor<64x64xi1, #blocked1>

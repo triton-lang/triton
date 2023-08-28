@@ -659,8 +659,7 @@ static scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter,
 
 static void rewriteSlice(SetVector<Value> &slice,
                          DenseMap<Value, Attribute> &layout,
-                         ConvertLayoutOp convertOp) {
-
+                         ConvertLayoutOp convertOp, IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
   for (Value v : slice) {
     if (v.getDefiningOp()) {
@@ -673,7 +672,6 @@ static void rewriteSlice(SetVector<Value> &slice,
   }
   opsToRewrite = multiRootTopologicalSort(opsToRewrite);
 
-  IRMapping mapping;
   SmallVector<Operation *> deadLoops;
   OpBuilder builder(slice.begin()->getContext());
   for (Operation *op : opsToRewrite) {
@@ -743,6 +741,13 @@ static void rewriteSlice(SetVector<Value> &slice,
     op->erase();
 }
 
+static void rewriteSlice(SetVector<Value> &slice,
+                         DenseMap<Value, Attribute> &layout,
+                         ConvertLayoutOp convertOp) {
+  IRMapping mapping;
+  rewriteSlice(slice, layout, convertOp, mapping);
+}
+
 static void backwardRematerialization(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
@@ -773,12 +778,76 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
   rewriteSlice(slice, layout, convertOp);
 }
 
+// For convert left we try to hoist them above type extension to reduce the cost
+// of the convert.
+static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
+  // we don't want to rematerialize any conversion to/from shared
+  if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
+      triton::gpu::isSharedEncoding(convertOp.getOperand()))
+    return;
+  // we don't handle conversions to DotOperandEncodingAttr
+  // this is a heuristics to accommodate fused attention
+  auto targetType = convertOp->getResultTypes()[0].cast<RankedTensorType>();
+  if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
+    return;
+
+  // 1. Take a backward slice of all the tensor dependencies.
+  SetVector<Value> slice;
+  DenseMap<Value, Attribute> layout;
+  auto isExtOp = [](Operation *op) {
+    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp>(op);
+  };
+  // Get a backward slice but don't go past ext ops
+  LogicalResult result = getConvertBackwardSlice(
+      convertOp.getOperand(), slice, targetType.getEncoding(), layout, isExtOp);
+  if (result.failed() || slice.empty())
+    return;
+  Operation *extOp = nullptr;
+  // 2. Check if all the operations in the slice can be rematerialized.
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp()) {
+      if (!canBeRemat(op))
+        return;
+      if (isExtOp(op)) {
+        // Only apply it if there is a single ext op otherwise we would have to
+        // duplicate the convert.
+        if (extOp != nullptr)
+          return;
+        extOp = op;
+      }
+    }
+  }
+  if (extOp == nullptr)
+    return;
+  // Move the convert before the ext op and rewrite the slice.
+  OpBuilder builder(extOp);
+  auto tensorType = extOp->getOperand(0).getType().cast<RankedTensorType>();
+  auto newType =
+      RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(),
+                            layout[extOp->getResult(0)]);
+  auto newConvertOp = builder.create<ConvertLayoutOp>(
+      convertOp.getLoc(), newType, extOp->getOperand(0));
+  IRMapping mapping;
+  mapping.map(extOp->getOperand(0), newConvertOp.getResult());
+  // 3. Rewrite the slice.
+  rewriteSlice(slice, layout, convertOp, mapping);
+}
+
 static void backwardRematerialization(ModuleOp module) {
   SmallVector<ConvertLayoutOp> convertOps;
   module.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
     backwardRematerialization(convertOp);
+  }
+}
+
+static void hoistConvert(ModuleOp module) {
+  SmallVector<ConvertLayoutOp> convertOps;
+  module.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ConvertLayoutOp convertOp : convertOps) {
+    hoistConvertOnTopOfExt(convertOp);
   }
 }
 
@@ -795,6 +864,7 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
+    // 1. Propagate layout forward starting from "anchor" ops.
     m.walk([](triton::FuncOp funcOp) {
       LayoutPropagation layoutPropagation(funcOp);
       layoutPropagation.initAnchorLayout();
@@ -810,7 +880,12 @@ public:
       signalPassFailure();
     }
 
+    // 2. For convert ops left try to rematerialize the slice of producer
+    // operation to avoid having to convert.
     backwardRematerialization(m);
+    // 3. For converts left try to hoist them above cast generating larger size
+    // types in order to reduce the cost of the convert op.
+    hoistConvert(m);
 
     mlir::RewritePatternSet decomposePatterns(context);
     decomposePatterns.add<DecomposeDotOperand>(context);
@@ -820,6 +895,8 @@ public:
       signalPassFailure();
     }
 
+    // 4. Apply clean up patterns to remove remove dead convert and dead code
+    // generated by the previous transformations.
     mlir::RewritePatternSet cleanUpPatterns2(context);
     populateForOpDeadArgumentElimination(cleanUpPatterns2);
     scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
