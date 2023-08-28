@@ -2172,12 +2172,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                Y, stride_yk, stride_yn,
                W, stride_wn, stride_wl,
                Z, stride_zm, stride_zn,
-               out_dtype: tl.constexpr,
                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
                ADD_MATRIX: tl.constexpr, ADD_ROWS: tl.constexpr, ADD_COLS: tl.constexpr,
                ALLOW_TF32: tl.constexpr,
                DO_SOFTMAX: tl.constexpr, CHAIN_DOT: tl.constexpr,
-               COL_A: tl.constexpr, COL_B: tl.constexpr):
+               COL_A: tl.constexpr, COL_B: tl.constexpr,
+               out_dtype: tl.constexpr = tl.float32):
         off_m = tl.arange(0, BLOCK_M)
         off_n = tl.arange(0, BLOCK_N)
         off_l = tl.arange(0, BLOCK_N)
@@ -2251,7 +2251,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          y_tri, y_tri.stride(0), y_tri.stride(1),
                          w_tri, w_tri.stride(0), w_tri.stride(1),
                          z_tri, z_tri.stride(0), z_tri.stride(1),
-                         out_dtype,
                          COL_A=col_a, COL_B=col_b,
                          BLOCK_M=M, BLOCK_K=K, BLOCK_N=N,
                          ADD_MATRIX=epilogue == 'add-matrix',
@@ -2260,7 +2259,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          DO_SOFTMAX=epilogue == 'softmax',
                          CHAIN_DOT=epilogue == 'chain-dot',
                          ALLOW_TF32=allow_tf32,
-                         num_warps=num_warps, num_ctas=num_ctas)
+                         num_warps=num_warps, num_ctas=num_ctas,
+                         out_dtype=out_dtype)
     if epilogue == 'softmax' and (in_dtype != 'float32' or allow_tf32):
         ptx = pgm.asm["ptx"]
         start = ptx.find("shfl.sync")
@@ -2313,9 +2313,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float32:
         if capability[0] == 7 and capability[1] == 5:  # Turing
-          assert re.search(r'mma.sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.f16.f16', ptx)
+            assert re.search(r'mma.sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.f16.f16', ptx)
         else:
-          assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.f16.f16', ptx)
+            assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.f16.f16', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float16:
         if capability[0] == 7 and capability[1] == 5:  # Turing
             assert re.search(r'mma.sync.aligned.m\d+n\d+k8(?:.row.col)?.f16.f16.f16', ptx)
@@ -2331,6 +2331,7 @@ def test_dot_mulbroadcastred(in_dtype, device):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         pytest.skip("Requires sm >= 80 to run")
+
     @triton.jit
     def kernel(Z, X, Y,
                M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
@@ -2430,6 +2431,7 @@ def test_constexpr(literal, dtype_str, device):
 def test_dot_without_load(dtype_str, device):
     capability = torch.cuda.get_device_capability()
     allow_tf32 = capability[0] > 7
+
     @triton.jit
     def _kernel(out, ALLOW_TF32: tl.constexpr):
         a = GENERATE_TEST_HERE
@@ -2900,6 +2902,8 @@ def test_call(type, num_ctas, device):
 # -------------
 
 # TODO(Keren): if_exp_dynamic
+
+
 @pytest.mark.parametrize("if_type", ["if", "if_and_dynamic", "if_exp_static", "if_and_static"])
 def test_if(if_type, device):
 
@@ -3084,7 +3088,7 @@ def test_inline_asm(num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
     check_cuda_only(device)
-    
+
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
