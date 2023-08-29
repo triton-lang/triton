@@ -756,6 +756,7 @@ const std::string Bf16_to_Fp8E4M3 =
 #endif
 
 /* ----- Packed integer to BF16 ------ */
+#ifndef USE_ROCM
 const std::string S8_to_Bf16 =
     "{                                           \n"
     ".reg .s8 s<4>;                              \n"
@@ -768,6 +769,7 @@ const std::string S8_to_Bf16 =
     "prmt.b32 $0, f0, f1, 0x7632;                \n" // f32->bf16 + pack
     "prmt.b32 $1, f2, f3, 0x7632;                \n" //
     "}";
+#endif
 
 static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
                                         Type inType, Type ouType) {
@@ -1511,6 +1513,29 @@ struct FSubOpConversion
   }
 };
 
+#ifdef USE_ROCM
+static SmallVector<Value>
+S8_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
+		   const Value &v0, const Value &v1, const Value &v2,
+		   const Value &v3) {
+  SmallVector<Value> inValues = {v0, v1, v2, v3};
+  SmallVector<Value> outValues = {};
+  for (Value inVal : inValues) {
+    Value i32Val = sext(i32_ty, inVal);
+
+    GCNBuilder builder;
+    auto &cvt = *builder.create("v_cvt_f32_i32");
+    auto res = builder.newOperand("=v");
+    auto operand = builder.newOperand(i32Val, "v");
+    cvt(res, operand);
+    Value f32Val = builder.launch(rewriter, loc, f32_ty, false);
+
+    outValues.push_back(FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, f32Val));
+  }
+  return outValues;
+}
+#endif
+
 // Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<mlir::arith::SIToFPOp, SIToFPOpConversion> {
@@ -1526,11 +1551,16 @@ struct SIToFPOpConversion
     Type inElemTy = getElementType(op.getIn());
     Type outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
+      #if USE_ROCM
+      auto outVals = S8_to_Bf16(loc, rewriter, operands[0][0], operands[1][0],
+                             operands[2][0], operands[3][0]);
+      #else
       auto cvtFunc = makeConverterFromPtx(
           S8_to_Bf16, getTypeConverter()->convertType(inElemTy),
           getTypeConverter()->convertType(outElemTy));
       auto outVals = cvtFunc(loc, rewriter, operands[0][0], operands[1][0],
                              operands[2][0], operands[3][0]);
+      #endif
       assert(outVals.size() == 4);
       return outVals;
     } else if (outElemTy.isBF16()) {

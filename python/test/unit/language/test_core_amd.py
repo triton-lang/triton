@@ -834,6 +834,7 @@ def test_atomic_cas():
     ('bfloat16', 'float32', False),
     ('float32', 'int32', True),
     ('float32', 'int1', False),
+    ('int8', 'bfloat16', False),
 ] + [
     (f'uint{x}', f'int{x}', True) for x in [8, 16, 32, 64]
 ] + [
