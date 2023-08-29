@@ -116,5 +116,3 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "standard.py", 33))
         assert (check_file_lines(file_lines, "standard.py", 34))
         assert (check_file_lines(file_lines, "standard.py", 36))
-        # core.py is changed frequently, so we only check if it exists
-        assert (check_file_lines(file_lines, "core.py", -1))

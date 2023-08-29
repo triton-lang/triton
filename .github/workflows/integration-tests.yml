@@ -62,6 +62,11 @@ jobs:
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files --verbose
+
       - name: Install Triton
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
@@ -258,6 +263,17 @@ jobs:
           sudo apt update
           sudo apt install gh
 
+      - name: Save PR number to a file
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          echo $PR_NUMBER > pr_number
+      - name: Upload PR number to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: pr_number
+          path: pr_number
+
       - name: Download latest main artifacts
         env:
           ARTIFACT_NAME: artifacts A100
@@ -353,33 +369,20 @@ jobs:
             echo "Error while comparing artifacts"
             echo "COMPARISON_RESULT=error" >> $GITHUB_ENV
           fi
-      - name: Check exit code and handle failure
-        if: ${{ env.COMPARISON_RESULT == 'error' }}
+      - name: Check comparison result and write to file
         run: |
-          echo "Error while comparing artifacts"
-          exit 1
-      - name: Fetch Run ID
-        id: get_run_id
-        run: echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
-
+          if [ "${{ env.COMPARISON_RESULT }}" = "true" ]; then
+            echo "SUCCESS" > comparison_result
+          else
+            echo "FAILED" > comparison_result
+          fi
+      - name: Upload comparison result to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: comparison_result
+          path: comparison_result
       - name: Upload results as artifact
         uses: actions/upload-artifact@v2
         with:
           name: kernels-reference-check
           path: kernels_reference_check.txt
-
-      - name: Check output and comment on PR
-        if: ${{ env.COMPARISON_RESULT == 'false' }}
-        uses: actions/github-script@v5
-        with:
-          github-token: ${{ secrets.CI_ACCESS_TOKEN }}
-          script: |
-            const run_id = ${{ env.RUN_ID }};
-            const issue_number = context.payload.pull_request.number;
-            const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}).`;
-            await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue_number,
-                body: message
-            });

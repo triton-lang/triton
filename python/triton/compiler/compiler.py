@@ -12,7 +12,8 @@ from typing import Any
 
 from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs,
                                    compile_ptx_to_cubin, get_env_vars, get_num_warps,
-                                   get_shared_memory_size, ir, translate_llvmir_to_ptx,
+                                   get_shared_memory_size, ir, runtime,
+                                   translate_llvmir_to_ptx,
                                    translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend, path_to_ptxas
 from ..common.build import is_hip
@@ -141,9 +142,9 @@ def ttgir_to_llir(mod, extern_libs, arch, tma_infos):
         _add_external_libs(mod, extern_libs)
     # TODO: separate tritongpu_to_llvmir for different backends
     if _is_cuda(arch):
-        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, False)
+        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, runtime.TARGET.NVVM)
     else:
-        return translate_triton_gpu_to_llvmir(mod, 0, True)
+        return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.ROCDL)
 
 
 # PTX translation
@@ -296,6 +297,32 @@ def get_architecture_descriptor(capability):
     return capability
 
 
+def get_arch_default_num_warps(device_type):
+    if device_type in ["cuda", "hip"]:
+        num_warps = 4
+    else:
+        _device_backend = get_backend(device_type)
+        assert _device_backend
+        arch = _device_backend.get_architecture_descriptor()
+        num_warps = arch["num_warps"]
+
+    return num_warps
+
+
+def get_arch_default_num_stages(device_type, capability=None):
+    if device_type in ["cuda", "hip"]:
+        arch = get_architecture_descriptor(capability)
+        is_cuda = device_type == "cuda" and _is_cuda(arch)
+        num_stages = 3 if is_cuda and arch >= 75 else 2
+    else:
+        _device_backend = get_backend(device_type)
+        assert _device_backend
+        arch = _device_backend.get_architecture_descriptor()
+        num_stages = arch["num_stages"]
+
+    return num_stages
+
+
 def add_cuda_stages(arch, extern_libs, stages):
 
     stages["ptx"] = (lambda path: Path(path).read_text(),
@@ -307,12 +334,14 @@ def add_cuda_stages(arch, extern_libs, stages):
 def compile(fn, **kwargs):
     # Get device type to decide which backend should be used
     device_type = kwargs.get("device_type", "cuda")
+    capability = kwargs.get("cc", None)
+
     if is_hip():
         device_type = "hip"
 
     if device_type == "cuda":
         _device_backend = get_backend(device_type)
-        arch = get_architecture_descriptor(kwargs.get("cc", None))
+        arch = get_architecture_descriptor(capability)
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
@@ -323,9 +352,10 @@ def compile(fn, **kwargs):
         is_cuda = False
     context = ir.context()
     constants = kwargs.get("constants", dict())
-    num_warps = kwargs.get("num_warps", 4)
+    num_warps = kwargs.get("num_warps", get_arch_default_num_warps(device_type))
+    assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
-    num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else 2)
+    num_stages = kwargs.get("num_stages", get_arch_default_num_stages(device_type, capability=capability))
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
@@ -365,6 +395,10 @@ def compile(fn, **kwargs):
                           lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
         _device_backend.add_stages(arch, extern_libs, stages)
     else:
+        # pass the user's configuration to the backend device.
+        arch["num_warps"] = num_warps
+        arch["num_stages"] = num_stages
+        arch["num_ctas"] = num_ctas
         _device_backend.add_stages(arch, extern_libs, stages)
 
     # find out the signature of the function

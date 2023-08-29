@@ -361,7 +361,7 @@ bool supportMMA(triton::DotOp op, int version) {
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     if (!(numWarps % 4 == 0 && retShapePerCTA[0] % 64 == 0 &&
           retShapePerCTA[1] % 8 == 0 &&
-          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN() ||
+          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
       return false;
@@ -473,9 +473,11 @@ struct DFSState {
   SmallVector<Operation *, 16> topologicalCounts;
   DenseSet<Operation *> seen;
 
-  /// We mark each op as ready if all its operands are seen. If an op is ready,
-  /// we add it to the queue. Otherwise, we keep adding its operands to the
-  /// ancestors set.
+  /// We mark each op as ready if all its operands and parents ops are seen. If
+  /// an op is ready, we add it to the queue. Otherwise, we keep adding its
+  /// operands to the ancestors set.
+  /// We always want an op to be scheduled after all its parents to handle
+  /// correctly cases with scf operations.
   void addToReadyQueue(Operation *op, DFSSubgraphState &subGraph,
                        SmallVector<Operation *, 4> &readyQueue) {
     bool ready = true;
@@ -485,6 +487,14 @@ struct DFSState {
         subGraph.push_back(def);
         ready = false;
       }
+    }
+    Operation *parent = op->getParentOp();
+    while (parent) {
+      if (!seen.count(parent)) {
+        subGraph.push_back(parent);
+        ready = false;
+      }
+      parent = parent->getParentOp();
     }
     if (ready)
       readyQueue.push_back(op);
