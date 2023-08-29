@@ -43,6 +43,9 @@ namespace LLVM {
 void vprintf(StringRef msg, ValueRange args,
              ConversionPatternRewriter &rewriter);
 
+void vprintf(ConversionPatternRewriter &rewriter, StringRef msg,
+             const Value& args...);
+
 void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
                    std::string elem_repr, ConversionPatternRewriter &builder);
 

@@ -687,6 +687,12 @@ void vprintf(StringRef msg, ValueRange args,
   PrintOpConversion::llPrintf(msg, args, rewriter);
 }
 
+void vprintf(ConversionPatternRewriter &rewriter, StringRef msg,
+             const Value& args...) {
+  std::vector<Value> values{args};
+  vprintf(msg, values, rewriter);
+}
+
 void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
                    std::string elem_repr, ConversionPatternRewriter &builder) {
   std::string fmt = info + " t-%d ";
