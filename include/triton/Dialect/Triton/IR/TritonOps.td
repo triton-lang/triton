@@ -137,7 +137,7 @@ def TT_LoadOp : TT_Op<"load",
                       [SameLoadStoreOperandsAndResultShape,
                        SameLoadStoreOperandsAndResultEncoding,
                        AttrSizedOperandSegments,
-                       MemoryEffects<[MemRead]>,
+                       DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
                        TypesMatchWith<"infer ptr type from result type",
                                       "result", "ptr", "$_self",
                                       "mlir::OpTrait::impl::verifyLoadStorePointerAndValueType">,
@@ -498,6 +498,8 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
     let results = (outs TT_IntTensor:$result);
 
     let assemblyFormat = "attr-dict `:` type($result)";
+
+    let hasFolder = 1;
 }
 
 //
@@ -514,7 +516,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [Elementwise,
   }];
 
   let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type]>>:$args);
-  let results = (outs TT_Tensor:$result);
+  let results = (outs TT_Type:$result);
 
 
   let assemblyFormat = [{

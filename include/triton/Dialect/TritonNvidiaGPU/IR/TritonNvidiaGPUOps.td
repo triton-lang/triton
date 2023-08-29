@@ -279,8 +279,7 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", []> {
 }
 
 def TTNG_StoreAsyncOp : TTNG_Op<"store_async",
-                              [Source1IsSharedEncoding,
-                               MemoryEffects<[MemWrite]>]> {
+                              [MemoryEffects<[MemWrite]>]> {
   let summary = "store asynchronous by a tensor pointer";
   let arguments = (ins TT_TensorPtr:$dst, TT_Tensor:$src,
                        DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache);

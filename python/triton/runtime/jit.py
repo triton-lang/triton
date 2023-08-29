@@ -13,6 +13,7 @@ from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union,
 
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
+from ..language.core import dtype
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
@@ -358,19 +359,16 @@ class JITFunction(KernelInterface[T]):
 
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
-        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
+        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = triton.language.dtype(\'{dflt}\')' if dtype.is_dtype(f'{dflt}') else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
         args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
 
         src = f"""
-def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_stages=3, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
-    from ..compiler import compile, CompiledKernel
+import triton
+def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
+    from ..compiler import compile, CompiledKernel, get_arch_default_num_warps, get_arch_default_num_stages
     sig_key = {f'{sig_keys},' if len(sig_keys) > 0 else ()}
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
     spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
-    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, enable_warp_specialization, self.debug)
-    if not extern_libs is None:
-      key = (key, tuple(extern_libs.items()))
-    assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     assert num_ctas > 0
     assert grid is not None
     if callable(grid):
@@ -402,6 +400,15 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_s
             stream = get_cuda_stream(device)
         else:
             stream = device_backend.get_stream()
+
+    if num_warps is None:
+        num_warps = get_arch_default_num_warps(device_type)
+    if num_stages is None:
+        num_stages = get_arch_default_num_stages(device_type)
+
+    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, enable_warp_specialization, self.debug)
+    if not extern_libs is None:
+      key = (key, tuple(extern_libs.items()))
 
     bin = cache[device].get(key, None)
     if bin is not None:
@@ -461,9 +468,6 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_s
         self.arg_names = [v.name for v in signature.parameters.values()]
         self.arg_defaults = [v.default for v in signature.parameters.values()]
         self.has_defaults = any(v != inspect._empty for v in self.arg_defaults)
-        # specialization hints
-        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
-        self.do_not_specialize = {self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize}
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]
@@ -480,6 +484,10 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=4, num_ctas=1, num_s
         self.__annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         # index of constexprs
         self.constexprs = [self.arg_names.index(name) for name, ty in self.__annotations__.items() if 'constexpr' in ty]
+        # specialization hints
+        regular_args = [arg for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
+        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
+        self.do_not_specialize = {regular_args.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize}
         # tma info
         self.tensormaps_info = TMAInfos()
         # launcher

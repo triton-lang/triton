@@ -54,6 +54,7 @@
 #include <fstream>
 #include <optional>
 #include <pybind11/buffer_info.h>
+#include <pybind11/embed.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -171,6 +172,30 @@ private:
   std::unique_ptr<mlir::Location> lastLoc;
   bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
 };
+
+static std::string locationToString(mlir::Location loc) {
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  loc.print(os);
+  os.flush(); // Make sure all the content is dumped into the 'str' string
+  return str;
+}
+
+static void outputWarning(mlir::Location loc, const std::string &msg) {
+  std::string locStr = locationToString(loc);
+
+  py::exec(
+      R"(
+import warnings
+
+def custom_showwarning(message, category, filename, lineno, file=None, line=None):
+    print(f"UserWarning: {message}")
+
+warnings.showwarning = custom_showwarning
+warnings.warn(f"{loc}: {msg}")
+)",
+      py::globals(), py::dict(py::arg("loc") = locStr, py::arg("msg") = msg));
+}
 
 /*****************************************************************************/
 /* Python bindings for triton::ir                                            */
@@ -595,6 +620,17 @@ void init_triton_ir(py::module &&m) {
                  auto *newBlock = block->splitBlock(pos);
                  newBlock->erase();
                }
+             });
+             // 2. Check if the result of tl.advance is used
+             self.walk([&](mlir::Operation *op) {
+               if (mlir::isa<mlir::triton::AdvanceOp>(op) &&
+                   op->getResult(0).use_empty())
+                 outputWarning(op->getLoc(), "The result of tl.advance is not "
+                                             "being used. Note that tl.advance "
+                                             "does not have any side effects. "
+                                             "To move the block pointer, you "
+                                             "need to assign the result of "
+                                             "tl.advance to a variable.");
              });
            })
       .def_property_readonly("type", &mlir::triton::FuncOp::getFunctionType)

@@ -80,6 +80,16 @@ void LoadOp::print(OpAsmPrinter &printer) {
   printer.printStrippedAttrOrType(getResult().getType());
 }
 
+void LoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getPtr(),
+                       SideEffects::DefaultResource::get());
+  if (getIsVolatile())
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         SideEffects::DefaultResource::get());
+}
+
 ParseResult StoreOp::parse(OpAsmParser &parser, OperationState &result) {
   // Parse operands
   SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
@@ -416,6 +426,16 @@ LogicalResult mlir::triton::DotOp::verify() {
   auto interface = cast<DialectInferLayoutInterface>(&dialect);
   return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
                                                      bEncoding);
+}
+
+//-- MakeRangeOp --
+OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
+  // make_range(start, start + 1) -> constant(start)
+  if (adaptor.getStart() + 1 == adaptor.getEnd()) {
+    auto shapedType = getType().cast<ShapedType>();
+    return SplatElementsAttr::get(shapedType, adaptor.getStartAttr());
+  }
+  return {};
 }
 
 //-- ReduceOp --

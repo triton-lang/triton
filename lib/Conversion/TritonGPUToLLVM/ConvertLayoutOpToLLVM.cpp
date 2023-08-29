@@ -699,15 +699,6 @@ private:
     return success();
   }
 
-  // Pack two 16-bit values into a 32-bit register.
-  static Value pack16bitsTo32(ConversionPatternRewriter &rewriter, Location loc,
-                              Value hb, Value lb) {
-    hb = zext(i32_ty, bitcast(hb, i16_ty));
-    lb = zext(i32_ty, bitcast(lb, i16_ty));
-    Value pack = or_(lb, shl(hb, i32_val(16)));
-    return pack;
-  }
-
   // blocked -> shared.
   // Swizzling in shared memory to avoid bank conflict. Normally used for
   // A/B operands of dots.
@@ -766,6 +757,14 @@ private:
       Value warpId0 = urem(urem(warpId, i32_val(warpsPerCTA[0])),
                            i32_val(srcShape[0] / instrShape[0]));
 
+      unsigned inVec =
+          inOrd == outOrd ? triton::gpu::getContigPerThread(mmaLayout)[inOrd[0]]
+                          : 1;
+      unsigned outVec = dstSharedLayout.getVec();
+      unsigned minVec = std::min(outVec, inVec);
+      assert(minVec == 2);
+      auto wordTy = vec_ty(elemTy, minVec);
+
       for (int rep = 0; rep < repM; ++rep) {
         Value rowOfWarp = add(mul(warpId0, i32_val(instrShape[0])),
                               i32_val(rep * rowsPerRep));
@@ -779,18 +778,19 @@ private:
               numElemsPerSwizzlingRow, true);
 
           Value addr = gep(elemPtrTy, smemBase, offset);
-          Value data0 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 1],
-                                       inVals[elemIdx + 0]);
-          Value data1 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 3],
-                                       inVals[elemIdx + 2]);
-          Value data2 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 5],
-                                       inVals[elemIdx + 4]);
-          Value data3 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 7],
-                                       inVals[elemIdx + 6]);
+
+          Value words[4];
+          for (unsigned i = 0; i < 8; ++i) {
+            if (i % minVec == 0)
+              words[i / 2] = undef(wordTy);
+            words[i / 2] = insert_element(
+                wordTy, words[i / 2], inVals[elemIdx + i], i32_val(i % minVec));
+          }
 
           rewriter.create<triton::nvgpu::StoreMatrixOp>(
               loc, bitcast(addr, ptrI8SharedTy),
-              ValueRange{data0, data1, data2, data3});
+              ValueRange{bitcast(words[0], i32_ty), bitcast(words[1], i32_ty),
+                         bitcast(words[2], i32_ty), bitcast(words[3], i32_ty)});
         }
       }
       // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
