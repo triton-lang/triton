@@ -121,6 +121,9 @@ public:
         cvtArgOp->getDialect()->getTypeID() !=
             mlir::TypeID::get<arith::ArithDialect>())
       return mlir::failure();
+    // not handled in elementwise lowering.
+    if (isa<arith::TruncIOp, arith::TruncFOp>(cvtArgOp))
+      return mlir::failure();
     // only considers conversions to dot operand
     if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
       return mlir::failure();
