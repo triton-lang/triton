@@ -2328,7 +2328,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          ALLOW_TF32=allow_tf32,
                          num_warps=num_warps, num_ctas=num_ctas,
                          out_dtype=out_dtype)
-    
+
     if epilogue == 'softmax' and (in_dtype != 'float32' or allow_tf32):
         if is_hip():
             pass
