@@ -53,7 +53,7 @@ class FileCacheManager(CacheManager):
 
     def has_file(self, filename):
         if not self.cache_dir:
-            return False
+            raise RuntimeError("Could not create or locate cache dir")
         return os.path.exists(self._make_path(filename))
 
     def get_file(self, filename) -> Optional[str]:
