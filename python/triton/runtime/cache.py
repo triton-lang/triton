@@ -40,11 +40,13 @@ class FileCacheManager(CacheManager):
         self.key = key
         self.lock_path = None
         # create cache directory if it doesn't exist
-        self.cache_dir = os.environ.get('TRITON_CACHE_DIR', default_cache_dir())
-        if not self.cache_dir:
+        self.cache_dir = os.getenv('TRITON_CACHE_DIR').strip() or default_cache_dir()
+        if self.cache_dir:
             self.cache_dir = os.path.join(self.cache_dir, self.key)
             self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
+        else:
+            raise RuntimeError("Could not create or locate cache dir")
 
     def _make_path(self, filename) -> str:
         return os.path.join(self.cache_dir, filename)
