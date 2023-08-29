@@ -4,6 +4,7 @@ import importlib
 import importlib.util
 import os
 import re
+import traceback
 import subprocess
 from typing import Dict
 
@@ -94,7 +95,7 @@ def get_backend(device_type: str):
             try:
                 importlib.import_module(device_backend_package_name, package=__spec__.name)
             except Exception:
-                return None
+                traceback.print_exc()
         else:
             return None
     return _backends[device_type] if device_type in _backends else None

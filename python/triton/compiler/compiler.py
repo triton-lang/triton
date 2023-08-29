@@ -357,7 +357,7 @@ def compile(fn, **kwargs):
                           lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
         add_cuda_stages(arch, extern_libs, stages)
     elif device_type == "hip":
-        _device_backend.add_stages(arch, extern_libs, stages, context=context, num_warps=num_warps, num_stages=num_stages)
+        _device_backend.add_stages(arch, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
     elif device_type == "xpu":
         stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
                            lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
@@ -480,9 +480,12 @@ def compile(fn, **kwargs):
             else:
                 metadata["shared"] = get_shared_memory_size(module)
         if ir_name == "ttgir":
-            metadata["enable_warp_specialization"] = ir.is_ws_supported(next_module)
-            if metadata["enable_warp_specialization"]:
-                metadata["num_warps"] = get_num_warps(next_module)
+            if is_hip():
+                metadata["num_warps"] = _device_backend.get_num_warps(next_module)
+            else:
+                metadata["enable_warp_specialization"] = ir.is_ws_supported(next_module)
+                if metadata["enable_warp_specialization"]:
+                    metadata["num_warps"] = get_num_warps(next_module)
         if ir_name == "ptx":
             metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
         if ir_name == "amdgcn":
@@ -513,7 +516,7 @@ def compile(fn, **kwargs):
     ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, JITFunction) else ()
     ids = {"ids_of_tensormaps": ids_of_tensormaps, "ids_of_folded_args": ids_of_folded_args, "ids_of_const_exprs": ids_of_const_exprs}
     # cache manager
-    if is_cuda or is_hip:
+    if is_cuda:
         so_path = make_stub(name, signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
     else:
         so_path = _device_backend.make_launcher_stub(name, signature, constants, ids)
