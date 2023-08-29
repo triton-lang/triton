@@ -251,7 +251,8 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
   if (!sliceEncoding)
     return std::nullopt;
-  assert(op.getAxis() == sliceEncoding.getDim());
+  if (op.getAxis() != sliceEncoding.getDim())
+    return std::nullopt;
   return sliceEncoding.getParent();
 }
 
@@ -260,7 +261,8 @@ static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
   auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
   if (!sliceEncoding)
     return std::nullopt;
-  assert(op.getAxis() == sliceEncoding.getDim());
+  if (op.getAxis() != sliceEncoding.getDim())
+    return std::nullopt;
   return sliceEncoding.getParent();
 }
 

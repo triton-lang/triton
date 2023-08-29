@@ -1740,3 +1740,23 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+// CHECK-LABEL: axis_mismatch
+tt.func @axis_mismatch(%arg0: f32) -> tensor<1xf32, #triton_gpu.slice<{dim = 0, parent = #blocked}>> {
+// CHECK: %[[R:.+]] = "tt.reduce"(%0) <{axis = 1 : i32}>
+// CHECK: %[[C:.+]] = triton_gpu.convert_layout %[[R]]
+// CHECK: tt.return %[[C]]
+  %0 = tt.splat %arg0 : (f32) -> tensor<1x16xf32, #blocked>
+  %1 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
+    ^bb0(%arg9: f32, %arg10: f32):
+    %60 = arith.addf %arg9, %arg10 : f32
+    tt.reduce.return %60 : f32
+  }) : (tensor<1x16xf32, #blocked>) -> tensor<1xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+  %2 = triton_gpu.convert_layout %1 : (tensor<1xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<1xf32, #blocked1>
+  %3 = triton_gpu.convert_layout %2 : (tensor<1xf32, #blocked1>) -> tensor<1xf32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+  tt.return %3: tensor<1xf32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
+}
