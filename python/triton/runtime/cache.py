@@ -84,14 +84,14 @@ class FileCacheManager(CacheManager):
     # Note a group of pushed files as being part of a group
     def put_group(self, filename: str, group: Dict[str, str]):
         if not self.cache_dir:
-            return
+            raise RuntimeError("Could not create or locate cache dir")
         grp_contents = json.dumps({"child_paths": sorted(list(group.keys()))})
         grp_filename = f"__grp__{filename}"
         return self.put(grp_contents, grp_filename, binary=False)
 
     def put(self, data, filename, binary=True) -> str:
         if not self.cache_dir:
-            return
+            raise RuntimeError("Could not create or locate cache dir")
         binary = isinstance(data, bytes)
         if not binary:
             data = str(data)
