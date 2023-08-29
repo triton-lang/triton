@@ -51,7 +51,7 @@ class FileCacheManager(CacheManager):
     def _make_path(self, filename) -> str:
         return os.path.join(self.cache_dir, filename)
 
-    def has_file(self, filename):
+    def has_file(self, filename) -> bool:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
         return os.path.exists(self._make_path(filename))
@@ -82,7 +82,7 @@ class FileCacheManager(CacheManager):
         return result
 
     # Note a group of pushed files as being part of a group
-    def put_group(self, filename: str, group: Dict[str, str]):
+    def put_group(self, filename: str, group: Dict[str, str]) -> str:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
         grp_contents = json.dumps({"child_paths": sorted(list(group.keys()))})
