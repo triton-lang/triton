@@ -136,47 +136,46 @@ bool ReduceOpHelper::isWarpSynchronous() {
          (triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1);
 }
 
-SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
-  SmallVector<SmallVector<unsigned>> smemShapes(3);
+SmallVector<unsigned> ReduceOpHelper::getScratchConfigsFast() {
+  SmallVector<unsigned> smemShape;
 
   auto argLayout = getSrcLayout();
   auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
 
   // that case doesn't need inter-warp communication
   if (isWarpSynchronous())
-    return {{0, 0}, {0, 0}};
+    return {0, 0};
 
   /// shared memory block0
-  smemShapes[0] = convertType<unsigned>(getSrcShape());
-  smemShapes[0][axis] = getInterWarpSize();
+  smemShape = convertType<unsigned>(getSrcShape());
+  smemShape[axis] = getInterWarpSize();
 
-  /// FIXME(Qingyi): This size is actually larger than required.
-  /// shared memory block1:
-  auto mod = op->getParentOfType<ModuleOp>();
-  unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-  unsigned threadsPerWarp =
-      triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-  smemShapes[1].push_back(numWarps * threadsPerWarp);
+  return smemShape;
+}
 
-  return smemShapes;
+Type ReduceOpHelper::getLargestSrcElementType() {
+  Type elemTy = srcElementTypes[0];
+  for (const auto &ty : srcElementTypes) {
+    if (elemTy.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth()) {
+      elemTy = ty;
+    }
+  }
+  return elemTy;
 }
 
 unsigned ReduceOpHelper::getScratchSizeInBytes() {
   unsigned elems = 0;
   if (isFastReduction()) {
-    auto smemShapes = getScratchConfigsFast();
-    for (const auto &smemShape : smemShapes)
-      elems = std::max(elems, product<unsigned>(smemShape));
+    auto smemShape = getScratchConfigsFast();
+    elems = product<unsigned>(smemShape);
   } else {
     auto smemShape = getScratchConfigBasic();
     elems = product<unsigned>(smemShape);
   }
 
-  unsigned bytesPerElem = 0;
-  for (const auto &ty : srcElementTypes) {
-    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
-  }
-  return bytesPerElem * elems;
+  unsigned bytesPerElem =
+      ceil<unsigned>(getLargestSrcElementType().getIntOrFloatBitWidth(), 8);
+  return (bytesPerElem * srcElementTypes.size()) * elems;
 }
 
 bool ReduceOpHelper::isSupportedLayout() {

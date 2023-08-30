@@ -9,6 +9,7 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
+using ::mlir::LLVM::loadShared;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getOrder;
@@ -475,7 +476,7 @@ private:
     auto srcLayout = helper.getSrcLayout();
     auto srcShape = helper.getSrcShape();
     unsigned axis = op.getAxis();
-    auto smemShapes = helper.getScratchConfigsFast();
+    auto smemShape = helper.getScratchConfigsFast();
 
     auto threadsPerWarp =
         triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
@@ -499,8 +500,7 @@ private:
 
       SmallVector<Value> writeIdx = indices[key];
       writeIdx[axis] = warpIdAxis;
-      Value writeOffset =
-          linearize(rewriter, loc, writeIdx, smemShapes[0], order);
+      Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, order);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         auto elemPtrTy = getElementPtrType(op, i);
         Value writePtr = gep(elemPtrTy, smemBases[i], writeOffset);
@@ -516,8 +516,8 @@ private:
                                    ConversionPatternRewriter &rewriter) const {
     triton::ReduceOp op = helper.getOperation();
     auto srcLayout = helper.getSrcLayout();
-    auto smemShapes = helper.getScratchConfigsFast();
-    unsigned elems = product<unsigned>(smemShapes[0]);
+    auto smemShape = helper.getScratchConfigsFast();
+    unsigned elems = product<unsigned>(smemShape);
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
     Location loc = op.getLoc();
 
@@ -539,7 +539,8 @@ private:
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         auto elemPtrTy = getElementPtrType(op, i);
         Value readPtr = gep(elemPtrTy, smemBases[i], readOffset);
-        acc[i] = load(readPtr);
+        Value threadLoads = icmp_slt(threadId, i32_val(elems));
+        acc[i] = loadShared(rewriter, loc, readPtr, threadLoads);
       }
       warpReduce(rewriter, loc, acc, op, sizeInterWarps);
 
@@ -573,7 +574,7 @@ private:
                                   ConversionPatternRewriter &rewriter) const {
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
-    auto smemShapes = helper.getScratchConfigsFast();
+    auto smemShape = helper.getScratchConfigsFast();
     auto order = getOrder(helper.getSrcLayout());
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -590,7 +591,7 @@ private:
           SmallVector<Value> readIdx = resultIndices[j];
           readIdx.insert(readIdx.begin() + op.getAxis(), i32_val(0));
           Value readOffset =
-              linearize(rewriter, loc, readIdx, smemShapes[0], order);
+              linearize(rewriter, loc, readIdx, smemShape, order);
           Value readPtr =
               gep(getElementPtrType(op, i), smemBases[i], readOffset);
           resultVals[j] = load(readPtr);
@@ -632,17 +633,19 @@ private:
     }
 
     // Compute a shared memory base per operand.
-    auto smemShapes = helper.getScratchConfigsFast();
-    unsigned elems = product<unsigned>(smemShapes[0]);
-    unsigned maxElems = std::max(elems, product<unsigned>(smemShapes[1]));
+    auto smemShape = helper.getScratchConfigsFast();
+    unsigned elems = product<unsigned>(smemShape);
     SmallVector<Value> smemBases(op.getNumOperands());
     smemBases[0] =
         bitcast(getSharedMemoryBase(loc, rewriter, op.getOperation()),
                 getElementPtrType(op, 0));
+
+    Type elemTy = helper.getLargestSrcElementType();
+    auto elemPtrTy = LLVM::LLVMPointerType::get(elemTy, 3);
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] = bitcast(gep(getElementPtrType(op, i - 1), smemBases[i - 1],
-                                 i32_val(maxElems)),
-                             getElementPtrType(op, i));
+      smemBases[i] = bitcast(
+          gep(elemPtrTy, bitcast(smemBases[i - 1], elemPtrTy), i32_val(elems)),
+          getElementPtrType(op, i));
     }
     storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
 

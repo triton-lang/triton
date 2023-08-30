@@ -36,6 +36,8 @@ public:
 
   triton::ReduceOp getOperation() { return op; }
 
+  Type getLargestSrcElementType();
+
   bool isFastReduction();
 
   bool isWarpSynchronous();
@@ -52,7 +54,7 @@ public:
 
   SmallVector<unsigned> getScratchConfigBasic();
 
-  SmallVector<SmallVector<unsigned>> getScratchConfigsFast();
+  SmallVector<unsigned> getScratchConfigsFast();
 
   unsigned getScratchSizeInBytes();
 
