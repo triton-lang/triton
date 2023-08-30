@@ -177,6 +177,7 @@ public:
   Operation *rewriteForOp(scf::ForOp forOp);
   Operation *rewriteIfOp(scf::IfOp ifOp);
   Operation *rewriteYieldOp(scf::YieldOp yieldOp);
+  Operation *rewriteReduceToScalar(Operation *reduceOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -366,14 +367,11 @@ void LayoutPropagation::dump() {
 
 void LayoutPropagation::rewrite() { rewriteRegion(funcOp->getRegion(0)); }
 
-static bool allowChangingSrcEncoding(Operation *op) {
+static bool reduceToScalar(Operation *op) {
   // For reductions returning a scalar we can change the src encoding without
   // affecting the output.
-  if (isa<triton::ReduceOp>(op) &&
-      !op->getResultTypes()[0].isa<RankedTensorType>() &&
-      op->getNumOperands() == 1)
-    return true;
-  return false;
+  return isa<triton::ReduceOp>(op) &&
+         !op->getResultTypes()[0].isa<RankedTensorType>();
 }
 
 void LayoutPropagation::rewriteRegion(Region &region) {
@@ -404,8 +402,9 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           queue.push_back(&R);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(&op)) {
         rewriteYieldOp(yieldOp);
+      } else if (reduceToScalar(&op)) {
+        rewriteReduceToScalar(&op);
       } else {
-        bool canChangeSrcEncoding = allowChangingSrcEncoding(&op);
         // If we don't need to rewrite the op we still need to remap the
         // operands.
         for (OpOperand &operand : op.getOpOperands()) {
@@ -414,8 +413,6 @@ void LayoutPropagation::rewriteRegion(Region &region) {
             continue;
           Attribute encoding =
               operand.get().getType().cast<RankedTensorType>().getEncoding();
-          if (canChangeSrcEncoding)
-            encoding = it->second.encodings[0];
           Value newOperand = getValueAs(operand.get(), encoding);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
@@ -566,6 +563,27 @@ Operation *LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
   }
   opToDelete.push_back(yieldOp.getOperation());
   return newYield;
+}
+
+Operation *LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
+  OpBuilder rewriter(reduceOp);
+  Attribute srcEncoding;
+  // Since all the operands need to have the same encoding pick the first one
+  // and use it for all the operands.
+  for (Value operand : reduceOp->getOperands()) {
+    auto it = layouts.find(operand);
+    if (it != layouts.end()) {
+      srcEncoding = it->second.encodings[0];
+      break;
+    }
+  }
+  if (!srcEncoding)
+    return reduceOp;
+  for (OpOperand &operand : reduceOp->getOpOperands()) {
+    Value newOperand = getValueAs(operand.get(), srcEncoding);
+    reduceOp->setOperand(operand.getOperandNumber(), newOperand);
+  }
+  return reduceOp;
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {

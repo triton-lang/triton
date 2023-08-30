@@ -1776,3 +1776,30 @@ tt.func @axis_mismatch(%arg0: f32) -> tensor<1xf32, #triton_gpu.slice<{dim = 0, 
   %3 = triton_gpu.convert_layout %2 : (tensor<1xf32, #blocked1>) -> tensor<1xf32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
   tt.return %3: tensor<1xf32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+// CHECK-LABEL: reduce_to_scalar
+//   CHECK-NOT:   triton_gpu.convert_layout
+//       CHECK:   tt.return
+tt.func @reduce_to_scalar(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>) -> (f32, i32) {
+  %0 = tt.load %ptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf32, #blocked>
+  %1 = triton_gpu.convert_layout %0 : (tensor<1024xf32, #blocked>) -> tensor<1024xf32, #blocked1>
+  %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1>
+  %3:2 = "tt.reduce"(%1, %2) <{axis = 0 : i32}> ({
+    ^bb0(%arg7: f32, %arg8: i32, %arg9: f32, %arg10: i32):
+    %51 = "triton_gpu.cmpf"(%arg7, %arg9) <{predicate = 1 : i64}> : (f32, f32) -> i1
+    %52 = "triton_gpu.cmpi"(%arg8, %arg10) <{predicate = 2 : i64}> : (i32, i32) -> i1
+    %53 = arith.andi %51, %52 : i1
+    %54 = "triton_gpu.cmpf"(%arg7, %arg9) <{predicate = 2 : i64}> : (f32, f32) -> i1
+    %55 = arith.ori %54, %53 : i1
+    %56 = arith.select %55, %arg7, %arg9 : f32
+    %57 = arith.select %55, %arg8, %arg10 : i32
+    tt.reduce.return %56, %57 : f32, i32
+  }) : (tensor<1024xf32, #blocked1>, tensor<1024xi32, #blocked1>) -> (f32, i32)
+  tt.return %3#0, %3#1: f32, i32
+}
+}
