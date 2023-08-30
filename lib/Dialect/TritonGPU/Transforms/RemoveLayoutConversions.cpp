@@ -748,6 +748,25 @@ static void rewriteSlice(SetVector<Value> &slice,
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
+static LogicalResult getRematerializableSlice(
+    Value root, Attribute rootEncoding, SetVector<Value> &slice,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation = nullptr) {
+  LogicalResult result = getConvertBackwardSlice(root, slice, rootEncoding,
+                                                 layout, stopPropagation);
+  if (result.failed() || slice.empty())
+    return failure();
+
+  // Check if all the operations in the slice can be rematerialized.
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp()) {
+      if (!canBeRemat(op))
+        return failure();
+    }
+  }
+  return success();
+}
+
 static void backwardRematerialization(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
@@ -759,22 +778,16 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
-  // 1. Take a backward slice of all the tensor dependencies.
+  // 1. Take a backward slice of all the tensor dependencies that can be
+  // rematerialized.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
-  LogicalResult result = getConvertBackwardSlice(
-      convertOp.getOperand(), slice, targetType.getEncoding(), layout);
-  if (result.failed() || slice.empty())
+  LogicalResult result = getRematerializableSlice(
+      convertOp.getOperand(), targetType.getEncoding(), slice, layout);
+  if (result.failed())
     return;
 
-  // 2. Check if all the operations in the slice can be rematerialized.
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
-        return;
-    }
-  }
-  // 3. Rewrite the slice.
+  // 2. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 }
 
@@ -791,32 +804,44 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
-  // 1. Take a backward slice of all the tensor dependencies.
-  SetVector<Value> slice;
-  DenseMap<Value, Attribute> layout;
   auto isExtOp = [](Operation *op) {
     return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp>(op);
   };
-  // Get a backward slice but don't go past ext ops
-  LogicalResult result = getConvertBackwardSlice(
-      convertOp.getOperand(), slice, targetType.getEncoding(), layout, isExtOp);
-  if (result.failed() || slice.empty())
+  // 1. Take a backward slice of all the tensor dependencies.
+  SetVector<Value> slice;
+  DenseMap<Value, Attribute> layout;
+  LogicalResult result = getRematerializableSlice(
+      convertOp.getOperand(), targetType.getEncoding(), slice, layout, isExtOp);
+  if (result.failed())
     return;
+
   Operation *extOp = nullptr;
-  // 2. Check if all the operations in the slice can be rematerialized.
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
-        return;
-      if (isExtOp(op)) {
-        // Only apply it if there is a single ext op otherwise we would have to
-        // duplicate the convert.
-        if (extOp != nullptr)
-          return;
-        extOp = op;
+  unsigned sliceSize = slice.size();
+  for (unsigned i = 0; i < sliceSize; i++) {
+    Value v = slice[i];
+    Operation *op = v.getDefiningOp();
+    if (!op)
+      continue;
+    if (isExtOp(op)) {
+      SetVector<Value> tempSlice;
+      DenseMap<Value, Attribute> tempLayout;
+      LogicalResult result = getRematerializableSlice(
+          op->getOperand(0), layout[v], tempSlice, tempLayout);
+      // If we can rematerialize the rest of the ext slice we can ignore this
+      // ext as it won't need a convert.
+      if (result.succeeded()) {
+        slice.insert(tempSlice.begin(), tempSlice.end());
+        layout.insert(tempLayout.begin(), tempLayout.end());
+        continue;
       }
+      // Only apply it if there is a single ext op otherwise we would have to
+      // duplicate the convert.
+      if (extOp != nullptr)
+        return;
+      extOp = op;
     }
   }
+
   if (extOp == nullptr)
     return;
   // Move the convert before the ext op and rewrite the slice.

@@ -85,11 +85,27 @@ tt.func @hoist_above_ext(%arg0: tensor<1024xf16, #layout0>, %arg1: f32) -> tenso
 // CHECK-NOT: triton_gpu.convert_layout
 // CHECK: tt.return
   %0 = arith.extf %arg0 : tensor<1024xf16, #layout0> to tensor<1024xf32, #layout0>
-  %1 = tt.splat %arg1 : (f32) -> tensor<1024xf32, #layout1>
-  %2 = triton_gpu.convert_layout %0 : (tensor<1024xf32, #layout0>) -> tensor<1024xf32, #layout1>
-  %3 = arith.addf %1, %2 : tensor<1024xf32, #layout1>
+  %1 = tt.splat %arg1 : (f32) -> tensor<1024xf32, #layout0>
+  %2 = arith.addf %0, %1 : tensor<1024xf32, #layout0>
+  %3 = triton_gpu.convert_layout %2 : (tensor<1024xf32, #layout0>) -> tensor<1024xf32, #layout1>
   tt.return %3 : tensor<1024xf32, #layout1>
 }
+
+// CHECK-LABEL: hoist_above_ext2
+tt.func @hoist_above_ext2(%arg0: tensor<1024xf16, #layout0>, %arg1: f16) -> tensor<1024xf32, #layout1> {
+// CHECK: %[[CVT:.+]] = triton_gpu.convert_layout
+// CHECK: arith.extf %[[CVT]]
+// CHECK-NOT: triton_gpu.convert_layout
+// CHECK: tt.return
+  %0 = arith.extf %arg0 : tensor<1024xf16, #layout0> to tensor<1024xf32, #layout0>
+  %1 = tt.splat %arg1 : (f16) -> tensor<1024xf16, #layout0>
+  %2 = arith.extf %1 : tensor<1024xf16, #layout0> to tensor<1024xf32, #layout0>
+  %3 = arith.addf %0, %2 : tensor<1024xf32, #layout0>
+  %4 = triton_gpu.convert_layout %3 : (tensor<1024xf32, #layout0>) -> tensor<1024xf32, #layout1>
+  tt.return %4 : tensor<1024xf32, #layout1>
+}
+
+
 
 // CHECK-LABEL: if
 tt.func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
