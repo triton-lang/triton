@@ -290,6 +290,13 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
   assert(inEncoding == ouEncoding);
   if (!inEncoding)
     return values;
+#ifdef USE_ROCM
+  // TODO Need to check why we need this reorder fuction, and rework this check
+  auto parentEncoding = inEncoding.getParent();
+  if (isa<BlockedEncodingAttr>(parentEncoding) ||
+      isa<MfmaEncodingAttr>(parentEncoding))
+    return values;
+#endif
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
   size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
   auto ouEltTy = ouTensorTy.getElementType();
