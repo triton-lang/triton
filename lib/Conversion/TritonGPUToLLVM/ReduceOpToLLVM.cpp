@@ -144,17 +144,29 @@ private:
                                   ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     unsigned elems = product<unsigned>(smemShape);
-    Type elemTy = helper.getLargestSrcElementType();
-    auto elemPtrTy = LLVM::LLVMPointerType::get(elemTy, 3);
-
-    SmallVector<Value> smemBases(op.getNumOperands());
-    smemBases[0] =
+    // indices will store the index of the op operands in descending order
+    // of their bitwidths
+    std::vector<unsigned> indices(op.getNumOperands());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
+      return op.getElementTypes()[i].getIntOrFloatBitWidth() >
+             op.getElementTypes()[j].getIntOrFloatBitWidth();
+    });
+    // Assign base index to each operand in their order in indices
+    std::map<unsigned, Value> indexToBase;
+    indexToBase[indices[0]] =
         bitcast(getSharedMemoryBase(loc, rewriter, op.getOperation()),
-                getElementPtrType(op, 0));
+                getElementPtrType(op, indices[0]));
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] = bitcast(
-          gep(elemPtrTy, bitcast(smemBases[i - 1], elemPtrTy), i32_val(elems)),
-          getElementPtrType(op, i));
+      indexToBase[indices[i]] =
+          bitcast(gep(getElementPtrType(op, indices[i - 1]),
+                      indexToBase[indices[i - 1]], i32_val(elems)),
+                  getElementPtrType(op, indices[i]));
+    }
+    // smemBases[k] is the base pointer for the k-th operand
+    SmallVector<Value> smemBases(op.getNumOperands());
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      smemBases[i] = indexToBase[i];
     }
     return smemBases;
   }

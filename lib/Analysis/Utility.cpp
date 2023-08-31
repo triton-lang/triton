@@ -153,16 +153,6 @@ SmallVector<unsigned> ReduceOpHelper::getScratchConfigsFast() {
   return smemShape;
 }
 
-Type ReduceOpHelper::getLargestSrcElementType() {
-  Type elemTy = srcElementTypes[0];
-  for (const auto &ty : srcElementTypes) {
-    if (elemTy.getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth()) {
-      elemTy = ty;
-    }
-  }
-  return elemTy;
-}
-
 unsigned ReduceOpHelper::getScratchSizeInBytes() {
   unsigned elems = 0;
   if (isFastReduction()) {
@@ -173,9 +163,11 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     elems = product<unsigned>(smemShape);
   }
 
-  unsigned bytesPerElem =
-      ceil<unsigned>(getLargestSrcElementType().getIntOrFloatBitWidth(), 8);
-  return (bytesPerElem * srcElementTypes.size()) * elems;
+  unsigned bytesPerElem = 0;
+  for (const auto &ty : srcElementTypes) {
+    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  }
+  return bytesPerElem * elems;
 }
 
 bool ReduceOpHelper::isSupportedLayout() {

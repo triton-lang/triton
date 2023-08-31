@@ -36,8 +36,6 @@ public:
 
   triton::ReduceOp getOperation() { return op; }
 
-  Type getLargestSrcElementType();
-
   bool isFastReduction();
 
   bool isWarpSynchronous();
