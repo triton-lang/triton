@@ -1629,6 +1629,7 @@ def test_reduce2d(op, dtype_str, shape, axis, num_ctas, device):
     if is_hip():
         pytest.skip(f"test_reduce2d not supported on HIP")
     # triton kernel
+
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
         range_m = tl.arange(0, BLOCK_M)
