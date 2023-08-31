@@ -34,7 +34,7 @@ jobs:
         run: |
           cd docs
           export PATH=$(python3 -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
-          sphinx-build . _build/html/
+          python3 -m sphinx . _build/html/main
 
       - name: Update docs
         run: |
