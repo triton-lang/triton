@@ -270,38 +270,7 @@ private:
     sync(rewriter, loc, op);
 
     // set output values
-    SmallVector<Value> results(op.getNumOperands());
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      if (auto resultTy =
-              op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
-        // nd-tensor where n >= 1
-
-        auto resultLayout = resultTy.getEncoding();
-
-        unsigned resultElems = getTotalElemsPerThread(resultTy);
-        auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
-        assert(resultIndices.size() == resultElems);
-
-        SmallVector<Value> resultVals(resultElems);
-        for (unsigned j = 0; j < resultElems; ++j) {
-          SmallVector<Value> readIdx = resultIndices[j];
-          readIdx.insert(readIdx.begin() + axis, ints[0]);
-          Value readOffset =
-              linearize(rewriter, loc, readIdx, smemShape, srcOrd);
-          Value readPtr =
-              gep(getElementPtrType(op, i), smemBases[i], readOffset);
-          resultVals[j] = load(readPtr);
-        }
-        results[i] = getTypeConverter()->packLLElements(loc, resultVals,
-                                                        rewriter, resultTy);
-      } else {
-        // 0d-tensor -> scalar
-        results[i] = load(smemBases[i]);
-      }
-    }
-
-    auto parentBlock = op.getOperation()->getBlock();
-    rewriter.replaceOp(op, results);
+    loadReductionAndPackResult(helper, smemShape, smemBases, rewriter);
     return success();
   }
 
@@ -588,11 +557,11 @@ private:
   // Load the final reduction from shared memory and replace the reduce result
   // with it.
   void loadReductionAndPackResult(ReduceOpHelper &helper,
+                                  SmallVector<unsigned> smemShape,
                                   SmallVector<Value> &smemBases,
                                   ConversionPatternRewriter &rewriter) const {
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
-    auto smemShape = helper.getScratchConfigsFast();
     auto order = getOrder(helper.getSrcLayout());
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -674,7 +643,7 @@ private:
     sync(rewriter, loc, op);
 
     // set output values
-    loadReductionAndPackResult(helper, smemBases, rewriter);
+    loadReductionAndPackResult(helper, smemShape, smemBases, rewriter);
 
     return success();
   }
