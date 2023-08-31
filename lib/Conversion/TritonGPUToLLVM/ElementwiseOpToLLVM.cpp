@@ -101,21 +101,38 @@ const std::string Fp8E4M3B15_to_Fp16 =
     "shl.b32 $1, b1, 7;                     \n"
     "}                                      \n";
 
-const std::string Fp16_to_Fp8E4M3B15 =
-    "{                                      \n"
-    ".reg .b32 a<2>, b<2>;                  \n"
-    ".reg .b32 max_val;                     \n"
-    "mov.b32 max_val, 0x3F803F80;           \n"
-    "and.b32 a0, $1, 0x7fff7fff;            \n"
-    "and.b32 a1, $2, 0x7fff7fff;            \n"
-    "min.f16x2 a0, a0, max_val;             \n"
-    "min.f16x2 a1, a1, max_val;             \n"
-    "mad.lo.u32 a0, a0, 2, 0x00800080;      \n"
-    "mad.lo.u32 a1, a1, 2, 0x00800080;      \n"
-    "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
-    "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
-    "prmt.b32 $0, b0, b1, 0x7531;           \n"
-    "}";
+const std::string Fp16_to_Fp8E4M3B15(bool has_minx2) {
+  std::string ret;
+  ret += "{                                      \n"
+         ".pred p<4>;                            \n"
+         ".reg .b32 a<2>, b<2>;                  \n"
+         ".reg .b16 c<4>;                        \n"
+         ".reg .b32 max_val;                     \n"
+         "mov.b32 max_val, 0x3F803F80;           \n"
+         "and.b32 a0, $1, 0x7fff7fff;            \n"
+         "and.b32 a1, $2, 0x7fff7fff;            \n";
+  if (has_minx2)
+    ret += "min.f16x2 a0, a0, max_val;           \n"
+           "min.f16x2 a1, a1, max_val;           \n";
+  else
+    ret += "setp.lt.f16x2  p0|p1, a0, max_val;   \n"
+           "setp.lt.f16x2  p2|p3, a1, max_val;   \n"
+           "mov.b32 {c0, c1}, a0;                \n"
+           "mov.b32 {c2, c3}, a1;                \n"
+           "selp.b16  c0, c0, max_val, p0;       \n"
+           "selp.b16  c1, c1, max_val, p1;       \n"
+           "selp.b16  c2, c2, max_val, p2;       \n"
+           "selp.b16  c3, c3, max_val, p3;       \n"
+           "mov.b32 a0, {c0, c1};                \n"
+           "mov.b32 a1, {c2, c3};                \n";
+  ret += "mad.lo.u32 a0, a0, 2, 0x00800080;      \n"
+         "mad.lo.u32 a1, a1, 2, 0x00800080;      \n"
+         "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
+         "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
+         "prmt.b32 $0, b0, b1, 0x7531;           \n"
+         "}";
+  return ret;
+}
 
 /* ----- FP8E4M3B15X4 ------ */
 // NOTE: NOT USED RIGHT NOW
@@ -557,7 +574,7 @@ struct FpToFpOpConversion
         {{F8E4M3TyID, F16TyID}, Fp8E4M3Nv_to_Fp16},
         {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16},
         // F16 -> F8
-        {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15},
+        {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15(computeCapability >= 80)},
         {{F16TyID, F8E4M3FNTyID}, Fp16_to_Fp8E4M3B15x4},
         {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3Nv},
         {{F16TyID, F8E5M2TyID}, Fp16_to_Fp8E5M2},
