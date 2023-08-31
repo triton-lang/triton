@@ -520,8 +520,6 @@ private:
     unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
     Value readOffset = threadId;
     for (unsigned round = 0; round < elemsPerThread; ++round) {
-      // FIXME(Qingyi): need predicate icmp_slt(threadId,
-      // i32_val(sizeInerWarps))
       SmallVector<Value> acc(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         auto elemPtrTy = getElementPtrType(op, i);

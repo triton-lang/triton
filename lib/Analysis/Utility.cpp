@@ -138,15 +138,10 @@ bool ReduceOpHelper::isWarpSynchronous() {
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfigsFast() {
   SmallVector<unsigned> smemShape;
-
-  auto argLayout = getSrcLayout();
-  auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
-
   // that case doesn't need inter-warp communication
   if (isWarpSynchronous())
     return {0, 0};
 
-  /// shared memory block0
   smemShape = convertType<unsigned>(getSrcShape());
   smemShape[axis] = getInterWarpSize();
 
