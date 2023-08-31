@@ -24,6 +24,7 @@ jobs:
         run: |
           pip3 install tabulate
           pip3 install cmake
+          pip3 install sphinx
 
       #- name: Fetch dependent branches
       #  run: |
