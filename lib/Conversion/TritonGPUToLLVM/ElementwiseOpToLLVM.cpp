@@ -104,25 +104,27 @@ const std::string Fp8E4M3B15_to_Fp16 =
 const std::string Fp16_to_Fp8E4M3B15(bool has_minx2) {
   std::string ret;
   ret += "{                                      \n"
-         ".pred p<4>;                            \n"
+         ".reg .pred p<4>;                       \n"
          ".reg .b32 a<2>, b<2>;                  \n"
          ".reg .b16 c<4>;                        \n"
-         ".reg .b32 max_val;                     \n"
-         "mov.b32 max_val, 0x3F803F80;           \n"
+         ".reg .b16 max_val_f16;                 \n"
+         ".reg .b32 max_val_f16x2;               \n"
+         "mov.b16 max_val_f16,   0x3F80;         \n"
+         "mov.b32 max_val_f16x2, 0x3F803F80;     \n"
          "and.b32 a0, $1, 0x7fff7fff;            \n"
          "and.b32 a1, $2, 0x7fff7fff;            \n";
   if (has_minx2)
-    ret += "min.f16x2 a0, a0, max_val;           \n"
-           "min.f16x2 a1, a1, max_val;           \n";
+    ret += "min.f16x2 a0, a0, max_val_f16x2;      \n"
+           "min.f16x2 a1, a1, max_val_f16x2;      \n";
   else
-    ret += "setp.lt.f16x2  p0|p1, a0, max_val;   \n"
-           "setp.lt.f16x2  p2|p3, a1, max_val;   \n"
+    ret += "setp.lt.f16x2  p0|p1, a0, max_val_f16x2;   \n"
+           "setp.lt.f16x2  p2|p3, a1, max_val_f16x2;   \n"
            "mov.b32 {c0, c1}, a0;                \n"
            "mov.b32 {c2, c3}, a1;                \n"
-           "selp.b16  c0, c0, max_val, p0;       \n"
-           "selp.b16  c1, c1, max_val, p1;       \n"
-           "selp.b16  c2, c2, max_val, p2;       \n"
-           "selp.b16  c3, c3, max_val, p3;       \n"
+           "selp.b16  c0, c0, max_val_f16, p0;   \n"
+           "selp.b16  c1, c1, max_val_f16, p1;   \n"
+           "selp.b16  c2, c2, max_val_f16, p2;   \n"
+           "selp.b16  c3, c3, max_val_f16, p3;   \n"
            "mov.b32 a0, {c0, c1};                \n"
            "mov.b32 a1, {c2, c3};                \n";
   ret += "mad.lo.u32 a0, a0, 2, 0x00800080;      \n"
