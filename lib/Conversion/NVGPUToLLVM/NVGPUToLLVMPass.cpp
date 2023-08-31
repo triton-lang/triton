@@ -437,7 +437,7 @@ public:
 
     PTXBuilder ptxBuilder;
     if (dimSize == 2) {
-      auto ptxAsm = "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group"
+      auto ptxAsm = "@$4 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group"
                     "[$0, {$2, $3}], [$1];";
       auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
 

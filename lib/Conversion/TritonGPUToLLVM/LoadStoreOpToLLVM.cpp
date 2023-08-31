@@ -749,7 +749,7 @@ struct StoreAsyncOpConversion
         typeConverter->convertType(rewriter.getI8Type()), 3);
 
     auto threadId = getThreadId(rewriter, loc);
-    Value pred = icmp_eq(urem(threadId, i32_val(32)), i32_val(0));
+    Value pred = int_val(1, 1);
 
     auto llCoord = getTypeConverter()->unpackLLElements(loc, llDst, rewriter,
                                                         dst.getType());
