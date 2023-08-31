@@ -175,9 +175,11 @@ public:
   Operation *rewriteOp(Operation *op);
   // Rewrite a for op based on the layout picked by the analysis.
   Operation *rewriteForOp(scf::ForOp forOp);
+  Operation *rewriteWhileOp(scf::WhileOp whileOp);
   Operation *rewriteIfOp(scf::IfOp ifOp);
-  Operation *rewriteYieldOp(scf::YieldOp yieldOp);
-  Operation *rewriteReduceToScalar(Operation *reduceOp);
+  void rewriteYieldOp(scf::YieldOp yieldOp);
+  void rewriteConditionOp(scf::ConditionOp conditionOp);
+  void rewriteReduceToScalar(Operation *reduceOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -291,16 +293,36 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding({arg, result}, info, changed, user);
       continue;
     }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+      Value arg = whileOp.getBeforeArguments()[use.getOperandNumber()];
+      setEncoding({arg}, info, changed, user);
+      continue;
+    }
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
-      SmallVector<Value> valuesToPropagate = {
-          parent->getResult(use.getOperandNumber())};
+      SmallVector<Value> valuesToPropagate;
+      if (isa<scf::ForOp, scf::IfOp>(parent))
+        valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
             forOp.getRegionIterArg(use.getOperandNumber()));
-      if (isa<scf::ForOp, scf::IfOp>(parent))
-        setEncoding({valuesToPropagate}, info, changed, user);
-      // TODO: handle while.
+      if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+        valuesToPropagate.push_back(
+            whileOp.getBeforeArguments()[use.getOperandNumber()]);
+        valuesToPropagate.push_back(
+            whileOp->getOperand(use.getOperandNumber()));
+      }
+      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
+        setEncoding(valuesToPropagate, info, changed, user);
+      continue;
+    }
+    if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
+      auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
+      // Skip arg 0 as it is the condition.
+      unsigned argIndex = use.getOperandNumber() - 1;
+      Value afterArg = whileOp.getAfterArguments()[argIndex];
+      Value result = whileOp->getResult(argIndex);
+      setEncoding({afterArg, result}, info, changed, user);
       continue;
     }
     // Workaround: don't propagate through truncI
@@ -402,6 +424,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           queue.push_back(&R);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(&op)) {
         rewriteYieldOp(yieldOp);
+      } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(&op)) {
+        rewriteConditionOp(conditionOp);
       } else if (reduceToScalar(&op)) {
         rewriteReduceToScalar(&op);
       } else {
@@ -519,6 +543,66 @@ Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
   return newForOp.getOperation();
 }
 
+Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
+  SmallVector<Value> operands;
+  SmallVector<Type> returnTypes;
+  OpBuilder rewriter(whileOp);
+  for (auto [operand, arg] :
+       llvm::zip(whileOp->getOperands(), whileOp.getBeforeArguments())) {
+    Value convertedOperand = operand;
+    if (layouts.count(arg))
+      convertedOperand = getValueAs(operand, *layouts[arg].encodings.begin());
+    operands.push_back(convertedOperand);
+  }
+  for (Value ret : whileOp.getResults()) {
+    auto it = layouts.find(ret);
+    if (it == layouts.end()) {
+      returnTypes.push_back(ret.getType());
+      continue;
+    }
+    auto origType = ret.getType().dyn_cast<RankedTensorType>();
+    auto newType =
+        RankedTensorType::get(origType.getShape(), origType.getElementType(),
+                              it->second.encodings[0]);
+    returnTypes.push_back(newType);
+  }
+
+  auto newWhileOp =
+      rewriter.create<scf::WhileOp>(whileOp.getLoc(), returnTypes, operands);
+  SmallVector<Type> argsTypesBefore;
+  for (Value operand : operands)
+    argsTypesBefore.push_back(operand.getType());
+  SmallVector<Location> bbArgLocsBefore(argsTypesBefore.size(),
+                                        whileOp.getLoc());
+  SmallVector<Location> bbArgLocsAfter(returnTypes.size(), whileOp.getLoc());
+  rewriter.createBlock(&newWhileOp.getBefore(), {}, argsTypesBefore,
+                       bbArgLocsBefore);
+  rewriter.createBlock(&newWhileOp.getAfter(), {}, returnTypes, bbArgLocsAfter);
+
+  for (int i = 0; i < whileOp.getNumRegions(); ++i) {
+    newWhileOp->getRegion(i).front().getOperations().splice(
+        newWhileOp->getRegion(i).front().getOperations().begin(),
+        whileOp->getRegion(i).front().getOperations());
+  }
+
+  auto remapArg = [&](Value oldVal, Value newVal) {
+    if (oldVal.getType() == newVal.getType())
+      oldVal.replaceAllUsesWith(newVal);
+    else
+      map(oldVal, newVal);
+  };
+  for (auto [oldResult, newResult] :
+       llvm::zip(whileOp.getResults(), newWhileOp.getResults()))
+    remapArg(oldResult, newResult);
+  for (auto [oldArg, newArg] :
+       llvm::zip(whileOp.getBeforeArguments(), newWhileOp.getBeforeArguments()))
+    remapArg(oldArg, newArg);
+  for (auto [oldArg, newArg] :
+       llvm::zip(whileOp.getAfterArguments(), newWhileOp.getAfterArguments()))
+    remapArg(oldArg, newArg);
+  return newWhileOp.getOperation();
+}
+
 Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
   SmallVector<Value> operands;
   OpBuilder rewriter(ifOp);
@@ -547,25 +631,37 @@ Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
   return newIfOp.getOperation();
 }
 
-Operation *LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
-  OpBuilder rewriter(yieldOp);
-  Operation *newYield = rewriter.clone(*yieldOp.getOperation());
+void LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
   Operation *parentOp = yieldOp->getParentOp();
   for (OpOperand &operand : yieldOp->getOpOperands()) {
     Type yieldType = operand.get().getType();
     if (isa<scf::ForOp, scf::IfOp>(parentOp))
       yieldType = parentOp->getResult(operand.getOperandNumber()).getType();
+    if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
+      yieldType =
+          whileOp.getBeforeArguments()[operand.getOperandNumber()].getType();
     auto tensorType = yieldType.dyn_cast<RankedTensorType>();
     if (!tensorType)
       continue;
     Value newOperand = getValueAs(operand.get(), tensorType.getEncoding());
-    newYield->setOperand(operand.getOperandNumber(), newOperand);
+    yieldOp->setOperand(operand.getOperandNumber(), newOperand);
   }
-  opToDelete.push_back(yieldOp.getOperation());
-  return newYield;
 }
 
-Operation *LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
+void LayoutPropagation::rewriteConditionOp(scf::ConditionOp conditionOp) {
+  scf::WhileOp whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
+  for (unsigned i = 1; i < conditionOp->getNumOperands(); ++i) {
+    OpOperand &operand = conditionOp->getOpOperand(i);
+    Type argType = whileOp->getResult(operand.getOperandNumber() - 1).getType();
+    auto tensorType = argType.dyn_cast<RankedTensorType>();
+    if (!tensorType)
+      continue;
+    Value newOperand = getValueAs(operand.get(), tensorType.getEncoding());
+    conditionOp->setOperand(operand.getOperandNumber(), newOperand);
+  }
+}
+
+void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
   OpBuilder rewriter(reduceOp);
   Attribute srcEncoding;
   // Since all the operands need to have the same encoding pick the first one
@@ -578,18 +674,19 @@ Operation *LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
     }
   }
   if (!srcEncoding)
-    return reduceOp;
+    return;
   for (OpOperand &operand : reduceOp->getOpOperands()) {
     Value newOperand = getValueAs(operand.get(), srcEncoding);
     reduceOp->setOperand(operand.getOperandNumber(), newOperand);
   }
-  return reduceOp;
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
   opToDelete.push_back(op);
   if (auto forOp = dyn_cast<scf::ForOp>(op))
     return rewriteForOp(forOp);
+  if (auto whileOp = dyn_cast<scf::WhileOp>(op))
+    return rewriteWhileOp(whileOp);
   if (auto ifOp = dyn_cast<scf::IfOp>(op))
     return rewriteIfOp(ifOp);
   OpBuilder rewriter(op);

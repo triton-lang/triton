@@ -1803,3 +1803,36 @@ tt.func @reduce_to_scalar(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>) -> (f32, i3
   tt.return %3#0, %3#1: f32, i32
 }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-warps" = 4 : i32} {
+// CHECK-LABEL: whileop
+//       CHECK: %[[L:.+]] = tt.load %{{.*}} {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf32, #blocked>
+//       CHECK: %[[W:.+]] = scf.while (%[[I:.+]] = %[[L]], %{{.*}} = %{{.*}}) : (tensor<1024xf32, #blocked>, i1) -> tensor<1024xf32, #blocked> {
+//       CHECK:   scf.condition(%{{.*}}) %[[I]] : tensor<1024xf32, #blocked>
+//       CHECK: } do {
+//       CHECK: ^bb0(%[[ARG1:.+]]: tensor<1024xf32, #blocked>):
+//       CHECK:    %[[ADD:.+]] = arith.addf %[[ARG1]], %[[ARG1]] : tensor<1024xf32, #blocked>
+//       CHECK:    scf.yield %[[ADD]], %{{.*}} : tensor<1024xf32, #blocked>, i1
+//       CHECK:  }
+//       CHECK:  tt.store %{{.*}}, %[[W]] {cache = 1 : i32, evict = 1 : i32} : tensor<1024xf32, #blocked>
+tt.func @whileop(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %cond: i1) {
+  %0 = tt.load %ptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<1024xf32, #blocked>
+  %1 = triton_gpu.convert_layout %0 : (tensor<1024xf32, #blocked>) -> tensor<1024xf32, #blocked1>
+  %2 = scf.while (%arg0 = %1, %arg1 = %cond) : (tensor<1024xf32, #blocked1>, i1) -> (tensor<1024xf32, #blocked1>) {
+      scf.condition(%arg1) %arg0 : tensor<1024xf32, #blocked1>
+    } do {
+    ^bb0(%arg0: tensor<1024xf32, #blocked1>):
+      %4 = triton_gpu.convert_layout %arg0 : (tensor<1024xf32, #blocked1>) -> tensor<1024xf32, #blocked>
+      %5 = arith.addf %4, %4 : tensor<1024xf32, #blocked>
+      %6 = triton_gpu.convert_layout %5 : (tensor<1024xf32, #blocked>) -> tensor<1024xf32, #blocked1>
+      scf.yield %6, %cond : tensor<1024xf32, #blocked1>, i1
+    }
+  %3 = triton_gpu.convert_layout %2 : (tensor<1024xf32, #blocked1>) -> tensor<1024xf32, #blocked>
+  tt.store %ptr, %3 {cache = 1 : i32, evict = 1 : i32} : tensor<1024xf32, #blocked>
+  tt.return
+}
+}
