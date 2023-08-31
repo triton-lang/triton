@@ -33,7 +33,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/PTX/TmaMetadata.h"
@@ -257,6 +256,7 @@ void init_triton_ir(py::module &&m) {
         // we load LLVM because the frontend uses LLVM.undef for
         // some placeholders
         self.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+        self.getOrLoadDialect<mlir::tensor::TensorDialect>();
       });
   // .def(py::init([](){
   //   mlir::MLIRContext context;
@@ -1958,24 +1958,6 @@ void init_triton_translation(py::module &m) {
            const std::vector<std::string> &paths) {
           ::mlir::triton::addExternalLibs(op, names, paths);
         });
-
-  m.def(
-      "translate_llvmir_to_hsaco",
-      [](const std::string llvmIR, std::string gfx_arch, std::string gfx_triple,
-         std::string gfx_features) -> std::tuple<std::string, std::string> {
-        // create LLVM module from C++
-        llvm::LLVMContext context;
-        std::unique_ptr<llvm::MemoryBuffer> buffer =
-            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-        llvm::SMDiagnostic error;
-        std::unique_ptr<llvm::Module> module =
-            llvm::parseIR(buffer->getMemBufferRef(), error, context);
-        // translate module to HSACO
-        auto hsacoCode = triton::translateLLVMIRToHSACO(
-            *module, gfx_arch, gfx_triple, gfx_features);
-        return hsacoCode;
-      },
-      ret::take_ownership);
 }
 
 void init_triton(py::module &m) {
