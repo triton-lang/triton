@@ -139,6 +139,26 @@ private:
     }
   }
 
+  SmallVector<Value> getSmemBases(ReduceOpHelper &helper, triton::ReduceOp op,
+                                  SmallVector<unsigned> smemShape,
+                                  ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    unsigned elems = product<unsigned>(smemShape);
+    Type elemTy = helper.getLargestSrcElementType();
+    auto elemPtrTy = LLVM::LLVMPointerType::get(elemTy, 3);
+
+    SmallVector<Value> smemBases(op.getNumOperands());
+    smemBases[0] =
+        bitcast(getSharedMemoryBase(loc, rewriter, op.getOperation()),
+                getElementPtrType(op, 0));
+    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
+      smemBases[i] = bitcast(
+          gep(elemPtrTy, bitcast(smemBases[i - 1], elemPtrTy), i32_val(elems)),
+          getElementPtrType(op, i));
+    }
+    return smemBases;
+  }
+
   // Use shared memory for reduction within warps and across warps
   LogicalResult
   matchAndRewriteBasic(triton::ReduceOp op, OpAdaptor adaptor,
@@ -157,25 +177,10 @@ private:
     auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto srcShape = helper.getSrcShape();
 
-    SmallVector<Type> elemPtrTys(srcTys.size());
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto ty = srcTys[i].getElementType();
-      auto llvmElemTy = getTypeConverter()->convertType(ty);
-      elemPtrTys[i] = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    }
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-
     auto smemShape = helper.getScratchConfigBasic();
-    unsigned elems = product<unsigned>(smemShape);
 
-    SmallVector<Value> smemBases(op.getNumOperands());
-    smemBases[0] = bitcast(
-        getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
-    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] =
-          bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(elems)),
-                  elemPtrTys[i]);
-    }
+    SmallVector<Value> smemBases =
+        getSmemBases(helper, op, smemShape, rewriter);
 
     auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
     std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
@@ -205,7 +210,7 @@ private:
       SmallVector<Value> writePtrs(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         // Store the within-thread accumulated value into shared memory
-        writePtrs[i] = gep(elemPtrTys[i], smemBases[i], writeOffset);
+        writePtrs[i] = gep(getElementPtrType(op, i), smemBases[i], writeOffset);
         store(acc[i], writePtrs[i]);
       }
 
@@ -229,7 +234,7 @@ private:
         SmallVector<Value> readPtrs(op.getNumOperands());
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
           // The readPtr is readOffset away from writePtr
-          readPtrs[i] = gep(elemPtrTys[i], writePtrs[i], readOffset);
+          readPtrs[i] = gep(getElementPtrType(op, i), writePtrs[i], readOffset);
         }
 
         sync(rewriter, loc, op);
@@ -271,7 +276,8 @@ private:
           readIdx.insert(readIdx.begin() + axis, ints[0]);
           Value readOffset =
               linearize(rewriter, loc, readIdx, smemShape, srcOrd);
-          Value readPtr = gep(elemPtrTys[i], smemBases[i], readOffset);
+          Value readPtr =
+              gep(getElementPtrType(op, i), smemBases[i], readOffset);
           resultVals[j] = load(readPtr);
         }
         results[i] = getTypeConverter()->packLLElements(loc, resultVals,
@@ -634,19 +640,10 @@ private:
 
     // Compute a shared memory base per operand.
     auto smemShape = helper.getScratchConfigsFast();
-    unsigned elems = product<unsigned>(smemShape);
-    SmallVector<Value> smemBases(op.getNumOperands());
-    smemBases[0] =
-        bitcast(getSharedMemoryBase(loc, rewriter, op.getOperation()),
-                getElementPtrType(op, 0));
 
-    Type elemTy = helper.getLargestSrcElementType();
-    auto elemPtrTy = LLVM::LLVMPointerType::get(elemTy, 3);
-    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      smemBases[i] = bitcast(
-          gep(elemPtrTy, bitcast(smemBases[i - 1], elemPtrTy), i32_val(elems)),
-          getElementPtrType(op, i));
-    }
+    SmallVector<Value> smemBases =
+        getSmemBases(helper, op, smemShape, rewriter);
+
     storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
 
     sync(rewriter, loc, op);
