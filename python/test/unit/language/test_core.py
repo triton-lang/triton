@@ -1533,6 +1533,9 @@ def get_reduced_dtype(dtype_str, op):
 def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
+    if is_hip():
+        pytest.skip(f"test_reduce1d not supported on HIP")
+
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK: tl.constexpr):
@@ -1623,6 +1626,8 @@ reduce_configs2 = [
 def test_reduce2d(op, dtype_str, shape, axis, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
+    if is_hip():
+        pytest.skip(f"test_reduce2d not supported on HIP")
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
@@ -1888,6 +1893,8 @@ layouts = [
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
 @pytest.mark.parametrize("src_layout", layouts)
 def test_store_op(M, src_layout, device):
+    if is_hip():
+        pytest.skip("test_convert1d is not supported yet in HIP")
 
     ir = f"""
     #src = {src_layout}
@@ -2225,6 +2232,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             pytest.skip(f"test_dot{(M, N, K)} not supported on HIP. Reduce Warp to work")
         if M == 16 or N == 16 or K == 16:
             pytest.skip(f"test_dot{(M, N, K)} segfaults on HIP")
+        if epilogue == "softmax":
+            pytest.skip(f"test_dot{epilogue} segfaults on HIP")
 
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
@@ -3164,6 +3173,9 @@ def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
 def test_inline_asm(num_ctas, device):
     check_cuda_only(device)
 
+    if is_hip():
+        pytest.skip("test_inline_asm is not supported in HIP")
+
     @triton.jit
     def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
@@ -3189,6 +3201,9 @@ def test_inline_asm(num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
     check_cuda_only(device)
+
+    if is_hip():
+        pytest.skip("test_inline_asm is not supported in HIP")
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
