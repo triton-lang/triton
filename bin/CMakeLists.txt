@@ -53,7 +53,6 @@ llvm_update_compile_flags(triton-translate)
          TritonNvidiaGPUTransforms
          TritonLLVMIR
          TritonPTX
-         TritonHSACO
          ${dialect_libs}
          ${conversion_libs}
          # tests
