@@ -11,6 +11,7 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
+using ::mlir::triton::gpu::getCTASplitNum;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
@@ -28,6 +29,12 @@ public:
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // When cross-CTA reduction is implemented in the future, this assertion can
+    // be removed
+    assert(isReduceWithinCTA(op) &&
+           "Layout optimization passes such as PlanCTAPass and "
+           "RemoveLayoutConversionPass should avoid cross-CTA reduction");
+
     if (ReduceOpHelper(op).isFastReduction())
       return matchAndRewriteFast(op, adaptor, rewriter);
     return matchAndRewriteBasic(op, adaptor, rewriter);
@@ -35,6 +42,15 @@ public:
 
 private:
   int computeCapability;
+
+  bool isReduceWithinCTA(triton::ReduceOp op) const {
+    auto axis = op.getAxis();
+    ReduceOpHelper helper(op);
+    auto srcLayout = helper.getSrcLayout();
+    auto CTASplitNum = getCTASplitNum(srcLayout);
+    assert(axis < CTASplitNum.size());
+    return CTASplitNum[axis] == 1;
+  }
 
   void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
                   SmallVector<Value> &acc, ValueRange cur, bool isFirst) const {

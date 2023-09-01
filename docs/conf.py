@@ -101,11 +101,12 @@ sphinx_gallery_conf = {
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
     # XXX: Temporarily disable fused attention tutorial on V100
-    'ignore_pattern': r'__init__\.py',
+    'ignore_pattern': r'(__init__\.py|09.*\.py|10.*\.py)',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {
         'sphinx_gallery': None,
-    }
+    },
+    'abort_on_example_error': True,
 }
 
 # Add any paths that contain templates here, relative to this directory.
@@ -144,7 +145,7 @@ release = ''
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = 'en'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
