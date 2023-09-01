@@ -129,6 +129,62 @@ class debugger_constexpr:
         other = other.value if isinstance(other, debugger_constexpr) else other
         return self.value & other
 
+    def __add__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return self.value + other
+
+    __radd__ = __add__
+
+    def __sub__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return self.value - other
+
+    def __rsub__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return other - self.value
+
+    def __mul__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return self.value * other
+
+    __rmul__ = __mul__
+
+    def __div__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return self.value / other
+
+    def __rdiv__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return other / self.value
+
+    __truediv__ = __div__
+
+    __rtruediv__ = __rdiv__
+
+    def __floordiv__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return self.value // other
+
+    def __rfloordiv__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return other // self.value
+
+    def __mod__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return self.value % other
+
+    def __rmod__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return other % self.value
+
+    def __pow__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return self.value ** other
+
+    def __rpow__(self, other):
+        other = other.value if isinstance(other, debugger_constexpr) else other
+        return other ** self.value
+
     def to(self, dtype, bitcast=False, _builder=None):
         if dtype in [torch.int64]:
             ret_ty = int

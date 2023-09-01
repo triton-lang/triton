@@ -128,3 +128,38 @@ def test_slice():
     assign_kernel[grid](a, output, 64, BLOCK_SIZE=32)
 
     assert torch.allclose(expected, output, atol=1e-2, rtol=0)
+
+def test_constexpr_math():
+
+    @triton.jit(interpret=True)
+    def math_kernel(
+        add_ptr,
+        mul_ptr,
+        div_ptr,
+        value: tl.constexpr,
+        n_elements: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        values = tl.zeros((BLOCK_SIZE,), dtype=tl.float32) + (1 + value + 1)
+        tl.store(add_ptr + offsets, values, mask=mask)
+        values = tl.zeros((BLOCK_SIZE,), dtype=tl.float32) + (2 * value * 2)
+        tl.store(mul_ptr + offsets, values, mask=mask)
+        values = tl.zeros((BLOCK_SIZE,), dtype=tl.float32) + (2 / value / 2)
+        tl.store(div_ptr + offsets, values, mask=mask)
+
+    add_ptr = torch.empty((128,), device="cuda", dtype=torch.float32)
+    mul_ptr = torch.empty((128,), device="cuda", dtype=torch.float32)
+    div_ptr = torch.empty((128,), device="cuda", dtype=torch.float32)
+
+    def grid(meta):
+        return (triton.cdiv(128, meta["BLOCK_SIZE"]),)
+
+    math_kernel[grid](add_ptr, mul_ptr, div_ptr, 0.5, 128, BLOCK_SIZE=32)
+
+    assert torch.allclose(torch.full_like(add_ptr, 1 + 0.5 + 1), add_ptr, atol=1e-2, rtol=0)
+    assert torch.allclose(torch.full_like(mul_ptr, 2 * 0.5 * 2), mul_ptr, atol=1e-2, rtol=0)
+    assert torch.allclose(torch.full_like(div_ptr, 2 / 0.5 / 2), div_ptr, atol=1e-2, rtol=0)
