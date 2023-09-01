@@ -25,11 +25,7 @@ class OutOfResources(Exception):
 
 
 class Autotuner(KernelInterface):
-<<<<<<< HEAD
-    def __init__(self, fn, arg_names, configs, key, verbose, reset_to_zero, prune_configs_by: Dict = None):
-=======
-    def __init__(self, fn, arg_names, configs, key, reset_to_zero, prune_configs_by: Dict = None, warmup=25, rep=100):
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+    def __init__(self, fn, arg_names, configs, key, verbose, reset_to_zero, prune_configs_by: Dict = None, warmup=25, rep=100):
         '''
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -62,12 +58,9 @@ class Autotuner(KernelInterface):
         self.perf_model, self.configs_top_k = perf_model, top_k
         self.early_config_prune = early_config_prune
         self.fn = fn
-<<<<<<< HEAD
-        self.verbose = verbose
-=======
         self.warmup = warmup
         self.rep = rep
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+        self.verbose = verbose
 
     def _bench(self, *args, config, **meta):
         # check for conflicts, i.e. meta-parameters both provided
@@ -187,11 +180,7 @@ class Config:
         return ', '.join(res)
 
 
-<<<<<<< HEAD
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, verbose=False):
-=======
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, warmup=25, rep=100):
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, verbose=False, warmup=25, rep=100):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -222,21 +211,15 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, warmup=25,
         'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It takes configs:List[Config] as its input, and returns pruned configs.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
-<<<<<<< HEAD
-    :param verbose: a boolean that controls whether the best_config for each key is printed
-    :type verbose: bool
-    """
-    def decorator(fn):
-        return Autotuner(fn, fn.arg_names, configs, key, verbose, reset_to_zero, prune_configs_by)
-=======
     :param warmup: Warmup time (in ms) to pass to benchmarking, defaults to 25.
     :type warmup: int
     :param rep: Repetition time (in ms) to pass to benchmarking, defaults to 100.
     :type rep: int
+    :param verbose: a boolean that controls whether the best_config for each key is printed
+    :type verbose: bool
     """
     def decorator(fn):
-        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, prune_configs_by, warmup, rep)
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+        return Autotuner(fn, fn.arg_names, configs, key, verbose, reset_to_zero, prune_configs_by, warmup, rep)
 
     return decorator
 

@@ -91,9 +91,8 @@ public:
         return;
       op->moveAfter(argOp);
     });
-<<<<<<< HEAD
-    // Move `dot` operand so that conversions to opIdx=0 happens before
-    // conversions to opIdx=1
+    // Move `dot` operand so that conversions to opIdx=1 happens after
+    // conversions to opIdx=0
 #ifdef USE_ROCM
     // Skip this reordering for ROCm backend since it will sink shared->dot
     // conversion for Q tensor in flash attention into the main loop. This
@@ -101,10 +100,6 @@ public:
     // iteration.
     return;
 #endif
-=======
-    // Move `dot` operand so that conversions to opIdx=1 happens after
-    // conversions to opIdx=0
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto dstType = op.getResult().getType().cast<RankedTensorType>();
       auto dstEncoding =

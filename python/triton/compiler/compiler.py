@@ -14,14 +14,9 @@ from typing import Any, Tuple
 from .._C.libtriton.triton import (add_external_libs, compile_ptx_to_cubin,
                                    get_shared_memory_size, ir,
                                    translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
-<<<<<<< HEAD
                                    translate_triton_gpu_to_llvmir, get_arch_info,
                                    get_warp_size)
-from ..common.backend import get_backend
-=======
-                                   translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend, path_to_ptxas
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources

@@ -294,15 +294,12 @@ class _attention(torch.autograd.Function):
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
             raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
-<<<<<<< HEAD
         if torch.version.hip is not None:
-            BLOCK = 64
+            BLOCK_M = 64
+            BLOCK_N = 64
         else:
-            BLOCK = 128
-=======
-        BLOCK_M = 128
-        BLOCK_N = 64
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+            BLOCK_M = 128
+            BLOCK_N = 64
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv

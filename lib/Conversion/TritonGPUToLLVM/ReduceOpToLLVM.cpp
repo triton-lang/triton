@@ -357,13 +357,9 @@ private:
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
 
     SmallVector<Value> smemBases(op.getNumOperands());
-<<<<<<< HEAD
-    if (sizeInterWarps > 1) {
-=======
     bool isWarpSync = helper.isWarpSynchronous();
 
     if (!isWarpSync) {
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
       smemBases[0] = bitcast(
           getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
       for (unsigned i = 1; i < op.getNumOperands(); ++i) {
@@ -455,11 +451,7 @@ private:
         accumulate(rewriter, *combineOp, acc, shfl, false);
       }
 
-<<<<<<< HEAD
-      if (sizeInterWarps == 1) {
-=======
       if (isWarpSync) {
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
         finalAccs[key] = acc;
         continue;
       }
@@ -474,11 +466,7 @@ private:
       }
     }
 
-<<<<<<< HEAD
-    if (sizeInterWarps == 1) {
-=======
     if (isWarpSync) {
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
       SmallVector<Value> results(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         if (auto resultTy =
@@ -513,12 +501,8 @@ private:
 
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     unsigned numThreads =
-<<<<<<< HEAD
-        product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) * wavefront_size;
-=======
         product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) *
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
     unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
     Value readOffset = threadId;
     for (unsigned round = 0; round < elemsPerThread; ++round) {

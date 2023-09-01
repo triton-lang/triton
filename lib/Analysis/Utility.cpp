@@ -94,11 +94,7 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
   auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
 
   // that case doesn't need inter-warp communication
-<<<<<<< HEAD
-  if (isFastReduction() && triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
-=======
   if (isWarpSynchronous())
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
     return {{0, 0}, {0, 0}};
 
   /// shared memory block0

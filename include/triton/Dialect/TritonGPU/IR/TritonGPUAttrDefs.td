@@ -77,8 +77,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-<<<<<<< HEAD
-                     "Type":$eltTy), [{
+                     "unsigned":$typeWidthInBit), [{
 
 #ifdef USE_ROCM
         // ---- begin GFX908/GFX90A ----
@@ -93,9 +92,8 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
             const int SIMDWidth = 16;
 
             // number of inner dimension rows per one pattern repeat
-            int typeBitWidth = eltTy.getIntOrFloatBitWidth();
             int innerDimLength = shape[order[0]];
-            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeBitWidth;
+            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
 
             int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
             // Note: the following settings is customized to avoid
@@ -111,7 +109,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
             // 4. TODO: what about f64?
             //
             // maxPhase is set to SIMDWidth / perPhase
-            int vecSize = (eltTy.isF16() ? 64 : 32 ) / typeBitWidth;
+            int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
             int maxPhase = SIMDWidth / perPhase;
 
             return $_get(context, vecSize, perPhase, maxPhase, order);
@@ -122,9 +120,6 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
           }
         }
 #endif
-=======
-                     "unsigned":$typeWidthInBit), [{
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
 
         if(!mmaEnc)
@@ -154,11 +149,11 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- begin Ampere ----
         if (mmaEnc.isAmpere()) {
-          int perPhase = 128 / (shape[order[0]] * 4 / dotOpEnc.getMMAv2kWidth());
+          int perPhase = 128 / (shape[order[0]] * 4 / dotOpEnc.getKWidth());
           perPhase = std::max<int>(perPhase, 1);
-          std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getMMAv2kWidth()};
+          std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
           // for now, disable swizzle when using transposed int8 tensor cores
-          if ((32 / typeWidthInBit != dotOpEnc.getMMAv2kWidth()) && order[0] == inner)
+          if ((32 / typeWidthInBit != dotOpEnc.getKWidth()) && order[0] == inner)
             return $_get(context, 1, 1, 1, order);
 
           // --- handle A operand ---

@@ -401,153 +401,6 @@ inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
   return outValues;
 }
 
-<<<<<<< HEAD
-struct FpToFpOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::FpToFpOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::FpToFpOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  typedef std::function<SmallVector<Value>(
-      Location, ConversionPatternRewriter &, const Value &, const Value &,
-      const Value &, const Value &)>
-      ConvertorT;
-  /* ------------------ */
-  // FP8 -> FP16
-  /* ------------------ */
-
-  static SmallVector<Value>
-  convertFp8x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
-                       const char *ptxAsm, const Value &v0, const Value &v1,
-                       const Value &v2, const Value &v3) {
-    auto ctx = rewriter.getContext();
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    Value fp8x4Vec = undef(fp8x4VecTy);
-    fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v0, i32_val(0));
-    fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v1, i32_val(1));
-    fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v2, i32_val(2));
-    fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v3, i32_val(3));
-    fp8x4Vec = bitcast(fp8x4Vec, i32_ty);
-
-    PTXBuilder builder;
-    auto &ptxOp = *builder.create(ptxAsm);
-
-    auto *o0 = builder.newOperand("=r");
-    auto *o1 = builder.newOperand("=r");
-    auto *i = builder.newOperand(fp8x4Vec, "r");
-    ptxOp({o0, o1, i}, /*onlyAttachMLIRArgs=*/true);
-
-    auto fp16x2VecTy = vec_ty(f16_ty, 2);
-    auto fp16x2x2StructTy =
-        struct_ty(SmallVector<Type>{fp16x2VecTy, fp16x2VecTy});
-    auto fp16x2x2Struct =
-        builder.launch(rewriter, loc, fp16x2x2StructTy, false);
-    auto fp16x2Vec0 = extract_val(fp16x2VecTy, fp16x2x2Struct, 0);
-    auto fp16x2Vec1 = extract_val(fp16x2VecTy, fp16x2x2Struct, 1);
-    return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
-            extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
-            extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
-            extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
-  }
-
-  static SmallVector<Value>
-  convertFp8E4M3x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-#ifdef USE_ROCM
-    auto ctx = rewriter.getContext();
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    Value a0 = undef(fp8x4VecTy);
-    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
-    a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
-    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
-    a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
-    a0 = bitcast(a0, i32_ty);
-
-    Value a1 = undef(fp8x4VecTy);
-    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
-    a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
-    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
-    a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
-    a1 = bitcast(a1, i32_ty);
-
-    Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-    Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
-
-    b0 = lshr(i32_ty, b0, i32_val(1));
-    b1 = lshr(i32_ty, b1, i32_val(1));
-
-    b0 = or_( i32_ty, b0, and_(i32_ty, a0, i32_val(0x80008000)) );
-    b1 = or_( i32_ty, b1, and_(i32_ty, a1, i32_val(0x80008000)) );
-
-    auto fp16x2VecTy = vec_ty(f16_ty, 2);
-    auto fp16x2Vec0 = bitcast(b0, fp16x2VecTy);
-    auto fp16x2Vec1 = bitcast(b1, fp16x2VecTy);
-
-    return { extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
-             extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
-             extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
-             extract_element(f16_ty, fp16x2Vec1, i32_val(1))
-           };
-#else
-    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-        "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
-        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-        "shr.b32  b0, b0, 1;                    \n" // b0 >>= 1
-        "shr.b32  b1, b1, 1;                    \n" // shift into fp16 position
-        "add.u32  b0, b0, 0x20002000;           \n" // b0.exp += 2**4-2**3
-                                                    // exponent compensate = 8
-        "add.u32  b1, b1, 0x20002000;           \n" // b1 += 8<<10 | 8<<10<<16
-        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-        "}";
-    return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-#endif
-  }
-
-  static SmallVector<Value>
-  convertFp8E5M2x4ToFp16x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-    // exponent bias of Fp8E5M2 and Fp16 are the same
-#ifdef USE_ROCM
-    auto ctx = rewriter.getContext();
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    Value a0 = undef(fp8x4VecTy);
-    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
-    a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
-    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
-    a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
-    a0 = bitcast(a0, i32_ty);
-
-    Value a1 = undef(fp8x4VecTy);
-    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
-    a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
-    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
-    a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
-    a1 = bitcast(a1, i32_ty);
-
-    auto fp16x2VecTy = vec_ty(f16_ty, 2);
-    auto fp16x2Vec0 = bitcast(a0, fp16x2VecTy);
-    auto fp16x2Vec1 = bitcast(a1, fp16x2VecTy);
-
-    return { extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
-             extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
-             extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
-             extract_element(f16_ty, fp16x2Vec1, i32_val(1))
-           };
-#else
-    auto *ptxAsm = "{                           \n"
-                   "prmt.b32 $0, 0, $2, 0x5140; \n\t"
-                   "prmt.b32 $1, 0, $2, 0x7362; \n\t"
-                   "}";
-    return convertFp8x4ToFp16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-#endif
-  }
-=======
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const Value &, const Value &,
                                          const Value &, const Value &)>
@@ -555,7 +408,6 @@ typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
 
 static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
                                        Type outType) {
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
 
   ConverterT converter = [ptxAsm, inType, outType](
                              Location loc, ConversionPatternRewriter &rewriter,
@@ -585,109 +437,6 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
     for (Value inVal : inPacked)
       operands.push_back(builder.newOperand(inVal, "r"));
     auto &ptxOp = *builder.create(ptxAsm);
-<<<<<<< HEAD
-
-    auto *o0 = builder.newOperand("=r");
-    auto *o1 = builder.newOperand("=r");
-    auto *i = builder.newOperand(fp8x4Vec, "r");
-    ptxOp({o0, o1, i}, /* onlyAttachMLIRArgs */ true);
-
-    auto bf16x2VecTy = vec_ty(i16_ty, 2);
-    auto bf16x2x2StructTy =
-        struct_ty(SmallVector<Type>{bf16x2VecTy, bf16x2VecTy});
-    auto bf16x2x2Struct =
-        builder.launch(rewriter, loc, bf16x2x2StructTy, false);
-    auto bf16x2Vec0 = extract_val(bf16x2VecTy, bf16x2x2Struct, 0);
-    auto bf16x2Vec1 = extract_val(bf16x2VecTy, bf16x2x2Struct, 1);
-    return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
-            extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
-            extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
-            extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
-  }
-
-  static SmallVector<Value>
-  convertFp8E4M3x4ToBf16x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-#ifdef USE_ROCM
-    auto ctx = rewriter.getContext();
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    Value a0 = undef(fp8x4VecTy);
-    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
-    a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
-    a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
-    a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
-    a0 = bitcast(a0, i32_ty);
-
-    Value a1 = undef(fp8x4VecTy);
-    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
-    a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
-    a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
-    a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
-    a1 = bitcast(a1, i32_ty);
-
-    Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
-    Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
-    Value nosign0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-    Value nosign1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
-
-    nosign0 = lshr(i32_ty, nosign0, i32_val(4));
-    nosign1 = lshr(i32_ty, nosign1, i32_val(4));
-    nosign0 = add(i32_ty, nosign0, i32_val(0x38003800));
-    nosign1 = add(i32_ty, nosign1, i32_val(0x38003800));
-
-    auto bf16x2VecTy = vec_ty(i16_ty, 2);
-    Value bf16x2Vec0 = or_(i32_ty, sign0, nosign0);
-    Value bf16x2Vec1 = or_(i32_ty, sign1, nosign1);
-    bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
-    bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
-
-    return { extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
-             extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
-             extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
-             extract_element(i16_ty, bf16x2Vec1, i32_val(1))
-           };
-#else
-    auto *ptxAsm = // WARN: subnormal (0bs0000xxx) are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-        "prmt.b32 a0, 0, $2, 0x5040;            \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7060;            \n" // a1 = 0xf100f200
-        "and.b32 b0, a0, 0x7fff7fff;            \n" // b0 = a0 & 0x7fff7fff
-        "and.b32 b1, a1, 0x7fff7fff;            \n" // (strip sign)
-        "shr.b32 b0, b0, 4;                     \n" // b0 >>= 4
-        "shr.b32 b1, b1, 4;                     \n" // shift into fp16 position
-        "add.u32 b0, b0, 0x3c003c00;            \n" // b0.exp += 2**7-2**3
-                                                    // exponent compensate = 120
-        "add.u32 b1, b1, 0x3c003c00;            \n" // b1 += 120<<7 | 120<<7<<16
-        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-        "}";
-    return convertFp8x4ToBf16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-#endif    
-  };
-
-  static SmallVector<Value>
-  convertFp8E5M2x4ToBf16x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-    auto *ptxAsm = // WARN: subnormal (0bs00000xx) are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-        "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
-        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-        "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
-        "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
-        "add.u32  b0, b0, 0x38003800;           \n" // b0.exp += 2**7-2**4
-                                                    // exponent compensate = 112
-        "add.u32  b1, b1, 0x38003800;           \n" // b1 += 112<<7 | 112<<7<<16
-        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-        "}";
-    return convertFp8x4ToBf16x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-=======
     ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
     auto outVecTy = vec_ty(outType, outVecWidth);
     SmallVector<Value> outPacked;
@@ -705,146 +454,13 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
       ret.push_back(extract_element(outType, outPacked[i / outVecWidth],
                                     i32_val(i % outVecWidth)));
     return ret;
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
   };
   return converter;
 }
 
-<<<<<<< HEAD
-  /* ------------------ */
-  // FP16 -> FP8
-  /* ------------------ */
-
-  static SmallVector<Value>
-  convertFp16x4ToFp8x4(Location loc, ConversionPatternRewriter &rewriter,
-                       const char *ptxAsm, const Value &v0, const Value &v1,
-                       const Value &v2, const Value &v3) {
-    auto fp16x2VecTy = vec_ty(f16_ty, 2);
-    Value fp16x2Vec0 = undef(fp16x2VecTy);
-    Value fp16x2Vec1 = undef(fp16x2VecTy);
-    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v0, i32_val(0));
-    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v1, i32_val(1));
-    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v2, i32_val(0));
-    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v3, i32_val(1));
-    fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
-    fp16x2Vec1 = bitcast(fp16x2Vec1, i32_ty);
-
-    PTXBuilder builder;
-    auto &ptxOp = *builder.create(ptxAsm);
-
-    auto *o = builder.newOperand("=r");
-    auto *i0 = builder.newOperand(fp16x2Vec0, "r");
-    auto *i1 = builder.newOperand(fp16x2Vec1, "r");
-    ptxOp({o, i0, i1}, /*onlyAttachMLIRArgs=*/true);
-
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    auto fp8x4Vec = builder.launch(rewriter, loc, fp8x4VecTy, false);
-    return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(1)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(2)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(3))};
-  }
-
-  static SmallVector<Value>
-  convertFp16x4ToFp8E4M3x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-#ifdef USE_ROCM
-    auto fp16x2VecTy = vec_ty(f16_ty, 2);
-    Value fp16x2Vec0 = undef(fp16x2VecTy);
-    Value fp16x2Vec1 = undef(fp16x2VecTy);
-    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v0, i32_val(0));
-    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v1, i32_val(1));
-    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v2, i32_val(0));
-    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v3, i32_val(1));
-    fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
-    fp16x2Vec1 = bitcast(fp16x2Vec1, i32_ty);
-
-    Value a0 = shl(i32_ty, fp16x2Vec0, i32_val(1));
-    Value a1 = shl(i32_ty, fp16x2Vec1, i32_val(1));
-    a0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-    a1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
-    a0 = add(i32_ty, a0, i32_val(0x00800080));
-    a1 = add(i32_ty, a1, i32_val(0x00800080));
-    Value b0 = or_( i32_ty, and_(i32_ty, fp16x2Vec0, i32_val(0x80008000)), a0 );
-    Value b1 = or_( i32_ty, and_(i32_ty, fp16x2Vec1, i32_val(0x80008000)), a1 );
-
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    b0 = bitcast(b0, fp8x4VecTy); 
-    b1 = bitcast(b1, fp8x4VecTy); 
-
-    return {extract_element(i8_ty, b0, i32_val(1)),
-            extract_element(i8_ty, b0, i32_val(3)),
-            extract_element(i8_ty, b1, i32_val(1)),
-            extract_element(i8_ty, b1, i32_val(3))
-            };
-
-#else
-    auto *ptxAsm = // WARN: subnormal Fp8s are not handled
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // see Fp8E4M3x4ToFp16x4
-        "sub.u32 a0, $1, 0x20002000;            \n" // a0 = input0 - 0x20002000
-                                                    // (compensate offset)
-        "sub.u32 a1, $2, 0x20002000;            \n" // a1 = input1 - 0x20002000
-                                                    // (8 << 10 | 8 << 10 << 16)
-        "shl.b32 a0, a0, 1;                     \n" // a0 <<= 1
-        "shl.b32 a1, a1, 1;                     \n" // shift into fp8e4 position
-        "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n" // a0 &= 0x7fff7fff
-        "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-        "add.u32 a0, a0, 0x00800080;            \n" // a0 += 0x00800080
-        "add.u32 a1, a1, 0x00800080;            \n" // (round to nearest)
-        "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n" // b0 = a0|(0x80008000&in0)
-        "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
-        "prmt.b32 $0, b0, b1, 0x7531;           \n" // output = b1b0
-        "}";
-    return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-#endif
-  }
-
-  static SmallVector<Value>
-  convertFp16x4ToFp8E5M2x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-#ifdef USE_ROCM
-    auto fp16x2VecTy = vec_ty(f16_ty, 2);
-    Value fp16x2Vec0 = undef(fp16x2VecTy);
-    Value fp16x2Vec1 = undef(fp16x2VecTy);
-    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v0, i32_val(0));
-    fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v1, i32_val(1));
-    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v2, i32_val(0));
-    fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v3, i32_val(1));
-    Value b0 = bitcast(fp16x2Vec0, i32_ty);
-    Value b1 = bitcast(fp16x2Vec1, i32_ty);
-
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    b0 = bitcast(b0, fp8x4VecTy); 
-    b1 = bitcast(b1, fp8x4VecTy); 
-
-    return {extract_element(i8_ty, b0, i32_val(1)),
-            extract_element(i8_ty, b0, i32_val(3)),
-            extract_element(i8_ty, b1, i32_val(1)),
-            extract_element(i8_ty, b1, i32_val(3))
-            };
-#else
-    auto *ptxAsm =
-        "{                            \n"
-        ".reg .b32 a<2>;              \n"
-        "and.b32 a0, $1, 0x7fff7fff;  \n"           // a0 &= 0x7fff7fff
-        "and.b32 a1, $2, 0x7fff7fff;  \n"           // (strip sign)
-        "add.u32 a0, a0, 0x00800080;  \n"           // a0 += 0x00800080
-        "add.u32 a1, a1, 0x00800080;  \n"           // (round to nearest)
-        "lop3.b32 a0, $1, 0x80008000, a0, 0xea; \n" // a0 = a0|(0x80008000&in0)
-        "lop3.b32 a1, $2, 0x80008000, a1, 0xea; \n" // (restore sign)
-        "prmt.b32 $0, a0, a1, 0x7531; \n\t"         // output = a1a0
-        "}";
-    return convertFp16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-#endif
-  }
-=======
 class MultipleOperandsRange
     : public iterator_range<SmallVector<SmallVector<Value>>::iterator> {
   using ContainerT = SmallVector<SmallVector<Value>>;
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
 
 public:
   using iterator_range<ContainerT::iterator>::iterator_range;
@@ -896,121 +512,6 @@ public:
     if (allOperands.size() == 0)
       allOperands.push_back({});
 
-<<<<<<< HEAD
-  static SmallVector<Value>
-  convertBf16x4ToFp8E4M3x4(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v0, const Value &v1, const Value &v2,
-                           const Value &v3) {
-#ifdef USE_ROCM
-    auto bf16x2VecTy = vec_ty(i16_ty, 2);
-    Value bf16x2Vec0 = undef(bf16x2VecTy);
-    Value bf16x2Vec1 = undef(bf16x2VecTy);
-    bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v0, i32_val(0));
-    bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v1, i32_val(1));
-    bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v2, i32_val(0));
-    bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v3, i32_val(1));
-    bf16x2Vec0 = bitcast(bf16x2Vec0, i32_ty);
-    bf16x2Vec1 = bitcast(bf16x2Vec1, i32_ty);
-
-    Value sign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x80008000));
-    Value sign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x80008000));
-    auto fp8x4VecTy = vec_ty(i8_ty, 4);
-    Value sign = undef(fp8x4VecTy);
-    sign0 = bitcast(sign0, fp8x4VecTy);
-    sign1 = bitcast(sign1, fp8x4VecTy);
-    sign = insert_element( fp8x4VecTy, sign, extract_element(i8_ty, sign0, i32_val(1)), i32_val(0) );
-    sign = insert_element( fp8x4VecTy, sign, extract_element(i8_ty, sign0, i32_val(3)), i32_val(1) );
-    sign = insert_element( fp8x4VecTy, sign, extract_element(i8_ty, sign1, i32_val(1)), i32_val(2) );
-    sign = insert_element( fp8x4VecTy, sign, extract_element(i8_ty, sign1, i32_val(3)), i32_val(3) );
-    sign = bitcast(sign, i32_ty);
-
-    Value nosign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x7fff7fff));
-    Value nosign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x7fff7fff));
-
-    Value nosign_0_0 = and_(i32_ty, nosign0, i32_val(0xffff0000));
-    nosign_0_0 = umax(i32_ty, nosign_0_0, i32_val(0x38000000));
-    nosign_0_0 = umin(i32_ty, nosign_0_0, i32_val(0x3ff00000));
-    Value nosign_0_1 = and_(i32_ty, nosign0, i32_val(0x0000ffff));
-    nosign_0_1 = umax(i32_ty, nosign_0_1, i32_val(0x3800));
-    nosign_0_1 = umin(i32_ty, nosign_0_1, i32_val(0x3ff0));
-    nosign0 = or_(i32_ty, nosign_0_0, nosign_0_1);
-
-    Value nosign_1_0 = and_(i32_ty, nosign1, i32_val(0xffff0000));
-    nosign_1_0 = umax(i32_ty, nosign_1_0, i32_val(0x38000000));
-    nosign_1_0 = umin(i32_ty, nosign_1_0, i32_val(0x3ff00000));
-    Value nosign_1_1 = and_(i32_ty, nosign1, i32_val(0x0000ffff));
-    nosign_1_1 = umax(i32_ty, nosign_1_1, i32_val(0x3800));
-    nosign_1_1 = umin(i32_ty, nosign_1_1, i32_val(0x3ff0));
-    nosign1 = or_(i32_ty, nosign_1_0, nosign_1_1);
-
-    nosign0 = add(i32_ty, nosign0, i32_val(0x80008));
-    nosign1 = add(i32_ty, nosign1, i32_val(0x80008));
-    nosign0 = sub(i32_ty, nosign0, i32_val(0x38003800));
-    nosign1 = sub(i32_ty, nosign1, i32_val(0x38003800));
-    nosign0 = lshr(i32_ty, nosign0, i32_val(4));
-    nosign1 = lshr(i32_ty, nosign1, i32_val(4));
-
-    nosign0 = bitcast(nosign0, fp8x4VecTy);
-    nosign1 = bitcast(nosign1, fp8x4VecTy);
-    Value nosign = undef(fp8x4VecTy);
-    nosign = insert_element( fp8x4VecTy, nosign, extract_element(i8_ty, nosign0, i32_val(0)), i32_val(0) );
-    nosign = insert_element( fp8x4VecTy, nosign, extract_element(i8_ty, nosign0, i32_val(2)), i32_val(1) );
-    nosign = insert_element( fp8x4VecTy, nosign, extract_element(i8_ty, nosign1, i32_val(0)), i32_val(2) );
-    nosign = insert_element( fp8x4VecTy, nosign, extract_element(i8_ty, nosign1, i32_val(2)), i32_val(3) );
-    nosign = bitcast(nosign, i32_ty);
-
-    Value fp8x4Vec = or_(i32_ty, nosign, sign);
-    fp8x4Vec = bitcast(fp8x4Vec, fp8x4VecTy);
-    return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(1)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(2)),
-            extract_element(i8_ty, fp8x4Vec, i32_val(3))};
-#else
-    auto *ptxAsm = // bf16 is clamped firstly to fp8 min/max
-        "{                                           \n" // bf16=fp8>>4 + 120<<7
-        ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
-        ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
-        "mov.u32 fp8_min, 0x3c003c00;                \n" // so bf16_min = 0x3c00
-        "mov.u32 fp8_max, 0x43f043f0;                \n" // so bf16_max = 0x43f0
-        "mov.u32 rn_, 0x80008;                       \n" // round to nearest
-        "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
-        "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
-        "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
-        "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
-        "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
-
-        // nosign = clamp(nosign, min, max)
-        ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
-        "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
-        "max.u32 nosign_0_0, nosign_0_0, 0x3c000000; \n"
-        "min.u32 nosign_0_0, nosign_0_0, 0x43f00000; \n"
-        "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
-        "max.u32 nosign_0_1, nosign_0_1, 0x3c00;     \n"
-        "min.u32 nosign_0_1, nosign_0_1, 0x43f0;     \n"
-        "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
-        "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
-        "max.u32 nosign_1_0, nosign_1_0, 0x3c000000; \n"
-        "min.u32 nosign_1_0, nosign_1_0, 0x43f00000; \n"
-        "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
-        "max.u32 nosign_1_1, nosign_1_1, 0x3c00;     \n"
-        "min.u32 nosign_1_1, nosign_1_1, 0x43f0;     \n"
-        "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
-
-        "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
-        "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
-        "sub.u32 nosign0, nosign0, 0x3c003c00;       \n" // nosign0-=0x3c003c00
-        "sub.u32 nosign1, nosign1, 0x3c003c00;       \n" // (compensate offset)
-        "shr.u32 nosign0, nosign0, 4;                \n" // nosign0 >>= 4
-        "shr.u32 nosign1, nosign1, 4;                \n" // shift into to fp8e4
-        "prmt.b32 nosign, nosign0, nosign1, 0x6420;  \n" // nosign0 = 0x00f100f2
-                                                         // nosign1 = 0x00f300f4
-                                                         // nosign = 0xf3f4f1f2
-        "or.b32 $0, nosign, sign;                    \n" // restore sign
-        "}";
-    return convertBf16x4ToFp8x4(loc, rewriter, ptxAsm, v0, v1, v2, v3);
-#endif
-  };
-=======
     SmallVector<Value> resultVals;
     for (auto it = allOperands.begin(), end = allOperands.end(); it != end;) {
       auto curr = static_cast<const ConcreteT *>(this)->createDestOps(
@@ -1033,7 +534,6 @@ public:
     Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
                                                           rewriter, resultTy);
     rewriter.replaceOp(op, view);
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
 
     return success();
   }
@@ -1208,109 +708,19 @@ struct FpToFpOpConversion
       for (Value &v : outVals)
         v = convertFp16ToFp32(loc, rewriter, v);
     // Pack values
-<<<<<<< HEAD
-    assert(outVals.size() == elems);
-    outVals = reorderValues(outVals, srcTensorType, dstTensorType);
-    outVals =
-        packI32(outVals, dstTensorType, rewriter, loc, getTypeConverter());
-    auto result = getTypeConverter()->packLLElements(loc, outVals, rewriter,
-                                                     dstTensorType);
-    rewriter.replaceOp(op, result);
-    return success();
+    return outVals;
   }
 };
 
 template <typename OP>
 Value EmitDualBF16ElementwiseOp(Location loc,
                                 ConversionPatternRewriter &rewriter,
-                                ValueRange operands) {
-  auto v0 = FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0]);
-  auto v1 = FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[1]);
+                                MultipleOperandsRange operands) {
+  auto v0 = FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0]);
+  auto v1 = FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][1]);
   auto result = rewriter.create<OP>(loc, f32_ty, v0, v1);
   return FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, result);
 }
-
-template <typename SourceOp, typename ConcreteT>
-class ElementwiseOpConversionBase
-    : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
-public:
-  using OpAdaptor = typename SourceOp::Adaptor;
-
-  explicit ElementwiseOpConversionBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
-
-  LogicalResult
-  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto resultTy = op.getType();
-    Location loc = op->getLoc();
-    // element type
-    auto resultElementTy = getElementTypeOrSelf(resultTy);
-    Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
-    SmallVector<Value> resultVals;
-    //
-    SmallVector<SmallVector<Value>> allOperands;
-    for (auto operand : adaptor.getOperands()) {
-      auto argTy = op->getOperand(0).getType();
-      auto sub_operands = this->getTypeConverter()->unpackLLElements(
-          loc, operand, rewriter, argTy);
-      sub_operands = unpackI32(sub_operands, argTy, rewriter, loc,
-                               this->getTypeConverter());
-      allOperands.resize(sub_operands.size());
-      for (auto v : llvm::enumerate(sub_operands))
-        allOperands[v.index()].push_back(v.value());
-    }
-    if (allOperands.size() == 0)
-      allOperands.push_back({});
-    for (const SmallVector<Value> &operands : allOperands) {
-      Value curr =
-          ((ConcreteT *)(this))
-              ->createDestOp(op, adaptor, rewriter, elemTy, operands, loc);
-      if (!bool(curr))
-        return failure();
-      resultVals.push_back(curr);
-    }
-    if (op->getNumOperands() > 0) {
-      auto argTy = op->getOperand(0).getType();
-      resultVals = reorderValues(resultVals, argTy, resultTy);
-    }
-    resultVals =
-        packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
-    Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
-                                                          rewriter, resultTy);
-    rewriter.replaceOp(op, view);
-
-    return success();
-  }
-};
-
-template <typename SourceOp, typename DestOp>
-struct ElementwiseOpConversion
-    : public ElementwiseOpConversionBase<
-          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
-  using Base =
-      ElementwiseOpConversionBase<SourceOp,
-                                  ElementwiseOpConversion<SourceOp, DestOp>>;
-  using Base::Base;
-  using OpAdaptor = typename Base::OpAdaptor;
-
-  explicit ElementwiseOpConversion(LLVMTypeConverter &typeConverter,
-                                   PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase<SourceOp, ElementwiseOpConversion>(
-            typeConverter, benefit) {}
-
-  // An interface to support variant DestOp builder.
-  DestOp createDestOp(SourceOp op, OpAdaptor adaptor,
-                      ConversionPatternRewriter &rewriter, Type elemTy,
-                      ValueRange operands, Location loc) const {
-    return rewriter.create<DestOp>(loc, elemTy, operands,
-                                   adaptor.getAttributes().getValue());
-=======
-    return outVals;
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
-  }
-};
 
 struct CmpIOpConversion
     : public ElementwiseOpConversionBase<triton::gpu::CmpIOp,
@@ -1458,20 +868,14 @@ struct FDivOpConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-<<<<<<< HEAD
-  Value createDestOp(mlir::arith::DivFOp op, OpAdaptor adaptor,
-                     ConversionPatternRewriter &rewriter, Type elemTy,
-                     ValueRange operands, Location loc) const {
-#ifdef USE_ROCM
-    return rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0],
-                                         operands[1]);
-#else
-=======
   SmallVector<Value> createDestOps(mlir::arith::DivFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+#ifdef USE_ROCM
+    return {rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0][0],
+                                         operands[0][1])};
+#else
     PTXBuilder ptxBuilder;
     auto &fdiv = *ptxBuilder.create<PTXInstr>("div");
     unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
@@ -1491,12 +895,8 @@ struct FDivOpConversion
     fdiv(res, lhs, rhs);
 
     Value ret = ptxBuilder.launch(rewriter, loc, elemTy, false);
-<<<<<<< HEAD
-    return ret;
-#endif
-=======
     return {ret};
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+#endif
   }
 };
 
@@ -1515,7 +915,7 @@ struct FMulOpConversion
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
 #ifdef USE_ROCM
-      return EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands);
+      return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
 #else
       PTXBuilder builder;
       auto ptxAsm = " { .reg .b16 c;        \n"
@@ -1526,12 +926,8 @@ struct FMulOpConversion
       auto lhs = builder.newOperand(operands[0][0], "h");
       auto rhs = builder.newOperand(operands[0][1], "h");
       fMul({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-<<<<<<< HEAD
-      return builder.launch(rewriter, loc, i16_ty, false);
-#endif
-=======
       return {builder.launch(rewriter, loc, i16_ty, false)};
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+#endif
     } else {
       return {rewriter.create<LLVM::FMulOp>(loc, elemTy, operands[0][0],
                                             operands[0][1])};
@@ -1554,7 +950,7 @@ struct FAddOpConversion
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
 #ifdef USE_ROCM
-      return EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands);
+      return {EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands)};
 #else
       PTXBuilder builder;
       auto ptxAsm = "{ .reg .b16 c;         \n"
@@ -1565,12 +961,8 @@ struct FAddOpConversion
       auto lhs = builder.newOperand(operands[0][0], "h");
       auto rhs = builder.newOperand(operands[0][1], "h");
       fAdd({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-<<<<<<< HEAD
-      return builder.launch(rewriter, loc, i16_ty, false);
-#endif
-=======
       return {builder.launch(rewriter, loc, i16_ty, false)};
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+#endif
     } else {
       return {rewriter.create<LLVM::FAddOp>(loc, elemTy, operands[0][0],
                                             operands[0][1])};
@@ -1593,7 +985,7 @@ struct FSubOpConversion
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
 #ifdef USE_ROCM
-      return EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands);
+      return {EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands)};
 #else
       PTXBuilder builder;
       auto ptxAsm = " { .reg .b16 c;         \n"
@@ -1604,12 +996,8 @@ struct FSubOpConversion
       auto lhs = builder.newOperand(operands[0][0], "h");
       auto rhs = builder.newOperand(operands[0][1], "h");
       fSub({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-<<<<<<< HEAD
-      return builder.launch(rewriter, loc, i16_ty, false);
-#endif
-=======
       return {builder.launch(rewriter, loc, i16_ty, false)};
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+#endif
     } else {
       return {rewriter.create<LLVM::FSubOp>(loc, elemTy, operands[0][0],
                                             operands[0][1])};
@@ -1735,20 +1123,16 @@ struct ExpOpConversionApprox
     Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
 
 #ifdef USE_ROCM
-    return rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
-                                         adaptor.getAttributes().getValue());
+    return {rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
+                                         adaptor.getAttributes().getValue())};
 #else
     PTXBuilder ptxBuilder;
     auto &exp2 = ptxBuilder.create<PTXInstr>("ex2")->o("approx").o("f32");
     auto output = ptxBuilder.newOperand("=f");
     auto input = ptxBuilder.newOperand(prod, "f");
     exp2(output, input);
-<<<<<<< HEAD
-    return ptxBuilder.launch(rewriter, loc, f32_ty, false);
-#endif
-=======
     return {ptxBuilder.launch(rewriter, loc, f32_ty, false)};
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+#endif
   }
 };
 

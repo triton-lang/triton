@@ -487,12 +487,8 @@ struct GetNumProgramsOpConversion
 #else
     Value blockId =
         rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
-<<<<<<< HEAD
-    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
-#endif // USE_ROCM
-=======
     rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+#endif // USE_ROCM
 
     return success();
   }

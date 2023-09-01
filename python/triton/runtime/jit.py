@@ -325,12 +325,8 @@ class JITFunction(KernelInterface[T]):
         args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
 
         src = f"""
-<<<<<<< HEAD
 
-def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
-=======
 def {self.fn.__name__}({args_signature}, grid=None, num_warps=4, num_stages=3, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
     from ..compiler import compile, CompiledKernel
     sig_key =  {sig_keys},
     constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}

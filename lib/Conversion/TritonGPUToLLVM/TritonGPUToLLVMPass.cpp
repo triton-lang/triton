@@ -618,11 +618,8 @@ private:
               computeCapability)
               .contains(byteWidth)) {
         return;
-<<<<<<< HEAD
-#endif
-=======
       }
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+#endif
 
       // load
       auto tmpTy =

@@ -431,15 +431,11 @@ public:
       }
     }
 
-<<<<<<< HEAD
-    pushConversionForward(cvt, cvtSlices, sharedInfo, rewriter);
-=======
     // Call SimplifyReduceCvt instead of the general push conversion forward
     if (isa<triton::ReduceOp>(cvtSlices.front()))
       return failure();
 
-    pushConversionForward(cvt, cvtSlices, rewriter);
->>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
+    pushConversionForward(cvt, cvtSlices, sharedInfo, rewriter);
     return success();
   }
 };
