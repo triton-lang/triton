@@ -188,3 +188,27 @@ def test_full():
     full_kernel[grid](output, 128, BLOCK_SIZE=32)
 
     assert torch.allclose(expected, output, atol=1e-2, rtol=0)
+
+def test_float64():
+    @triton.jit(interpret=True)
+    def full_kernel(
+        output_ptr,
+        n_elements: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        val = tl.zeros((BLOCK_SIZE,), dtype=tl.float64)
+        tl.store(output_ptr + offsets, val, mask=mask)
+
+    expected = torch.zeros((128,), device="cuda", dtype=torch.float64)
+    output = torch.empty((128,), device="cuda", dtype=torch.float64)
+
+    def grid(meta):
+        return (triton.cdiv(128, meta["BLOCK_SIZE"]),)
+
+    full_kernel[grid](output, 128, BLOCK_SIZE=32)
+
+    assert torch.allclose(expected, output, atol=1e-2, rtol=0)

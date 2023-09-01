@@ -452,8 +452,12 @@ class TritonLangProxy:
                 dtype = torch.float16
             elif dtype.is_bf16():
                 dtype = torch.bfloat16
+            elif dtype.is_fp64():
+                dtype = torch.float64
             elif dtype.is_int32():
                 dtype = torch.int32
+            elif dtype.is_int64():
+                dtype = torch.int64
             elif dtype.is_int16():
                 dtype = torch.int16
             elif dtype.is_int8():
@@ -477,8 +481,12 @@ class TritonLangProxy:
                 dtype = torch.float16
             elif dtype.is_bf16():
                 dtype = torch.bfloat16
+            elif dtype.is_fp64():
+                dtype = torch.float64
             elif dtype.is_int32():
                 dtype = torch.int32
+            elif dtype.is_int64():
+                dtype = torch.int64
             elif dtype.is_int16():
                 dtype = torch.int16
             elif dtype.is_int8():
