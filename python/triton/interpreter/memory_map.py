@@ -10,6 +10,7 @@ torch = torch_wrapper.torch
 @dataclasses.dataclass
 class RegisteredStorage:
     storage: torch.Storage
+    storage_offset: int
     dtype: torch.dtype
     size: int
     ptr: int
@@ -20,10 +21,7 @@ class RegisteredStorage:
 
     @property
     def access_tensor(self) -> torch.Tensor:
-        return torch.tensor(self.storage, dtype=self.dtype, device=self.storage.device)
-
-    def ensure_immutable(self):
-        assert self.storage.data_ptr() == self.ptr and self.storage.size() == self.size
+        return torch.tensor(self.storage, dtype=self.dtype, device=self.storage.device)[self.storage_offset:]
 
 
 class MemoryMap:
@@ -44,12 +42,11 @@ class MemoryMap:
         )
         if registered_storage is None:
             raise Exception("Storage not found or pointers spanning multiple tensors")
-        registered_storage.ensure_immutable()
         return registered_storage
 
     def add_tensor(self, t: torch.Tensor):
         storage = t.untyped_storage()
-        self.storages.append(RegisteredStorage(storage, t.dtype, storage.size(), storage.data_ptr()))
+        self.storages.append(RegisteredStorage(storage, t.storage_offset(), t.dtype, storage.size(), storage.data_ptr()))
         return t.data_ptr()
 
     def load(
@@ -76,7 +73,7 @@ class MemoryMap:
         registered_storage = self._get_registered_storage(pointer[mask])
         access_tensor = registered_storage.access_tensor
 
-        index_tensor = pointer - registered_storage.ptr
+        index_tensor = pointer - (registered_storage.ptr + registered_storage.storage_offset * registered_storage.dtype.itemsize)
 
         block = torch.full_like(pointer, fill_value=other, dtype=access_tensor.dtype, device="cuda")
         block[mask] = access_tensor[index_tensor[mask]]

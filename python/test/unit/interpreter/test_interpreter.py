@@ -101,3 +101,30 @@ def test_args():
         pytest.fail("Should raise exception")
     except TypeError:
         pass
+
+def test_slice():
+
+    @triton.jit(interpret=True)
+    def assign_kernel(
+        x_ptr,
+        output_ptr,
+        n_elements: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        tl.store(output_ptr + offsets, x, mask=mask)
+
+    a = torch.rand((128,), device="cuda")[64:]
+    expected = a
+    output = torch.empty((64,), device="cuda")
+
+    def grid(meta):
+        return (triton.cdiv(64, meta["BLOCK_SIZE"]),)
+
+    assign_kernel[grid](a, output, 64, BLOCK_SIZE=32)
+
+    assert torch.allclose(expected, output, atol=1e-2, rtol=0)
