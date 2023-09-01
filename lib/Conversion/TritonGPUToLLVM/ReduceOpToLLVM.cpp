@@ -99,8 +99,6 @@ private:
     return srcValues;
   }
 
-
-
   SmallVector<Value> getSmemBases(ReduceOpHelper &helper, triton::ReduceOp op,
                                   SmallVector<unsigned> smemShape,
                                   ConversionPatternRewriter &rewriter) const {
