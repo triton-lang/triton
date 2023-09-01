@@ -6,17 +6,14 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "mlir/IR/OpBase.td"
-include "mlir/IR/FunctionInterfaces.td" // FunctionOpInterface
 include "mlir/IR/SymbolInterfaces.td" // SymbolUserOpInterface
 include "mlir/IR/OpAsmInterface.td" // OpAsmOpInterface
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
-include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
+include "mlir/Interfaces/FunctionInterfaces.td" // FunctionOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
-include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
-include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 
 //
 // Op Base
