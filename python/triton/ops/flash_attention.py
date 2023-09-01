@@ -21,7 +21,7 @@ def _fwd_kernel(
     Out,
     stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
+    stride_vz, stride_vh, stride_vn, stride_vk,
     stride_oz, stride_oh, stride_om, stride_on,
     Z, H, N_CTX,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
@@ -50,7 +50,7 @@ def _fwd_kernel(
     V_block_ptr = tl.make_block_ptr(
         base=V + qvk_offset,
         shape=(N_CTX, BLOCK_DMODEL),
-        strides=(stride_vk, stride_vn),
+        strides=(stride_vn, stride_vk),
         offsets=(0, 0),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
         order=(1, 0)
@@ -137,7 +137,7 @@ def _bwd_kernel_one_col_block(
     D,
     stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
+    stride_vz, stride_vh, stride_vn, stride_vk,
     Z, H, N_CTX,
     off_hz, start_n, num_block,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
@@ -159,7 +159,7 @@ def _bwd_kernel_one_col_block(
     # initialize pointers to value-like data
     q_ptrs = Q + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
     k_ptrs = K + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
-    v_ptrs = V + (offs_n[:, None] * stride_vk + offs_k[None, :] * stride_vn)
+    v_ptrs = V + (offs_n[:, None] * stride_vn + offs_k[None, :] * stride_vk)
     do_ptrs = DO + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
     dq_ptrs = DQ + (offs_qm[:, None] * stride_qm + offs_k[None, :] * stride_qk)
     # pointer to row-wise quantities in value-like data
@@ -212,7 +212,7 @@ def _bwd_kernel_one_col_block(
         q_ptrs += BLOCK_M * stride_qm
         do_ptrs += BLOCK_M * stride_qm
     # write-back
-    dv_ptrs = DV + (offs_n[:, None] * stride_vk + offs_k[None, :] * stride_vn)
+    dv_ptrs = DV + (offs_n[:, None] * stride_vn + offs_k[None, :] * stride_vk)
     dk_ptrs = DK + (offs_n[:, None] * stride_kn + offs_k[None, :] * stride_kk)
     tl.store(dv_ptrs, dv)
     tl.store(dk_ptrs, dk)
@@ -228,7 +228,7 @@ def _bwd_kernel(
     D,
     stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
     stride_kz, stride_kh, stride_kn, stride_kk,
-    stride_vz, stride_vh, stride_vk, stride_vn,
+    stride_vz, stride_vh, stride_vn, stride_vk,
     Z, H, N_CTX,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -259,7 +259,7 @@ def _bwd_kernel(
                 D,
                 stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
                 stride_kz, stride_kh, stride_kn, stride_kk,
-                stride_vz, stride_vh, stride_vk, stride_vn,
+                stride_vz, stride_vh, stride_vn, stride_vk,
                 Z, H, N_CTX,
                 off_hz, start_n, num_block_n,
                 BLOCK_M=BLOCK_M, BLOCK_DMODEL=BLOCK_DMODEL,
@@ -276,7 +276,7 @@ def _bwd_kernel(
             D,
             stride_dqa, stride_qz, stride_qh, stride_qm, stride_qk,
             stride_kz, stride_kh, stride_kn, stride_kk,
-            stride_vz, stride_vh, stride_vk, stride_vn,
+            stride_vz, stride_vh, stride_vn, stride_vk,
             Z, H, N_CTX,
             off_hz, start_n, num_block_n,
             BLOCK_M=BLOCK_M, BLOCK_DMODEL=BLOCK_DMODEL,

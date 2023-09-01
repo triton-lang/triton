@@ -914,6 +914,18 @@ private:
   const TensorPtrMapT *tensorPtrMap;
 };
 
+namespace {
+void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
+                   int numCTAs) {
+  if (numCTAs == 1) {
+    barrier();
+  } else {
+    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
+    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+  }
+}
+} // namespace
+
 struct AtomicCASOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -933,6 +945,10 @@ struct AtomicCASOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
+
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && "Parent ModuleOp not found for AtomicCASOp");
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
@@ -971,7 +987,7 @@ struct AtomicCASOpConversion
     atom.global().o(semStr).o("cas").o("b32");
     atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
     auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
-    barrier();
+    createBarrier(rewriter, loc, numCTAs);
 
     PTXBuilder ptxBuilderStore;
     auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "r");
@@ -981,9 +997,9 @@ struct AtomicCASOpConversion
     st(dstOprStore, valOprStore).predicate(mask);
     auto ASMReturnTy = void_ty(ctx);
     ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
-    barrier();
+    createBarrier(rewriter, loc, numCTAs);
     Value ret = load(atomPtr);
-    barrier();
+    createBarrier(rewriter, loc, numCTAs);
     rewriter.replaceOp(op, {ret});
     return success();
   }
@@ -1008,7 +1024,11 @@ struct AtomicRMWOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     MLIRContext *ctx = rewriter.getContext();
-    //
+
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && "Parent ModuleOp not found for AtomicRMWOp");
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+
     auto atomicRmwAttr = op.getAtomicRmwOp();
 
     Value val = op.getVal();
@@ -1139,9 +1159,9 @@ struct AtomicRMWOpConversion
         auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
         storeShared(ptrOpr, valOpr).predicate(rmwMask);
         ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
-        barrier();
+        createBarrier(rewriter, loc, numCTAs);
         Value ret = load(atomPtr);
-        barrier();
+        createBarrier(rewriter, loc, numCTAs);
         rewriter.replaceOp(op, {ret});
       }
     }
