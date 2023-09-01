@@ -463,6 +463,32 @@ class TritonLangProxy:
         return torch.zeros(size=shape, dtype=dtype, device="cuda")
 
     @_tensor_operation
+    def full(self, shape, value, dtype):
+        for i, d in enumerate(shape):
+            if not isinstance(d, debugger_constexpr):
+                raise TypeError(f"Shape element {i} must have type `constexpr`")
+            if not isinstance(d.value, int):
+                raise TypeError(f"Shape element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
+        shape = [x.value for x in shape]
+        if isinstance(dtype, lcore.dtype):
+            if dtype.is_fp32():
+                dtype = torch.float32
+            elif dtype.is_fp16():
+                dtype = torch.float16
+            elif dtype.is_bf16():
+                dtype = torch.bfloat16
+            elif dtype.is_int32():
+                dtype = torch.int32
+            elif dtype.is_int16():
+                dtype = torch.int16
+            elif dtype.is_int8():
+                dtype = torch.int8
+            else:
+                raise TypeError(f"Unsupported dtype {dtype}")
+        value = value.value if isinstance(value, debugger_constexpr) else value
+        return torch.full(size=shape, fill_value=value, dtype=dtype, device="cuda")
+
+    @_tensor_operation
     def dequantize(self, input, scale, shift, nbit, dst_ty=None):
         if dst_ty is None:
             dst_ty = torch.float16

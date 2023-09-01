@@ -163,3 +163,28 @@ def test_constexpr_math():
     assert torch.allclose(torch.full_like(add_ptr, 1 + 0.5 + 1), add_ptr, atol=1e-2, rtol=0)
     assert torch.allclose(torch.full_like(mul_ptr, 2 * 0.5 * 2), mul_ptr, atol=1e-2, rtol=0)
     assert torch.allclose(torch.full_like(div_ptr, 2 / 0.5 / 2), div_ptr, atol=1e-2, rtol=0)
+
+def test_full():
+
+    @triton.jit(interpret=True)
+    def full_kernel(
+        output_ptr,
+        n_elements: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        val = tl.full((BLOCK_SIZE,), 1., dtype=tl.float32)
+        tl.store(output_ptr + offsets, val, mask=mask)
+
+    expected = torch.full((128,), 1, device="cuda", dtype=torch.float32)
+    output = torch.empty((128,), device="cuda")
+
+    def grid(meta):
+        return (triton.cdiv(128, meta["BLOCK_SIZE"]),)
+
+    full_kernel[grid](output, 128, BLOCK_SIZE=32)
+
+    assert torch.allclose(expected, output, atol=1e-2, rtol=0)
