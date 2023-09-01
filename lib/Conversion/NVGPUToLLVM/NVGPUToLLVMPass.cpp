@@ -22,6 +22,7 @@ using ::mlir::LLVM::getSRegValue;
 namespace {
 
 using OperandsAndConstraints = std::vector<std::pair<mlir::Value, std::string>>;
+typedef std::vector<std::string> Constraints;
 
 const std::string Reg_Alloc_Op = "setmaxnreg.inc.sync.aligned.u32 #regCount;";
 const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
@@ -1059,8 +1060,8 @@ public:
     RewritePatternSet patterns(context);
 
 #define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
-  patterns.add<NVGPUOpGenericPattern<SRC_OP>>(                                 \
-      context, ASM, std::vector<std::string>(), std::vector<std::string>());
+  patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
+                                              Constraints());
     POPULATE_NVGPU_OP(ttn::RegAllocOp, Reg_Alloc_Op)
     POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, Wgmma_Fence_Op)
     POPULATE_NVGPU_OP(ttn::CGABarrierSyncOp, Cga_Barrier_Sync_op)
@@ -1073,38 +1074,27 @@ public:
     POPULATE_NVGPU_OP(ttn::RegDeallocOp, Reg_Dealloc_Op)
 #undef POPULATE_NVGPU_OP
     patterns.add<NVGPUOpGenericPattern<ttn::MBarrierInitOp>>(
-        context, Mbarrier_Init_Op, std::vector<std::string>(),
-        std::vector<std::string>({"r", "b"}));
+        context, Mbarrier_Init_Op, Constraints(), Constraints({"r", "b"}));
     patterns.add<NVGPUOpGenericPattern<ttn::MBarrierWaitOp>>(
-        context, Mbarrier_Wait_Op, std::vector<std::string>(),
-        std::vector<std::string>({"r", "r"}));
+        context, Mbarrier_Wait_Op, Constraints(), Constraints({"r", "r"}));
     patterns.add<NVGPUOpGenericPattern<ttn::NamedBarrierArriveOp>>(
-        context, Named_Barrier_Arrive_Op, std::vector<std::string>(),
-        std::vector<std::string>({"r", "r"}));
+        context, Named_Barrier_Arrive_Op, Constraints(),
+        Constraints({"r", "r"}));
     patterns.add<NVGPUOpGenericPattern<ttn::NamedBarrierWaitOp>>(
-        context, Named_Barrier_Wait_Op, std::vector<std::string>(),
-        std::vector<std::string>({"r", "r"}));
+        context, Named_Barrier_Wait_Op, Constraints(), Constraints({"r", "r"}));
     patterns.add<NVGPUOpGenericPattern<ttn::Sts64Op>>(
-        context, Sts64_Op, std::vector<std::string>(),
-        std::vector<std::string>({"r", "r", "r"}));
+        context, Sts64_Op, Constraints(), Constraints({"r", "r", "r"}));
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
-        context, Cluster_Cta_Id_Op, std::vector<std::string>({"=r"}),
-        std::vector<std::string>());
+        context, Cluster_Cta_Id_Op, Constraints({"=r"}), Constraints());
     patterns.add<NVGPUOpGenericPattern<ttn::WGMMADescCreateOp>>(
-        context, Wgmma_Desc_Create_op, std::vector<std::string>({"=l"}),
-        std::vector<std::string>({"l", "l"}));
+        context, Wgmma_Desc_Create_op, Constraints({"=l"}),
+        Constraints({"l", "l"}));
 
-    patterns.add<FenceAsyncSharedOpPattern>(context);
-    patterns.add<StoreMatrixOpPattern>(context);
-    patterns.add<OffsetOfStmatrixV4OpPattern>(context);
-    patterns.add<MBarrierArriveOpPattern>(context);
-    patterns.add<ClusterArriveOpPattern>(context);
-    patterns.add<TMALoadTiledOpPattern>(context);
-    patterns.add<TMAStoreTiledOpPattern>(context);
-    patterns.add<LoadDSmemOpPattern>(context);
-    patterns.add<WGMMAOpPattern>(context);
-    patterns.add<StoreDSmemOpPattern>(context);
-    patterns.add<OffsetOfSts64OpPattern>(context);
+    patterns.add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
+                 OffsetOfStmatrixV4OpPattern, MBarrierArriveOpPattern,
+                 ClusterArriveOpPattern, TMALoadTiledOpPattern,
+                 TMAStoreTiledOpPattern, LoadDSmemOpPattern, WGMMAOpPattern,
+                 StoreDSmemOpPattern, OffsetOfSts64OpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
