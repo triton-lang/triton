@@ -247,7 +247,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<ConvertTransConvert>(context);
-    patterns.add<MoveOpAfterLayoutConversion>(context);
+    if (triton::gpu::TritonGPUDialect::getComputeCapability(m) >= 80)
+      patterns.add<MoveOpAfterLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
