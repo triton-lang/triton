@@ -1,8 +1,11 @@
 #include "ReduceOpToLLVM.h"
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::shflSync;
 using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getOrder;
@@ -86,13 +89,14 @@ private:
   void getWriteIndexBasic(ConversionPatternRewriter &rewriter, Location loc,
                           Attribute layout, SmallVector<Value> &index,
                           SmallVector<Value> &writeIdx,
-                          std::map<int, Value> &ints, unsigned axis) const {
+                          std::map<int, Value> &ints, unsigned originalAxis,
+                          unsigned axis) const {
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      auto dim = sliceLayout.getDim();
-      assert(dim != axis && "Reduction axis cannot be sliced");
+      // Recover the axis in the parent layout
+      auto parentAxis = axis < sliceLayout.getDim() ? axis : axis + 1;
       auto parentLayout = sliceLayout.getParent();
       getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
-                         axis);
+                         originalAxis, parentAxis);
       return;
     }
 
@@ -113,21 +117,21 @@ private:
       // we would have a single accumulation every `axisSizePerThread`
       // contiguous values in the original tensor, so we would need
       // to map every `axisSizePerThread` to 1 value in smem as:
-      // writeIdx[axis] = index[axis] / axisSizePerThread
-      writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+      // writeIdx[originalAxis] = index[originalAxis] / axisSizePerThread
+      writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
     } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       if (!mmaLayout.isAmpere()) {
         llvm::report_fatal_error("Unsupported layout");
       }
-      if (axis == 0) {
+      if (originalAxis == 0) {
         // Because warpTileSize = [16, 8] and threadsPerWarp = [8, 4], each 8
         // rows in smem would correspond to a warp. The mapping
         // is: (warp_index) x 8 + (row index within warp)
-        writeIdx[axis] =
-            add(mul(udiv(index[axis], _16), _8), urem(index[axis], _8));
+        writeIdx[originalAxis] = add(mul(udiv(index[originalAxis], _16), _8),
+                                     urem(index[originalAxis], _8));
       } else {
         // Same as BlockedEncodingAttr case
-        writeIdx[axis] = udiv(index[axis], axisSizePerThread);
+        writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
       }
     } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
       // TODO: Support MFMA transposed layout.
@@ -233,7 +237,7 @@ private:
       // get the writeIdx at which to write in smem
       SmallVector<Value> writeIdx;
       getWriteIndexBasic(rewriter, loc, srcLayout, indices[key], writeIdx, ints,
-                         axis);
+                         axis, axis);
 
       // calculate the offset in smem for that writeIdx
       Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
@@ -353,7 +357,13 @@ private:
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
 
     SmallVector<Value> smemBases(op.getNumOperands());
+<<<<<<< HEAD
     if (sizeInterWarps > 1) {
+=======
+    bool isWarpSync = helper.isWarpSynchronous();
+
+    if (!isWarpSync) {
+>>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
       smemBases[0] = bitcast(
           getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys[0]);
       for (unsigned i = 1; i < op.getNumOperands(); ++i) {
@@ -392,8 +402,10 @@ private:
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
 
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcLayout);
+    auto threadsPerWarp =
+        triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
+    auto warpsPerCTA =
+        triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
     auto order = getOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
@@ -443,7 +455,11 @@ private:
         accumulate(rewriter, *combineOp, acc, shfl, false);
       }
 
+<<<<<<< HEAD
       if (sizeInterWarps == 1) {
+=======
+      if (isWarpSync) {
+>>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
         finalAccs[key] = acc;
         continue;
       }
@@ -458,7 +474,11 @@ private:
       }
     }
 
+<<<<<<< HEAD
     if (sizeInterWarps == 1) {
+=======
+    if (isWarpSync) {
+>>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
       SmallVector<Value> results(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         if (auto resultTy =
@@ -490,8 +510,15 @@ private:
     //
     // Each thread needs to process:
     //   elemsPerThread = sizeInterWarps * s1 * s2 .. Sn / numThreads
+
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     unsigned numThreads =
+<<<<<<< HEAD
         product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) * wavefront_size;
+=======
+        product<unsigned>(triton::gpu::getWarpsPerCTA(srcLayout)) *
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+>>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
     unsigned elemsPerThread = std::max<unsigned>(elems / numThreads, 1);
     Value readOffset = threadId;
     for (unsigned round = 0; round < elemsPerThread; ++round) {

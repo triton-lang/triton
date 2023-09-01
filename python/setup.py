@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
@@ -65,10 +66,14 @@ def get_pybind11_package_info():
 
 
 def get_llvm_package_info():
-    # download if nothing is installed
+    # added statement for Apple Silicon
     system = platform.system()
+    arch = 'x86_64'
     if system == "Darwin":
         system_suffix = "apple-darwin"
+        cpu_type = os.popen('sysctl machdep.cpu.brand_string').read()
+        if "apple" in cpu_type.lower():
+            arch = 'arm64'
     elif system == "Linux":
         vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
         vglibc = vglibc[0] * 100 + vglibc[1]
@@ -78,7 +83,7 @@ def get_llvm_package_info():
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    name = f'llvm+mlir-17.0.0-x86_64-{system_suffix}-{release_suffix}'
+    name = f'llvm+mlir-17.0.0-{arch}-{system_suffix}-{release_suffix}'
     version = "llvm-17.0.0-c5dede880d17"
     url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
@@ -117,6 +122,7 @@ def get_thirdparty_packages(triton_cache_path):
 
 
 def download_and_copy_ptxas():
+
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
     version = "12.1.105"
@@ -145,6 +151,11 @@ def download_and_copy_ptxas():
 
 
 # ---- cmake extension ----
+
+class CMakeBuildPy(build_py):
+    def run(self) -> None:
+        self.run_command('build_ext')
+        return super().run()
 
 
 class CMakeExtension(Extension):
@@ -205,6 +216,7 @@ class CMakeBuild(build_ext):
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DTRITON_BUILD_TUTORIALS=OFF",
@@ -280,7 +292,7 @@ setup(
     ],
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
-    cmdclass={"build_ext": CMakeBuild},
+    cmdclass={"build_ext": CMakeBuild, "build_py": CMakeBuildPy},
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],

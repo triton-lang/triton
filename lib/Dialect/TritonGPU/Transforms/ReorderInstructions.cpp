@@ -1,6 +1,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -42,6 +43,7 @@ public:
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
+    mlir::DominanceInfo dom(m);
     // Sink conversions into loops when they will increase
     // register pressure
     DenseMap<Operation *, Operation *> opToMove;
@@ -89,6 +91,7 @@ public:
         return;
       op->moveAfter(argOp);
     });
+<<<<<<< HEAD
     // Move `dot` operand so that conversions to opIdx=0 happens before
     // conversions to opIdx=1
 #ifdef USE_ROCM
@@ -98,6 +101,10 @@ public:
     // iteration.
     return;
 #endif
+=======
+    // Move `dot` operand so that conversions to opIdx=1 happens after
+    // conversions to opIdx=0
+>>>>>>> 5df904233c11a65bd131ead7268f84cca7804275
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto dstType = op.getResult().getType().cast<RankedTensorType>();
       auto dstEncoding =
@@ -105,17 +112,22 @@ public:
       if (!dstEncoding)
         return;
       int opIdx = dstEncoding.getOpIdx();
-      if (opIdx != 0)
+      if (opIdx != 1)
         return;
       if (op->getUsers().empty())
         return;
       auto dotUser = dyn_cast<triton::DotOp>(*op->user_begin());
       if (!dotUser)
         return;
-      auto BOp = dotUser.getOperand(1).getDefiningOp();
-      if (!BOp)
+      auto AOp =
+          dotUser.getOperand(0).getDefiningOp<triton::gpu::ConvertLayoutOp>();
+      if (!AOp)
         return;
-      op->moveBefore(BOp);
+      // Check that the conversion to OpIdx=1 happens before and can be moved
+      // after the conversion to OpIdx=0.
+      if (!dom.dominates(op.getOperation(), AOp.getOperation()))
+        return;
+      op->moveAfter(AOp);
     });
     return;
   }

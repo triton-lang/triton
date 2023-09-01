@@ -4,6 +4,7 @@
 using namespace mlir;
 
 using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -59,6 +60,7 @@ private:
   SmallVector<uint32_t> warpsPerCTA;
   int kOrder;
   int kWidth;
+  int vecWidth;
   SmallVector<int64_t> tileShape;
   SmallVector<int> instrShape;
   SmallVector<int> matShape;
@@ -177,13 +179,13 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value warpId, Value lane,
 // <----------------------------------------->
 // vecWidth
 // <------->
-//  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3  /|\
+//  *#t0 ... *#t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  *t0 ... *t0  t1 ... t1  t2 ... t2  t3 ... t3  /|\
 //  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   ||  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   |
 //  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   ||  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   | quad height
 // ...                                                                                            |
 // t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31   || t28 .. t28 t29 .. t29 t30 .. t30 t31 .. t31  \|/
 // --------------------------------------------- || --------------------------------------------
-//  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3
+//  *#t0 ... *#t0  t1 ... t1  t2 ... t2  t3 ... t3   ||  t0 ... t0  t1 ... t1  t2 ... t2  t3 ... t3
 //  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7   ||  t4 ... t4  t5 ... t5  t6 ... t6  t7 ... t7
 //  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11   ||  t8 ... t8  t9 ... t9 t10 .. t10 t11 .. t11
 // ...
@@ -205,23 +207,21 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
 
   SmallVector<Value> offs(numPtrs);
 
-  int vecWidth = kWidth;
   int threadsPerQuad[2] = {8, 4};
   int laneWidth = 4;
   int laneHeight = 8;
-  int quadWidth = laneWidth * vecWidth;
+  int quadWidth = laneWidth * kWidth;
   int quadHeight = laneHeight;
   int numQuadI = 2;
 
   // outer index base
   Value iBase = udiv(lane, i32_val(laneWidth));
 
-  for (int rep = 0; rep < numPtrs / (2 * vecWidth); ++rep)
+  for (int rep = 0; rep < numPtrs / (2 * kWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
-      for (int elemId = 0; elemId < vecWidth; ++elemId) {
-        int idx = rep * 2 * vecWidth + quadId * vecWidth + elemId;
+      for (int elemId = 0; elemId < kWidth; ++elemId) {
         // inner index base
-        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(vecWidth));
+        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(kWidth));
         jBase = add(jBase, i32_val(elemId));
         // inner index offset
         Value jOff = i32_val(0);
@@ -249,9 +249,17 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value warpOff,
         // To prevent out-of-bound access when tile is too small.
         Value i = add(iBase, mul(iOff, i32_val(quadHeight)));
         Value j = add(jBase, mul(jOff, i32_val(quadWidth)));
-        // wrap around the bounds
-        // i = urem(i, i32_val(cTileShape));
-        // j = urem(j, i32_val(sTileShape));
+        // Compute id of this ptr
+        int idx = rep * 2 * kWidth;
+        if (needTrans) {
+          idx += quadId * vecWidth;
+          idx += elemId % vecWidth;
+          idx += elemId / vecWidth * kWidth;
+        } else {
+          idx += quadId * kWidth;
+          idx += elemId;
+        }
+
         if (needTrans) {
           offs[idx] = add(i, mul(j, stridedSmemOffset));
         } else {
@@ -273,7 +281,7 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
   if (canUseLdmatrix)
     ptrIdx = matIdx[order[0]] / (instrShape[order[0]] / matShape[order[0]]);
   else
-    ptrIdx = matIdx[order[0]] * 4 / elemBytes;
+    ptrIdx = matIdx[order[0]] * (needTrans ? kWidth : vecWidth);
 
   // The main difference with the original triton code is we removed the
   // prefetch-related logic here for the upstream optimizer phase should
@@ -322,11 +330,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else {
-    if (needTrans && (4 / elemBytes) != kWidth)
-      llvm_unreachable("unimplemented Shared -> DotOperandMmav2 code path");
     // base pointers
     std::array<std::array<Value, 4>, 2> ptrs;
-    int vecWidth = 4 / elemBytes;
     for (int i = 0; i < vecWidth; i++)
       ptrs[0][i] = getPtr(ptrIdx + i);
     for (int i = 0; i < vecWidth; i++)
@@ -335,7 +340,8 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     int _i0 = matIdx[order[1]] * (stridedLoadMatOffset * stridedMatShape);
     int _i1 = _i0;
     if (needTrans)
-      _i1 += stridedLoadMatOffset * stridedMatShape;
+      _i1 += (kWidth != vecWidth) ? vecWidth
+                                  : stridedLoadMatOffset * stridedMatShape;
     else
       _i1 += (kOrder == 1 ? 1 : stridedLoadMatOffset) * stridedMatShape;
     Value i0 = mul(i32_val(_i0), stridedSmemOffset);
@@ -344,9 +350,11 @@ MMA16816SmemLoader::loadX4(int mat0, int mat1, ArrayRef<Value> ptrs, Type matTy,
     // load 4 32-bit values from shared memory
     // (equivalent to ldmatrix.x4)
     SmallVector<SmallVector<Value>> vptrs(4, SmallVector<Value>(vecWidth));
+
     for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < vecWidth; ++j)
+      for (int j = 0; j < vecWidth; ++j) {
         vptrs[i][j] = gep(shemPtrTy, ptrs[i / 2][j], ii[i % 2]);
+      }
     // row + trans and col + no-trans are equivalent
     bool isActualTrans =
         (needTrans && kOrder == 1) || (!needTrans && kOrder == 0);
@@ -397,13 +405,14 @@ MMA16816SmemLoader::MMA16816SmemLoader(
       ctx(rewriter.getContext()) {
   contiguousMatShape = matShape[order[0]];
   stridedMatShape = matShape[order[1]];
-
   stridedSmemOffset = smemStrides[order[1]];
+  vecWidth = 4 / elemBytes;
 
   // rule: k must be the fast-changing axis.
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans);
-  canUseLdmatrix = canUseLdmatrix && (kWidth == 4 / elemBytes);
+  canUseLdmatrix = canUseLdmatrix && (kWidth == vecWidth);
+  // canUseLdmatrix = false;
 
   if (canUseLdmatrix) {
     // Each CTA, the warps is arranged as [1xwarpsPerTile] if not transposed,
@@ -413,7 +422,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   } else {
     numPtrs = tileShape[order[0]] / (needTrans ? warpsPerTile : 1) /
               matShape[order[0]];
-    numPtrs *= 4 / elemBytes;
+    numPtrs *= kWidth;
   }
   numPtrs = std::max<int>(numPtrs, 2);
 
@@ -487,8 +496,20 @@ std::function<void(int, int)> getLoadMatrixFn(
   auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
+  const int vecPhase = sharedLayout.getVec();
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
+
+  if (tensor.getType()
+          .cast<RankedTensorType>()
+          .getElementType()
+          .isa<mlir::Float8E4M3B11FNUZType>()) {
+    bool noTrans = (isA ^ order[0] == 0);
+    assert(noTrans && "float8e4b15 must have row-col layout");
+  }
+
+  if (kWidth != (4 / elemBytes))
+    assert(vecPhase == 1 || vecPhase == 4 * kWidth);
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int a, int b) {
@@ -552,14 +573,14 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   int kWidth = encoding.getKWidth();
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
+  auto order = triton::gpu::getOrder(mmaLayout);
   Value warp = udiv(thread, i32_val(32));
   Value lane = urem(thread, i32_val(32));
-  // Note: warps are currently column major in MMA layout
-  Value warpRowIndex = urem(warp, i32_val(warpsPerCTA[0]));
-  Value warpColIndex =
-      urem(udiv(warp, i32_val(warpsPerCTA[0])), i32_val(warpsPerCTA[1]));
-  Value warpM = urem(warpRowIndex, i32_val(shape[0] / 16));
-  Value warpN = urem(warpColIndex, i32_val(shape[1] / 8));
+
+  SmallVector<Value> multiDimWarpId =
+      delinearize(rewriter, loc, warp, warpsPerCTA, order);
+  Value warpM = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
+  Value warpN = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
 
   int warpsPerTile;
   if (isA)

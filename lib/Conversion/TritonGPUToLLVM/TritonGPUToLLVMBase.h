@@ -15,6 +15,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -218,10 +219,9 @@ public:
   }
 
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
-    auto llvmIndexTy = this->getTypeConverter()->getIndexType();
     auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
-        loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x);
-    return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
+        loc, ::mlir::gpu::Dimension::x);
+    return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
   }
 
   // -----------------------------------------------------------------------
@@ -504,65 +504,6 @@ public:
       mask = and_(mask, icmp_eq(tid, i32_val(0)));
     }
     return mask;
-  }
-
-  // Convert an \param index to a multi-dim coordinate given \param shape and
-  // \param order.
-  SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                                 Location loc, Value linear,
-                                 ArrayRef<unsigned> shape,
-                                 ArrayRef<unsigned> order) const {
-    unsigned rank = shape.size();
-    assert(rank == order.size());
-    auto reordered = reorder(shape, order);
-    auto reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
-    SmallVector<Value> multiDim(rank);
-    for (unsigned i = 0; i < rank; ++i) {
-      multiDim[order[i]] = reorderedMultiDim[i];
-    }
-    return multiDim;
-  }
-
-  SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                                 Location loc, Value linear,
-                                 ArrayRef<unsigned> shape) const {
-    unsigned rank = shape.size();
-    assert(rank > 0);
-    SmallVector<Value> multiDim(rank);
-    if (rank == 1) {
-      multiDim[0] = linear;
-    } else {
-      Value remained = linear;
-      for (auto &&en : llvm::enumerate(shape.drop_back())) {
-        Value dimSize = i32_val(en.value());
-        multiDim[en.index()] = urem(remained, dimSize);
-        remained = udiv(remained, dimSize);
-      }
-      multiDim[rank - 1] = remained;
-    }
-    return multiDim;
-  }
-
-  Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                  ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
-                  ArrayRef<unsigned> order) const {
-    return linearize(rewriter, loc, reorder<Value>(multiDim, order),
-                     reorder<unsigned>(shape, order));
-  }
-
-  Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                  ArrayRef<Value> multiDim, ArrayRef<unsigned> shape) const {
-    auto rank = multiDim.size();
-    Value linear = i32_val(0);
-    if (rank > 0) {
-      linear = multiDim.back();
-      for (auto [dim, dimShape] :
-           llvm::reverse(llvm::zip(multiDim.drop_back(), shape.drop_back()))) {
-        Value dimSize = i32_val(dimShape);
-        linear = add(mul(linear, dimSize), dim);
-      }
-    }
-    return linear;
   }
 
   Value dot(ConversionPatternRewriter &rewriter, Location loc,
@@ -964,19 +905,23 @@ private:
                               const MmaEncodingAttr &mmaLayout,
                               RankedTensorType type) const {
     auto shape = type.getShape();
-    auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
-    assert(_warpsPerCTA.size() == 2);
-    SmallVector<Value> warpsPerCTA = {i32_val(_warpsPerCTA[0]),
-                                      i32_val(_warpsPerCTA[1])};
+    auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
+    assert(warpsPerCTA.size() == 2);
+    auto order = triton::gpu::getOrder(mmaLayout);
     Value threadId = getThreadId(rewriter, loc);
     Value warpSize = i32_val(triton::gpu::getWarpSize(mmaLayout));
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
-    Value warpId0 = urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / 16));
-    Value warpId1 = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
-                         i32_val(shape[1] / 8));
-    Value offWarp0 = mul(warpId0, i32_val(16));
-    Value offWarp1 = mul(warpId1, i32_val(8));
+
+    SmallVector<Value> multiDimWarpId =
+        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+    unsigned lastAxis = order[order.size() - 1];
+    multiDimWarpId[lastAxis] =
+        urem(multiDimWarpId[lastAxis], i32_val(warpsPerCTA[lastAxis]));
+    multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
+    multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
+    Value offWarp0 = mul(multiDimWarpId[0], i32_val(16));
+    Value offWarp1 = mul(multiDimWarpId[1], i32_val(8));
 
     SmallVector<Value> multiDimBase(2);
     multiDimBase[0] = add(udiv(laneId, i32_val(4)), offWarp0);
