@@ -62,18 +62,6 @@ class DebuggerFunction:
     def _is_constexpr(self, name):
         return name in self.func.__annotations__ and self.func.__annotations__[name] is lcore.constexpr
 
-    def _get_constexpr(self):
-        result = []
-        for name, annotation in self.func.__annotations__.items():
-            if annotation is lcore.constexpr:
-                result.append(name)
-        return result
-
-    def _assert_constexpr(self, **kwargs):
-        constexp = self._get_constexpr()
-        missing = [i for i in constexp if i not in kwargs.keys()]
-        assert len(missing) == 0, f"You must specify constexpr {missing}"
-
     def _get_grid(self, **kwargs):
         if callable(self.grid):
             return self.grid(kwargs)
@@ -81,7 +69,6 @@ class DebuggerFunction:
             return self.grid
 
     def __call__(self, *args, **kwargs):
-        self._assert_constexpr(**kwargs)
 
         memory = MemoryMap()
 

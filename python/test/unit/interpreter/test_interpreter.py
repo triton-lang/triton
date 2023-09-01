@@ -1,6 +1,7 @@
 import random
 
 import torch
+import pytest
 
 import triton
 import triton.language as tl
@@ -67,3 +68,36 @@ def test_atomic():
 
     atomic[(nb_dim, )](a)
     assert torch.allclose(a, torch.full_like(a, 2))
+
+def test_args():
+
+    @triton.jit(interpret=True)
+    def assign_kernel(
+        x_ptr,
+        output_ptr,
+        n_elements: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        tl.store(output_ptr + offsets, x, mask=mask)
+
+    a = torch.rand((128,), device="cuda")
+    expected = a
+    output = torch.empty((128,), device="cuda")
+
+    def grid(meta):
+        return (triton.cdiv(128, meta["BLOCK_SIZE"]),)
+
+    assign_kernel[grid](a, output, 128, BLOCK_SIZE=32)
+
+    assert torch.allclose(expected, output, atol=1e-2, rtol=0)
+
+    try:
+        assign_kernel[grid](a, output, BLOCK_SIZE=32)
+        pytest.fail("Should raise exception")
+    except TypeError:
+        pass
