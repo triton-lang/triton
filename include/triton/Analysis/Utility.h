@@ -50,13 +50,13 @@ public:
 
   unsigned getThreadsReductionAxis();
 
-  SmallVector<unsigned> getScratchConfigBasic();
-
-  SmallVector<unsigned> getScratchConfigsFast();
+  SmallVector<unsigned> getScratchConfig();
 
   unsigned getScratchSizeInBytes();
 
   bool isSupportedLayout();
+
+  unsigned getAxis() { return axis; }
 
 private:
   triton::ReduceOp op;

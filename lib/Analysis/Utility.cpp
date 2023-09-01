@@ -124,19 +124,12 @@ unsigned ReduceOpHelper::getThreadsReductionAxis() {
          triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
 }
 
-SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
-  auto smemShape = convertType<unsigned>(getSrcShape());
-  smemShape[axis] = std::min(smemShape[axis], getThreadsReductionAxis());
-  return smemShape;
-}
-
 bool ReduceOpHelper::isWarpSynchronous() {
   auto argsLayout = getSrcLayout();
-  return isFastReduction() &&
-         (triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1);
+  return triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1;
 }
 
-SmallVector<unsigned> ReduceOpHelper::getScratchConfigsFast() {
+SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
   SmallVector<unsigned> smemShape;
   // that case doesn't need inter-warp communication
   if (isWarpSynchronous())
@@ -149,14 +142,8 @@ SmallVector<unsigned> ReduceOpHelper::getScratchConfigsFast() {
 }
 
 unsigned ReduceOpHelper::getScratchSizeInBytes() {
-  unsigned elems = 0;
-  if (isFastReduction()) {
-    auto smemShape = getScratchConfigsFast();
-    elems = product<unsigned>(smemShape);
-  } else {
-    auto smemShape = getScratchConfigBasic();
-    elems = product<unsigned>(smemShape);
-  }
+  auto smemShape = getScratchConfig();
+  auto elems = product<unsigned>(smemShape);
 
   unsigned bytesPerElem = 0;
   for (const auto &ty : srcElementTypes) {
