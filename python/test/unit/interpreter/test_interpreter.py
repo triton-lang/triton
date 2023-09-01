@@ -1,7 +1,7 @@
 import random
 
-import torch
 import pytest
+import torch
 
 import triton
 import triton.language as tl
