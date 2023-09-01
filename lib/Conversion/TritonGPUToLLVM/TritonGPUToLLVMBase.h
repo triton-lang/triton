@@ -1129,25 +1129,12 @@ protected:
     formatString.push_back('\0'); // Null terminate for C
     size_t formatStringSize = formatString.size_in_bytes();
 
-    auto globalType = LLVM::LLVMArrayType::get(llvmI8, formatStringSize);
-    LLVM::GlobalOp global;
-    {
-      ConversionPatternRewriter::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(moduleOp.getBody());
-      global = rewriter.create<LLVM::GlobalOp>(
-          loc, globalType,
-          /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-          rewriter.getStringAttr(formatString));
-    }
+    Value prefixString =
+        LLVM::addStringToModule(loc, rewriter, "printfFormat_", formatString);
 
-    // Get a pointer to the format string's first element and pass it to
-    // printf()
-    Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
-        loc,
-        getTypeConverter()->getPointerType(globalType, global.getAddrSpace()),
-        global.getSymNameAttr());
-    Value stringStart = rewriter.create<LLVM::GEPOp>(
-        loc, i8Ptr, globalType, globalPtr, ArrayRef<LLVM::GEPArg>{0, 0});
+    auto prefixPtrType = ocklAppendStringN.getArgumentTypes()[1];
+    prefixString = bitcast(prefixString, prefixPtrType);
+
     Value stringLen =
         rewriter.create<LLVM::ConstantOp>(loc, llvmI64, formatStringSize);
 
@@ -1156,7 +1143,7 @@ protected:
 
     auto appendFormatCall = rewriter.create<LLVM::CallOp>(
         loc, ocklAppendStringN,
-        ValueRange{printfDesc, stringStart, stringLen,
+        ValueRange{printfDesc, prefixString, stringLen,
                    args.empty() ? oneI32 : zeroI32});
     printfDesc = appendFormatCall.getResult();
 
