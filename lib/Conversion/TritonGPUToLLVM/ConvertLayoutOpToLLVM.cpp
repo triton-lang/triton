@@ -346,7 +346,7 @@ private:
     SmallVector<unsigned> numCTAsEachRep(rank, 1);
     SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(layout, shape);
     SmallVector<int64_t> shapePerCTA = getShapePerCTA(layout, shape);
-    auto elemTy = type.getElementType();
+    auto elemTy = getTypeConverter()->convertType(type.getElementType());
 
     int ctaId = 0;
 
