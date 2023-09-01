@@ -160,12 +160,6 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         else:
             return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_fast)
     else:
-        if core.constexpr(input.dtype.primitive_bitwidth) < 32:
-            if core.constexpr(input.dtype.is_floating()):
-                input = input.to(core.float32)
-            else:
-                assert input.dtype.is_integer_type()
-                input = input.to(core.int32)
         return core.reduce(input, axis, maximum)
 
 
@@ -212,12 +206,6 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         else:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_fast)
     else:
-        if core.constexpr(input.dtype.primitive_bitwidth) < 32:
-            if core.constexpr(input.dtype.is_floating()):
-                input = input.to(core.float32)
-            else:
-                assert input.dtype.is_integer_type()
-                input = input.to(core.int32)
         return core.reduce(input, axis, minimum)
 
 
