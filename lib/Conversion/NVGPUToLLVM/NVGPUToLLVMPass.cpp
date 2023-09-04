@@ -566,7 +566,7 @@ public:
     auto dimSize = coords.size();
     std::string ptxAsm;
     if (dimSize == 2) {
-      ptxAsm = "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group"
+      ptxAsm = "@$4 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group"
                "[$0, {$2, $3}], [$1];";
     } else if (dimSize == 3) {
       ptxAsm = "@$5 cp.async.bulk.tensor.3d.global.shared::cta.bulk_group"
