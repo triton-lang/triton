@@ -69,6 +69,7 @@ def test_atomic():
     atomic[(nb_dim, )](a)
     assert torch.allclose(a, torch.full_like(a, 2))
 
+
 def test_args():
 
     @triton.jit(interpret=True)
@@ -102,6 +103,7 @@ def test_args():
     except TypeError:
         pass
 
+
 def test_slice():
 
     @triton.jit(interpret=True)
@@ -128,6 +130,7 @@ def test_slice():
     assign_kernel[grid](a, output, 64, BLOCK_SIZE=32)
 
     assert torch.allclose(expected, output, atol=1e-2, rtol=0)
+
 
 def test_constexpr_math():
 
@@ -164,6 +167,7 @@ def test_constexpr_math():
     assert torch.allclose(torch.full_like(mul_ptr, 2 * 0.5 * 2), mul_ptr, atol=1e-2, rtol=0)
     assert torch.allclose(torch.full_like(div_ptr, 2 / 0.5 / 2), div_ptr, atol=1e-2, rtol=0)
 
+
 def test_full():
 
     @triton.jit(interpret=True)
@@ -188,6 +192,7 @@ def test_full():
     full_kernel[grid](output, 128, BLOCK_SIZE=32)
 
     assert torch.allclose(expected, output, atol=1e-2, rtol=0)
+
 
 def test_float64():
     @triton.jit(interpret=True)
