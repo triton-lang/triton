@@ -1504,6 +1504,8 @@ def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: 
 
 
 def _convert_elem_to_ir_value(builder, elem, require_i64):
+    if isinstance(elem, int):
+        elem = tl.constexpr(elem)
     if isinstance(elem, tl.constexpr):
         return builder.get_int64(elem.value) if require_i64 else builder.get_int32(elem.value)
     elif isinstance(elem, tl.tensor):

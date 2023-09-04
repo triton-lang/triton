@@ -42,6 +42,9 @@ class TensorHandle:
         self.data = data
         self.dtype = dtype
 
+    def __bool__(self):
+        return bool(self.data.all())
+
 
 def wrap_ret(compute_ret_ty):
     def wrapper(fn):
@@ -54,16 +57,18 @@ def wrap_ret(compute_ret_ty):
 
 class Builder:
 
-    def __init__(self, grid_dim) -> None:
-        assert len(grid_dim) == 3
-        self.grid_idx = None
-        self.grid_dim = grid_dim
+    def __init__(self) -> None:
+        self.arch = None
+        # pass
 
     def set_grid_idx(self, x, y, z):
         assert x < self.grid_dim[0]
         assert y < self.grid_dim[1]
         assert z < self.grid_dim[2]
         self.grid_idx = (x, y, z)
+
+    def set_grid_dim(self, nx, ny, nz):
+        self.grid_dim = (nx, ny, nz)
 
     def np_dtype(self, tt_dtype):
         if isinstance(tt_dtype, tl.pointer_type):
@@ -84,8 +89,26 @@ class Builder:
         return np_types[tt_dtype]
 
     # constants
+    def get_half_ty(self):
+        return tl.float16
+
+    def get_float_ty(self):
+        return tl.float32
+
+    def get_block_ty(self, dtype, shape):
+        return tl.tensor(shape, dtype)
+
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
+
+    def get_int64(self, value):
+        return TensorHandle(np.array([value], dtype=np.int64), tl.int64)
+
+    def get_fp32(self, value):
+        return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
+
+    def get_null_value(self, type):
+        return TensorHandle(np.array([0], dtype=self.np_dtype(type)), type)
 
     # programming model
     def create_get_program_id(self, axis):
@@ -105,9 +128,18 @@ class Builder:
     def create_store(self, ptr, val, _0, _1):
         return _interpreter.store_ptrs(ptr.data, val.data)
 
+    def create_masked_load(self, ptrs, mask, other, cacheModifier, evictionPolicy, isVolatile):
+        return self.create_load(ptrs, None, None, None)
+
+    def create_masked_store(self, ptrs, value, mask, cacheModifier, evictionPolicy):
+        return self.create_store(ptrs, value, None, None)
+
     # casting ops
     def cast_impl(self, src, dst_type):
+        if isinstance(dst_type, tl.tensor):
+            dst_type = dst_type.dtype
         return TensorHandle(src.data.astype(self.np_dtype(dst_type)), dst_type)
+
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_fp_to_si = lambda self, src, dst_type: self.cast_impl(src, dst_type)
@@ -132,8 +164,8 @@ class Builder:
     create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
     create_fsub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
-    create_sdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
-    create_udiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
+    create_sdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.floor_divide)
+    create_udiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.floor_divide)
     create_srem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
     create_urem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
     create_add = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
@@ -194,6 +226,9 @@ class Builder:
     create_view = lambda self, arg, shape: TensorHandle(arg.data.reshape(shape), arg.dtype)
     create_trans = lambda self, arg: self.unary_op(arg, np.transpose)
 
+    def create_dot(self, a, b, d, allow_tf32):
+        return TensorHandle(np.dot(a.data, b.data) + d.data, a.dtype)
+
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
 
@@ -207,12 +242,6 @@ class Builder:
     #     pass
 
     # def create_tensor_pointer_store(self, ptr, value, boundaryCheck, cacheModifier, evictionPolicy):
-    #     pass
-
-    # def create_masked_load(self, ptrs, mask, other, cacheModifier, evictionPolicy, isVolatile):
-    #     pass
-
-    # def create_masked_store(self, ptrs, value, mask, cacheModifier, evictionPolicy):
     #     pass
 
     def create_expand_dims(self, arg, axis):
@@ -281,7 +310,6 @@ class Builder:
 
 def patch_attr(obj, name, member, builder):
     new_member = lambda *args, member=member, **kwargs: (member(*args, **{k: v for k, v in kwargs.items() if k != '_builder'}, _builder=builder))
-    setattr(new_member, '__triton_builtin__', True)
     setattr(obj, name, new_member)
 
 
@@ -305,6 +333,15 @@ def _implicit_cvt(arg):
     return arg
 
 
+def _unwrap(tensor):
+    if isinstance(tensor, triton.TensorWrapper):
+        return tensor.base
+    return tensor
+
+
+builder = Builder()
+
+
 class GridExecutor:
 
     def __init__(self, fn, grid):
@@ -313,20 +350,22 @@ class GridExecutor:
         self.grid = tuple(grid) + (1,) * (3 - len(grid))
 
     def _patch_lang(self, builder):
-        lang = [value for _, value in self.fn.__globals__.items() if value is tl]
+        lang = [value for _, value in self.fn.__globals__.items() if value in [tl, tl.core]]
         assert len(lang) == 1, "triton.language must be visible from within jit'd function"
         _patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
         _patch_lang_core(lang[0], builder)
 
     def __call__(self, *args_dev, **kwargs):
-        builder = Builder(self.grid)
+        # removes reserved keywords from kwargs
+        kwargs = {k: v for k, v in kwargs.items() if k not in ['num_warps', 'num_stages', 'num_ctas']}
         # remaps core language functions to interpreted ones
         self._patch_lang(builder)
         # we need to copy arguments to the host for the interpreter
-        args_hst = [arg.cpu() if hasattr(arg, 'data_ptr') else arg for arg in args_dev]
+        args_hst = [_unwrap(arg).cpu() if hasattr(arg, 'data_ptr') else arg for arg in args_dev]
         # implicitly convert tensor arguments to their base pointers
         wrapped_args = [_implicit_cvt(arg) for arg in args_hst]
         # iterate through grid
+        builder.set_grid_dim(*self.grid)
         for x in range(self.grid[0]):
             for y in range(self.grid[1]):
                 for z in range(self.grid[2]):
@@ -335,10 +374,16 @@ class GridExecutor:
         # copy arguments back to propagate side-effects
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, 'data_ptr'):
-                arg_dev.copy_(arg_hst.to(arg_dev.device))
+                _unwrap(arg_dev).copy_(arg_hst.to(arg_dev.device))
 
 
 class InterpretedFunction:
+
+    def _patch_lang(self, builder):
+        lang = [value for _, value in self.fn.__globals__.items() if value in [tl, tl.core]]
+        assert len(lang) == 1, "triton.language must be visible from within jit'd function"
+        _patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
+        _patch_lang_core(lang[0], builder)
 
     def __init__(self, fn) -> None:
         self.fn = fn
@@ -347,4 +392,5 @@ class InterpretedFunction:
         return GridExecutor(self.fn, grid)
 
     def __call__(self, *args, **kwargs):
+        self._patch_lang(builder)
         return self.fn(*args, **kwargs)
