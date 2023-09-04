@@ -115,7 +115,7 @@ public:
     mode = getModeFromLayout(sharedLayout, widthInByte);
 
     baseDesc = rewriter.create<triton::nvgpu::WGMMADescCreateOp>(
-        loc, i64_ty, base, i32_val(shape[ord[1]]), mode);
+        loc, base, i32_val(shape[ord[1]]), mode);
   }
 
   Value smemLoad(int a, int b) {

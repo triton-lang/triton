@@ -21,11 +21,25 @@ template <class T> SmallVector<unsigned, 4> argSort(const T &arr) {
   return ret;
 }
 
+unsigned getElementBitWidth(const Value &val) {
+  auto valType = val.getType();
+  if (valType.isa<PointerType>())
+    valType = valType.cast<PointerType>().getPointeeType();
+  auto tensorType = valType.cast<RankedTensorType>();
+
+  auto typeForMem =
+      tensorType.getElementType().isa<PointerType>()
+          ? tensorType.getElementType().cast<PointerType>().getPointeeType()
+          : tensorType.getElementType();
+  return typeForMem.getIntOrFloatBitWidth();
+}
+
 typedef DenseMap<Value, std::function<Type(Type)>> LayoutMap;
 
 struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
   Attribute getCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 Value ptr, int numWarps, int threadsPerWarp) {
+                                 Value ptr, Operation *op, int numWarps,
+                                 int threadsPerWarp) {
     auto refType = ptr.getType();
     if (refType.isa<PointerType>())
       refType = refType.cast<PointerType>().getPointeeType();
@@ -74,6 +88,18 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       order = argSort(queryAxisInfo(ptr).getContiguity());
     }
 
+    auto matchesOrder = [&refTensorType](const Value &val) {
+      if (val.getType() == refTensorType) {
+        return true;
+      }
+
+      auto rttType = val.getType().dyn_cast<RankedTensorType>();
+      if (!rttType) {
+        return false;
+      }
+      return rttType.getShape() == refTensorType.getShape();
+    };
+
     // The desired divisibility is the maximum divisibility
     // among all dependent pointers who have the same order as
     // `ptr`.
@@ -83,7 +109,7 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
     if (refType.isa<RankedTensorType>() && ptr.getDefiningOp()) {
       for (Operation *op : mlir::multiRootGetSlice(ptr.getDefiningOp())) {
         for (Value val : op->getResults()) {
-          if (val.getType() != refTensorType)
+          if (!matchesOrder(val))
             continue;
           auto currOrder =
               argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
@@ -109,11 +135,11 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
 
     // Thread tile size depends on memory alignment
     SmallVector<unsigned, 4> sizePerThread(refTensorType.getRank(), 1);
-    unsigned elemNumBits = typeForMem.getIntOrFloatBitWidth();
-    unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
     unsigned perThread = 1;
     for (Value val : withSameOrder) {
       auto valInfo = queryAxisInfo(val);
+      unsigned elemNumBits = getElementBitWidth(val);
+      unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
       unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
       unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
       unsigned maxContig =
@@ -122,7 +148,20 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
       perThread = std::max(perThread, currPerThread);
     }
-    sizePerThread[order[0]] = std::min<int>(perThread, numElemsPerThread);
+
+    perThread = std::min<int>(perThread, numElemsPerThread);
+
+    if (!dyn_cast<triton::LoadOp>(op)) {
+      // For ops that can result in a global memory write, we should enforce
+      // that each thread handles at most 128 bits, which is the widest
+      // available vectorized store op; otherwise, the store will have "gaps"
+      // in the memory write at the warp level, resulting in worse performance.
+      // For loads, we can expect that the gaps won't matter due to the L1
+      // cache.
+      unsigned elemNumBits = getElementBitWidth(ptr);
+      perThread = std::min<int>(perThread, 128 / elemNumBits);
+    }
+    sizePerThread[order[0]] = perThread;
 
     auto CTALayout = triton::gpu::getCTALayout(refTensorType.getEncoding());
     return triton::gpu::BlockedEncodingAttr::get(
@@ -132,9 +171,9 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
 
   std::function<Type(Type)>
   getTypeConverter(ModuleAxisInfoAnalysis &axisInfoAnalysis, Value ptr,
-                   int numWarps, int threadsPerWarp) {
-    Attribute encoding =
-        getCoalescedEncoding(axisInfoAnalysis, ptr, numWarps, threadsPerWarp);
+                   Operation *op, int numWarps, int threadsPerWarp) {
+    Attribute encoding = getCoalescedEncoding(axisInfoAnalysis, ptr, op,
+                                              numWarps, threadsPerWarp);
     return [encoding](Type type) {
       RankedTensorType tensorType = type.cast<RankedTensorType>();
       return RankedTensorType::get(tensorType.getShape(),
@@ -240,8 +279,8 @@ struct CoalescePass : public TritonGPUCoalesceBase<CoalescePass> {
       int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
       int threadsPerWarp =
           triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-      auto convertType =
-          getTypeConverter(axisInfoAnalysis, ptr, numWarps, threadsPerWarp);
+      auto convertType = getTypeConverter(axisInfoAnalysis, ptr, curr, numWarps,
+                                          threadsPerWarp);
       layoutMap[ptr] = convertType;
     });
 
