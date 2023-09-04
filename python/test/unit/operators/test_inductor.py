@@ -52,7 +52,7 @@ def test_normalization_with_remat():
     arg8_1 = torch.rand(64, device="cuda")
     arg9_1 = torch.rand(64, device="cuda")
     triton_[(512,)](buf14, buf16, arg114_1, arg115_1, arg8_1, arg9_1, 512, 4096, 1, 2048)
-    torch.testing.assert_allclose(buf16.mean().item(), buf14.mean().item(), atol=1e-7, rtol=0)
+    torch.testing.assert_close(buf16.mean().item(), buf14.mean().item(), atol=1e-7, rtol=0)
 
 
 def test_avg_pool_bw():
@@ -152,4 +152,4 @@ def test_avg_pool_bw():
     out_ref[:, :, 1:7, 0::7] = 2 / 3
     out_ref[:, :, 0::7, 1:7] = 2 / 3
     out_ref[:, :, 0::7, 0::7] = 4 / 9
-    torch.testing.assert_allclose(out, out_ref)
+    torch.testing.assert_close(out, out_ref)

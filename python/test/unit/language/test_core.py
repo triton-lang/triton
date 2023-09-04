@@ -881,7 +881,7 @@ def test_abs_fp8(in_dtype, device):
     f32_tensor = convert_float_to_float32(f8_tensor, in_dtype)
     expect = f32_tensor.abs()
     actual_f8 = convert_float_to_float32(out_f8, in_dtype)
-    torch.testing.assert_allclose(actual_f8, expect)
+    torch.testing.assert_close(actual_f8, expect)
 
 
 # ----------------
@@ -2594,7 +2594,7 @@ def test_masked_load(dtype_str, size, size_diff, num_ctas, device):
 
     reference_out = torch.cat((input, torch.ones((size_diff,), dtype=dtype, device=device)))
     # print((output - reference_out).nonzero())
-    torch.testing.assert_allclose(output, reference_out)
+    torch.testing.assert_close(output, reference_out)
 
 # Testing masked loads with an intermate copy to shared memory run.
 
@@ -2649,7 +2649,7 @@ def test_masked_load_shared_memory(dtype, device):
                         M=M, N=N, K=K)
 
     reference_out = torch.matmul(in1, in2)
-    torch.testing.assert_allclose(out, reference_out, atol=1e-2, rtol=0)
+    torch.testing.assert_close(out, reference_out, atol=1e-2, rtol=0)
 
 
 @pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
