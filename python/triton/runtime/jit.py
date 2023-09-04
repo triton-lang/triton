@@ -562,7 +562,6 @@ def jit(
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-    interpret: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -584,17 +583,17 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        # if interpret:
-        from ..interpreter.new_interpreter import InterpretedFunction
-        return InterpretedFunction(fn)
-        # else:
-        #     return JITFunction(
-        #         fn,
-        #         version=version,
-        #         do_not_specialize=do_not_specialize,
-        #         debug=debug,
-        #         noinline=noinline,
-        #     )
+        if os.getenv("TRITON_INTERPRET", "0") == "1":
+            from ..interpreter.new_interpreter import InterpretedFunction
+            return InterpretedFunction(fn)
+        else:
+            return JITFunction(
+                fn,
+                version=version,
+                do_not_specialize=do_not_specialize,
+                debug=debug,
+                noinline=noinline,
+            )
     if fn is not None:
         return decorator(fn)
 
