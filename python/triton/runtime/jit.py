@@ -306,7 +306,7 @@ class JITFunction(KernelInterface[T]):
                         else (False,)'
         elif 'Tensor' in arg_annotation:
             return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)'
-        elif arg_annotation == 'int':
+        elif 'int' in arg_annotation or 'bool' in arg_annotation:
             return f'({arg} % {JITFunction.divisibility} == 0, {arg} % {JITFunction.divisibility_8} == 0, {arg} == 1)'
         else:
             return '(False,)'
