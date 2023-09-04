@@ -54,6 +54,17 @@ def wrap_ret(compute_ret_ty):
 
 class Builder:
 
+    def __init__(self, grid_dim) -> None:
+        assert len(grid_dim) == 3
+        self.grid_idx = None
+        self.grid_dim = grid_dim
+
+    def set_grid_idx(self, x, y, z):
+        assert x < self.grid_dim[0]
+        assert y < self.grid_dim[1]
+        assert z < self.grid_dim[2]
+        self.grid_idx = (x, y, z)
+
     def np_dtype(self, tt_dtype):
         if isinstance(tt_dtype, tl.pointer_type):
             return np.dtype(np.uint64)
@@ -72,19 +83,17 @@ class Builder:
         }
         return np_types[tt_dtype]
 
-    def __init__(self) -> None:
-        pass
-
     # constants
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
 
     # programming model
     def create_get_program_id(self, axis):
-        pass
+        assert self.grid_idx is not None
+        return TensorHandle(np.array([self.grid_idx[axis]], dtype=np.int32), tl.int32)
 
     def create_get_num_programs(self, axis):
-        pass
+        return TensorHandle(np.array([self.grid_dim[axis]], dtype=np.int32), tl.int32)
 
     # memory ops
     def create_load(self, ptr, _0, _1, volatile):
@@ -192,7 +201,7 @@ class Builder:
 
     def create_addptr(self, ptr, offset):
         dtype_tt = ptr.dtype.element_ty
-        return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data, ptr.dtype)
+        return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
 
     # def create_tensor_pointer_load(self, ptr, boundaryCheck, paddingOption, cacheModifier, evictionPolicy, isVolatile):
     #     pass
@@ -270,37 +279,28 @@ class Builder:
     #     pass
 
 
+def patch_attr(obj, name, member, builder):
+    new_member = lambda *args, member=member, **kwargs: (member(*args, **{k: v for k, v in kwargs.items() if k != '_builder'}, _builder=builder))
+    setattr(new_member, '__triton_builtin__', True)
+    setattr(obj, name, new_member)
+
+
+def _patch_lang_tensor(tensor, builder):
+    for name, member in inspect.getmembers(tensor):
+        if tl.core.is_builtin(member):
+            patch_attr(tensor, name, member, builder)
+
+
+def _patch_lang_core(lang, builder):
+    for name, member in inspect.getmembers(lang):
+        if tl.core.is_builtin(member):
+            patch_attr(lang, name, member, builder)
+
+
 class Interpreter:
 
-    @staticmethod
-    def patch_attr(obj, name, member, builder):
-        new_member = lambda *args, member=member, **kwargs: (member(*args, **{k: v for k, v in kwargs.items() if k != '_builder'}, _builder=builder))
-        setattr(obj, name, new_member)
-
-    @staticmethod
-    def _patch_lang_tensor(tensor, builder):
-        for name, member in inspect.getmembers(tensor):
-            if tl.core.is_builtin(member):
-                Interpreter.patch_attr(tensor, name, member, builder)
-
-    @staticmethod
-    def _patch_lang_core(lang, builder):
-        for name, member in inspect.getmembers(lang):
-            if tl.core.is_builtin(member):
-                Interpreter.patch_attr(lang, name, member, builder)
-
-    @staticmethod
-    def _patch_lang(fn):
-        builder = Builder()
-        lang = [value for _, value in fn.__globals__.items() if value is tl]
-        assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-        Interpreter._patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
-        Interpreter._patch_lang_core(lang[0], builder)
-
-    def __init__(self, fn, grid) -> None:
-        self.grid = grid
+    def __init__(self, fn) -> None:
         self.fn = fn
-        Interpreter._patch_lang(fn)
 
     @staticmethod
     def _implicit_cvt(arg):
@@ -323,13 +323,36 @@ class Interpreter:
                 arg_dev.copy_(arg_hst.to(arg_dev.device))
 
 
+class GridExecutor:
+
+    def __init__(self, fn, grid):
+        assert len(grid) <= 3
+        self.fn = fn
+        self.grid = tuple(grid) + (1,) * (3 - len(grid))
+
+    def _patch_lang(self, builder):
+        lang = [value for _, value in self.fn.__globals__.items() if value is tl]
+        assert len(lang) == 1, "triton.language must be visible from within jit'd function"
+        _patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
+        _patch_lang_core(lang[0], builder)
+
+    def __call__(self, *args, **kwargs):
+        builder = Builder(self.grid)
+        self._patch_lang(builder)
+        for x in range(self.grid[0]):
+            for y in range(self.grid[1]):
+                for z in range(self.grid[2]):
+                    builder.set_grid_idx(x, y, z)
+                    Interpreter(self.fn)(*args, **kwargs)
+
+
 class InterpretedFunction:
 
     def __init__(self, fn) -> None:
         self.fn = fn
 
     def __getitem__(self, grid):
-        return Interpreter(self.fn, grid)
+        return GridExecutor(self.fn, grid)
 
     def __call__(self, *args, **kwargs):
         return Interpreter(self.fn, None)(*args, **kwargs)
