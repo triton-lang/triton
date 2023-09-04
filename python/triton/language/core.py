@@ -747,7 +747,7 @@ class tensor:
             slices = [slices]
         ret = self
         for dim, sl in enumerate(slices):
-            if isinstance(sl, constexpr) and sl.value is None:
+            if sl is None or isinstance(sl, constexpr) and sl.value is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
             elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
                 pass

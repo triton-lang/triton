@@ -55,6 +55,8 @@ def wrap_ret(compute_ret_ty):
 class Builder:
 
     def np_dtype(self, tt_dtype):
+        if isinstance(tt_dtype, tl.pointer_type):
+            return np.dtype(np.uint64)
         np_types = {
             tl.float16: np.dtype(np.float16),
             tl.float32: np.dtype(np.float32),
@@ -73,6 +75,18 @@ class Builder:
     def __init__(self) -> None:
         pass
 
+    # constants
+    def get_int32(self, value):
+        return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
+
+    # programming model
+    def create_get_program_id(self, axis):
+        pass
+
+    def create_get_num_programs(self, axis):
+        pass
+
+    # memory ops
     def create_load(self, ptr, _0, _1, volatile):
         dtype_tt = ptr.dtype.element_ty
         dtype_np = self.np_dtype(dtype_tt)
@@ -81,10 +95,6 @@ class Builder:
 
     def create_store(self, ptr, val, _0, _1):
         return _interpreter.store_ptrs(ptr.data, val.data)
-
-    def create_fadd(self, lhs, rhs):
-        # assert lhs.dtype is not tl.bfloat16
-        return TensorHandle(lhs.data + rhs.data, lhs.dtype)
 
     # casting ops
     def cast_impl(self, src, dst_type):
@@ -106,6 +116,8 @@ class Builder:
     # binary operators
     def binary_op(self, lhs, rhs, op):
         return TensorHandle(op(lhs.data, rhs.data), lhs.dtype)
+
+    create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_fdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
     create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
@@ -152,128 +164,117 @@ class Builder:
     create_xor = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_xor)
     create_or = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_or)
 
+    # ternary functions
+    def ternary_op(self, lhs, rhs, other, op):
+        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
+    create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
+
+    # unary functions
+    def unary_op(self, arg, op):
+        return TensorHandle(op(arg.data), arg.dtype)
+    create_exp = lambda self, arg: self.unary_op(arg, np.exp)
+    create_cos = lambda self, arg: self.unary_op(arg, np.cos)
+    create_sin = lambda self, arg: self.unary_op(arg, np.sin)
+    create_log = lambda self, arg: self.unary_op(arg, np.log)
+    create_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
+    create_fabs = lambda self, arg: self.unary_op(arg, np.abs)
+    create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
+
+    # tensor operators
+    create_dot = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.dot)
+    create_view = lambda self, arg, shape: TensorHandle(arg.data.reshape(shape), arg.dtype)
+    create_trans = lambda self, arg: self.unary_op(arg, np.transpose)
+
+    def create_make_range(self, start, stop):
+        return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
+
     # pointer arithmetic
 
     def create_addptr(self, ptr, offset):
-        pass
+        dtype_tt = ptr.dtype.element_ty
+        return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data, ptr.dtype)
 
-    def create_tensor_pointer_load(self, ptr, boundaryCheck, paddingOption, cacheModifier, evictionPolicy, isVolatile):
-        pass
+    # def create_tensor_pointer_load(self, ptr, boundaryCheck, paddingOption, cacheModifier, evictionPolicy, isVolatile):
+    #     pass
 
-    def create_tensor_pointer_store(self, ptr, value, boundaryCheck, cacheModifier, evictionPolicy):
-        pass
+    # def create_tensor_pointer_store(self, ptr, value, boundaryCheck, cacheModifier, evictionPolicy):
+    #     pass
 
-    def create_masked_load(self, ptrs, mask, other, cacheModifier, evictionPolicy, isVolatile):
-        pass
+    # def create_masked_load(self, ptrs, mask, other, cacheModifier, evictionPolicy, isVolatile):
+    #     pass
 
-    def create_masked_store(self, ptrs, value, mask, cacheModifier, evictionPolicy):
-        pass
-
-    def create_view(self, arg, shape):
-        pass
+    # def create_masked_store(self, ptrs, value, mask, cacheModifier, evictionPolicy):
+    #     pass
 
     def create_expand_dims(self, arg, axis):
-        pass
-
-    def create_cat(self, lhs, rhs):
-        pass
-
-    def create_trans(self, arg):
-        pass
+        return TensorHandle(np.expand_dims(arg.data, axis), arg.dtype)
 
     def create_broadcast(self, arg, shape):
-        pass
+        return TensorHandle(np.broadcast_to(arg.data, shape), arg.dtype)
+
+    # def create_cat(self, lhs, rhs):
+    #     pass
+
+    # def create_broadcast(self, arg, shape):
+    #     pass
 
     def create_splat(self, arg, shape):
-        pass
+        return TensorHandle(np.full(shape, arg.data[0], dtype=self.np_dtype(arg.dtype)), arg.dtype)
 
-    def create_atomic_cas(self, ptr, cmp, val, sem):
-        pass
+    # def create_atomic_cas(self, ptr, cmp, val, sem):
+    #     pass
 
-    def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem):
-        pass
+    # def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem):
+    #     pass
 
-    def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
-        pass
+    # def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
+    #     pass
 
-    def create_get_program_id(self, axis):
-        pass
+    # def create_reduce(self, operands, axis):
+    #     pass
 
-    def create_get_num_programs(self, axis):
-        pass
+    # def create_reduce_ret(self, args):
+    #     pass
 
-    def create_dot(self, a, b, c, allowTF32):
-        pass
+    # def create_scan(self, operands, axis):
+    #     pass
 
-    def create_exp(self, val):
-        pass
+    # def create_scan_ret(self, args):
+    #     pass
 
-    def create_cos(self, val):
-        pass
+    # def create_ptr_to_int(self, val, type):
+    #     pass
 
-    def create_sin(self, val):
-        pass
+    # def create_int_to_ptr(self, val, type):
+    #     pass
 
-    def create_log(self, val):
-        pass
+    # def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
+    #     pass
 
-    def create_sqrt(self, val):
-        pass
+    # def create_print(self, prefix, values):
+    #     pass
 
-    def create_fabs(self, val):
-        pass
+    # def create_assert(self, condition, message, fileName, funcName, lineNo):
+    #     pass
 
-    def create_iabs(self, val):
-        pass
+    # def create_undef(self, type):
+    #     pass
 
-    def create_reduce(self, operands, axis):
-        pass
+    # def create_barrier(self):
+    #     pass
 
-    def create_reduce_ret(self, args):
-        pass
+    # def create_make_block_ptr(self, base, shape, strides, offsets, tensorShape, order):
+    #     pass
 
-    def create_scan(self, operands, axis):
-        pass
-
-    def create_scan_ret(self, args):
-        pass
-
-    def create_ptr_to_int(self, val, type):
-        pass
-
-    def create_int_to_ptr(self, val, type):
-        pass
-
-    def create_select(self, condition, trueValue, falseValue):
-        pass
-
-    def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
-        pass
-
-    def create_print(self, prefix, values):
-        pass
-
-    def create_assert(self, condition, message, fileName, funcName, lineNo):
-        pass
-
-    def create_undef(self, type):
-        pass
-
-    def create_barrier(self):
-        pass
-
-    def create_make_block_ptr(self, base, shape, strides, offsets, tensorShape, order):
-        pass
-
-    def create_advance(self, ptr, offsets):
-        pass
+    # def create_advance(self, ptr, offsets):
+    #     pass
 
 
 class Interpreter:
 
     @staticmethod
     def patch_attr(obj, name, member, builder):
-        new_member = lambda *args, member=member, **kwargs: (member(*args, **kwargs, _builder=builder))
+        new_member = lambda *args, member=member, **kwargs: (member(*args, **{k: v for k, v in kwargs.items() if k != '_builder'}, _builder=builder))
         setattr(obj, name, new_member)
 
     @staticmethod
@@ -311,14 +312,15 @@ class Interpreter:
 
     def __call__(self, *args_dev, **kwargs):
         # we need to copy arguments to the host for the interpreter
-        args_hst = [arg.cpu() for arg in args_dev]
+        args_hst = [arg.cpu() if hasattr(arg, 'data_ptr') else arg for arg in args_dev]
         # implicitly convert tensor arguments to their base pointers
         wrapped_args = [self._implicit_cvt(arg) for arg in args_hst]
         # run function
         self.fn(*wrapped_args, **kwargs)
         # copy arguments back to propagate side-effects
         for arg_dev, arg_hst in zip(args_dev, args_hst):
-            arg_dev.copy_(arg_hst.to(arg_dev.device))
+            if hasattr(arg_dev, 'data_ptr'):
+                arg_dev.copy_(arg_hst.to(arg_dev.device))
 
 
 class InterpretedFunction:
