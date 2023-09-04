@@ -297,30 +297,12 @@ def _patch_lang_core(lang, builder):
             patch_attr(lang, name, member, builder)
 
 
-class Interpreter:
-
-    def __init__(self, fn) -> None:
-        self.fn = fn
-
-    @staticmethod
-    def _implicit_cvt(arg):
-        if hasattr(arg, 'data_ptr'):
-            ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
-            handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
-            return tl.tensor(handle, ty)
-        return arg
-
-    def __call__(self, *args_dev, **kwargs):
-        # we need to copy arguments to the host for the interpreter
-        args_hst = [arg.cpu() if hasattr(arg, 'data_ptr') else arg for arg in args_dev]
-        # implicitly convert tensor arguments to their base pointers
-        wrapped_args = [self._implicit_cvt(arg) for arg in args_hst]
-        # run function
-        self.fn(*wrapped_args, **kwargs)
-        # copy arguments back to propagate side-effects
-        for arg_dev, arg_hst in zip(args_dev, args_hst):
-            if hasattr(arg_dev, 'data_ptr'):
-                arg_dev.copy_(arg_hst.to(arg_dev.device))
+def _implicit_cvt(arg):
+    if hasattr(arg, 'data_ptr'):
+        ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
+        handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
+        return tl.tensor(handle, ty)
+    return arg
 
 
 class GridExecutor:
@@ -336,14 +318,24 @@ class GridExecutor:
         _patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
         _patch_lang_core(lang[0], builder)
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args_dev, **kwargs):
         builder = Builder(self.grid)
+        # remaps core language functions to interpreted ones
         self._patch_lang(builder)
+        # we need to copy arguments to the host for the interpreter
+        args_hst = [arg.cpu() if hasattr(arg, 'data_ptr') else arg for arg in args_dev]
+        # implicitly convert tensor arguments to their base pointers
+        wrapped_args = [_implicit_cvt(arg) for arg in args_hst]
+        # iterate through grid
         for x in range(self.grid[0]):
             for y in range(self.grid[1]):
                 for z in range(self.grid[2]):
                     builder.set_grid_idx(x, y, z)
-                    Interpreter(self.fn)(*args, **kwargs)
+                    self.fn(*wrapped_args, **kwargs)
+        # copy arguments back to propagate side-effects
+        for arg_dev, arg_hst in zip(args_dev, args_hst):
+            if hasattr(arg_dev, 'data_ptr'):
+                arg_dev.copy_(arg_hst.to(arg_dev.device))
 
 
 class InterpretedFunction:
@@ -355,4 +347,4 @@ class InterpretedFunction:
         return GridExecutor(self.fn, grid)
 
     def __call__(self, *args, **kwargs):
-        return Interpreter(self.fn, None)(*args, **kwargs)
+        return self.fn(*args, **kwargs)
