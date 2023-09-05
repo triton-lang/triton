@@ -262,10 +262,16 @@ private:
                     ConversionPatternRewriter &rewriter) const {
     triton::ReduceOp op = helper.getOperation();
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarpWithUniqueData(
-        helper.getSrcLayout(), helper.getSrcShape());
-    unsigned interleave =
-        helper.isFastReduction() ? 1 : threadsPerWarp[1 - helper.getAxis()];
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(helper.getSrcLayout());
+    unsigned interleave = helper.isFastReduction() || threadsPerWarp.size() == 1
+                              ? 1
+                              : threadsPerWarp[1 - helper.getAxis()];
+    if (auto sliceLayout =
+            helper.getSrcLayout().dyn_cast<SliceEncodingAttr>()) {
+      auto parentLayout = sliceLayout.getParent();
+      threadsPerWarp = triton::gpu::getThreadsPerWarp(parentLayout);
+      interleave = threadsPerWarp[sliceLayout.getDim()];
+    }
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = accs[key];
@@ -328,19 +334,33 @@ private:
 
     auto threadsPerWarp =
         triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
-    auto warpsPerCTA =
-        triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
     auto order = getOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-
     Value laneIdAxis = multiDimLaneId[axis];
-    Value warpIdAxis = multiDimWarpId[axis];
-
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);
+
+    auto warpsPerCTA =
+        triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
+    SmallVector<Value> multiDimWarpId =
+        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+    Value warpIdAxis = multiDimWarpId[axis];
+
+    // Clean  up, make a helper function instead
+    // 2x2 warps with slice dim = 0, warpId = 2 ends up writing at the same
+    // address as warpId = 0 since the warpsPerCTA is [1, 2], need to figure out
+    // a way to properly delinearize warpId in the slice case
+    if (auto sliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
+      auto parentLayout = sliceLayout.getParent();
+      auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(parentLayout);
+      auto parentOrder = triton::gpu::getOrder(parentLayout);
+      SmallVector<Value> multiDimWarpId =
+          delinearize(rewriter, loc, warpId, parentWarpsPerCTA, parentOrder);
+      multiDimWarpId.erase(multiDimWarpId.begin() + sliceLayout.getDim());
+      warpIdAxis = multiDimWarpId[axis];
+    }
+
     if (!helper.isFastReduction()) {
       std::reverse(order.begin(), order.end());
     }
