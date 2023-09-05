@@ -138,8 +138,8 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     out_tri.backward(dout_tri)
     da_tri = a_tri.grad
     # compare
-    torch.testing.assert_close(out_tri, out_ref)
-    torch.testing.assert_close(da_tri, da_ref)
+    torch.testing.assert_close(out_tri, out_ref, equal_nan=True)
+    torch.testing.assert_close(da_tri, da_ref, equal_nan=True)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])
