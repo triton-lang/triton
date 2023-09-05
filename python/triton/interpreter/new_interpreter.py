@@ -119,20 +119,25 @@ class Builder:
         return TensorHandle(np.array([self.grid_dim[axis]], dtype=np.int32), tl.int32)
 
     # memory ops
-    def create_load(self, ptr, _0, _1, volatile):
-        dtype_tt = ptr.dtype.element_ty
-        dtype_np = self.np_dtype(dtype_tt)
-        ret = _interpreter.load_ptrs(ptr.data, dtype_np)
-        return TensorHandle(ret, dtype_tt)
+    def create_load(self, ptr, _0, _1, is_volatile):
+        mask = np.ones_like(ptr.data, dtype=np.bool)
+        other = None
+        return self.create_masked_load(ptr, mask, other, _0, _1, is_volatile)
 
     def create_store(self, ptr, val, _0, _1):
-        return _interpreter.store_ptrs(ptr.data, val.data)
+        mask = np.ones_like(ptr.data, dtype=np.bool)
+        return self.create_masked_store(ptr, val, mask, None, None)
 
-    def create_masked_load(self, ptrs, mask, other, cacheModifier, evictionPolicy, isVolatile):
-        return self.create_load(ptrs, None, None, None)
+    def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
+        dtype_tt = ptrs.dtype.element_ty
+        dtype_np = self.np_dtype(dtype_tt)
+        if other is None:
+            other = np.ones_like(ptrs.data, dtype=dtype_np)
+        ret = _interpreter.load(ptrs.data, mask.data, other, dtype_np)
+        return TensorHandle(ret, dtype_tt)
 
-    def create_masked_store(self, ptrs, value, mask, cacheModifier, evictionPolicy):
-        return self.create_store(ptrs, value, None, None)
+    def create_masked_store(self, ptrs, value, mask, cache_modifier, eviction_policy):
+        return _interpreter.store(ptrs.data, value.data, mask.data)
 
     # casting ops
     def cast_impl(self, src, dst_type):

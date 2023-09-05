@@ -1982,27 +1982,36 @@ void init_triton_translation(py::module &m) {
 void init_triton_interpreter(py::module &&m) {
   using ret = py::return_value_policy;
 
-  m.def("load_ptrs",
-        [](py::array_t<uint64_t> ptrs, py::dtype ret_dtype) -> py::array {
+  m.def("load",
+        [](py::array_t<uint64_t> ptrs, py::array_t<bool> masks, py::array other,
+           py::dtype ret_dtype) -> py::array {
           int numel = ptrs.size();
           auto shape =
               std::vector<ptrdiff_t>(ptrs.shape(), ptrs.shape() + ptrs.ndim());
           py::array ret(ret_dtype, py::array::ShapeContainer{numel});
           py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
+          py::array_t<bool> reshaped_masks = masks.reshape({numel});
+          py::array reshaped_others = other.reshape({numel});
           for (size_t i = 0; i < ptrs.size(); ++i)
-            memcpy(ret.mutable_data(i),
-                   reinterpret_cast<void *>(reshaped_ptrs.at(i)),
-                   ret_dtype.itemsize());
+            if (reshaped_masks.at(i))
+              memcpy(ret.mutable_data(i),
+                     reinterpret_cast<void *>(reshaped_ptrs.at(i)),
+                     ret_dtype.itemsize());
+            else
+              memcpy(ret.mutable_data(i), other.data(i), ret_dtype.itemsize());
           return ret.reshape(shape);
         });
 
-  m.def("store_ptrs", [](py::array_t<uint64_t> ptrs, py::array values) {
+  m.def("store", [](py::array_t<uint64_t> ptrs, py::array values,
+                    py::array_t<bool> mask) {
     int numel = ptrs.size();
     py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
+    py::array_t<bool> reshaped_masks = mask.reshape({numel});
     auto reshaped_values = values.reshape({numel});
     for (size_t i = 0; i < ptrs.size(); ++i) {
-      memcpy(reinterpret_cast<void *>(reshaped_ptrs.at(i)),
-             reshaped_values.mutable_data(i), values.dtype().itemsize());
+      if (reshaped_masks.at(i))
+        memcpy(reinterpret_cast<void *>(reshaped_ptrs.at(i)),
+               reshaped_values.mutable_data(i), values.dtype().itemsize());
     }
   });
 }
