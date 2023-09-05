@@ -24,9 +24,9 @@
 
 
 import os
+import shutil
 import sys
 import sysconfig
-import shutil
 from pathlib import Path
 
 import sphinx_rtd_theme
@@ -38,12 +38,14 @@ def process_sig(app, what, name, obj, options, signature, return_annotation):
         signature = signature.split('_builder')[0] + ")"
     return (signature, return_annotation)
 
+
 def get_cmake_dir():
     plat_name = sysconfig.get_platform()
     python_version = sysconfig.get_python_version()
     dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
     cmake_dir = Path("../python") / "build" / dir_name
     return cmake_dir
+
 
 def setup_generated_mlir_docs():
     dst_path = Path("dialects")
@@ -56,15 +58,15 @@ def setup_generated_mlir_docs():
     shutil.copytree(src_dir, dst_path, dirs_exist_ok=True)
 
     files = os.listdir(dst_path)
-    
+
     dialects = "\n   ".join(["./" + f for f in files if "Dialect" in f])
     ops = [f for f in files if "Ops" in f]
 
     # Add titles
     for op in ops:
         with open(dst_path / op, 'r+') as f:
-            lines = f.readlines() 
-            lines.insert(0, "# " + op.split(".md")[0]) 
+            lines = f.readlines()
+            lines.insert(0, "# " + op.split(".md")[0])
             f.seek(0)
             f.writelines(lines)
     ops = "\n   ".join(["./" + op for op in ops])
@@ -87,6 +89,7 @@ Triton MLIR Dialects and Ops
 """
     with open(dst_path / "dialects.rst", "w+") as f:
         f.write(rst_string)
+
 
 def setup(app):
     """Customize function args retrieving to get args under decorator."""
