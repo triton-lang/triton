@@ -36,7 +36,9 @@ public:
 
   triton::ReduceOp getOperation() { return op; }
 
-  bool isFastReduction();
+  bool isReductionOnLayoutFastAxis();
+
+  unsigned getThreadOffsetOnReductionAxis();
 
   bool isWarpSynchronous();
 
@@ -55,6 +57,8 @@ public:
   unsigned getScratchSizeInBytes();
 
   bool isSupportedLayout();
+
+  bool isReduceWithinCTA();
 
   unsigned getAxis() { return axis; }
 

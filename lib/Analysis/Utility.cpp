@@ -33,12 +33,37 @@ SmallVector<unsigned> getParentOrder(Attribute layout) {
 
 } // namespace
 
-bool ReduceOpHelper::isFastReduction() {
-  // Disable fast reduction only for debugging purpose
-  if (::triton::tools::getBoolEnv("DISABLE_FAST_REDUCTION"))
-    return false;
+bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
   return getParentAxis(getSrcLayout(), axis) ==
          getParentOrder(getSrcLayout())[0];
+}
+
+// Thread offset is the thread index offset of two adjacent threads on the
+// reduction axis within the warp.
+unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
+  auto srcLayout = getSrcLayout();
+
+  // If the reduction axis is the fast axis of the parent layout
+  if (isReductionOnLayoutFastAxis()) {
+    return 1;
+  }
+
+  unsigned threadOffset = 1;
+  if (auto sliceLayout =
+          srcLayout.dyn_cast<mlir::triton::gpu::SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(parentLayout);
+    threadOffset = threadsPerWarp[sliceLayout.getDim()];
+  } else {
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
+    if (threadsPerWarp.size() == 1) {
+      threadOffset = 1;
+    } else {
+      assert(threadsPerWarp.size() == 2 && "Only supports 2D layouts");
+      threadOffset = axis == 0 ? threadsPerWarp[1] : threadsPerWarp[0];
+    }
+  }
+  return threadOffset;
 }
 
 // Cases where distributed shared memory is not required in ConvertLayout:
@@ -152,7 +177,21 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
   return bytesPerElem * elems;
 }
 
+bool ReduceOpHelper::isReduceWithinCTA() {
+  auto axis = getAxis();
+  auto srcLayout = getSrcLayout();
+  auto CTASplitNum = mlir::triton::gpu::getCTASplitNum(srcLayout);
+  assert(axis < CTASplitNum.size());
+  return CTASplitNum[axis] == 1;
+}
+
 bool ReduceOpHelper::isSupportedLayout() {
+  // Layout optimization passes such as PlanCTAPass and
+  // RemoveLayoutConversionPass should avoid cross-CTA reduction
+  if (!isReduceWithinCTA()) {
+    return false;
+  }
+
   auto srcLayout = getSrcLayout();
   if (srcLayout.isa<triton::gpu::BlockedEncodingAttr>()) {
     return true;
