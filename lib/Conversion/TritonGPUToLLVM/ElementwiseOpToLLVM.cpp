@@ -290,13 +290,12 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
   assert(inEncoding == ouEncoding);
   if (!inEncoding)
     return values;
-#ifdef USE_ROCM
-  // TODO Need to check why we need this reorder fuction, and rework this check
-  auto parentEncoding = inEncoding.getParent();
-  if (isa<BlockedEncodingAttr>(parentEncoding) ||
-      isa<MfmaEncodingAttr>(parentEncoding))
+  // If the parent of the dot operand is in block encoding, we don't need to
+  // reorder elements
+  auto parentEncoding =
+      dyn_cast<triton::gpu::MmaEncodingAttr>(ouEncoding.getParent());
+  if (!parentEncoding)
     return values;
-#endif
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
   size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
   auto ouEltTy = ouTensorTy.getElementType();
