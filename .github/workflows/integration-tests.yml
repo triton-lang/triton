@@ -43,9 +43,14 @@ jobs:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-required)}}
 
     steps:
+      - name: Submodule cleanup fix
+        run: |
+            git rm --cached _deps/googletest-src
+            git submodule status
+            git submodule foreach --recursive git clean -ffdx
+            git submodule foreach --recursive git reset --hard
       - name: Checkout
         uses: actions/checkout@v2
-
       - name: Set CUDA ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
