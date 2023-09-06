@@ -154,10 +154,24 @@ public:
   matchAndRewrite(arith::SelectOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
-                      op, retType, adaptor.getCondition(),
-                      adaptor.getTrueValue(), adaptor.getFalseValue()),
-                  adaptor.getAttributes());
+
+    Value cond = adaptor.getCondition();
+    if (llvm::isa<RankedTensorType>(retType) &&
+        !llvm::isa<TensorType>(cond.getType())) {
+      // triton_gpu.select doesn't support scalar condition values, so add a
+      // splat
+      auto retTypeTensor = llvm::cast<RankedTensorType>(retType);
+      auto retShape = retTypeTensor.getShape();
+      auto retEncoding = retTypeTensor.getEncoding();
+      Type condTy =
+          RankedTensorType::get(retShape, cond.getType(), retEncoding);
+      cond = rewriter.create<triton::SplatOp>(op.getLoc(), condTy, cond);
+    }
+
+    addNamedAttrs(
+        rewriter.replaceOpWithNewOp<triton::gpu::SelectOp>(
+            op, retType, cond, adaptor.getTrueValue(), adaptor.getFalseValue()),
+        adaptor.getAttributes());
     return success();
   }
 };
@@ -537,6 +551,38 @@ struct TritonReduceReturnPattern
   }
 };
 
+struct TritonScanPattern : public OpConversionPattern<triton::ScanOp> {
+  using OpConversionPattern<triton::ScanOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto newScan = rewriter.create<triton::ScanOp>(
+        op.getLoc(), adaptor.getOperands(), adaptor.getAxis());
+    addNamedAttrs(newScan, adaptor.getAttributes());
+
+    auto &newCombineOp = newScan.getCombineOp();
+    rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp,
+                               newCombineOp.end());
+    rewriter.replaceOp(op, newScan.getResult());
+    return success();
+  }
+};
+
+struct TritonScanReturnPattern
+    : public OpConversionPattern<triton::ScanReturnOp> {
+  using OpConversionPattern<triton::ScanReturnOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ScanReturnOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ScanReturnOp>(
+                      op, adaptor.getResult()),
+                  adaptor.getAttributes());
+    return success();
+  }
+};
+
 struct TritonPrintPattern : public OpConversionPattern<triton::PrintOp> {
   using OpConversionPattern<triton::PrintOp>::OpConversionPattern;
 
@@ -623,9 +669,10 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
           TritonGenericPattern<triton::PtrToIntOp>,
           TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
           TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-          TritonReducePattern, TritonReduceReturnPattern, TritonTransPattern,
-          TritonExpandDimsPattern, TritonMakeRangePattern, TritonDotPattern,
-          TritonLoadPattern, TritonStorePattern,
+          TritonReducePattern, TritonReduceReturnPattern, TritonScanPattern,
+          TritonScanReturnPattern, TritonTransPattern, TritonExpandDimsPattern,
+          TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
+          TritonStorePattern,
           TritonExternElementwisePattern<triton::PureExternElementwiseOp>,
           TritonExternElementwisePattern<triton::ImpureExternElementwiseOp>,
           TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern,

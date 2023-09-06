@@ -7,7 +7,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -96,6 +95,8 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
     auto parentThreadsPerWarp = getThreadsPerWarp(parent);
+    assert(parentThreadsPerWarp.size() == 2 &&
+           "getThreadsPerWarp only implemented for 2D slice layout");
     SmallVector<unsigned> threadsPerWarp = parentThreadsPerWarp;
     threadsPerWarp.erase(threadsPerWarp.begin() + sliceLayout.getDim());
     for (unsigned i = 0; i < threadsPerWarp.size(); i++)
@@ -153,6 +154,8 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
     auto parentWarpsPerCTA = getWarpsPerCTA(parent);
+    assert(parentWarpsPerCTA.size() == 2 &&
+           "getWarpsPerCTA only implemented for 2D slice layout");
     SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
     warpsPerCTA.erase(warpsPerCTA.begin() + sliceLayout.getDim());
     for (unsigned i = 0; i < warpsPerCTA.size(); i++)
@@ -261,20 +264,15 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   }
 }
 
-SmallVector<unsigned> getUniqueContigPerThread(Type type) {
-  if (type.isIntOrIndexOrFloat() || type.isa<triton::PointerType>())
-    return SmallVector<unsigned>(1, 1);
-  auto tensorType = type.cast<RankedTensorType>();
-  auto shape = tensorType.getShape();
+SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
+                                               ArrayRef<int64_t> shape) {
   // If slice layout, call recursively on parent layout, and drop
   // sliced dim
-  if (auto sliceLayout =
-          tensorType.getEncoding().dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     auto parentShape = sliceLayout.paddedShape(shape);
-    auto parentTy = RankedTensorType::get(
-        parentShape, tensorType.getElementType(), parentLayout);
-    auto parentUniqueContigPerThread = getUniqueContigPerThread(parentTy);
+    auto parentUniqueContigPerThread =
+        getUniqueContigPerThread(parentLayout, parentShape);
     parentUniqueContigPerThread.erase(parentUniqueContigPerThread.begin() +
                                       sliceLayout.getDim());
     return parentUniqueContigPerThread;
@@ -282,7 +280,7 @@ SmallVector<unsigned> getUniqueContigPerThread(Type type) {
   // Base case
   auto rank = shape.size();
   SmallVector<unsigned> ret(rank);
-  auto contigPerThread = getContigPerThread(tensorType.getEncoding());
+  auto contigPerThread = getContigPerThread(layout);
   assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
   for (int d = 0; d < rank; ++d) {
     ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
@@ -428,9 +426,21 @@ bool isSharedEncoding(Value value) {
   return false;
 }
 
+bool isExpensiveCat(CatOp cat, Attribute &targetEncoding) {
+  // If the new elements per thread is less than the old one, we will need to do
+  // convert encoding that goes through shared memory anyway. So we consider it
+  // as expensive.
+  auto tensorTy = cat.getResult().getType().cast<RankedTensorType>();
+  auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
+  auto shape = tensorTy.getShape();
+  auto elemTy = tensorTy.getElementType();
+  auto newTotalElemsPerThread =
+      gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
+  return newTotalElemsPerThread < totalElemsPerThread;
+}
+
 } // namespace gpu
 } // namespace triton
-
 } // namespace mlir
 
 static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
@@ -1290,6 +1300,23 @@ struct TritonGPUInferLayoutInterface
     } else
       return emitOptionalError(
           location, "Dot's a/b's encoding should be of DotOperandEncodingAttr");
+    return success();
+  }
+
+  LogicalResult
+  verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
+                                   Attribute operandEncodingB) const override {
+    auto aEncoding =
+        operandEncodingA.dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+    auto bEncoding =
+        operandEncodingB.dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+    if (!aEncoding && !bEncoding)
+      return mlir::success();
+    // Verify that the encodings are valid.
+    if (!aEncoding || !bEncoding)
+      return op->emitError("mismatching encoding between A and B operands");
+    if (aEncoding.getKWidth() != bEncoding.getKWidth())
+      return op->emitError("mismatching kWidth between A and B operands");
     return success();
   }
 };

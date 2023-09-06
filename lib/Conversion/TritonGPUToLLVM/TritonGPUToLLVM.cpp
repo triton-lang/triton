@@ -134,9 +134,15 @@ struct PrintOpConversion
     } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
       return "%f";
     } else if (type.isSignedInteger()) {
-      return "%i";
+      if (type.getIntOrFloatBitWidth() == 64)
+        return "%lli";
+      else
+        return "%i";
     } else if (type.isUnsignedInteger() || type.isSignlessInteger()) {
-      return "%u";
+      if (type.getIntOrFloatBitWidth() == 64)
+        return "%llu";
+      else
+        return "%u";
     }
     assert(false && "not supported type");
     return "";
@@ -444,7 +450,7 @@ struct GetProgramIdOpConversion
 
     Value blockId =
         rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxisAsInt()]);
-    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
+    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
     return success();
   }
 
@@ -481,7 +487,7 @@ struct GetNumProgramsOpConversion
 #else
     Value blockId =
         rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
-    rewriter.replaceOpWithNewOp<arith::TruncIOp>(op, i32_ty, blockId);
+    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
 #endif // USE_ROCM
 
     return success();

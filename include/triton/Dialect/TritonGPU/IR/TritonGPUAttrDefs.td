@@ -77,7 +77,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
-                     "Type":$eltTy), [{
+                     "unsigned":$typeWidthInBit), [{
 
 #ifdef USE_ROCM
         // ---- begin GFX908/GFX90A ----
@@ -92,9 +92,8 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
             const int SIMDWidth = 16;
 
             // number of inner dimension rows per one pattern repeat
-            int typeBitWidth = eltTy.getIntOrFloatBitWidth();
             int innerDimLength = shape[order[0]];
-            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeBitWidth;
+            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
 
             int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
             // Note: the following settings is customized to avoid
@@ -110,7 +109,7 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
             // 4. TODO: what about f64?
             //
             // maxPhase is set to SIMDWidth / perPhase
-            int vecSize = (eltTy.isF16() ? 64 : 32 ) / typeBitWidth;
+            int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
             int maxPhase = SIMDWidth / perPhase;
 
             return $_get(context, vecSize, perPhase, maxPhase, order);
@@ -126,18 +125,17 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
         if(!mmaEnc)
           return $_get(context, 1, 1, 1, order);
 
-
         int opIdx = dotOpEnc.getOpIdx();
 
         // number of rows per phase
-        int perPhase = 128 / (shape[order[0]] * (eltTy.getIntOrFloatBitWidth() / 8));
-        perPhase = std::max<int>(perPhase, 1);
 
         // index of the inner dimension in `order`
         unsigned inner = (opIdx == 0) ? 0 : 1;
 
         // ---- begin Volta ----
         if (mmaEnc.isVolta()) {
+          int perPhase = 128 / (shape[order[0]] * (typeWidthInBit / 8));
+          perPhase = std::max<int>(perPhase, 1);
           bool is_row = order[0] != 0;
           bool is_vec4 = opIdx == 0 ? !is_row && (shape[order[0]] <= 16) :
               is_row && (shape[order[0]] <= 16);
@@ -151,10 +149,11 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- begin Ampere ----
         if (mmaEnc.isAmpere()) {
-          std::vector<size_t> matShape = {8, 8,
-                                          2 * 64 / eltTy.getIntOrFloatBitWidth()};
+          int perPhase = 128 / (shape[order[0]] * 4 / dotOpEnc.getKWidth());
+          perPhase = std::max<int>(perPhase, 1);
+          std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
           // for now, disable swizzle when using transposed int8 tensor cores
-          if (eltTy.isInteger(8) && order[0] == inner)
+          if ((32 / typeWidthInBit != dotOpEnc.getKWidth()) && order[0] == inner)
             return $_get(context, 1, 1, 1, order);
 
           // --- handle A operand ---
@@ -178,6 +177,14 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- not implemented ----
         llvm_unreachable("unsupported swizzling for provided MMA version");
+    }]>,
+
+    AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
+                     "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
+                     "Type":$eltTy), [{
+      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      return get(context, dotOpEnc, shape, order, bitwidth);
     }]>
   ];
 

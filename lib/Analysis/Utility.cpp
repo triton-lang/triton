@@ -5,12 +5,36 @@
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include <deque>
 
 namespace mlir {
 
+namespace {
+
+int getParentAxis(Attribute layout, int axis) {
+  if (auto sliceEncoding = layout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+    axis = axis < sliceEncoding.getDim() ? axis : axis + 1;
+    return getParentAxis(sliceEncoding.getParent(), axis);
+  }
+  return axis;
+}
+
+SmallVector<unsigned> getParentOrder(Attribute layout) {
+  if (auto sliceEncoding = layout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+    return getParentOrder(sliceEncoding.getParent());
+  }
+  return triton::gpu::getOrder(layout);
+}
+
+} // namespace
+
 bool ReduceOpHelper::isFastReduction() {
-  return axis == triton::gpu::getOrder(getSrcLayout())[0];
+  // Disable fast reduction only for debugging purpose
+  if (::triton::tools::getBoolEnv("DISABLE_FAST_REDUCTION"))
+    return false;
+  return getParentAxis(getSrcLayout(), axis) ==
+         getParentOrder(getSrcLayout())[0];
 }
 
 unsigned ReduceOpHelper::getInterWarpSize() {
@@ -36,7 +60,9 @@ unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  return std::min(srcReduceDimSize,
+  unsigned elementPerThreads = triton::gpu::getUniqueContigPerThread(
+      getSrcLayout(), getSrcShape())[axis];
+  return std::min(srcReduceDimSize / elementPerThreads,
                   triton::gpu::getThreadsPerWarpWithUniqueData(
                       getSrcLayout(), getSrcShape())[axis]);
 }
@@ -55,6 +81,12 @@ SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
   return smemShape;
 }
 
+bool ReduceOpHelper::isWarpSynchronous() {
+  auto argsLayout = getSrcLayout();
+  return isFastReduction() &&
+         (triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1);
+}
+
 SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
   SmallVector<SmallVector<unsigned>> smemShapes(3);
 
@@ -62,7 +94,7 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
   auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
 
   // that case doesn't need inter-warp communication
-  if (isFastReduction() && triton::gpu::getWarpsPerCTA(argLayout)[axis] == 1)
+  if (isWarpSynchronous())
     return {{0, 0}, {0, 0}};
 
   /// shared memory block0
@@ -115,6 +147,134 @@ bool ReduceOpHelper::isSupportedLayout() {
     return true;
   }
   return false;
+}
+
+unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
+  return getEncoding().getSizePerThread()[getAxis()];
+}
+
+unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
+  SmallVector<unsigned> sizePerThreads = getContigPerThread(getEncoding());
+  sizePerThreads[getAxis()] = 1;
+  return product<unsigned>(sizePerThreads);
+}
+
+Region &ScanLoweringHelper::getCombineOp() { return scanOp.getCombineOp(); }
+
+unsigned ScanLoweringHelper::getAxisNumThreadsPerWarp() {
+  return triton::gpu::getThreadsPerWarp(getEncoding())[getAxis()];
+}
+
+unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
+  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(getEncoding());
+  threadsPerWarp[getAxis()] = 1;
+  return product<unsigned>(threadsPerWarp);
+}
+
+// Return the flat numbers of threads computing independent scan results.
+unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
+  unsigned numParallelThreadsPerWarp = getNonAxisNumThreadsPerWarp();
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(getEncoding());
+  warpsPerCTA[getAxis()] = 1;
+  unsigned numParallelWarpsPerCTA = product<unsigned>(warpsPerCTA);
+  return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
+}
+unsigned ScanLoweringHelper::getAxisNumWarps() {
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  return warpsPerCTA[getAxis()];
+}
+
+unsigned ScanLoweringHelper::getAxisNumBlocks() {
+  auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
+  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding);
+  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  unsigned axis = getAxis();
+  return ceil<unsigned>(
+      type.getShape()[axis],
+      (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
+}
+
+unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
+  auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
+  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding);
+  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  unsigned axis = getAxis();
+  unsigned numBlocks = 1;
+  for (unsigned i = 0; i < sizePerThreads.size(); i++) {
+    if (i == axis)
+      continue;
+    numBlocks *= ceil<unsigned>(
+        type.getShape()[i],
+        (sizePerThreads[i] * threadsPerWarp[i] * warpsPerCTA[i]));
+  }
+  return numBlocks;
+}
+
+bool ScanLoweringHelper::isSupported() {
+  // TODO: Support the following cases:
+  // 1. Scan on non-blocking encodings
+  // 2. Scan with multiple operands
+  if (!isa<triton::gpu::BlockedEncodingAttr>(srcEncoding))
+    return false;
+  if (scanOp.getNumOperands() != 1)
+    return false;
+  return true;
+}
+
+unsigned ScanLoweringHelper::getScratchSizeInBytes() {
+  auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
+  unsigned elementSizeInBytes = type.getElementTypeBitWidth() / 8;
+  auto mod = scanOp->getParentOfType<ModuleOp>();
+  unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  unsigned numNonAxisElementsPerWapr =
+      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
+  unsigned numElements = numWarps * numNonAxisElementsPerWapr *
+                         getAxisNumBlocks() * getNonAxisNumBlocks();
+  return elementSizeInBytes * numElements;
+}
+
+triton::gpu::BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
+  return srcEncoding.cast<triton::gpu::BlockedEncodingAttr>();
+}
+
+unsigned ScanLoweringHelper::getAxisElementStride() {
+  auto order = triton::gpu::getOrder(srcEncoding);
+  unsigned stride = 1;
+  for (unsigned dim : order) {
+    if (dim == getAxis())
+      return stride;
+    stride *= getContigPerThread(getEncoding())[dim];
+  }
+  llvm_unreachable("Axis not found in order");
+}
+
+unsigned ScanLoweringHelper::getAxisThreadStride() {
+  auto order = triton::gpu::getOrder(srcEncoding);
+  unsigned stride = 1;
+  for (unsigned dim : order) {
+    if (dim == getAxis())
+      return stride;
+    stride *= getEncoding().getThreadsPerWarp()[dim];
+  }
+  llvm_unreachable("Axis not found in order");
+}
+
+unsigned ScanLoweringHelper::getAxisBlockStride() {
+  auto order = triton::gpu::getOrder(srcEncoding);
+  unsigned stride = 1;
+  auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
+  auto sizePerThreads = triton::gpu::getSizePerThread(srcEncoding);
+  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  for (unsigned dim : order) {
+    if (dim == getAxis())
+      return stride;
+    stride *= type.getShape()[dim] /
+              (sizePerThreads[dim] * threadsPerWarp[dim] * warpsPerCTA[dim]);
+  }
+  llvm_unreachable("Axis not found in order");
 }
 
 bool maybeSharedAllocationOp(Operation *op) {

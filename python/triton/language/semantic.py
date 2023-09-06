@@ -1,10 +1,11 @@
 from __future__ import annotations  # remove after python 3.11
 
+import warnings
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
+from .._C.libtriton.triton import ir
 from . import core as tl
-from triton._C.libtriton.triton import ir
 
 import triton._C.libtriton.triton as _triton
 import re
@@ -671,6 +672,11 @@ def bitcast(input: tl.tensor,
                      dst_ty)
 
 
+# TODO: architecture descriptor class
+def _is_cuda(arch):
+    return isinstance(arch, int)
+
+
 def cast(input: tl.tensor,
          dst_ty: tl.dtype,
          builder: ir.builder) -> tl.tensor:
@@ -684,6 +690,11 @@ def cast(input: tl.tensor,
 
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
+
+    if _is_cuda(builder.arch) and builder.arch < 89 and \
+       (src_sca_ty.is_fp8e4() or dst_sca_ty.is_fp8e4()):
+        warnings.warn("Standard tl.float8e4 format will be deprecated on SM < 89. "
+                      "Please use tl.float8e4b15.", DeprecationWarning)
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
@@ -784,13 +795,29 @@ def cast(input: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
-def _str_to_cache_modifier(cache_modifier):
+def _str_to_load_cache_modifier(cache_modifier):
     cache = ir.CACHE_MODIFIER.NONE  # default
     if cache_modifier:
         if cache_modifier == ".ca":
             cache = ir.CACHE_MODIFIER.CA
         elif cache_modifier == ".cg":
             cache = ir.CACHE_MODIFIER.CG
+        else:
+            raise ValueError(f"Cache modifier {cache_modifier} not supported")
+    return cache
+
+
+def _str_to_store_cache_modifier(cache_modifier):
+    cache = ir.CACHE_MODIFIER.NONE  # default
+    if cache_modifier:
+        if cache_modifier == ".wb":
+            cache = ir.CACHE_MODIFIER.WB
+        elif cache_modifier == ".cg":
+            cache = ir.CACHE_MODIFIER.CG
+        elif cache_modifier == ".cs":
+            cache = ir.CACHE_MODIFIER.CS
+        elif cache_modifier == ".wt":
+            cache = ir.CACHE_MODIFIER.WT
         else:
             raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
@@ -938,7 +965,7 @@ def load(ptr: tl.tensor,
          is_volatile: bool,
          builder: ir.builder) -> tl.tensor:
     # Cache, eviction and padding options
-    cache = _str_to_cache_modifier(cache_modifier)
+    cache = _str_to_load_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
     padding = _str_to_padding_option(padding_option)
 
@@ -1027,7 +1054,7 @@ def store(ptr: tl.tensor,
           eviction_policy: str,
           builder: ir.builder) -> tl.tensor:
     # Cache and eviction options
-    cache = _str_to_cache_modifier(cache_modifier)
+    cache = _str_to_store_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
@@ -1375,6 +1402,32 @@ def reduction(
 
 
 # ===----------------------------------------------------------------------===
+#                               Associative Scan
+# ===----------------------------------------------------------------------===
+
+
+def associative_scan(
+    inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder
+) -> Tuple[tl.tensor, ...]:
+    if len(inputs) != 1:
+        raise ValueError("Current implementation only support single tensor input")
+    shape = inputs[0].type.shape
+
+    def wrap_tensor(x, scalar_ty):
+        res_ty = tl.block_type(scalar_ty, shape)
+        return tl.tensor(x, res_ty)
+
+    scan_op = builder.create_scan([t.handle for t in inputs], axis)
+    region_builder_fn(scan_op)
+    scan_op.verify()
+
+    return tuple(
+        wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar)
+        for i in range(len(inputs))
+    )
+
+
+# ===----------------------------------------------------------------------===
 #                               Math
 # ===----------------------------------------------------------------------===
 
@@ -1465,6 +1518,13 @@ def max_contiguous(x: tl.tensor, values: List[int]) -> tl.tensor:
     if len(x.shape) != len(values):
         raise ValueError("Shape of input to max_contiguous does not match the length of values")
     x.handle.set_attr("tt.contiguity", ir.make_attr(values, x.handle.get_context()))
+    return x
+
+
+def max_constancy(x: tl.tensor, values: List[int]) -> tl.tensor:
+    if len(x.shape) != len(values):
+        raise ValueError("Shape of input to max_constancy does not match the length of values")
+    x.handle.set_attr("tt.constancy", ir.make_attr(values, x.handle.get_context()))
     return x
 
 

@@ -2,6 +2,7 @@
 
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/Dialect.h"
@@ -16,6 +17,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Target/LLVMIR/Passes.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/ADT/APInt.h"
@@ -339,6 +341,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   }
   auto printingFlags = mlir::OpPrintingFlags();
   printingFlags.elideLargeElementsAttrs(16);
+  printingFlags.enableDebugInfo();
   pm.enableIRPrinting(
       /*shouldPrintBeforePass=*/nullptr,
       /*shouldPrintAfterPass=*/
@@ -361,6 +364,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(createConvertControlFlowToLLVMPass());
 #endif
+  if (!::triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO"))
+    pm.addPass(mlir::createLLVMDIScopePass());
 
   if (failed(pm.run(module))) {
     llvm::errs() << "Pass execution failed";

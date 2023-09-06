@@ -2,8 +2,13 @@
 Fused Attention
 ===============
 
-This is a Triton implementation of the Flash Attention algorithm
-(see: Dao et al., https://arxiv.org/pdf/2205.14135v2.pdf; Rabe and Staats https://arxiv.org/pdf/2112.05682v2.pdf)
+This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf)
+
+Extra Credits:
+- Original flash attention paper (https://arxiv.org/abs/2205.14135)
+- Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
+- Adam P. Goucher for simplified vector math
+
 """
 
 import pytest
@@ -11,6 +16,11 @@ import torch
 
 import triton
 import triton.language as tl
+
+
+@triton.jit
+def max_fn(x, y):
+    return tl.math.max(x, y)
 
 
 @triton.jit
@@ -122,6 +132,7 @@ def _bwd_preprocess(
     # load
     o = tl.load(Out + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
     do = tl.load(DO + off_m[:, None] * D_HEAD + off_n[None, :]).to(tl.float32)
+    # compute
     delta = tl.sum(o * do, axis=1)
     # write-back
     tl.store(NewDO + off_m[:, None] * D_HEAD + off_n[None, :], do)
@@ -141,10 +152,12 @@ def _bwd_kernel(
     num_block,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    CAUSAL: tl.constexpr,
 ):
     off_hz = tl.program_id(0)
     off_z = off_hz // H
     off_h = off_hz % H
+    qk_scale = sm_scale * 1.44269504
     # offset pointers for batch/head
     Q += off_z * stride_qz + off_h * stride_qh
     K += off_z * stride_qz + off_h * stride_qh
@@ -156,7 +169,10 @@ def _bwd_kernel(
     # See fwd pass above for explanation.
     qk_scale = sm_scale * 1.44269504
     for start_n in range(0, num_block):
-        lo = start_n * BLOCK_M
+        if CAUSAL:
+            lo = start_n * BLOCK_M
+        else:
+            lo = 0
         # initialize row/col offsets
         offs_qm = lo + tl.arange(0, BLOCK_M)
         offs_n = start_n * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -183,9 +199,11 @@ def _bwd_kernel(
             # load q, k, v, do on-chip
             q = tl.load(q_ptrs)
             # recompute p = softmax(qk, dim=-1).T
-            # NOTE: `do` is pre-divided by `l`; no normalization here
-            qk = tl.dot(q, tl.trans(k))
-            qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
+            if CAUSAL:
+                qk = tl.dot(q, tl.trans(k), out_dtype=tl.float32)
+                qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), qk, float("-inf"))
+            else:
+                qk = tl.dot(q, tl.trans(k), out_dtype=tl.float32)
             l_i = tl.load(l_ptrs + offs_m_curr)
             p = tl.math.exp2(qk * qk_scale - l_i[:, None])
             # compute dv
@@ -449,6 +467,7 @@ class _attention(torch.autograd.Function):
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         P_SEQ = 0 if q.shape[-2] == k.shape[-2] else k.shape[-2] - q.shape[-2]
 
+        num_warps = 4 if Lk <= 64 else 8
         _fwd_kernel[grid](
             q, k, v, sm_scale,
             L,
@@ -474,14 +493,19 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do):
-        BLOCK = 64
-        q, k, v, o, l = ctx.saved_tensors
+        # configuration is not supported
+        assert(not (ctx.split_kernel and not ctx.causal))
+        if torch.version.hip is not None:
+            BLOCK = 64
+        else:
+            BLOCK = 128
+        q, k, v, o, L = ctx.saved_tensors
         do = do.contiguous()
-        dq = torch.zeros_like(q)
+        dq = torch.zeros_like(q, dtype=torch.float32)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
+        delta = torch.empty_like(L)
         do_scaled = torch.empty_like(do)
-        delta = torch.empty_like(l)
         # Figure out what BLOCK size fwd used and adjust num_blocks accordingly.
         # If the two are the same, we don't need this but the bwd pass block size
         # is smaller than the fwd so we need this scaling to ensure we loop over all
@@ -499,8 +523,7 @@ class _attention(torch.autograd.Function):
                 q, k, v, ctx.sm_scale,
                 o, do_scaled,
                 dq, dk, dv,
-                l,
-                delta,
+                L, delta,
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),
                 v.stride(0), v.stride(1), v.stride(2), v.stride(3),
@@ -508,15 +531,16 @@ class _attention(torch.autograd.Function):
                 block_scale * ctx.grid[0],
                 BLOCK_M=BLOCK, BLOCK_N=BLOCK,
                 BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=4,
+                CAUSAL=ctx.causal,
                 num_stages=1,
             )
         else :
+            dq = torch.zeros_like(q)
             _bwd_kernel_dk_dv[(block_scale * ctx.grid[0], ctx.grid[1])](
                 q, k, v, ctx.sm_scale,
                 o, do_scaled,
                 dk, dv,
-                l,
-                delta,
+                L, delta,
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),
                 v.stride(0), v.stride(1), v.stride(2), v.stride(3),
@@ -529,8 +553,7 @@ class _attention(torch.autograd.Function):
                 q, k, v, ctx.sm_scale,
                 o, do_scaled,
                 dq,
-                l,
-                delta,
+                L, delta,
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),
                 v.stride(0), v.stride(1), v.stride(2), v.stride(3),
@@ -641,7 +664,7 @@ configs = [triton.testing.Benchmark(
     ylabel='ms',
     plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}',
     args={'H': N_HEADS, 'BATCH': BATCH, 'D_HEAD': D_HEAD, 'dtype': torch.float16, 'mode': mode, 'causal': causal}
-) for mode in ['fwd', 'bwd'] for causal in [True, False]]
+) for mode in ['fwd', 'bwd'] for causal in [False, True]]
 
 
 @triton.testing.perf_report(configs)

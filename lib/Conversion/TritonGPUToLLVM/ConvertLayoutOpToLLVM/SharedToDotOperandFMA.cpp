@@ -125,7 +125,8 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
   for (int i = 0; i < aNumPtr; ++i) {
     aOff[i] = add(mul(offA0, strideA0), mul(offA1, strideA1));
   }
-  auto elemTy = A.getType().cast<RankedTensorType>().getElementType();
+  auto elemTy = typeConverter->convertType(
+      A.getType().cast<RankedTensorType>().getElementType());
 
   Type ptrTy = ptr_ty(elemTy, 3);
   SmallVector<Value> aPtrs(aNumPtr);
@@ -189,7 +190,8 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
   for (int i = 0; i < bNumPtr; ++i) {
     bOff[i] = add(mul(offB0, strideB0), mul(offB1, strideB1));
   }
-  auto elemTy = B.getType().cast<RankedTensorType>().getElementType();
+  auto elemTy = typeConverter->convertType(
+      B.getType().cast<RankedTensorType>().getElementType());
 
   Type ptrTy = ptr_ty(elemTy, 3);
   SmallVector<Value> bPtrs(bNumPtr);

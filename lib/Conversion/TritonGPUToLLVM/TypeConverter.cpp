@@ -25,7 +25,10 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     return convertTritonTensorType(type);
   });
   // Internally store float8 as int8
-  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
+  addConversion([&](mlir::Float8E4M3B11FNUZType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
+  addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
   addConversion([&](mlir::Float8E5M2Type type) -> std::optional<Type> {

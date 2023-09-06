@@ -8,7 +8,7 @@ import triton.language as tl
 import triton.ops
 
 
-def f8_to_f16(x):
+def f8_to_f16(x, dtype):
 
     @triton.jit
     def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
@@ -16,12 +16,12 @@ def f8_to_f16(x):
         offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offs < N
         x = tl.load(X + offs, mask=mask)
-        y = x.to(tl.float8e5)
-        tl.store(Y + offs, y, mask=mask)
+        tl.store(Y + offs, x, mask=mask)
 
     ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
     grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
-    kernel[grid](ret, triton.reinterpret(x, tl.float8e5), ret.numel(), BLOCK_SIZE=1024)
+    dtype = getattr(tl, dtype)
+    kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
     return ret
 
 
@@ -63,34 +63,47 @@ def f8_to_f16(x):
                 (64, 64, 16, 4, 4, 2, None, None, None, AT, BT, DTYPE, DTYPE),
                 (64, 64, 16, 8, 4, 2, None, None, None, AT, BT, DTYPE, DTYPE),
                 # variable input
-                (128, 128, 32, 1, 4, 2, 1024, 1024, 1024, AT, BT, DTYPE, DTYPE),
-                (128, 128, 32, 1, 4, 2, 384, 128, 640, AT, BT, DTYPE, DTYPE),
+                (128, 128, 32, 1, 4, 2, 256, 384, 160, AT, BT, DTYPE, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 256, AT, BT, DTYPE, DTYPE),
                 (128, 128, 32, 1, 4, 2, 107, 233, 311, AT, BT, DTYPE, DTYPE),
+                (128, 256, 64, 1, 8, 3, 256, 512, 160, AT, BT, DTYPE, DTYPE),
             ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
         ],
         # n-stage
         *[
             [
-                (16, 16, 16, 1, 1, STAGES, 1024, 1024, 1024, AT, BT, DTYPE, DTYPE),
-                (64, 32, 64, 1, 2, STAGES, 1024, 1024, 1024, AT, BT, DTYPE, DTYPE),
-                (128, 64, 16, 1, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE, DTYPE),
-                (256, 128, 32, 1, 8, STAGES, 1024, 1024, 1024, AT, BT, DTYPE, DTYPE),
-                (128, 128, 32, 1, 4, STAGES, 384, 128, 640, AT, BT, DTYPE, DTYPE),
+                (16, 16, 16, 1, 1, STAGES, 32, 32, 80, AT, BT, DTYPE, DTYPE),
+                (64, 32, 64, 1, 2, STAGES, 128, 64, 128, AT, BT, DTYPE, DTYPE),
+                (128, 64, 16, 1, 4, STAGES, 256, 128, 80, AT, BT, DTYPE, DTYPE),
+                (256, 128, 32, 1, 8, STAGES, 512, 256, 160, AT, BT, DTYPE, DTYPE),
+                (128, 128, 32, 1, 4, STAGES, 256, 256, 160, AT, BT, DTYPE, DTYPE),
                 # split-k
-                (64, 64, 16, 8, 4, STAGES, 1024, 1024, 1024, AT, BT, DTYPE, DTYPE),
-                (64, 64, 16, 8, 4, STAGES, 1024, 1024, 32, AT, BT, DTYPE, DTYPE),
-            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [2, 3, 4]
+                (64, 64, 16, 8, 4, STAGES, 128, 128, 768, AT, BT, DTYPE, DTYPE),
+                (64, 64, 16, 8, 4, STAGES, 128, 128, 32, AT, BT, DTYPE, DTYPE),
+            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [4]
         ],
         # mixed-precision
         *[
             [
-                (16, 16, 16, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
-                (128, 32, 32, 1, 2, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
-                (128, 256, 16, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
-                (32, 64, 16, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
-                (128, 128, 32, 8, 4, 2, 1024, 1024, 1024, AT, BT, ADTYPE, BDTYPE),
-            ] for ADTYPE, BDTYPE in [("float8", "float16")] for AT in [False, True] for BT in [False, True]
+                (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
+                (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE),
+                (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE),
+                (128, 128, 32, 8, 4, 2, 256, 256, 128, AT, BT, ADTYPE, BDTYPE),
+            ] for ADTYPE, BDTYPE in [("float8e4", "float8e5"),
+                                     ("float8e4", "float16"),
+                                     ("float16", "float8e5"),
+                                     ("float16", "float32"),
+                                     ("float32", "float16"),
+                                     ("bfloat16", "float32"),
+                                     ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True]
+        ],
+        *[
+            # float8e4b15 only supports row-col layout
+            [
+                (128, 128, 32, 1, 4, 2, None, None, None, False, True, ADTYPE, BDTYPE),
+            ] for ADTYPE, BDTYPE in [("float8e4b15", "float8e5"),
+                                     ("float8e4b15", "float16"),
+                                     ("float16", "float8e4b15")]
         ]
     ),
 )
@@ -115,22 +128,42 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     M = BLOCK_M if M is None else M
     N = BLOCK_N if N is None else N
     K = BLOCK_K * SPLIT_K if K is None else K
+    a_fp8 = "float8" in ADTYPE
+    b_fp8 = "float8" in BDTYPE
 
-    def get_input(n, m, t, dtype):
+    def maybe_upcast(x, dtype, is_float8):
+        if is_float8:
+            return f8_to_f16(x, dtype)
+        return x
+
+    def init_input(n, m, t, dtype, is_float8):
         if t:
-            return get_input(m, n, False, dtype).t()
-        if dtype == "float8":
-            x = torch.randint(10, 50, (n, m), device="cuda", dtype=torch.int8)
-            return f8_to_f16(x)
+            return init_input(m, n, False, dtype, is_float8).t()
+        if is_float8:
+            return torch.randint(20, 50, (n, m), device="cuda", dtype=torch.int8)
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dtype]
         return .1 * torch.randn((n, m), device="cuda", dtype=dtype)
+
     # allocate/transpose inputs
-    a = get_input(M, K, AT, ADTYPE)
-    b = get_input(K, N, BT, BDTYPE)
+    a = init_input(M, K, AT, ADTYPE, a_fp8)
+    b = init_input(K, N, BT, BDTYPE, b_fp8)
     # run test
-    th_c = torch.matmul(a, b)
+    th_a = maybe_upcast(a, ADTYPE, a_fp8).to(torch.float32)
+    if AT and a_fp8:
+        th_a = th_a.view(th_a.shape[::-1]).T
+    th_b = maybe_upcast(b, BDTYPE, b_fp8).to(torch.float32)
+    if BT and b_fp8:
+        th_b = th_b.view(th_b.shape[::-1]).T
+    th_c = torch.matmul(th_a, th_b)
     try:
+        if a_fp8:
+            a = triton.reinterpret(a, getattr(tl, ADTYPE))
+        if b_fp8:
+            b = triton.reinterpret(b, getattr(tl, BDTYPE))
         tt_c = triton.ops.matmul(a, b)
-        torch.testing.assert_allclose(th_c, tt_c, atol=1e-2, rtol=0)
+        atol, rtol = 1e-2, 0
+        if ADTYPE == torch.bfloat16 or BDTYPE == torch.bfloat16:
+            atol, rtol = 3.5e-2, 0
+        torch.testing.assert_allclose(th_c, tt_c, atol=atol, rtol=rtol)
     except triton.OutOfResources as e:
         pytest.skip(str(e))

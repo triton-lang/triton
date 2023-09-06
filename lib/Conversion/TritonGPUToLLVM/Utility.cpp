@@ -70,6 +70,82 @@ getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
   return strides;
 }
 
+// Convert an \param index to a multi-dim coordinate given \param shape and
+// \param order.
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, Value linear,
+                               ArrayRef<unsigned> shape,
+                               ArrayRef<unsigned> order) {
+  unsigned rank = shape.size();
+  assert(rank == order.size());
+  auto reordered = reorder(shape, order);
+  SmallVector<Value> reorderedMultiDim(rank);
+  if (auto constantOp = linear.getDefiningOp<arith::ConstantOp>()) {
+    unsigned intVal =
+        constantOp.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+    reorderedMultiDim = delinearize(rewriter, loc, intVal, reordered);
+  } else {
+    reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
+  }
+  SmallVector<Value> multiDim(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    multiDim[order[i]] = reorderedMultiDim[i];
+  }
+  return multiDim;
+}
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, unsigned linear,
+                               ArrayRef<unsigned> shape) {
+  unsigned rank = shape.size();
+  assert(rank > 0);
+  SmallVector<Value> multiDim(rank);
+  unsigned remained = linear;
+  for (auto &&en : llvm::enumerate(shape)) {
+    unsigned dimSize = en.value();
+    multiDim[en.index()] = i32_val(remained % dimSize);
+    remained = remained / dimSize;
+  }
+  return multiDim;
+}
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, Value linear,
+                               ArrayRef<unsigned> shape) {
+  unsigned rank = shape.size();
+  assert(rank > 0);
+  SmallVector<Value> multiDim(rank);
+  Value remained = linear;
+  for (auto &&en : llvm::enumerate(shape)) {
+    Value dimSize = i32_val(en.value());
+    multiDim[en.index()] = urem(remained, dimSize);
+    remained = udiv(remained, dimSize);
+  }
+  return multiDim;
+}
+
+Value linearize(ConversionPatternRewriter &rewriter, Location loc,
+                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
+                ArrayRef<unsigned> order) {
+  return linearize(rewriter, loc, reorder<Value>(multiDim, order),
+                   reorder<unsigned>(shape, order));
+}
+
+Value linearize(ConversionPatternRewriter &rewriter, Location loc,
+                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape) {
+  auto rank = multiDim.size();
+  Value linear = i32_val(0);
+  if (rank > 0) {
+    linear = multiDim.back();
+    for (auto [dim, dimShape] :
+         llvm::reverse(llvm::zip(multiDim.drop_back(), shape.drop_back()))) {
+      Value dimSize = i32_val(dimShape);
+      linear = add(mul(linear, dimSize), dim);
+    }
+  }
+  return linear;
+}
+
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred) {
 #if USE_ROCM
@@ -89,8 +165,9 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 #endif
 }
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
+static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
+                            Value val, int i, const std::string &shuffleType,
+                            const std::string &clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -98,8 +175,8 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = shflSync(loc, rewriter, val0, i);
-    val1 = shflSync(loc, rewriter, val1, i);
+    val0 = commonShflSync(loc, rewriter, val0, i, shuffleType, clamp);
+    val1 = commonShflSync(loc, rewriter, val1, i, shuffleType, clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -142,15 +219,25 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   return builder.launch(rewriter, loc, val.getType(), true);
 #else
   PTXBuilder builder;
-  auto &shfl = builder.create("shfl.sync")->o("bfly").o("b32");
+  auto &shfl = builder.create("shfl.sync")->o(shuffleType).o("b32");
   auto *dOpr = builder.newOperand("=r");
   auto *aOpr = builder.newOperand(val, "r");
   auto *bOpr = builder.newConstantOperand(i);
-  auto *cOpr = builder.newConstantOperand("0x1f");
+  auto *cOpr = builder.newConstantOperand(clamp);
   auto *maskOpr = builder.newConstantOperand("0xffffffff");
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
   return builder.launch(rewriter, loc, val.getType(), false);
 #endif
+}
+
+Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+               int i) {
+  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
+}
+
+Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i) {
+  return commonShflSync(loc, rewriter, val, i, "up", "0x0");
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,

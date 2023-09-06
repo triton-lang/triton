@@ -387,6 +387,14 @@ public:
     // heuristics for flash attention
     if (srcEncoding.isa<triton::gpu::SliceEncodingAttr>())
       return failure();
+    // For cases like:
+    // %0 = convert_layout %arg0
+    // We should try to move %0 out of scf.for first, if it couldn't be moved
+    // out additional conversions will be added to the loop body.
+    if (!cvt.getOperand().getDefiningOp() &&
+        isa<scf::ForOp>(cvt->getParentOp()))
+      return failure();
+
     SetVector<Operation *> cvtSlices;
     auto filter = [&](Operation *op) {
       return op->getBlock() == cvt->getBlock() &&
@@ -405,7 +413,8 @@ public:
       // don't rematerialize non-element-wise
       if (!op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() &&
           !op->hasTrait<mlir::OpTrait::Elementwise>() &&
-          !isa<triton::StoreOp, triton::ReduceOp>(op))
+          !isa<triton::StoreOp, triton::AssertOp, triton::PrintOp,
+               triton::ReduceOp>(op))
         return failure();
       // don't rematerialize if it adds an extra conversion that can't
       // be removed
@@ -421,6 +430,10 @@ public:
           return failure();
       }
     }
+
+    // Call SimplifyReduceCvt instead of the general push conversion forward
+    if (isa<triton::ReduceOp>(cvtSlices.front()))
+      return failure();
 
     pushConversionForward(cvt, cvtSlices, sharedInfo, rewriter);
     return success();
@@ -476,8 +489,8 @@ public:
 
     IRMapping mapping;
     rematerializeConversionChain(toConvert, rewriter, processed, mapping);
-
     rewriter.replaceOp(cvt, mapping.lookup(cvt->getOperand(0)));
+
     return mlir::success();
   }
 };
@@ -514,37 +527,27 @@ public:
     for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
       mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
     mapping.map(origConversion.getResult(), newForOp.getRegionIterArgs()[i]);
-    // the iter arg of interest may have other uses than the conversion
-    // we're hoisting out of the loop. If that's the case we will
-    // need to add extra conversions for all uses... which is only useful
-    // if these extra conversions can be removed by another pattern
-    auto oldArg = forOp.getRegionIterArgs()[i];
-    auto newArg = newForOp.getRegionIterArgs()[i];
-    auto newArgFallback = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        newForOp.getLoc(), origType, newArg);
 
     mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
     for (Operation &op : forOp.getBody()->without_terminator()) {
       if (&op == (Operation *)(&origConversion))
         continue;
       Operation *newOp = rewriter.clone(op, mapping);
-      if (find(oldArg.getUsers(), &op) != oldArg.getUsers().end())
-        newOp->replaceUsesOfWith(newArg, newArgFallback);
     }
-
     // create yield, inserting conversions if necessary
     auto yieldOp = forOp.getBody()->getTerminator();
     SmallVector<Value, 4> newYieldArgs;
     for (Value arg : yieldOp->getOperands())
       newYieldArgs.push_back(mapping.lookup(arg));
-    newYieldArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        yieldOp->getLoc(), newType, newYieldArgs[i]);
+    if (newYieldArgs[i].getType() != newType)
+      newYieldArgs[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
+          yieldOp->getLoc(), newType, newYieldArgs[i]);
     rewriter.create<scf::YieldOp>(forOp.getLoc(), newYieldArgs);
 
     // replace
     SmallVector<Value, 4> newResults = newForOp->getResults();
     newResults[i] = rewriter.create<triton::gpu::ConvertLayoutOp>(
-        rewriter.getUnknownLoc(), origType, newForOp->getResult(i));
+        newForOp.getLoc(), origType, newForOp->getResult(i));
     newResults[i].getDefiningOp()->moveAfter(newForOp);
     return newResults;
   }

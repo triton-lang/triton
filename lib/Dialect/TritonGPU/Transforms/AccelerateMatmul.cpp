@@ -1,3 +1,4 @@
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -204,6 +205,29 @@ class BlockedToMMA : public mlir::RewritePattern {
   int computeCapability;
   mutable int mmaV1Counter{}; // used to generate ID for MMAv1 encoding
 
+  static bool bwdFilter(Operation *op) {
+    return op->getNumOperands() == 1 &&
+           (isa<triton::FpToFpOp, triton::BitcastOp,
+                triton::gpu::ConvertLayoutOp>(op) ||
+            op->getDialect()->getTypeID() ==
+                mlir::TypeID::get<arith::ArithDialect>());
+  }
+
+  // finds the first different value bitwidth in the chain of
+  // shape-preserving unary ops  that x depends on
+  static int computeOrigBitWidth(Value x) {
+    int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
+    int origBitWidth = finalBitWidth;
+    SetVector<Operation *> slice;
+    mlir::getBackwardSlice(x, &slice, bwdFilter);
+    Operation *firstOp = slice.empty() ? nullptr : *slice.begin();
+    if (firstOp)
+      if (Value arg = firstOp->getOperand(0))
+        if (RankedTensorType argTy = arg.getType().dyn_cast<RankedTensorType>())
+          origBitWidth = argTy.getElementType().getIntOrFloatBitWidth();
+    return origBitWidth;
+  }
+
 public:
   BlockedToMMA(mlir::MLIRContext *context, int computeCapability)
       : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context),
@@ -215,6 +239,7 @@ public:
     if (computeCapability < 70)
       return failure();
     auto dotOp = cast<triton::DotOp>(op);
+    auto ctx = op->getContext();
     // TODO: Check data-types and SM compatibility
     auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
     if (!oldRetType.getEncoding() ||
@@ -279,36 +304,28 @@ public:
     }
     auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), mmaEnc);
-
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc = rewriter.create<triton::gpu::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
-    auto oldAOrder = oldAType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-    auto oldBOrder = oldBType.getEncoding()
-                         .cast<triton::gpu::DotOperandEncodingAttr>()
-                         .getParent()
-                         .cast<triton::gpu::BlockedEncodingAttr>()
-                         .getOrder();
-
+    // convert operands
+    int minBitwidth = std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+    Type minType = IntegerType::get(ctx, minBitwidth);
+    // convert A operand
     auto newAEncoding = triton::gpu::DotOperandEncodingAttr::get(
         oldAType.getContext(), 0, newRetType.getEncoding(),
-        oldAType.getElementType());
-    auto newBEncoding = triton::gpu::DotOperandEncodingAttr::get(
-        oldBType.getContext(), 1, newRetType.getEncoding(),
-        oldBType.getElementType());
-
+        minBitwidth > 0 ? minType : oldAType.getElementType());
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(), newAEncoding);
+    a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
+    // convert B operand
+    auto newBEncoding = triton::gpu::DotOperandEncodingAttr::get(
+        oldBType.getContext(), 1, newRetType.getEncoding(),
+        minBitwidth > 0 ? minType : oldBType.getElementType());
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(), newBEncoding);
-
-    a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
+    // convert dot instruction
     auto newDot = rewriter.create<triton::DotOp>(
         dotOp.getLoc(), newRetType, a, b, newAcc, dotOp.getAllowTF32());
 
