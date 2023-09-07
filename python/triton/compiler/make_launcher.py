@@ -65,7 +65,7 @@ def ty_to_cpp(ty):
 def generate_launcher(constants, signature, ids):
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    desc_start_idx = max(signature.keys())
+    desc_start_idx = max(signature.keys()) if len(signature) > 0 else 0
     signature = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
