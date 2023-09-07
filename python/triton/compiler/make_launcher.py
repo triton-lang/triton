@@ -63,7 +63,7 @@ def ty_to_cpp(ty):
 
 
 def generate_launcher(constants, signature, ids):
-    # Record the end of normal arguments;
+    # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
     desc_start_idx = max(signature.keys())
     signature = generate_cu_signature(constants, signature, ids)
