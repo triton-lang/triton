@@ -90,12 +90,17 @@ def optimize_ttgir(mod, num_stages, arch):
         pm.add_tritongpu_accelerate_matmul_pass(80)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
-    pm.add_tritongpu_pipeline_pass(num_stages)
+    if num_stages == 0 and is_hip() and gpu_has_mfma():
+        pm.add_tritongpu_stream_pipeline_pass()
+        pm.add_canonicalizer_pass()
+    else:
+        pm.add_tritongpu_pipeline_pass(num_stages)
     pm.add_tritongpu_prefetch_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
-    pm.add_tritongpu_reorder_instructions_pass()
+    if num_stages != 0:
+        pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
     pm.run(mod)

@@ -1698,6 +1698,10 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self, int numStages) {
              self.addPass(mlir::createTritonGPUPipelinePass(numStages));
            })
+      .def("add_tritongpu_stream_pipeline_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUStreamPipelinePass());
+           })
       .def("add_tritongpu_prefetch_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUPrefetchPass());

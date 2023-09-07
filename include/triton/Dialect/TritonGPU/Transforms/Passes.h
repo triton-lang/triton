@@ -6,6 +6,8 @@
 namespace mlir {
 std::unique_ptr<Pass> createTritonGPUPipelinePass(int numStages = 2);
 
+std::unique_ptr<Pass> createTritonGPUStreamPipelinePass();
+
 std::unique_ptr<Pass>
 createTritonGPUAccelerateMatmulPass(int computeCapability = 80);
 
