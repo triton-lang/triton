@@ -118,7 +118,10 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
       char err[1024] = {{0}};
       strcat(err, prefix);
       strcat(err, str);
+      PyGILState_STATE gil_state;
+      gil_state = PyGILState_Ensure();
       PyErr_SetString(PyExc_RuntimeError, err);
+      PyGILState_Release(gil_state);
    }}
 }}
 

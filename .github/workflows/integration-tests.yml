@@ -44,8 +44,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-
+        uses: actions/checkout@v3
+        with:
+          submodules: 'true'
       - name: Set CUDA ENV
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |

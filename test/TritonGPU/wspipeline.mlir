@@ -21,7 +21,8 @@
 // CHECK: triton_nvidia_gpu.consumer_wait
 // CHECK: triton_gpu.extract_slice
 // CHECK: triton_gpu.extract_slice
-// CHECK: tt.dot
+// CHECK: triton_nvidia_gpu.dot_async
+// CHECK: triton_nvidia_gpu.dot_wait
 // CHECK: triton_nvidia_gpu.consumer_release
 // CHECK: scf.yield
 // CHECK: async_agent = dense<1> : vector<1xi32>
