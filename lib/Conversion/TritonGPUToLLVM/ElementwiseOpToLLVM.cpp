@@ -1539,9 +1539,12 @@ S8_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
     auto res = builder.newOperand("=v");
     auto operand = builder.newOperand(i32Val, "v");
     cvt(res, operand);
-    Value f32Val = builder.launch(rewriter, loc, f32_ty, false);
+    auto f32Val = builder.launch(rewriter, loc, f32_ty, false);
 
-    outValues.push_back(FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, f32Val));
+    f32Val = bitcast(f32Val, i32_ty);
+    auto shifted = lshr(i32_ty, f32Val, i32_val(16));
+    auto truncated = trunc(i16_ty, shifted);
+    outValues.push_back(truncated);
   }
   return outValues;
 }

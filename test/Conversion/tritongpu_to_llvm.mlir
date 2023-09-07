@@ -1727,6 +1727,12 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
     // 8 elements per thread => we should process 2 vectors of 4
     // CHECK: llvm.inline_asm
     // CHECK: llvm.inline_asm
+    // GCN: llvm.inline_asm
+    // GCN: llvm.inline_asm
+    // GCN: llvm.inline_asm
+    // GCN: llvm.inline_asm
+    // GCN: llvm.inline_asm
+    // GCN: llvm.inline_asm
     // CHECK-NOT: llvm.inline_asm
     %out = arith.sitofp %in : tensor<16x16xi8, #mma> to tensor<16x16xbf16, #mma>
     tt.return
