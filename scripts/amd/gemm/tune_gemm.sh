@@ -7,7 +7,7 @@
 ## $5: 1: reduced tuning space
 
 if [[ $# -lt 4 ]];then
-    echo "Usage: ./tritonProfiler.sh <driver program> M N K"
+    echo "Usage: ./tune_gemm.sh <driver program> M N K"
     exit
 fi
 
@@ -19,4 +19,9 @@ reduceSpace=$5
 
 DRIVER=$(echo $DRIVER | sed -e "s/matmul_grouped.py/matmul.py/g")
 
-python $DRIVER -m $M -n $N -k $K
+# $DRIVER is the actual tuning scripts, it is the file matmul.py
+# -mnk are the size of input matrices, matrix (m, k) x (k, n)
+# --specify_size means using -mnk to specify size of input matrices
+# --rocprof means using rocprof to measure kernel time. If not set,
+# kernel time is from do_bench()
+python $DRIVER -m $M -n $N -k $K --specify_size --rocprof

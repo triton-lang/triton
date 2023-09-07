@@ -1,65 +1,12 @@
-"""
-Matrix Multiplication Tuning Scripts, Changed from the tutorial example "python/tutorials/03-matrix-multiplication.py"
-"""
-
-import torch
-
-import triton
-import triton.language as tl
+#!/usr/bin/env python3
 import argparse
 import sys
-import yaml
-import os
-import subprocess
 
-# global flag to indicate whether using the full tuing space
-tuning_full_space = False
-
-def get_full_tuning_space(use_split_k):
-    configs = []
-    if not tuning_full_space:
-        return configs
-
-    block_mn_range = [32, 64, 128]
-    block_k_range = [32, 64]
-    split_k_range = [2, 4, 5, 8, 10]
-    num_warps_range = [1, 2, 4, 8]
-    group_m_range = [1, 4, 8]
-
-    for block_m in block_mn_range:
-        for block_n in block_mn_range:
-            for block_k in block_k_range:
-                for num_warps in num_warps_range:
-                    for group_m in group_m_range:
-                        configs.append(triton.Config({'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m}, num_stages=1, num_warps=num_warps))
-                        if use_split_k:
-                            for split_k in split_k_range:
-                                configs.append(triton.Config({'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m, 'SPLIT_K': split_k}, num_stages=1, num_warps=num_warps))
-    return configs
+import torch
+import triton
+import triton.language as tl
 
 
-# `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
-#   - A list of `triton.Config` objects that define different configurations of
-#       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
-#   - An auto-tuning *key* whose change in values will trigger evaluation of all the
-#       provided configs
-@triton.autotune(
-    configs= get_full_tuning_space(True) if tuning_full_space else [
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'SPLIT_K': 1}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 8}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 10}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 8}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'SPLIT_K': 10}, num_stages=1, num_warps=1),
-    ],
-    key=['M', 'N', 'K'],
-)
 @triton.heuristics({
     'EVEN_K': lambda args: args['K'] % (args['BLOCK_SIZE_K'] * args['SPLIT_K']) == 0,
 })
@@ -158,19 +105,6 @@ def matmul_kernel_splitK(
 
 
 # Kernel no split K
-@triton.autotune(
-    configs= get_full_tuning_space(False) if tuning_full_space else [
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=2),
-    ],
-    key=['M', 'N', 'K'],
-)
 @triton.heuristics({
     'EVEN_K': lambda args: args['K'] % args['BLOCK_SIZE_K'] == 0,
 })
@@ -273,7 +207,7 @@ def need_split_k(SIZE_M, SIZE_N, SIZE_K):
     return (SIZE_M < 64 or SIZE_N < 64) and SIZE_K > 1024
 
 
-def matmul(a, b, activation=""):
+def matmul(a, b, block_m, block_n, block_k, group_m, split_k, num_warps, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -295,6 +229,13 @@ def matmul(a, b, activation=""):
             a.stride(0), a.stride(1),
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
+            BLOCK_SIZE_M = block_m, 
+            BLOCK_SIZE_N = block_n, 
+            BLOCK_SIZE_K = block_k,
+            GROUP_SIZE_M = group_m,
+            SPLIT_K = split_k,
+            num_warps = num_warps,
+            num_stages = 1,
             ACTIVATION=activation
         )
 
@@ -308,151 +249,69 @@ def matmul(a, b, activation=""):
             a.stride(0), a.stride(1),
             b.stride(0), b.stride(1),
             c.stride(0), c.stride(1),
+            BLOCK_SIZE_M = block_m, 
+            BLOCK_SIZE_N = block_n, 
+            BLOCK_SIZE_K = block_k,
+            GROUP_SIZE_M = group_m,
+            num_warps = num_warps,
+            num_stages = 1,
             ACTIVATION=activation
         )
 
     return c
 
-def get_best_config(M, N, K):
-    if need_split_k(M, N, K):
-        best_config = matmul_kernel_splitK.get_best_config(M = M, N = N, K = K)
-    else:
-        best_config = matmul_kernel.get_best_config(M = M, N = N, K = K)
-    return best_config
+
+def test_gemm(M, N, K, block_m, block_n, block_k, group_m, split_k, num_warps, dtype):
+    a = torch.randn((M, K), device='cuda', dtype=dtype)
+    b = torch.randn((K, N), device='cuda', dtype=dtype)
+    c = matmul(a, b, block_m, block_n, block_k, group_m, split_k, num_warps)
+
+    return c
 
 
-def test_correctness(M, N, K, datatype = torch.float16):
-    torch.manual_seed(0)
-    a = torch.randn((M, K), device='cuda', dtype=datatype)
-    b = torch.randn((K, N), device='cuda', dtype=datatype)
-    triton_output = matmul(a, b)
-    torch_output = torch.matmul(a, b)
-    print(f"triton_output={triton_output}")
-    print(f"torch_output={torch_output}")
-    rtol = 0 if torch.version.hip is None else 1e-2
-    size_str = f'size, (M: {M}, N: {N}, K: {K})'
-    if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
-        print(f'✅ Triton and Torch match for {size_str}')
-    else:
-        print(f'❌ Triton and Torch differ for {size_str}')
+def main(args=None):
+    if args is None:
+        args = sys.argv[1:]
 
-
-def run_speed(M, N, K, datatype, use_rocprof, provider):
-    a = torch.randn((M, K), device='cuda', dtype=datatype)
-    b = torch.randn((K, N), device='cuda', dtype=datatype)
-    quantiles = [0.5, 0.2, 0.8]
-    if provider == 'pytorch':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
-    if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
-    return min_ms
-
-def run_bash_command(commandstring):
-    #print( commandstring )
-    proc = subprocess.run(commandstring, shell=True, check=True, executable='/bin/bash', stdout = subprocess.PIPE)
-    return proc.stdout.splitlines()
-
-
-def parse_args():
     parser = argparse.ArgumentParser(
-        prog="tune a specific gemm size",
+        prog="test gemm tuning",
+        description="Tuning infra for triton gemm",
         allow_abbrev=False,
     )
 
-    parser.add_argument("-m", type=int, default=0)
-    parser.add_argument("-n", type=int, default=0)
-    parser.add_argument("-k", type=int, default=0)
-    parser.add_argument("-dtype", type=str, default='fp16', help="Input data type, default is fp16")
-    parser.add_argument("--specify_type", action='store_true', default=False, help="Whether user specify data type, default false")
-    parser.add_argument("--specify_size", action='store_true', default=False, help="Whether user specify input matrix size, default false")
-    parser.add_argument("--compare", action='store_true', default=False, help="Whether check result correctness")
-    parser.add_argument("--gemm_size_file", type=str, default="", help='yaml file to indicate matrix size')
-    parser.add_argument("--rocprof", action='store_true', default=False, help='Use rocprof to measure kernel time, default uses do_bench()!')
-    parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
-    args = parser.parse_args()
+    parser.add_argument("-m", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-n", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-k", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-block_m", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-block_n", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-block_k", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-group_m", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-split_k", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-num_warps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("-dtype", type=str, default='fp16', help="Input/output data type")
+    parsed_args = parser.parse_args(args)
 
-    return args
-
-def main():
-    args = parse_args()
     dtype = torch.float16
-    if args.specify_type:
-        if args.dtype == 'fp16':
-            dtype = torch.float16
-        elif args.dtype == 'fp32':
-            dtype = torch.float32
-        elif args.dtype == 'bf16':
-            dtype = torch.bfloat16
-        else:
-            print(f"Unsupported datatype {args.dtype}")
-            sys.exit(1)
-    use_rocprof = args.rocprof
-    verbose = args.v
-
-    mnks = []
-    if args.specify_size:
-        M = args.m
-        N = args.n
-        K = args.k
-        if M == 0 or N == 0 or K == 0:
-            print(f"Input matrix size: (M {M}, N {N}, K {K}) contains dim size 0!")
-        mnks = [(M, N, K)]
+    if parsed_args.dtype == 'fp16':
+        dtype = torch.float16
+    elif parsed_args.dtype == 'fp32':
+        dtype = torch.float32
+    elif parsed_args.dtype == 'bf16':
+        dtype = torch.bfloat16
     else:
-        matrix_size_file = args.gemm_size_file
-        if matrix_size_file == "" or not os.path.isfile(matrix_size_file):
-            print(f"Matrix size file: {matrix_size_file} does not exist!")
-            sys.exit(1)
+        print(f"Unsupported datatype {args.dtype}")
+        sys.exit(1)
 
-        with open(matrix_size_file) as file:
-            matrix_sizes = yaml.safe_load(file)
-
-        for sizes in matrix_sizes:
-            M = sizes['M']
-            N = sizes['N']
-            K = sizes['K']
-            mnks.append((M, N, K))
-
-
-    for (m, n, k) in mnks:
-        min_ms = run_speed(m, n, k, dtype, use_rocprof, 'triton')
-
-        # function to compute flops
-        perf_flops = lambda ms: 2 * m * n * k * 1e-12 / (ms * 1e-3)
-
-        if args.compare:
-            test_correctness(m, n, k, dtype)
-        best_config = get_best_config(m, n, k)
-
-        if use_rocprof:
-            dtype_str = 'fp16' if (not args.specify_type) else args.dtype 
-            block_m = best_config.kwargs['BLOCK_SIZE_M']
-            block_n = best_config.kwargs['BLOCK_SIZE_N']
-            block_k = best_config.kwargs['BLOCK_SIZE_K']
-            group_m = best_config.kwargs['GROUP_SIZE_M']
-            split_k = best_config.kwargs['SPLIT_K'] if 'SPLIT_K' in best_config.kwargs.keys() else 1
-            # num_warps = best_config['num_warps']
-            num_warps = best_config.num_warps
-            driver = 'rocprof_gemm.py'
-            TRITON_DIR = os.getenv('TRITON_DIR')
-            if TRITON_DIR is not None:
-                driver = os.path.join(TRITON_DIR, 'scripts/amd/gemm', driver)
-            run_cmd = f'python {driver} -m {m} -n {n} -k {k} \
-                        -block_m {block_m} -block_n {block_n} -block_k {block_k} \
-                        -group_m {group_m} -split_k {split_k} -num_warps {num_warps} \
-                        -dtype {dtype_str}'
-            prof_cmd = f'rocprof --stats {run_cmd}'
-            run_bash_command(prof_cmd)
-
-            parse_result_cmd = f'sed -n \'/matmul_kernel/p\' results.stats.csv | awk -F \',\' \'{{print $4}}\''
-            parse_outputs = run_bash_command(parse_result_cmd)
-            min_ms = int(parse_outputs[0]) / 1000000
-
-        out_str = f'SIZE: {m},{n},{k} '
-        # print best config
-        if verbose:
-            out_str += f'  best_config: ({best_config}),   '
-        out_str += f'TFLOPS: {perf_flops(min_ms)} time(ns): {min_ms * 1000000}'
-        print(out_str)
+    M = parsed_args.m
+    N = parsed_args.n
+    K = parsed_args.k
+    block_m = parsed_args.block_m
+    block_n = parsed_args.block_n
+    block_k = parsed_args.block_k
+    group_m = parsed_args.group_m
+    split_k = parsed_args.split_k
+    num_warps = parsed_args.num_warps
+    test_gemm(M, N, K, block_m, block_n, block_k, group_m, split_k, num_warps, dtype)
 
 
 if __name__ == '__main__':

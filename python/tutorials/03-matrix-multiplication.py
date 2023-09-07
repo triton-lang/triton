@@ -154,7 +154,9 @@ import torch
 
 import triton
 import triton.language as tl
-
+import sys
+import argparse
+import pytest
 
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
 #   - A list of `triton.Config` objects that define different configurations of
@@ -308,19 +310,33 @@ def matmul(a, b, activation=""):
 # ---------
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
+@pytest.mark.parametrize("M, N, K, in_dtype, out_dtype",
+[ (*shape, in_dtype, out_dtype)
+    for shape in [(128, 256, 32), (128, 16, 32), (32, 128, 64),
+                  (128, 128, 64), (64, 128, 128), (32, 128, 64),
+                  (64, 64, 32), (32, 32, 128), (128, 128, 64),
+                   (64, 128, 128), (512, 512, 512), (1024, 1024, 1024)]
+    for in_dtype, out_dtype in [('int8', 'int8'),
+                                ('float16', 'float16'),
+                                ('bfloat16', 'bfloat16'),
+                                ('float16', 'float32'),
+                                ('float32', 'float32')]]
+)
+def test_correctness(M, N, K, in_dtype, out_dtype):
+    torch.manual_seed(0)
+    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+    triton_output = matmul(a, b)
+    torch_output = torch.matmul(a, b)
+    print(f"triton_output={triton_output}")
+    print(f"torch_output={torch_output}")
+    rtol = 0 if torch.version.hip is None else 1e-2
+    if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
+        print("✅ Triton and Torch match")
+    else:
+        print("❌ Triton and Torch differ")
+        assert torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol)
 
-torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-triton_output = matmul(a, b)
-torch_output = torch.matmul(a, b)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
-rtol = 0 if torch.version.hip is None else 1e-2
-if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
-    print("✅ Triton and Torch match")
-else:
-    print("❌ Triton and Torch differ")
 
 # %%
 # Benchmark
@@ -332,6 +348,8 @@ else:
 # We can now compare the performance of our kernel against that of cuBLAS. Here we focus on square matrices,
 # but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
+global verbose
+verbose = False
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
@@ -359,8 +377,32 @@ def benchmark(M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+        global verbose
+        if verbose:
+            print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.get_best_config(M, N, K)})')
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        prog="GEMM tutorial example",
+        allow_abbrev=False,
+    )
+
+    parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
+    args = parser.parse_args()
+
+    return args
+
+
+def main():
+    # assign to a global verbose var to indicate whether print
+    # best tuning config
+    global verbose
+    args = parse_args()
+    verbose=args.v
+    benchmark.run(show_plots=True, print_data=True)
+
+if __name__ == '__main__':
+    sys.exit(main())
