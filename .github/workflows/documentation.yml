@@ -25,6 +25,7 @@ jobs:
           pip3 install tabulate
           pip3 install cmake
           pip3 install sphinx
+          pip3 install myst_parser
 
       #- name: Fetch dependent branches
       #  run: |
