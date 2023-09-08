@@ -648,14 +648,6 @@ section 9.7.13.4.1 for more details.
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned kWidth = 32 / bitwidth;
       return $_get(context, opIdx, parent, kWidth);
-    }]>,
-
-    // Specially for MFMA(MI100/MI200)
-    AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent), [{
-      assert(llvm::isa<MfmaEncodingAttr>(parent));
-      unsigned kWidth = 0; // unused for MFMA ops
-      return $_get(context, opIdx, parent, kWidth);
     }]>
   ];
 
@@ -671,7 +663,7 @@ section 9.7.13.4.1 for more details.
     SmallVector<int64_t> getMMAv2Rep(ArrayRef<int64_t> shape,
                                      int bitwidth) const;
 #ifdef USE_ROCM
-    SmallVector<int64_t> getMFMAElemsPerThread(Type elemTy) const;
+    SmallVector<int64_t> getMFMAElemsPerInstr() const;
     SmallVector<int64_t> getMFMARep(ArrayRef<int64_t> operandShape,
                                     Type elemType) const;
 #endif

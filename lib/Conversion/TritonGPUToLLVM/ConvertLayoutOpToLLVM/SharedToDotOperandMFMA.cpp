@@ -420,7 +420,7 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   auto order = sharedLayout.getOrder();
 
   auto aElemTy = aTensorTy.getElementType();
-  auto aElemsPerInstr = encoding.getMFMAElemsPerThread(aElemTy);
+  auto aElemsPerInstr = encoding.getMFMAElemsPerInstr();
   auto mfmaInstrM = aElemsPerInstr[0];
   auto mfmaInstrK = aElemsPerInstr[1];
 
@@ -559,7 +559,7 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   auto order = sharedLayout.getOrder();
 
   auto bElemTy = bTensorTy.getElementType();
-  auto bElemsPerInstr = encoding.getMFMAElemsPerThread(bElemTy);
+  auto bElemsPerInstr = encoding.getMFMAElemsPerInstr();
   auto mfmaInstrK = bElemsPerInstr[0];
   auto mfmaInstrN = bElemsPerInstr[1];
 

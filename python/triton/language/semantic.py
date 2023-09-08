@@ -1255,15 +1255,28 @@ def is_hip():
         raise ImportError("Triton requires PyTorch to be installed")
     return torch.version.hip is not None
 
-def gpu_has_mfma() -> bool:
+
+def gpu_matrix_core_version() -> int:
+    """ Determine matrix core type available on current GPU.
+
+        0 means no tensor cores are available
+        1 corresponds to MFMA in CDNA 1 architecture
+        2 corresponds to MFMA in CDNA 2 architecture
+    """
+
     if not is_hip():
-        return False
+        return 0
     arch_info = _triton.get_arch_info()
     gfx_arch_details = re.search('amd.*', arch_info)
     if gfx_arch_details is None:
-        return False
+        return 0
     gfx_arch_details = gfx_arch_details.group(0).strip().split('--')
-    return gfx_arch_details[1].split(':')[0] in ['gfx908', 'gfx90a', 'gfx940', 'gfx941']
+    gpu_name = gfx_arch_details[1].split(':')[0]
+    if gpu_name in ['gfx908']:
+        return 1
+    if gpu_name in ['gfx90a', 'gfx940', 'gfx941']:
+        return 2
+    return 0
 
 def mfma_supported_granularity(m, n, k) -> bool:
     granularity_mn = 32
@@ -1275,11 +1288,11 @@ def mfma_supported_granularity(m, n, k) -> bool:
     return True
 
 def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
-    if not gpu_has_mfma():
+    matrix_core_version = gpu_matrix_core_version()
+    if matrix_core_version not in [1, 2]:
         return False
     if not mfma_supported_granularity(M, N ,K):
         return False
-    # TODO: Add check for configurations and types.
     return True
 
 def dot(lhs: tl.tensor,

@@ -114,9 +114,10 @@ SmallVector<unsigned, 2> warpsPerTileMI200(triton::DotOp dotOp,
 }
 
 class BlockedToMFMA : public mlir::RewritePattern {
+  int mfmaVersion;
 public:
-  BlockedToMFMA(mlir::MLIRContext *context)
-      : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context) {}
+  BlockedToMFMA(mlir::MLIRContext *context, int mfmaVersion)
+      : mlir::RewritePattern(triton::DotOp::getOperationName(), 2, context), mfmaVersion(mfmaVersion) {}
 
   bool isChainDot(triton::DotOp &dotOp) const {
     auto filter = [&dotOp](Operation *op) {
@@ -128,6 +129,27 @@ public:
         return true;
     }
     return false;
+  }
+
+  std::pair<int64_t, int64_t> chooseMfmaDimensions(triton::DotOp dot, int mfmaVersion) const {
+    int64_t nonKDim = 32;
+    int64_t kDim = -1;
+    auto opType = dot.getA().getType().cast<RankedTensorType>();
+    auto elemType = opType.getElementType();
+    if (elemType.isF32())
+      kDim = 2;
+    if (elemType.isF16())
+      kDim = 8;
+    if (elemType.isBF16()) {
+      if (mfmaVersion == 1)
+        kDim = 4;
+      if (mfmaVersion == 2)
+        kDim = 8;
+    }
+    if (elemType.isInteger(8))
+      kDim = 8;
+    assert(kDim != -1);
+    return {nonKDim, kDim};
   }
 
   mlir::LogicalResult
@@ -157,7 +179,7 @@ public:
 
     triton::gpu::MfmaEncodingAttr mfmaEnc;
 
-    int64_t nonKDim = 32;
+    auto [nonKDim, kDim] = chooseMfmaDimensions(dotOp, mfmaVersion);
 
     auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
 
@@ -185,10 +207,10 @@ public:
 
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc));
+        triton::gpu::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kDim));
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc));
+        triton::gpu::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kDim));
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
     auto newDot = rewriter.create<triton::DotOp>(
@@ -352,7 +374,10 @@ public:
 
     mlir::RewritePatternSet patterns(context);
 #ifdef USE_ROCM
-    patterns.add<::BlockedToMFMA>(context);
+    if (computeCapability == 1 || computeCapability == 2) {
+      int mfmaVersion = computeCapability;
+      patterns.add<::BlockedToMFMA>(context, mfmaVersion);
+    }
 #else
     patterns.add<::BlockedToMMA>(context, computeCapability);
 #endif

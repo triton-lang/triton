@@ -675,7 +675,13 @@ private:
       // TODO: Support types other than float16 and
       // bf16 (represented as int16 in llvm ir).
       assert((type::isFloat(elemTy) || type::isInt(elemTy)) && elemSize == 16);
-      unsigned vecSize = 4;
+      // vecSize is an number of sequential elements stored by one thread
+      // - For MFMA (nonKDim == 32) encoding it is 4
+      // - For MFMA (nonKDim == 32) operand encoding it is dotOperandEndocing::kWidth,
+      //   which is 4 for fp16 and bfloat16 dtypes
+      //
+      // For mentioned types MFMA and MFMA operand layouts are the same
+      const unsigned vecSize = 4;
       Type vecTy = vec_ty(elemTy, vecSize);
       types = SmallVector<Type>(elems / vecSize, vecTy);
       for (unsigned i = 0; i < elems; i += vecSize) {

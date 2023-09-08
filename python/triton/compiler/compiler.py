@@ -86,8 +86,9 @@ def optimize_ttgir(mod, num_stages, arch):
     if _is_cuda(arch):
         pm.add_tritongpu_accelerate_matmul_pass(arch)
     # TODO change interface of accelerate_matmul_pass
-    if is_hip() and gpu_has_mfma():
-        pm.add_tritongpu_accelerate_matmul_pass(80)
+    if is_hip():
+        matrix_core_version = gpu_matrix_core_version()
+        pm.add_tritongpu_accelerate_matmul_pass(matrix_core_version)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     if num_stages == 0 and is_hip() and gpu_has_mfma():
@@ -330,7 +331,7 @@ def is_hip():
         raise ImportError("Triton requires PyTorch to be installed")
     return torch.version.hip is not None
 
-from ..language.semantic import gpu_has_mfma
+from ..language.semantic import gpu_matrix_core_version
 
 def get_architecture_descriptor(capability):
     try:

@@ -18,6 +18,7 @@ enum class MatrixCoreType : uint8_t {
   // D = AB + C
   FP32_FP16_FP16_FP32 = 0, // default
   FP32_BF16_BF16_FP32,
+  FP32_BF16_BF16_FP32_1K,
   FP32_FP32_FP32_FP32,
   FP64_FP64_FP64_FP64,
   INT32_INT8_INT8_INT32,
@@ -57,6 +58,10 @@ struct DotOpMFMAConversionHelper {
           loc, TypeRange{resType},
           ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     case MatrixCoreType::FP32_BF16_BF16_FP32:
+      return rewriter.create<ROCDL::mfma_f32_32x32x4bf16>(
+          loc, TypeRange{resType},
+          ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
+    case MatrixCoreType::FP32_BF16_BF16_FP32_1K:
       return rewriter.create<ROCDL::mfma_f32_32x32x8bf16_1k>(
           loc, TypeRange{resType},
           ValueRange{valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
@@ -85,8 +90,13 @@ struct DotOpMFMAConversionHelper {
       return MatrixCoreType::FP32_FP16_FP16_FP32;
     if (elemTy.isF32())
       return MatrixCoreType::FP32_FP32_FP32_FP32;
-    if (elemTy.isBF16())
-      return MatrixCoreType::FP32_BF16_BF16_FP32;
+    if (elemTy.isBF16()) {
+      auto dotOpEncoding = tensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+      if (dotOpEncoding.getKWidth() == 8)
+        return MatrixCoreType::FP32_BF16_BF16_FP32_1K;
+      else
+        return MatrixCoreType::FP32_BF16_BF16_FP32;
+    }
     if (elemTy.isInteger(8))
       return MatrixCoreType::INT32_INT8_INT8_INT32;
     if (elemTy.isF64())
