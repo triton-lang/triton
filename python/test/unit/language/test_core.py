@@ -1877,7 +1877,7 @@ def test_reduce_layouts(M, N, src_layout, axis, device):
     x_tri = torch.tensor(x, device=device)
     z_tri = torch.tensor(z, device=device)
 
-    pgm = kernel[(1, 1, 4)](x_tri, x_tri.stride(0), z_tri)
+    pgm = kernel[(1, 1, 1)](x_tri, x_tri.stride(0), z_tri)
 
     z_ref = np.sum(x, axis=axis, keepdims=True)
 
