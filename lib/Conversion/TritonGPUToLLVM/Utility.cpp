@@ -230,6 +230,33 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 #endif
 }
 
+static Value shflUp_amd(Location loc, ConversionPatternRewriter &rewriter,
+                        Value val, int i) {
+  GCNBuilder builder;
+  Value threadId =
+      rewriter
+      .create<UnrealizedConversionCastOp>(
+          loc, TypeRange{i32_ty},
+          ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
+                  loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
+      .getResult(0);
+  Value warpSize = i32_val(64);
+  Value laneId = urem(threadId, warpSize);
+  Value mask = icmp_slt(laneId, i32_val(i));
+  Value delta = sub(laneId, i32_val(i));
+  Value index = select(mask, laneId, delta);
+  Value byteOffset = i32_val(2);
+  Value permuteAddr = shl(index, byteOffset);
+  auto shfl = builder.create("ds_bpermute_b32");
+  auto dOpr = builder.newOperand("=v");
+  auto addrOpr = builder.newOperand(permuteAddr, "v");
+  auto aOpr = builder.newOperand(val, "v");
+  (*shfl)(dOpr, addrOpr, aOpr);
+  auto swait = builder.create("s_waitcnt lgkmcnt(0)");
+  (*swait)();
+  return builder.launch(rewriter, loc, val.getType(), true);
+}
+
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
   return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
@@ -237,7 +264,11 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
+#ifdef USE_ROCM
+  return shflUp_amd(loc, rewriter, val, i);
+#else
   return commonShflSync(loc, rewriter, val, i, "up", "0x0");
+#endif
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,

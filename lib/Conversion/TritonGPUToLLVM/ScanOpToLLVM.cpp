@@ -243,7 +243,7 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   auto srcEncoding = helper.getEncoding();
 
   Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(32);
+  Value warpSize = i32_val(64);
   Value warpId = udiv(threadId, warpSize);
   Value laneId = urem(threadId, warpSize);
 
