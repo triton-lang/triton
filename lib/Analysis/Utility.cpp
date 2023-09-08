@@ -161,7 +161,7 @@ SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
     return {0, 0};
 
   smemShape = convertType<unsigned>(getSrcShape());
-  smemShape[axis] = getInterWarpSize();
+  smemShape[axis] = getInterWarpSizeWithUniqueData();
 
   return smemShape;
 }
