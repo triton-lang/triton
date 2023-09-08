@@ -235,11 +235,11 @@ static Value shflUp_amd(Location loc, ConversionPatternRewriter &rewriter,
   GCNBuilder builder;
   Value threadId =
       rewriter
-      .create<UnrealizedConversionCastOp>(
-          loc, TypeRange{i32_ty},
-          ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
+          .create<UnrealizedConversionCastOp>(
+              loc, TypeRange{i32_ty},
+              ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
                   loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
-      .getResult(0);
+          .getResult(0);
   Value warpSize = i32_val(64);
   Value laneId = urem(threadId, warpSize);
   Value mask = icmp_slt(laneId, i32_val(i));
