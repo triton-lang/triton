@@ -231,17 +231,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 static Value shflUp_amd(Location loc, ConversionPatternRewriter &rewriter,
-                        Value val, int i) {
+                        Value val, int i, Value laneId) {
   GCNBuilder builder;
-  Value threadId =
-      rewriter
-          .create<UnrealizedConversionCastOp>(
-              loc, TypeRange{i32_ty},
-              ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
-                  loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
-          .getResult(0);
-  Value warpSize = i32_val(64);
-  Value laneId = urem(threadId, warpSize);
   Value mask = icmp_slt(laneId, i32_val(i));
   Value delta = sub(laneId, i32_val(i));
   Value index = select(mask, laneId, delta);
@@ -263,9 +254,9 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+                 int i, Value laneId) {
 #ifdef USE_ROCM
-  return shflUp_amd(loc, rewriter, val, i);
+    return shflUp_amd(loc, rewriter, val, i, laneId);
 #else
   return commonShflSync(loc, rewriter, val, i, "up", "0x0");
 #endif

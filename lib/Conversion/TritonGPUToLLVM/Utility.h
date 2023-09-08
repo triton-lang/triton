@@ -294,7 +294,7 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i);
+                 int i, Value laneId);
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
