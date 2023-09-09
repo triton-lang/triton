@@ -437,6 +437,7 @@ def compile(fn, **kwargs):
     # create cache manager
     fn_cache_manager = get_cache_manager(make_hash(fn, arch, get_env_vars(), **kwargs))
     # managers used to dump and override IR for debugging
+    enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
     fn_override_manager = get_override_manager(make_hash(fn, arch, get_env_vars(), **kwargs, ignore_version=True))
     fn_dump_manager = get_dump_manager(make_hash(fn, arch, get_env_vars(), **kwargs, ignore_version=True))
 
@@ -501,8 +502,8 @@ def compile(fn, **kwargs):
                     metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
                     fn_cache_manager.put(next_module, ir_filename)
                     fn_dump_manager.put(next_module, ir_filename)
-                    if (fn_override_manager.has_file(ir_filename)):
-                        print(f"\n-- Overriding {ir_filename}")
+                    if (enable_override and fn_override_manager.has_file(ir_filename)):
+                        print(f"\nOverriding kernel with file {ir_filename}")
                         full_name = fn_override_manager.get_file(ir_filename)
                         next_module = parse(full_name)
             else:
