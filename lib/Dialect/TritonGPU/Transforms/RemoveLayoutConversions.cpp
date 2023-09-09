@@ -241,7 +241,8 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 static bool isLayoutAnchor(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<triton::DotOp, triton::AtomicRMWOp, triton::AtomicCASOp>(op))
+  if (isa<triton::ViewOp, triton::DotOp, triton::AtomicRMWOp,
+          triton::AtomicCASOp>(op))
     return true;
   return false;
 }
