@@ -259,7 +259,7 @@ void LayoutPropagation::initAnchorLayout() {
           if (tensorType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() &&
               !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
-          layouts.insert({result, tensorType.getEncoding()});
+          layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
         }
       }
     }
@@ -356,14 +356,20 @@ void LayoutPropagation::propagateLayout() {
 
 void LayoutPropagation::resolveConflicts() {
   for (auto &it : layouts) {
+    Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
     if (info.encodings.size() <= 1)
       continue;
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
+    int maxSizePerThread = 1;
     Attribute encoding = *info.encodings.begin();
+    bool isLoadOrStore =
+        op && isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
+                  triton::AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
-      if (e.isa<triton::gpu::BlockedEncodingAttr>()) {
+      if ((isLoadOrStore && e.isa<triton::gpu::BlockedEncodingAttr>()) ||
+          (!isLoadOrStore && e.isa<triton::gpu::MmaEncodingAttr>())) {
         encoding = e;
         break;
       }
