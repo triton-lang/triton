@@ -149,7 +149,7 @@ def test_user_defined_persistent_non_warp_specialized_gemm(M, N, K, BLOCK_M, BLO
         static_persistent_matmul_kernel[grid](a_ptr=a, b_ptr=b, c_ptr=c, M=M, N=N, K=K, stride_am=a.stride(0), stride_ak=a.stride(1), stride_bk=b.stride(0), stride_bn=b.stride(1), stride_cm=c.stride(0), stride_cn=c.stride(1), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, NUM_SM=num_SMs, num_warps=NUM_WARPS, num_ctas=NUM_CTAS)
 
     th_c = torch.matmul(a, b)
-    torch.testing.assert_allclose(th_c, c, atol=1e-2, rtol=0)
+    torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
 
 
 @triton.jit
@@ -300,7 +300,7 @@ def test_non_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
             enable_warp_specialization=True)
 
     th_c = torch.matmul(a, b)
-    torch.testing.assert_allclose(th_c, c, atol=1e-2, rtol=0)
+    torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
 
 
 @triton.jit
@@ -456,7 +456,7 @@ def test_user_defined_persistent_warp_specialized_gemm(M, N, K, BLOCK_M, BLOCK_N
             enable_warp_specialization=True)
 
     th_c = torch.matmul(a, b)
-    torch.testing.assert_allclose(th_c, c, atol=1e-2, rtol=0)
+    torch.testing.assert_close(th_c, c, atol=1e-2, rtol=0, check_dtype=False)
 
 
 @triton.jit
