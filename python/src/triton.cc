@@ -2012,8 +2012,8 @@ void init_triton_interpreter(py::module &&m) {
     auto reshaped_values = values.reshape({numel});
     for (size_t i = 0; i < ptrs.size(); ++i) {
       if (reshaped_masks.at(i))
-        memcpy(reinterpret_cast<void *>(reshaped_ptrs.at(i)),
-               reshaped_values.mutable_data(i), values.dtype().itemsize());
+        memcpy(reinterpret_cast<void *>(reshaped_ptrs.mutable_at(i)),
+               reshaped_values.data(i), values.dtype().itemsize());
     }
   });
 }
