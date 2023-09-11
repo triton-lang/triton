@@ -27,9 +27,6 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
         Option<"computeCapability", "compute-capability",
                "int32_t", /*default*/"80",
                "device compute capability">,
-        Option<"tmaMetadata", "tma-metadata",
-               "mlir::triton::gpu::TMAMetadataTy*", /*default*/"nullptr",
-               "tma metadata to the runtime">,
         Option<"target", "target", "enum Target", "mlir::triton::Target::Default",
                "compile for target compatible LLVM",
                "llvm::cl::values("
