@@ -1750,7 +1750,7 @@ scan_layouts = [
 ]
 
 
-@pytest.mark.parametrize("M, N", [[32, 32], [32, 64], [64, 32]])
+@pytest.mark.parametrize("M, N", [[32, 16], [32, 32], [32, 64], [64, 32]])
 @pytest.mark.parametrize("src_layout", scan_layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_scan_layouts(M, N, src_layout, axis, device):
