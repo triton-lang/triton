@@ -167,7 +167,7 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, int i, const std::string &shuffleType,
-                            const std::string &clamp) {
+                            const std::string &clamp, Value laneId) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -175,8 +175,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, shuffleType, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, shuffleType, clamp);
+    val0 = commonShflSync(loc, rewriter, val0, i, shuffleType, clamp, laneId);
+    val1 = commonShflSync(loc, rewriter, val1, i, shuffleType, clamp, laneId);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -185,34 +185,47 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 
 #ifdef USE_ROCM
   GCNBuilder builder;
-  if (i > 16) {
-    Value threadId =
-        rewriter
-            .create<UnrealizedConversionCastOp>(
-                loc, TypeRange{i32_ty},
-                ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
-                    loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
-            .getResult(0);
-    Value stride = i32_val(32);
+  if (shuffleType == "bfly") {
+    if (i > 16) {
+      Value threadId =
+          rewriter
+              .create<UnrealizedConversionCastOp>(
+                  loc, TypeRange{i32_ty},
+                  ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
+                      loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
+              .getResult(0);
+      Value stride = i32_val(32);
+      Value byteOffset = i32_val(2);
+      Value lineId = add(threadId, stride);
+      Value permuteAddr = shl(lineId, byteOffset);
+      auto shfl = builder.create("ds_permute_b32");
+      auto dOpr = builder.newOperand("=v");
+      auto addrOpr = builder.newOperand(permuteAddr, "v");
+      auto aOpr = builder.newOperand(val, "v");
+      (*shfl)(dOpr, addrOpr, aOpr);
+    } else {
+      // This map facilates the butterfly shuffle pattern for a stride less
+      // than 16. The pattern stride is the key of the map.
+      DenseMap<short, unsigned int> masks{
+          {16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
+      auto shfl = builder.create("ds_swizzle_b32");
+      auto dOpr = builder.newOperand("=v");
+      auto aOpr = builder.newOperand(val, "v");
+      auto maskOpr =
+          builder.newConstantOperand("offset:" + std::to_string(masks[i]));
+      (*shfl)(dOpr, aOpr, maskOpr);
+    }
+  } else { // shuffle_up
+    Value mask = icmp_slt(laneId, i32_val(i));
+    Value delta = sub(laneId, i32_val(i));
+    Value index = select(mask, laneId, delta);
     Value byteOffset = i32_val(2);
-    Value lineId = add(threadId, stride);
-    Value permuteAddr = shl(lineId, byteOffset);
-    auto shfl = builder.create("ds_permute_b32");
+    Value permuteAddr = shl(index, byteOffset);
+    auto shfl = builder.create("ds_bpermute_b32");
     auto dOpr = builder.newOperand("=v");
     auto addrOpr = builder.newOperand(permuteAddr, "v");
     auto aOpr = builder.newOperand(val, "v");
     (*shfl)(dOpr, addrOpr, aOpr);
-  } else {
-    // This map facilates the butterfly shuffle pattern for a stride less
-    // than 16. The pattern stride is the key of the map.
-    DenseMap<short, unsigned int> masks{
-        {16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
-    auto shfl = builder.create("ds_swizzle_b32");
-    auto dOpr = builder.newOperand("=v");
-    auto aOpr = builder.newOperand(val, "v");
-    auto maskOpr =
-        builder.newConstantOperand("offset:" + std::to_string(masks[i]));
-    (*shfl)(dOpr, aOpr, maskOpr);
   }
   auto swait = builder.create("s_waitcnt lgkmcnt(0)");
   (*swait)();
@@ -230,36 +243,14 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 #endif
 }
 
-static Value shflUp_amd(Location loc, ConversionPatternRewriter &rewriter,
-                        Value val, int i, Value laneId) {
-  GCNBuilder builder;
-  Value mask = icmp_slt(laneId, i32_val(i));
-  Value delta = sub(laneId, i32_val(i));
-  Value index = select(mask, laneId, delta);
-  Value byteOffset = i32_val(2);
-  Value permuteAddr = shl(index, byteOffset);
-  auto shfl = builder.create("ds_bpermute_b32");
-  auto dOpr = builder.newOperand("=v");
-  auto addrOpr = builder.newOperand(permuteAddr, "v");
-  auto aOpr = builder.newOperand(val, "v");
-  (*shfl)(dOpr, addrOpr, aOpr);
-  auto swait = builder.create("s_waitcnt lgkmcnt(0)");
-  (*swait)();
-  return builder.launch(rewriter, loc, val.getType(), true);
-}
-
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
-  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
+  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f", nullptr);
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i, Value laneId) {
-#ifdef USE_ROCM
-    return shflUp_amd(loc, rewriter, val, i, laneId);
-#else
-  return commonShflSync(loc, rewriter, val, i, "up", "0x0");
-#endif
+  return commonShflSync(loc, rewriter, val, i, "up", "0x0", laneId);
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
