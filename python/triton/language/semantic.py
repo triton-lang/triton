@@ -1514,7 +1514,7 @@ def abs(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
-    if len(x.shape) != len(values):
+    if max(1, len(x.shape)) != len(values):
         raise ValueError("Shape of input to multiple_of does not match the length of values")
     x.handle.set_attr("tt.divisibility", ir.make_attr(values, x.handle.get_context()))
     return x
