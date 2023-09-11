@@ -1823,15 +1823,13 @@ def test_reduce_layouts(M, N, src_layout, axis, device):
     if is_hip():
         pytest.skip("test_reduce_layouts is not supported in HIP")
 
-    rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     rdims_1d = f"{N}" if axis == 0 else f"{M}"
-    store_range = "%7" if axis == 0 else "%1"
     blocked = BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
     ir = f"""
     #blocked = {blocked}
     #src = {src_layout}
     module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
-    tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
+    tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg3: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) {{
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>>
         %1 = tt.expand_dims %0 {{axis = 1 : i32}} : (tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>>) -> tensor<{M}x1xi32, #blocked>
         %2 = tt.splat %arg1 : (i32) -> tensor<{M}x1xi32, #blocked>
@@ -1843,18 +1841,28 @@ def test_reduce_layouts(M, N, src_layout, axis, device):
         %8 = tt.broadcast %5 : (tensor<{M}x1x!tt.ptr<i32>, #blocked>) -> tensor<{M}x{N}x!tt.ptr<i32>, #blocked>
         %9 = tt.broadcast %7 : (tensor<1x{N}xi32, #blocked>) -> tensor<{M}x{N}xi32, #blocked>
         %10 = tt.addptr %8, %9 : tensor<{M}x{N}x!tt.ptr<i32>, #blocked>, tensor<{M}x{N}xi32, #blocked>
-        %11 = tt.splat %arg2 : (!tt.ptr<i32>) -> tensor<{rdims_2d}x!tt.ptr<i32>, #blocked>
-        %12 = tt.addptr %11, {store_range} : tensor<{rdims_2d}x!tt.ptr<i32>, #blocked>, tensor<{rdims_2d}xi32, #blocked>
-        %13 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #blocked>
-        %14 = {GPU_DIALECT}.convert_layout %13 : (tensor<{M}x{N}xi32, #blocked>) -> tensor<{M}x{N}xi32, #src>
-        %15 = "tt.reduce"(%14) ({{
-        ^bb0(%arg3: i32, %arg4: i32):
-          %17 = arith.addi %arg3, %arg4 : i32
+        %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}xi32, #blocked>
+        %12 = {GPU_DIALECT}.convert_layout %11 : (tensor<{M}x{N}xi32, #blocked>) -> tensor<{M}x{N}xi32, #src>
+        gpu.barrier
+        %14 = tt.elementwise_inline_asm "mov.u64 $0, %globaltimer;" {{constraints = "=l", packed_element = 1 : i32, pure = false}} -> i64
+        gpu.barrier
+        %15 = "tt.reduce"(%12) ({{
+        ^bb0(%arg4: i32, %arg5: i32):
+          %17 = arith.addi %arg4, %arg5 : i32
           tt.reduce.return %17 : i32
         }}) {{axis = {axis} : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{rdims_1d}xi32, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>
-        %18 = {GPU_DIALECT}.convert_layout %15 : (tensor<{rdims_1d}xi32, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>) -> tensor<{rdims_1d}xi32, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #blocked}}>>
-        %19 = tt.expand_dims %18 {{axis = {axis} : i32}} : (tensor<{rdims_1d}xi32, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #blocked}}>>) -> tensor<{rdims_2d}xi32, #blocked>
-        tt.store %12, %19 {{cache = 1 : i32, evict = 1 : i32}} : tensor<{rdims_2d}xi32, #blocked>
+        %16 = "tt.reduce"(%15) ({{
+        ^bb0(%arg4: i32, %arg5: i32):
+          %17 = arith.addi %arg4, %arg5 : i32
+          tt.reduce.return %17 : i32
+        }}) {{axis = 0 : i32}} : (tensor<{rdims_1d}xi32, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>) -> i32
+        gpu.barrier
+        %17 = tt.elementwise_inline_asm "mov.u64 $0, %globaltimer;" {{constraints = "=l", packed_element = 1 : i32, pure = false}} -> i64
+        gpu.barrier
+        %18 = arith.subi %17, %14 : i64
+        %19 = arith.sitofp %18 : i64 to f32
+        tt.store %arg3, %19 {{cache = 1 : i32, evict = 1 : i32}} : f32
+        tt.store %arg2, %16 {{cache = 1 : i32, evict = 1 : i32}} : i32
         tt.return
     }}
     }}
@@ -1868,18 +1876,15 @@ def test_reduce_layouts(M, N, src_layout, axis, device):
 
     rs = RandomState(17)
     x = rs.randint(0, 20, (M, N)).astype('int32')
-
-    if axis == 0:
-        z = np.zeros((1, N)).astype('int32')
-    else:
-        z = np.zeros((M, 1)).astype('int32')
+    z = np.zeros((1, 1)).astype('int32')
+    t = np.zeros((1, 1)).astype('float32')
 
     x_tri = torch.tensor(x, device=device)
     z_tri = torch.tensor(z, device=device)
+    t_tri = torch.tensor(t, device=device)
 
-    pgm = kernel[(1, 1, 1)](x_tri, x_tri.stride(0), z_tri)
-
-    z_ref = np.sum(x, axis=axis, keepdims=True)
+    pgm = kernel[(1, 1, 1)](x_tri, x_tri.stride(0), z_tri, t_tri)
+    z_ref = np.sum(x)
 
     np.testing.assert_equal(z_ref, z_tri.cpu().numpy())
 
