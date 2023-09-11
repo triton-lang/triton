@@ -1187,8 +1187,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared0 = #triton_gpu.shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0]}>
 #mfma0 = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA=[1,1], isTranspose=false}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma0, kWidth = 8}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma0, kWidth = 8}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma0, kWidth = 4}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma0, kWidth = 4}>
 module attributes {"triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_dot_mfma
   tt.func @convert_dot_mfma(%A: tensor<32x32xf16, #blocked0>, %B: tensor<32x32xf16, #blocked0>) {
@@ -1361,8 +1361,8 @@ module attributes {"triton_gpu.num-warps" = 4 : i32} {
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #mfma = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [2, 2], isTransposed=false}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma, kWidth = 8}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma, kWidth = 8}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma, kWidth = 4}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma, kWidth = 4}>
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: matmul_kernel_dot_operand_layout_gcn
   tt.func @matmul_kernel_dot_operand_layout_gcn(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},

@@ -133,21 +133,22 @@ public:
 
   std::pair<int64_t, int64_t> chooseMfmaDimensions(triton::DotOp dot, int mfmaVersion) const {
     int64_t nonKDim = 32;
+    // number of matrix elements along k dim per thread per in one mfma instruction
     int64_t kDim = -1;
     auto opType = dot.getA().getType().cast<RankedTensorType>();
     auto elemType = opType.getElementType();
     if (elemType.isF32())
-      kDim = 2;
+      kDim = 1;
     if (elemType.isF16())
-      kDim = 8;
+      kDim = 4;
     if (elemType.isBF16()) {
       if (mfmaVersion == 1)
-        kDim = 4;
+        kDim = 2;
       if (mfmaVersion == 2)
-        kDim = 8;
+        kDim = 4;
     }
     if (elemType.isInteger(8))
-      kDim = 8;
+      kDim = 4;
     assert(kDim != -1);
     return {nonKDim, kDim};
   }

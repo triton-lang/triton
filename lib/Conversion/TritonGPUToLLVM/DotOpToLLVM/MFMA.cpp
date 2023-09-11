@@ -92,10 +92,12 @@ struct DotOpMFMAConversionHelper {
       return MatrixCoreType::FP32_FP32_FP32_FP32;
     if (elemTy.isBF16()) {
       auto dotOpEncoding = tensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-      if (dotOpEncoding.getKWidth() == 8)
+      if (dotOpEncoding.getKWidth() == 4) {
         return MatrixCoreType::FP32_BF16_BF16_FP32_1K;
-      else
+      } else {
+        assert(dotOpEncoding.getKWidth() == 2);
         return MatrixCoreType::FP32_BF16_BF16_FP32;
+      }
     }
     if (elemTy.isInteger(8))
       return MatrixCoreType::INT32_INT8_INT8_INT32;

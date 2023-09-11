@@ -679,9 +679,9 @@ DotOperandEncodingAttr::getMFMAElemsPerInstr() const {
   int64_t nonKDim = mfmaEncoding.getNonKDim();
   int64_t kDim = getKWidth();
   if (getOpIdx() == 0)
-    return {nonKDim, kDim};
+    return {nonKDim, kDim*2};
   else
-    return {kDim, nonKDim};
+    return {kDim*2, nonKDim};
 }
 
 SmallVector<int64_t>
