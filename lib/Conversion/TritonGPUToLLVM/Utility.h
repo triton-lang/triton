@@ -6,6 +6,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators

@@ -22,6 +22,7 @@
  */
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
 #include "DumpLayout.h"
 
