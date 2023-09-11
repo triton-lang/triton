@@ -91,7 +91,7 @@ def optimize_ttgir(mod, num_stages, arch):
         pm.add_tritongpu_accelerate_matmul_pass(matrix_core_version)
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
-    if num_stages == 0 and is_hip() and gpu_has_mfma():
+    if num_stages == 0 and is_hip() and gpu_matrix_core_version() != 0:
         pm.add_tritongpu_stream_pipeline_pass()
         pm.add_canonicalizer_pass()
     else:
