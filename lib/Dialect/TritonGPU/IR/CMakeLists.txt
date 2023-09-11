@@ -4,6 +4,8 @@ add_mlir_dialect_library(TritonGPUIR
   Types.cpp
 
   DEPENDS
+  NVGPUTableGen
+  NVGPUAttrDefsIncGen
   TritonGPUTableGen
   TritonGPUAttrDefsIncGen
 
