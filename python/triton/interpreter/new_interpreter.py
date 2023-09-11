@@ -56,6 +56,22 @@ class BlockPointerHandle:
         self.tensor_shape = tensor_shape
         self.order = order
 
+    def materialize_pointers(self, boundary_check):
+        dtype_tt = self.base.dtype.element_ty
+        n_bytes = dtype_tt.primitive_bitwidth // 8
+        tensor_shape = self.tensor_shape
+        ptrs = np.broadcast_to(self.base.data, self.tensor_shape)
+        masks = np.ones(self.tensor_shape, dtype=bool)
+        for dim in range(len(tensor_shape)):
+            bcast_dims = [1] * len(tensor_shape)
+            bcast_dims[dim] = tensor_shape[dim]
+            off = (self.offsets[dim].data + np.arange(tensor_shape[dim])).reshape(bcast_dims)
+            ptrs = ptrs + (n_bytes * off * self.strides[dim].data).astype(np.uint64)
+            if dim in boundary_check:
+                masks = np.logical_and(masks, off < self.shape[dim].data)
+        ptrs = TensorHandle(ptrs, self.base.dtype)
+        return ptrs, masks
+
 
 def wrap_ret(compute_ret_ty):
     def wrapper(fn):
@@ -258,35 +274,13 @@ class Builder:
         return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
 
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy, is_volatile):
-        dtype_tt = ptr.base.dtype.element_ty
-        n_bytes = (dtype_tt.primitive_bitwidth // 8)
-        shapes = [int(ptr.tensor_shape[dim]) for dim in range(len(ptr.tensor_shape))]
-        ptrs = np.broadcast_to(ptr.base.data, shapes)
-        masks = np.ones(shapes, dtype=bool)
-        # padding_value = {None: 0., "zero": 0., "nan": float('nan')}[padding_option]
-        for dim in range(len(shapes)):
-            bcast_dims = [1] * len(shapes)
-            bcast_dims[dim] = shapes[dim]
-            off = (ptr.offsets[dim].data + np.arange(shapes[dim])).reshape(bcast_dims)
-            ptrs = ptrs + (n_bytes * off * ptr.strides[dim].data).astype(np.uint64)
-            masks = np.logical_and(masks, off < ptr.shape[dim].data)
-        # other = np.full(shapes, padding_value, dtype=self.np_dtype(ptr.base.dtype.element_ty))
-        ptrs = TensorHandle(ptrs, ptr.base.dtype)
-        return self.create_masked_load(ptrs, masks, None, cache_modifier, eviction_policy, is_volatile)
+        ptrs, masks = ptr.materialize_pointers(boundary_check)
+        assert padding_option is None
+        other = None
+        return self.create_masked_load(ptrs, masks, other, cache_modifier, eviction_policy, is_volatile)
 
     def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy):
-        dtype_tt = ptr.base.dtype.element_ty
-        n_bytes = (dtype_tt.primitive_bitwidth // 8)
-        shapes = [int(ptr.tensor_shape[dim]) for dim in range(len(ptr.tensor_shape))]
-        ptrs = np.broadcast_to(ptr.base.data, shapes)
-        masks = np.ones(shapes, dtype=bool)
-        for dim in range(len(shapes)):
-            bcast_dims = [1] * len(shapes)
-            bcast_dims[dim] = shapes[dim]
-            off = (ptr.offsets[dim].data + np.arange(shapes[dim])).reshape(bcast_dims)
-            ptrs = ptrs + (n_bytes * off * ptr.strides[dim].data).astype(np.uint64)
-            masks = np.logical_and(masks, off < ptr.shape[dim].data)
-        ptrs = TensorHandle(ptrs, ptr.base.dtype)
+        ptrs, masks = ptr.materialize_pointers(boundary_check)
         return self.create_masked_store(ptrs, value, masks, cache_modifier, eviction_policy)
 
     def create_expand_dims(self, arg, axis):
