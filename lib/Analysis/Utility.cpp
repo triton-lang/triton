@@ -271,9 +271,9 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= std::max<unsigned int>(
-        1, type.getShape()[dim] /
-               (sizePerThreads[dim] * threadsPerWarp[dim] * warpsPerCTA[dim]));
+    stride *= ceil<unsigned int>(type.getShape()[dim], sizePerThreads[dim] *
+                                                           threadsPerWarp[dim] *
+                                                           warpsPerCTA[dim]);
   }
   llvm_unreachable("Axis not found in order");
 }
