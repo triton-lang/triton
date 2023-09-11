@@ -258,6 +258,8 @@ class Builder:
         return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
 
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy, is_volatile):
+        dtype_tt = ptr.base.dtype.element_ty
+        n_bytes = (dtype_tt.primitive_bitwidth // 8)
         shapes = [int(ptr.tensor_shape[dim]) for dim in range(len(ptr.tensor_shape))]
         ptrs = np.broadcast_to(ptr.base.data, shapes)
         masks = np.ones(shapes, dtype=bool)
@@ -266,13 +268,15 @@ class Builder:
             bcast_dims = [1] * len(shapes)
             bcast_dims[dim] = shapes[dim]
             off = (ptr.offsets[dim].data + np.arange(shapes[dim])).reshape(bcast_dims)
-            ptrs = ptrs + off * ptr.strides[dim].data
+            ptrs = ptrs + (n_bytes * off * ptr.strides[dim].data).astype(np.uint64)
             masks = np.logical_and(masks, off < ptr.shape[dim].data)
         # other = np.full(shapes, padding_value, dtype=self.np_dtype(ptr.base.dtype.element_ty))
         ptrs = TensorHandle(ptrs, ptr.base.dtype)
         return self.create_masked_load(ptrs, masks, None, cache_modifier, eviction_policy, is_volatile)
 
     def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy):
+        dtype_tt = ptr.base.dtype.element_ty
+        n_bytes = (dtype_tt.primitive_bitwidth // 8)
         shapes = [int(ptr.tensor_shape[dim]) for dim in range(len(ptr.tensor_shape))]
         ptrs = np.broadcast_to(ptr.base.data, shapes)
         masks = np.ones(shapes, dtype=bool)
@@ -280,7 +284,7 @@ class Builder:
             bcast_dims = [1] * len(shapes)
             bcast_dims[dim] = shapes[dim]
             off = (ptr.offsets[dim].data + np.arange(shapes[dim])).reshape(bcast_dims)
-            ptrs = ptrs + off * ptr.strides[dim].data
+            ptrs = ptrs + (n_bytes * off * ptr.strides[dim].data).astype(np.uint64)
             masks = np.logical_and(masks, off < ptr.shape[dim].data)
         ptrs = TensorHandle(ptrs, ptr.base.dtype)
         return self.create_masked_store(ptrs, value, masks, cache_modifier, eviction_policy)

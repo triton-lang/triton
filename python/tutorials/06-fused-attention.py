@@ -77,6 +77,7 @@ def _fwd_kernel(
     # don't work as expected with `exp` in the loop
     qk_scale = sm_scale * 1.44269504
     # load q: it will stay in SRAM throughout
+    print("Q")
     q = tl.load(Q_block_ptr)
     q = (q * qk_scale).to(tl.float16)
     # loop over k, v and update accumulator
