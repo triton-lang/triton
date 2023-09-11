@@ -1992,13 +1992,15 @@ void init_triton_interpreter(py::module &&m) {
           py::array_t<uint64_t> reshaped_ptrs = ptrs.reshape({numel});
           py::array_t<bool> reshaped_masks = masks.reshape({numel});
           py::array reshaped_others = other.reshape({numel});
-          for (size_t i = 0; i < ptrs.size(); ++i)
+          for (size_t i = 0; i < ptrs.size(); ++i) {
             if (reshaped_masks.at(i))
               memcpy(ret.mutable_data(i),
                      reinterpret_cast<void *>(reshaped_ptrs.at(i)),
                      ret_dtype.itemsize());
             else
-              memcpy(ret.mutable_data(i), other.data(i), ret_dtype.itemsize());
+              memcpy(ret.mutable_data(i), reshaped_others.data(i),
+                     ret_dtype.itemsize());
+          }
           return ret.reshape(shape);
         });
 

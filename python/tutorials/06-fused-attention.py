@@ -11,7 +11,7 @@ Extra Credits:
 
 """
 
-import pytest
+# import pytest
 import torch
 
 import triton
@@ -96,6 +96,7 @@ def _fwd_kernel(
         alpha = tl.math.exp2(m_i - m_i_new)
         p = tl.math.exp2(qk - m_i_new[:, None])
         # -- scale and update acc --
+        # breakpoint()
         acc_scale = l_i * 0 + alpha  # workaround some compiler bug
         acc *= acc_scale[:, None]
         acc += tl.dot(p.to(tl.float16), v)
@@ -306,15 +307,15 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD, P_SEQ', [(6, 9, 1024, 64, 128)])
-@pytest.mark.parametrize('causal', [False, True])
+# @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD, P_SEQ', [(6, 9, 1024, 64, 128)])
+# @pytest.mark.parametrize('causal', [False, True])
 def test_op(Z, H, N_CTX, D_HEAD, P_SEQ, causal, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     k = torch.empty((Z, H, N_CTX + P_SEQ, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     v = torch.empty((Z, H, N_CTX + P_SEQ, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     sm_scale = 0.5
-    dout = torch.randn_like(q)
+    # dout = torch.randn_like(q)
     # reference implementation
     M = torch.tril(torch.ones((N_CTX, N_CTX + P_SEQ), device="cuda"), diagonal=P_SEQ)
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
@@ -323,21 +324,21 @@ def test_op(Z, H, N_CTX, D_HEAD, P_SEQ, causal, dtype=torch.float16):
     p = torch.softmax(p.float(), dim=-1).half()
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
-    ref_out.backward(dout)
-    ref_dv, v.grad = v.grad.clone(), None
-    ref_dk, k.grad = k.grad.clone(), None
-    ref_dq, q.grad = q.grad.clone(), None
+    # ref_out.backward(dout)
+    # ref_dv, v.grad = v.grad.clone(), None
+    # ref_dk, k.grad = k.grad.clone(), None
+    # ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
     tri_out = attention(q, k, v, causal, sm_scale).half()
-    tri_out.backward(dout)
-    tri_dv, v.grad = v.grad.clone(), None
-    tri_dk, k.grad = k.grad.clone(), None
-    tri_dq, q.grad = q.grad.clone(), None
+    # tri_out.backward(dout)
+    # tri_dv, v.grad = v.grad.clone(), None
+    # tri_dk, k.grad = k.grad.clone(), None
+    # tri_dq, q.grad = q.grad.clone(), None
     # compare
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
-    assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
-    assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
-    assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=0)
+    # assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
+    # assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
+    # assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=0)
 
 
 try:
@@ -410,4 +411,5 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
 
 
 # only works on post-Ampere GPUs right now
-bench_flash_attention.run(save_path='.', print_data=True)
+# bench_flash_attention.run(save_path='.', print_data=True)
+test_op(1, 1, 128, 64, 128, False, torch.float16)

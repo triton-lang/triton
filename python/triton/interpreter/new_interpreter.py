@@ -46,6 +46,17 @@ class TensorHandle:
         return bool(self.data.all())
 
 
+class BlockPointerHandle:
+
+    def __init__(self, base, shape, strides, offsets, tensor_shape, order):
+        self.base = base
+        self.shape = shape
+        self.strides = strides
+        self.offsets = offsets
+        self.tensor_shape = tensor_shape
+        self.order = order
+
+
 def wrap_ret(compute_ret_ty):
     def wrapper(fn):
         def wrapped(*args, **kwargs):
@@ -104,6 +115,9 @@ class Builder:
     def get_int64(self, value):
         return TensorHandle(np.array([value], dtype=np.int64), tl.int64)
 
+    def get_fp16(self, value):
+        return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
+
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
 
@@ -120,12 +134,12 @@ class Builder:
 
     # memory ops
     def create_load(self, ptr, _0, _1, is_volatile):
-        mask = np.ones_like(ptr.data, dtype=np.bool)
+        mask = np.ones_like(ptr.data, dtype=bool)
         other = None
         return self.create_masked_load(ptr, mask, other, _0, _1, is_volatile)
 
     def create_store(self, ptr, val, _0, _1):
-        mask = np.ones_like(ptr.data, dtype=np.bool)
+        mask = np.ones_like(ptr.data, dtype=bool)
         return self.create_masked_store(ptr, val, mask, None, None)
 
     def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
@@ -243,11 +257,33 @@ class Builder:
         dtype_tt = ptr.dtype.element_ty
         return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
 
-    # def create_tensor_pointer_load(self, ptr, boundaryCheck, paddingOption, cacheModifier, evictionPolicy, isVolatile):
-    #     pass
+    def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy, is_volatile):
+        ptrs = ptr.base.data
+        shapes = [int(ptr.tensor_shape[dim]) for dim in range(len(ptr.tensor_shape))]
+        masks = np.ones(shapes, dtype=bool)
+        # padding_value = {None: 0., "zero": 0., "nan": float('nan')}[padding_option]
+        for dim in range(len(shapes)):
+            bcast_dims = [1] * len(shapes)
+            bcast_dims[dim] = shapes[dim]
+            off = (ptr.offsets[dim].data + np.arange(shapes[dim])).reshape(bcast_dims)
+            ptrs = ptrs + off * ptr.strides[dim].data
+            masks = np.logical_and(masks, off < ptr.shape[dim].data)
+        # other = np.full(shapes, padding_value, dtype=self.np_dtype(ptr.base.dtype.element_ty))
+        ptrs = TensorHandle(ptrs, ptr.base.dtype)
+        return self.create_masked_load(ptrs, masks, None, cache_modifier, eviction_policy, is_volatile)
 
-    # def create_tensor_pointer_store(self, ptr, value, boundaryCheck, cacheModifier, evictionPolicy):
-    #     pass
+    def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy):
+        ptrs = ptr.base.data
+        shapes = [int(ptr.tensor_shape[dim]) for dim in range(len(ptr.tensor_shape))]
+        masks = np.ones(shapes, dtype=bool)
+        for dim in range(len(shapes)):
+            bcast_dims = [1] * len(shapes)
+            bcast_dims[dim] = shapes[dim]
+            off = (ptr.offsets[dim].data + np.arange(shapes[dim])).reshape(bcast_dims)
+            ptrs = ptrs + off * ptr.strides[dim].data
+            masks = np.logical_and(masks, off < ptr.shape[dim].data)
+        ptrs = TensorHandle(ptrs, ptr.base.dtype)
+        return self.create_masked_store(ptrs, value, masks, cache_modifier, eviction_policy)
 
     def create_expand_dims(self, arg, axis):
         return TensorHandle(np.expand_dims(arg.data, axis), arg.dtype)
@@ -306,11 +342,15 @@ class Builder:
     # def create_barrier(self):
     #     pass
 
-    # def create_make_block_ptr(self, base, shape, strides, offsets, tensorShape, order):
-    #     pass
+    def create_make_block_ptr(self, base, shape, strides, offsets, tensor_shape, order):
+        return BlockPointerHandle(base, shape, strides, np.array(offsets), tensor_shape, order)
 
-    # def create_advance(self, ptr, offsets):
-    #     pass
+    def create_advance(self, ptr, offsets):
+        assert len(ptr.offsets) == len(offsets)
+        ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, ptr.offsets, ptr.tensor_shape, ptr.order)
+        for i in range(len(offsets)):
+            ret.offsets[i].data += offsets[i].data
+        return ret
 
 
 def patch_attr(obj, name, member, builder):
@@ -328,6 +368,58 @@ def _patch_lang_core(lang, builder):
     for name, member in inspect.getmembers(lang):
         if tl.core.is_builtin(member):
             patch_attr(lang, name, member, builder)
+    # reduce is better off with a separate patch due to how
+    # the builder currently interfaces with custom functions
+
+    def _new_reduce(input, axis, combine_fn):
+        fn = combine_fn.fn.__name__
+        mapping = {
+            'maximum': np.max,
+            '_sum_combine': np.sum,
+        }
+        ret = mapping[fn](input.handle.data, axis=axis)
+        ret_type = tl.block_type(input.dtype, ret.shape)
+        return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
+
+    lang.reduce = _new_reduce
+
+
+def _patch_lang_math(lang, builder):
+    math = lang.math
+    mapping = {
+        'abs': 'abs',
+        'acos': 'arccos',
+        'asin': 'arcsin',
+        'exp2': 'exp2',
+        'log2': 'log2',
+        'max': 'maximum',
+    }
+
+    def make_numpy(name):
+        def impl(*args, **kwargs):
+            ret_type = args[0].type  # TODO: incorrect
+            ret_dtype = args[0].dtype  # TODO: incorrect
+            args = [arg.handle.data for arg in args]
+            kwargs = {k: v.handle.data for k, v in kwargs.items()}
+            ret = getattr(np, mapping[name])(*args, **kwargs)
+            ret = tl.core.tensor(TensorHandle(ret, ret_dtype), ret_type)
+            return ret
+        return impl
+
+    def make_fallback(name):
+        def fallback(*args, **kwargs):
+            raise NotImplementedError(f"""
+{name} not supported in interpreter mode: no known numpy implementation.
+If you think that {name} in fact does have a numpy implementation, please add it
+to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
+""")
+        return fallback
+
+    for name, member in inspect.getmembers(math):
+        if name in mapping:
+            setattr(math, name, make_numpy(name))
+        else:
+            setattr(math, name, make_fallback(name))
 
 
 def _implicit_cvt(arg):
@@ -359,6 +451,7 @@ class GridExecutor:
         assert len(lang) == 1, "triton.language must be visible from within jit'd function"
         _patch_lang_tensor(getattr(lang[0], 'tensor'), builder)
         _patch_lang_core(lang[0], builder)
+        _patch_lang_math(lang[0], builder)
 
     def __call__(self, *args_dev, **kwargs):
         # removes reserved keywords from kwargs
