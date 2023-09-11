@@ -63,8 +63,9 @@ def ty_to_cpp(ty):
 
 
 def generate_launcher(constants, signature, ids):
-    start_desc = len(signature)
-    signature = generate_cu_signature(constants, signature, ids)
+    # Record the end of regular arguments;
+    # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
+    signature, desc_start_idx = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -99,7 +100,7 @@ def generate_launcher(constants, signature, ids):
 
     # generate glue code
     folded_without_constexprs = [c for c in ids['ids_of_folded_args'] if c not in ids['ids_of_const_exprs']]
-    params = [i for i in signature.keys() if i >= start_desc or (i not in constants and i not in folded_without_constexprs)]
+    params = [i for i in signature.keys() if i >= desc_start_idx or (i not in constants and i not in folded_without_constexprs)]
     src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
