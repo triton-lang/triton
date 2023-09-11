@@ -501,24 +501,30 @@ def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.te
     if isinstance(value, tl.tensor):
         assert value.numel.value == 1, "only accepts size-1 tensor"
         value = cast(value, dtype, builder)
-        ret_ty = tl.block_type(value.dtype, shape)
-        return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
     else:
         # scalar
+        if dtype is None:
+            raise ValueError("dtype must be specified when value is not a tensor")
         if value == 0:
             value = builder.get_null_value(dtype.to_ir(builder))
         else:
             get_value_fn = getattr(builder, f"get_{dtype.name}")
             value = get_value_fn(value)
-        if dtype is None:
-            raise ValueError("dtype must be specified when value is not a tensor")
-        ret_ty = tl.block_type(dtype, shape)
-        return tl.tensor(builder.create_splat(value, shape), ret_ty)
+        value = tl.tensor(value, dtype)
+
+    return splat(value, shape, builder)
 
 
 # ===----------------------------------------------------------------------===//
 #                               Shape Manipulation
 # ===----------------------------------------------------------------------===//
+
+def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
+    assert not value.type.is_block(), "Cannot splat a block tensor"
+    if len(shape) == 0:
+        return value
+    ret_ty = tl.block_type(value.dtype, shape)
+    return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
 
 
 def view(input: tl.tensor,

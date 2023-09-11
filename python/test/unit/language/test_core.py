@@ -2467,7 +2467,8 @@ def test_dot_mulbroadcastred(in_dtype, device):
 
 
 @pytest.mark.parametrize("dtype_str", int_dtypes + uint_dtypes + float_dtypes + ['bfloat16'])
-def test_full(dtype_str, device):
+@pytest.mark.parametrize("shape", [(), (1,), (128,)])
+def test_full(dtype_str, shape, device):
     if dtype_str in uint_dtypes and not hasattr(torch, dtype_str):
         # PyTorch only has unsigned 8, but not 16, 32, or 64
         dtype = getattr(torch, dtype_str[1:])  # uintx -> intx
@@ -2478,21 +2479,28 @@ def test_full(dtype_str, device):
     @triton.jit
     def kernel_static(out):
         a = GENERATE_TEST_HERE
+        tl.static_assert(a.shape == SHAPE)
         out_ptr = out + tl.arange(0, 128)[:]
         tl.store(out_ptr, a)
 
     @triton.jit
     def kernel_dynamic(out, val, dtype: tl.constexpr):
-        a = tl.full((128,), val, dtype)
+        a = tl.full(SHAPE, val, dtype)
+        tl.static_assert(a.shape == SHAPE)
         out_ptr = out + tl.arange(0, 128)[:]
         tl.store(out_ptr, a)
 
-    kernel_static_patched = patch_kernel(kernel_static, {'GENERATE_TEST_HERE': f"tl.full((128,), 2, tl.{dtype_str})"})
+    kernel_static_patched = patch_kernel(kernel_static, {
+        'GENERATE_TEST_HERE': f"tl.full({shape}, 2, tl.{dtype_str})",
+        'SHAPE': str(shape),
+    })
     out_static = torch.zeros((128), dtype=dtype, device=device)
     kernel_static_patched[(1,)](out_static)
-    out_dynamic = torch.zeros((128), dtype=dtype, device=device)
-    kernel_dynamic[(1,)](out_dynamic, 2, getattr(triton.language, dtype_str))
     assert torch.all(out_static == 2)
+
+    kernel_dynamic_patched = patch_kernel(kernel_dynamic, {'SHAPE': str(shape)})
+    out_dynamic = torch.zeros((128), dtype=dtype, device=device)
+    kernel_dynamic_patched[(1,)](out_dynamic, 2, getattr(triton.language, dtype_str))
     assert torch.all(out_dynamic == 2)
 
 
