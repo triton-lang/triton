@@ -387,6 +387,11 @@ struct ConvertTritonGPUToLLVM
   using ConvertTritonGPUToLLVMBase<
       ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
 
+  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
+                         mlir::triton::gpu::TMAMetadataTy *tmaMetadata)
+      : ConvertTritonGPUToLLVMBase({computeCapability, target}),
+        tmaMetadata(tmaMetadata) {}
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
@@ -576,6 +581,7 @@ private:
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
            CacheKeyDenseMapInfo>
       indexCache;
+  mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
@@ -869,9 +875,11 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
 }
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(const ConvertTritonGPUToLLVMOptions &options) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(options);
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass(
+    int32_t computeCapability, Target target,
+    mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target,
+                                                  tmaMetadata);
 }
 
 } // namespace triton
