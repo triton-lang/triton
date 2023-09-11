@@ -258,8 +258,8 @@ class Builder:
         return TensorHandle(ptr.data + (dtype_tt.primitive_bitwidth // 8) * offset.data.astype(np.uint64), ptr.dtype)
 
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy, is_volatile):
-        ptrs = ptr.base.data
         shapes = [int(ptr.tensor_shape[dim]) for dim in range(len(ptr.tensor_shape))]
+        ptrs = np.broadcast_to(ptr.base.data, shapes)
         masks = np.ones(shapes, dtype=bool)
         # padding_value = {None: 0., "zero": 0., "nan": float('nan')}[padding_option]
         for dim in range(len(shapes)):
@@ -273,8 +273,8 @@ class Builder:
         return self.create_masked_load(ptrs, masks, None, cache_modifier, eviction_policy, is_volatile)
 
     def create_tensor_pointer_store(self, ptr, value, boundary_check, cache_modifier, eviction_policy):
-        ptrs = ptr.base.data
         shapes = [int(ptr.tensor_shape[dim]) for dim in range(len(ptr.tensor_shape))]
+        ptrs = np.broadcast_to(ptr.base.data, shapes)
         masks = np.ones(shapes, dtype=bool)
         for dim in range(len(shapes)):
             bcast_dims = [1] * len(shapes)

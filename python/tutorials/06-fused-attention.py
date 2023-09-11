@@ -311,9 +311,9 @@ attention = _attention.apply
 # @pytest.mark.parametrize('causal', [False, True])
 def test_op(Z, H, N_CTX, D_HEAD, P_SEQ, causal, dtype=torch.float16):
     torch.manual_seed(20)
-    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    k = torch.empty((Z, H, N_CTX + P_SEQ, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    v = torch.empty((Z, H, N_CTX + P_SEQ, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=1., std=0.).requires_grad_()
+    k = torch.empty((Z, H, N_CTX + P_SEQ, D_HEAD), dtype=dtype, device="cuda").normal_(mean=1., std=0.).requires_grad_()
+    v = torch.empty((Z, H, N_CTX + P_SEQ, D_HEAD), dtype=dtype, device="cuda").normal_(mean=1., std=0.).requires_grad_()
     sm_scale = 0.5
     # dout = torch.randn_like(q)
     # reference implementation
@@ -335,6 +335,8 @@ def test_op(Z, H, N_CTX, D_HEAD, P_SEQ, causal, dtype=torch.float16):
     # tri_dk, k.grad = k.grad.clone(), None
     # tri_dq, q.grad = q.grad.clone(), None
     # compare
+    print(ref_out)
+    print(tri_out)
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
     # assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
     # assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=0)
