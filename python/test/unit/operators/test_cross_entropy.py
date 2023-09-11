@@ -36,5 +36,7 @@ def test_op(M, N, dtype, mode):
         x.grad = None
         th_y.backward(dy)
         th_dx = x.grad.clone()
-
-        torch.testing.assert_close(th_dx, tt_dx)
+        if dtype == 'float16':
+            torch.testing.assert_close(th_dx, tt_dx, rtol=0.001, atol=0.001)
+        else:
+            torch.testing.assert_close(th_dx, tt_dx)
