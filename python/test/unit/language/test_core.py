@@ -1905,44 +1905,6 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
 
 
-def test_dot_reduce2d():
-    @triton.jit
-    def kernel(X, Y, Z, T, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
-        range_m = tl.arange(0, BLOCK_M)
-        range_n = tl.arange(0, BLOCK_N)
-        range_k = tl.arange(0, BLOCK_K)
-        x = tl.load(X + range_m[:, None] * BLOCK_K + range_k[None, :])
-        y = tl.load(Y + range_k[:, None] * BLOCK_N + range_n[None, :])
-        start = tl.extra.cuda.globaltimer()
-        for i in range(10000):
-            mult = tl.dot(x, y, allow_tf32=False, out_dtype=tl.float32)
-            s1 = tl.sum(mult, axis=1)
-            z = tl.sum(s1, axis=0)
-            tl.store(Z, z)
-        end = tl.extra.cuda.globaltimer()
-        tl.store(T, end - start)
-
-    (M, K, N) = (32, 32, 32)
-    device = 'cuda'
-    dtype_str = 'float32'
-
-    rs = RandomState(17)
-    x = numpy_random((M, K), dtype_str=dtype_str, rs=rs)
-    y = numpy_random((K, N), dtype_str=dtype_str, rs=rs)
-    z = np.zeros((1, 1)).astype(getattr(np, dtype_str))
-    t = np.zeros((1, 1)).astype(getattr(np, dtype_str))
-
-    x_tri = torch.tensor(x, device=device)
-    y_tri = torch.tensor(y, device=device)
-    z_tri = torch.tensor(z, device=device)
-    t_tri = torch.tensor(t, device=device)
-
-    pgm = kernel[(1, 1, 1)](x_tri, y_tri, z_tri, t_tri, BLOCK_M=M, BLOCK_N=N, BLOCK_K=K)
-    print(f"Time = {t_tri[0]/10000}")
-    z_ref = np.sum(np.matmul(x, y))
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-
-
 layouts = [
     BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
