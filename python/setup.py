@@ -85,7 +85,7 @@ def get_llvm_package_info():
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
     name = f'llvm+mlir-17.0.0-{arch}-{system_suffix}-{release_suffix}'
-    version = "llvm-17.0.0-c5dede880d17"
+    version = "llvm-17.0.0-0954dc3fb921"
     url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
     # FIXME: remove the following once github.com/ptillet/triton-llvm-releases has arm64 llvm releases
     if arch == 'arm64' and 'linux' in system_suffix:
