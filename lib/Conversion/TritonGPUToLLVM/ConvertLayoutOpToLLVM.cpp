@@ -237,12 +237,24 @@ private:
     llvm_unreachable("unexpected layout in getMultiDimOffset");
   }
 
+  SmallVector<Value> wrapMultiDim(ConversionPatternRewriter &rewriter,
+                                  Location loc, ArrayRef<Value> multiDimOffset,
+                                  ArrayRef<unsigned> shape) const {
+    unsigned rank = shape.size();
+    SmallVector<Value> multiDimOffsetWrapped(rank);
+    for (unsigned d = 0; d < rank; ++d) {
+      multiDimOffsetWrapped[d] = urem(multiDimOffset[d], i32_val(shape[d]));
+    }
+    return multiDimOffsetWrapped;
+  }
+
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
                       ArrayRef<unsigned> numCTAsEachRep,
                       ArrayRef<unsigned> multiDimRepId, unsigned vec,
                       ArrayRef<unsigned> paddedRepShape,
+                      ArrayRef<unsigned> origRepShape,
                       ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
                       Value smemBase) const {
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
@@ -286,8 +298,10 @@ private:
         SmallVector<Value> multiDimOffset =
             getMultiDimOffset(layout, loc, rewriter, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
-        Value offset =
-            linearize(rewriter, loc, multiDimOffset, paddedRepShape, outOrd);
+        SmallVector<Value> multiDimOffsetWrapped =
+            wrapMultiDim(rewriter, loc, multiDimOffset, origRepShape);
+        Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
+                                 paddedRepShape, outOrd);
         auto elemPtrTy = ptr_ty(llvmElemTy, 3);
         Value ptr = gep(elemPtrTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
@@ -575,6 +589,7 @@ private:
                                                      rewriter, srcTy);
     unsigned inVec = 0;
     unsigned outVec = 0;
+    auto origRepShape = getRepShapeForCvtLayout(op, inVec, outVec);
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
     if (getElementTypeOrSelf(op.getType())
             .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>()) {
@@ -618,7 +633,7 @@ private:
         else
           processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
                          inNumCTAsEachRep, multiDimRepId, inVec, paddedRepShape,
-                         outOrd, vals, smemBase);
+                         origRepShape, outOrd, vals, smemBase);
       } else {
         assert(0 && "ConvertLayout with input layout not implemented");
         return failure();
@@ -651,7 +666,8 @@ private:
         else
           processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
                          outNumCTAsEachRep, multiDimRepId, outVec,
-                         paddedRepShape, outOrd, outVals, smemBase);
+                         paddedRepShape, origRepShape, outOrd, outVals,
+                         smemBase);
       } else {
         assert(0 && "ConvertLayout with output layout not implemented");
         return failure();

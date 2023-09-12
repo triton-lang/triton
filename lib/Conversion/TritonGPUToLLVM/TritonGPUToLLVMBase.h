@@ -500,10 +500,10 @@ public:
     auto dstElemTy = dstTy.getElementType();
     auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
     auto outOrd = dstSharedLayout.getOrder();
-    unsigned inVec =
-        inOrd == outOrd
-            ? triton::gpu::getContigPerThread(srcDistributedLayout)[inOrd[0]]
-            : 1;
+    unsigned inVec = inOrd == outOrd
+                         ? triton::gpu::getUniqueContigPerThread(
+                               srcDistributedLayout, srcShape)[inOrd[0]]
+                         : 1;
     unsigned outVec = dstSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
