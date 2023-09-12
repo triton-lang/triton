@@ -1825,7 +1825,7 @@ layouts = [
 def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, device):
     if is_hip():
         pytest.skip("test_reduce_layouts is not supported in HIP")
-    if reduce_op == "sum" and dtype_str == "float16":
+    if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
@@ -1902,7 +1902,10 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
     pgm = kernel[(1, 1, 1)](x_tri, x_tri.stride(0), z_tri)
     z_ref = numpy_op(x) if reduce2d else numpy_op(x, axis=axis, keepdims=True)
 
-    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
+    if dtype_str == 'float16':
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-2)
+    else:
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
 
 
 layouts = [
