@@ -167,7 +167,7 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, int i, const std::string &shuffleType,
-                            const std::string &clamp, Value laneId) {
+                            const std::string &clamp, Value laneId = Value()) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -216,6 +216,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
       (*shfl)(dOpr, aOpr, maskOpr);
     }
   } else { // shuffle_up
+    assert(shuffleType == "up" && "Only shfl_bfly and shfl_up are supported");
     Value mask = icmp_slt(laneId, i32_val(i));
     Value delta = sub(laneId, i32_val(i));
     Value index = select(mask, laneId, delta);
@@ -245,7 +246,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
-  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f", nullptr);
+  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
