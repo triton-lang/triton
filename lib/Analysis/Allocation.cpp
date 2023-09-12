@@ -108,7 +108,7 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
   auto repShape = getRepShapeForCvtLayout(op, inVec, outVec);
 
-  if (repShape.size() == 1)
+  if (repShape.size() <= 1)
     return repShape;
   unsigned paddedDim = 1;
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
