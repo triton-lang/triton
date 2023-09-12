@@ -1848,12 +1848,18 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
           tt.reduce.return %17 : {ty}
         }}) {{axis = 0 : i32}} : (tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>) -> {ty}
         tt.store %arg2, %14 {{cache = 1 : i32, evict = 1 : i32}} : {ty}
+        tt.return
+        }}
+        }}
     """ if reduce2d else f"""
         %14 = tt.splat %arg2 : (!tt.ptr<{ty}>) -> tensor<{rdims_2d}x!tt.ptr<{ty}>, #blocked>
         %15 = tt.addptr %14, {store_range} : tensor<{rdims_2d}x!tt.ptr<{ty}>, #blocked>, tensor<{rdims_2d}xi32, #blocked>
         %16 = {GPU_DIALECT}.convert_layout %13 : (tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>) -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #blocked}}>>
         %17 = tt.expand_dims %16 {{axis = {axis} : i32}} : (tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #blocked}}>>) -> tensor<{rdims_2d}x{ty}, #blocked>
         tt.store %15, %17 {{cache = 1 : i32, evict = 1 : i32}} : tensor<{rdims_2d}x{ty}, #blocked>
+        tt.return
+        }}
+        }}
     """
 
     ir = f"""
@@ -1879,11 +1885,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
           %17 = {arith_op} %arg3, %arg4 : {ty}
           tt.reduce.return %17 : {ty}
         }}) {{axis = {axis} : i32}} : (tensor<{M}x{N}x{ty}, #src>) -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>
-    """ + epilogue + f"""
-        tt.return
-    }}
-    }}
-    """
+    """ + epilogue
 
     import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
