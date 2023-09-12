@@ -604,16 +604,16 @@ struct TritonExternElementwisePattern
     : public OpConversionPattern<triton::ExternElementwiseOp> {
   using OpConversionPattern<triton::ExternElementwiseOp>::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(
-      triton::ExternElementwiseOp op,
-      typename triton::ExternElementwiseOp::Adaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(triton::ExternElementwiseOp op,
+                  typename triton::ExternElementwiseOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<triton::ExternElementwiseOp>(
-            op, retType, adaptor.getOperands(), op.getLibnameAttr(),
-            op.getLibpathAttr(), op.getSymbolAttr(), op.getPureAttr()),
-        adaptor.getAttributes());
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExternElementwiseOp>(
+                      op, retType, adaptor.getOperands(), op.getLibnameAttr(),
+                      op.getLibpathAttr(), op.getSymbolAttr(),
+                      op.getPureAttr()),
+                  adaptor.getAttributes());
     return success();
   }
 };
