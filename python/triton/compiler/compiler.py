@@ -331,6 +331,17 @@ def add_cuda_stages(arch, extern_libs, stages):
                        lambda src: ptx_to_cubin(src, arch))
 
 
+def get_sass(cubin_asm, fun=None):
+    fd, path = tempfile.mkstemp()
+    try:
+        with open(fd, 'wb') as cubin:
+            cubin.write(cubin_asm)
+        sass = extract(path, fun)
+    finally:
+        os.remove(path)
+    return sass
+
+
 def compile(fn, **kwargs):
     # Get device type to decide which backend should be used
     device_type = kwargs.get("device_type", "cuda")
@@ -492,7 +503,6 @@ def compile(fn, **kwargs):
                     metadata_group[extra_file_name] = fn_cache_manager.put(next_module[1], extra_file_name)
                 else:
                     metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
-                    fn_cache_manager.put(next_module, ir_filename)
             else:
                 if ir_name == "amdgcn":
                     extra_file_name = f"{name}.hsaco_path"
@@ -504,6 +514,11 @@ def compile(fn, **kwargs):
 
         if ir_name == "cubin":
             asm[ir_name] = next_module
+            sass_ir = "sass"
+            sass_fname = f"{name}.{sass_ir}"
+            asm[sass_ir] = get_sass(next_module)
+            metadata_group[sass_fname] = fn_cache_manager.put(asm[sass_ir], sass_fname)
+
         elif ir_name == "amdgcn":
             asm[ir_name] = str(next_module[0])
         else:
@@ -656,16 +671,3 @@ class CompiledKernel:
                            self.clusterDims[1], self.clusterDims[2], self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
         return runner
-
-    def get_sass(self, fun=None):
-        if 'sass' in self.asm:
-            return self.asm['sass']
-        fd, path = tempfile.mkstemp()
-        try:
-            with open(fd, 'wb') as cubin:
-                cubin.write(self.asm['cubin'])
-            self.sass = extract(path, fun)
-        finally:
-            os.remove(path)
-        self.asm['sass'] = self.sass
-        return self.sass
