@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "TypeConverter.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 namespace mlir {
 
