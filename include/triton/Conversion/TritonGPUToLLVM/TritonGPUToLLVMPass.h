@@ -21,18 +21,8 @@ enum Target { NVVM, ROCDL, Default = NVVM };
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-<<<<<<< HEAD
-#ifdef USE_ROCM
-createConvertTritonGPUToLLVMPass(int computeCapability = 80,
-                                 bool isROCM = true);
-#else
-createConvertTritonGPUToLLVMPass(int computeCapability = 80,
-                                 bool isROCM = false);
-#endif
-=======
 createConvertTritonGPUToLLVMPass(const ConvertTritonGPUToLLVMOptions &options);
 
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 } // namespace triton
 
 } // namespace mlir

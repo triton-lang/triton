@@ -324,12 +324,8 @@ public:
     // then (x + y) XOR z = 0byyyyxxxx XOR 0b00000zzzz = (x XOR z) + y
     // This means that we can use some immediate offsets for shared memory
     // operations.
-<<<<<<< HEAD
     resElemTy = getTypeConverter()->convertType(resElemTy);
-    auto dstPtrTy = ptr_ty(resElemTy, 3);
-=======
     auto dstPtrTy = ptr_ty(getTypeConverter()->convertType(resElemTy), 3);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
     auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
     Value dstPtrBase = gep(dstPtrTy, smemObj.base, dstOffset);
 
@@ -555,13 +551,8 @@ public:
       auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
       auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
       auto order = triton::gpu::getOrder(layout);
-<<<<<<< HEAD
-      auto shapePerCTA = triton::gpu::getShapePerCTA(layout, shape);
-      Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
-=======
       auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
-      Value warpSize = i32_val(32);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+      Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
       Value laneId = urem(tid, warpSize);
       Value warpId = udiv(tid, warpSize);
       SmallVector<Value> multiDimWarpId =
@@ -694,19 +685,13 @@ public:
                                                         blockedLayout, type);
       } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
         if (mmaLayout.isVolta())
-<<<<<<< HEAD
-          result = emitBaseIndexForMmaLayoutV1(loc, rewriter, mmaLayout, type);
-        if (mmaLayout.isAmpere())
-          result = emitBaseIndexForMmaLayoutV2(loc, rewriter, mmaLayout, type);
-      } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-        result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
-=======
           result = emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter,
                                                         mmaLayout, type);
         if (mmaLayout.isAmpere() || mmaLayout.isHopper())
           result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter,
                                                           mmaLayout, type);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+      } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+        result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
       } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
         auto parentLayout = sliceLayout.getParent();
         auto parentShape = sliceLayout.paddedShape(type.getShape());
@@ -764,7 +749,7 @@ public:
     const unsigned elemsPerThreadPerGroup = 4;
     auto warpSize = getWarpSize(mfmaLayout);
     assert(warpSize == 64);
-    auto shapePerCta = getShapePerCTA(mfmaLayout);
+    auto shapePerCta = getShapePerCTATile(mfmaLayout);
     for (unsigned block = 0; block < numGroups; block++) {
       unsigned rowOrColOffset = block * elemsPerThreadPerGroup * warpSize / 32;
       for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
@@ -802,14 +787,11 @@ public:
         result = emitIndicesForDistributedLayout(loc, b, blocked, type,
                                                  withCTAOffset);
       } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
-<<<<<<< HEAD
-        result = emitIndicesForDistributedLayout(loc, b, mma, type);
-      } else if (auto mfma = layout.dyn_cast<MfmaEncodingAttr>()) {
-        result = emitIndicesForDistributedLayout(loc, b, mfma, type);
-=======
         result =
             emitIndicesForDistributedLayout(loc, b, mma, type, withCTAOffset);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+      } else if (auto mfma = layout.dyn_cast<MfmaEncodingAttr>()) {
+        result = 
+            emitIndicesForDistributedLayout(loc, b, mfma, type, withCTAOffset);
       } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
         result =
             emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
@@ -848,7 +830,7 @@ private:
       const BlockedEncodingAttr &blockedLayout, RankedTensorType type) const {
     auto shape = type.getShape();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(triton::gpu::getWarpSize(blocked_layout));
+    Value warpSize = i32_val(triton::gpu::getWarpSize(blockedLayout));
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blockedLayout.getSizePerThread();
@@ -1208,7 +1190,7 @@ private:
 
     auto tensorShape = type.getShape();
     SmallVector<SmallVector<unsigned>> offsets;
-    auto shapePerCta = getShapePerCTA(mfmaLayout);
+    auto shapePerCta = getShapePerCTA(mfmaLayout, tensorShape);
 
     SmallVector<unsigned> numCTAPerDim(2);
     for (unsigned d = 0; d < 2; ++d) {

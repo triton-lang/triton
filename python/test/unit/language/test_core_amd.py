@@ -1005,7 +1005,7 @@ def deserialize_fp8(np_data, in_dtype):
 #         return np_data
 
 
-@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4, tl.float8e5])
+@pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4b15x4, tl.float8e4nv, tl.float8e5])
 @pytest.mark.parametrize("out_dtype", [torch.float16, torch.float32])
 def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     """
@@ -1056,9 +1056,9 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
                                         [32, 32, 128],
                                         [128, 128, 64],
                                         [64, 128, 128]]
-                          for ab_type in [[tl.float8e4, tl.float16],
+                          for ab_type in [[tl.float8e4nv, tl.float16],
                                            [tl.float8e5, tl.float16],
-                                           [tl.float16, tl.float8e4],
+                                           [tl.float16, tl.float8e4nv],
                                            [tl.float16, tl.float8e5]]
                           for out_dtype in [torch.float16, torch.float32]
                         ])

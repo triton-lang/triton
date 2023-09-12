@@ -36,11 +36,8 @@
 #include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
-<<<<<<< HEAD
 #include "triton/Target/HSACO/HSACOTranslation.h"
-=======
 #include "triton/Target/PTX/TmaMetadata.h"
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 

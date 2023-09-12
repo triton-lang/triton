@@ -249,7 +249,6 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
         return {};
       }
     } else if (parentLayout.isa<MfmaEncodingAttr>()) {
-      auto parentShapePerCTA = getShapePerCTA(parentLayout);
       auto opIdx = dotLayout.getOpIdx();
       if (opIdx == 0) {
         return {4, 1};
@@ -381,7 +380,7 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
       }
     } else if (auto parentMfmaLayout =
                    parentLayout.dyn_cast<MfmaEncodingAttr>()) {
-      auto parentShapePerCTA = getShapePerCTA(parentLayout, tensorShape);
+      auto parentShapePerCTA = getShapePerCTATile(parentLayout, tensorShape);
       auto opIdx = dotLayout.getOpIdx();
 
       if (opIdx == 0) {
@@ -691,11 +690,7 @@ static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
                                         bool &value, StringRef desc) {
   auto boolAttr = attr.dyn_cast<BoolAttr>();
   if (!boolAttr) {
-<<<<<<< HEAD
-    parser.emitError(parser.getNameLoc(), "expected bool type in ") << desc;
-=======
     parser.emitError(parser.getNameLoc(), "expected an bool type in ") << desc;
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
     return failure();
   }
   value = boolAttr.getValue();
@@ -862,11 +857,11 @@ MmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   return elemsPerThread;
 }
 
-<<<<<<< HEAD
 unsigned MfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                   Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
-=======
+}
+
 unsigned
 MmaEncodingAttr::getElemsPerThreadOfOperand(int opIdx,
                                             ArrayRef<int64_t> shape) const {
@@ -896,7 +891,6 @@ MmaEncodingAttr::getElemsPerThreadOfOperand(int opIdx,
     }
   }
   return res;
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 }
 
 unsigned MmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
@@ -971,7 +965,6 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 
 unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
-<<<<<<< HEAD
   if (auto mfmaParent = getParent().dyn_cast<MfmaEncodingAttr>()) {
     int warpsPerCTAM = mfmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mfmaParent.getWarpsPerCTA()[1];
@@ -980,9 +973,7 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
     auto rep = getMFMARep(shape, eltTy);
     return rep[0] * rep[1];
   }
-=======
   auto shapePerCTA = getShapePerCTA(*this, shape);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
@@ -1247,7 +1238,7 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   unsigned nonKDim = 0;
-  SmallVector<unsigned, 2> warpsPerCTA;
+  SmallVector<unsigned> warpsPerCTA;
   bool isTransposed;
 
   for (const NamedAttribute &attr : dict) {
@@ -1438,11 +1429,7 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>();
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", parent = " << getParent();
-<<<<<<< HEAD
   if ((mmaParent && mmaParent.isAmpere()) || getParent().isa<MfmaEncodingAttr>())
-=======
-  if (mmaParent && mmaParent.isAmpere())
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
     printer << ", kWidth = " << getKWidth();
   printer << "}>";
 }

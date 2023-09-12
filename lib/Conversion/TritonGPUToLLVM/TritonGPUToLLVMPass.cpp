@@ -20,11 +20,11 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-<<<<<<< HEAD
-=======
+#ifndef USE_ROCM
+#else
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#endif
 #include "triton/Tools/Sys/GetPlatform.hpp"
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 
 #include "BarrierOpToLLVM.h"
 #include "ClusterOpsToLLVM.h"
@@ -70,19 +70,13 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-<<<<<<< HEAD
-    if (isROCM) {
-      addLegalDialect<ROCDL::ROCDLDialect>();
-      addLegalDialect<mlir::scf::SCFDialect>();
-    } else {
-=======
     switch (target) {
     case Target::NVVM:
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
       addLegalDialect<NVVM::NVVMDialect>();
       break;
     case Target::ROCDL:
       addLegalDialect<ROCDL::ROCDLDialect>();
+      addLegalDialect<mlir::scf::SCFDialect>();
       break;
     }
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -377,19 +371,13 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-<<<<<<< HEAD
-    if (isROCM) {
-      addLegalDialect<ROCDL::ROCDLDialect>();
-      addLegalDialect<mlir::scf::SCFDialect>();
-    } else {
-=======
     switch (target) {
     case Target::NVVM:
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
       addLegalDialect<NVVM::NVVMDialect>();
       break;
     case Target::ROCDL:
       addLegalDialect<ROCDL::ROCDLDialect>();
+      addLegalDialect<mlir::scf::SCFDialect>();
       break;
     }
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
@@ -419,14 +407,10 @@ struct ConvertTritonGPUToLLVM
 
     // Preprocess
     decomposeFp8e4b15Convert(mod);
-<<<<<<< HEAD
-    decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
-#ifdef USE_ROCM
-    decomposeMfmaToDotOperand(mod, numWarps, threadsPerWarp);
-#endif
-=======
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+#ifdef USE_ROCM
+    decomposeMfmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
+#endif
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
     decomposeMixedModeDotOp(mod);
@@ -699,8 +683,8 @@ private:
   }
 
 #ifdef USE_ROCM
-  void decomposeMfmaToDotOperand(ModuleOp mod, int numWarps,
-                                 int threadsPerWarp) const {
+  void decomposeMfmaToDotOperand(ModuleOp mod, int numWarps, int threadsPerWarp,
+                                 int numCTAs) const {
     // Replace `mfma -> dot_op` with `mfma -> blocked -> dot_op`
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -716,7 +700,7 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMfma),
-                getOrder(srcMfma), numWarps, threadsPerWarp));
+                getOrder(srcMfma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(

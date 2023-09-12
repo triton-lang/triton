@@ -10,15 +10,14 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp16_to_Fp8E5M2(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+                   const SmallVector<Value> &v) {
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
   Value fp16x2Vec0 = undef(fp16x2VecTy);
   Value fp16x2Vec1 = undef(fp16x2VecTy);
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v0, i32_val(0));
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v1, i32_val(1));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v2, i32_val(0));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v3, i32_val(1));
+  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[0], i32_val(0));
+  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[1], i32_val(1));
+  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[2], i32_val(0));
+  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[3], i32_val(1));
 
   Value a0 = bitcast(fp16x2Vec0, i32_ty);
   Value a1 = bitcast(fp16x2Vec1, i32_ty);
@@ -58,20 +57,19 @@ const std::string Fp16_to_Fp8E5M2 =
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp8E5M2_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+                   const SmallVector<Value> &v) {
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = undef(fp8x4VecTy);
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
+  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
+  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
   a0 = bitcast(a0, i32_ty);
   Value a1 = undef(fp8x4VecTy);
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
+  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
+  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
   a1 = bitcast(a1, i32_ty);
 
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
@@ -94,21 +92,20 @@ const std::string Fp8E5M2_to_Fp16 = "{                           \n"
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp8E5M2_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+                   const SmallVector<Value> &v) {
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = undef(fp8x4VecTy);
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
+  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
+  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
   a0 = bitcast(a0, i32_ty);
 
   Value a1 = undef(fp8x4VecTy);
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
+  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
+  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
   a1 = bitcast(a1, i32_ty);
 
   Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
@@ -155,15 +152,14 @@ const std::string Fp8E5M2_to_Bf16 =
 #ifdef USE_ROCM
 static SmallVector<Value>
 Bf16_to_Fp8E5M2(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+                   const SmallVector<Value> &v) {
   auto bf16x2VecTy = vec_ty(i16_ty, 2);
   Value bf16x2Vec0 = undef(bf16x2VecTy);
   Value bf16x2Vec1 = undef(bf16x2VecTy);
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v0, i32_val(0));
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v1, i32_val(1));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v2, i32_val(0));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v3, i32_val(1));
+  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
+  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[1], i32_val(1));
+  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[2], i32_val(0));
+  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[3], i32_val(1));
   bf16x2Vec0 = bitcast(bf16x2Vec0, i32_ty);
   bf16x2Vec1 = bitcast(bf16x2Vec1, i32_ty);
 
@@ -276,21 +272,20 @@ const std::string Bf16_to_Fp8E5M2 =
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp8E4M3B15_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+                   const SmallVector<Value> &v) {
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = undef(fp8x4VecTy);
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
+  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
+  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
   a0 = bitcast(a0, i32_ty);
 
   Value a1 = undef(fp8x4VecTy);
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
+  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
+  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
   a1 = bitcast(a1, i32_ty);
 
   Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
@@ -325,22 +320,20 @@ const std::string Fp8E4M3B15_to_Fp16 =
     "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
     "shl.b32 $1, b1, 7;                     \n"
     "}                                      \n";
-<<<<<<< HEAD
 #endif
 
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
-			 const Value &v0, const Value &v1, const Value &v2,
-			 const Value &v3) {
+                         const SmallVector<Value> &v) {
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
   Value fp16x2Vec0 = undef(fp16x2VecTy);
   Value fp16x2Vec1 = undef(fp16x2VecTy);
 
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v0, i32_val(0));
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v1, i32_val(1));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v2, i32_val(0));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v3, i32_val(1));
+  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[0], i32_val(0));
+  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[1], i32_val(1));
+  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[2], i32_val(0));
+  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[3], i32_val(1));
   
   Value fp16x2VecMin = i32_val(0xBF80BF80);
   Value fp16x2VecMax = i32_val(0x3F803F80);
@@ -374,29 +367,6 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 	  };
 }
 #else
-const std::string Fp16_to_Fp8E4M3B15 =
-    "{                                      \n"
-    ".reg .b32 a<2>, b<2>;                  \n"
-    ".reg .b32 min_val, max_val;            \n"
-    "mov.b32 min_val, 0xBF80BF80;           \n"
-    "mov.b32 max_val, 0x3F803F80;           \n"
-    "max.f16x2 $1, $1, min_val;             \n"
-    "min.f16x2 $1, $1, max_val;             \n"
-    "max.f16x2 $2, $2, min_val;             \n"
-    "min.f16x2 $2, $2, max_val;             \n"
-    "shl.b32 a0, $1, 1;                     \n"
-    "shl.b32 a1, $2, 1;                     \n"
-    "lop3.b32 a0, a0, 0x7fff7fff, 0, 0xc0;  \n"
-    "lop3.b32 a1, a1, 0x7fff7fff, 0, 0xc0;  \n"
-    "add.u32 a0, a0, 0x00800080;            \n"
-    "add.u32 a1, a1, 0x00800080;            \n"
-    "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
-    "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
-    "prmt.b32 $0, b0, b1, 0x7531;           \n"
-    "}";
-#endif
-=======
-
 const std::string Fp16_to_Fp8E4M3B15(bool has_minx2) {
   std::string ret;
   ret += "{                                      \n"
@@ -431,7 +401,7 @@ const std::string Fp16_to_Fp8E4M3B15(bool has_minx2) {
          "}";
   return ret;
 }
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+#endif
 
 /* ----- FP8E4M3B15X4 ------ */
 // NOTE: NOT USED RIGHT NOW
@@ -446,8 +416,7 @@ const std::string Fp16_to_Fp8E4M3B15(bool has_minx2) {
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp8E4M3B15x4_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+                   const SmallVector<Value> &v) {
   return {};
 }
 #else
@@ -472,8 +441,7 @@ const std::string Fp8E4M3B15x4_to_Fp16 =
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp16_to_Fp8E4M3B15x4(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+                   const SmallVector<Value> &v) {
   return {};
 }
 #else
@@ -488,7 +456,6 @@ const std::string Fp16_to_Fp8E4M3B15x4 =
     "}";
 #endif
 
-<<<<<<< HEAD
 /* ----- FP8E4M3 ------ */
 // Note: when handled by software, this format
 // does not handle denormals and has
@@ -498,21 +465,20 @@ const std::string Fp16_to_Fp8E4M3B15x4 =
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp8E4M3_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+		   const SmallVector<Value> &v) {
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = undef(fp8x4VecTy);
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
+  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
+  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
   a0 = bitcast(a0, i32_ty);
 
   Value a1 = undef(fp8x4VecTy);
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
+  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
+  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
   a1 = bitcast(a1, i32_ty);
 
   Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
@@ -559,16 +525,15 @@ const std::string Fp8E4M3_to_Fp16 =
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp16_to_Fp8E4M3(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+		   const SmallVector<Value> &v) {
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
   Value fp16x2Vec0 = undef(fp16x2VecTy);
   Value fp16x2Vec1 = undef(fp16x2VecTy);
 
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v0, i32_val(0));
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v1, i32_val(1));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v2, i32_val(0));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v3, i32_val(1));
+  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[0], i32_val(0));
+  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[1], i32_val(1));
+  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[2], i32_val(0));
+  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[3], i32_val(1));
   
   fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
   fp16x2Vec1 = bitcast(fp16x2Vec1, i32_ty);
@@ -618,21 +583,20 @@ const std::string Fp16_to_Fp8E4M3 =
 #ifdef USE_ROCM
 static SmallVector<Value>
 Fp8E4M3_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+		   const SmallVector<Value> &v) {
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = undef(fp8x4VecTy);
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v0, i32_val(1));
+  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
   a0 = insert_element(fp8x4VecTy, a0, int_val(8,0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v1, i32_val(3));
+  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
   a0 = bitcast(a0, i32_ty);
 
   Value a1 = undef(fp8x4VecTy);
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v2, i32_val(1));
+  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
   a1 = insert_element(fp8x4VecTy, a1, int_val(8,0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v3, i32_val(3));
+  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
   a1 = bitcast(a1, i32_ty);
 
   Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
@@ -679,15 +643,14 @@ const std::string Fp8E4M3_to_Bf16 =
 #ifdef USE_ROCM
 static SmallVector<Value>
 Bf16_to_Fp8E4M3(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
+		   const SmallVector<Value> &v) {
   auto bf16x2VecTy = vec_ty(i16_ty, 2);
   Value bf16x2Vec0 = undef(bf16x2VecTy);
   Value bf16x2Vec1 = undef(bf16x2VecTy);
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v0, i32_val(0));
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v1, i32_val(1));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v2, i32_val(0));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v3, i32_val(1));
+  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
+  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[1], i32_val(1));
+  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[2], i32_val(0));
+  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[3], i32_val(1));
   bf16x2Vec0 = bitcast(bf16x2Vec0, i32_ty);
   bf16x2Vec1 = bitcast(bf16x2Vec1, i32_ty);
 
@@ -788,7 +751,7 @@ const std::string Bf16_to_Fp8E4M3 =
     "or.b32 $0, nosign, sign;                    \n" // restore sign
     "}";
 #endif
-=======
+
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
 const std::string Fp8E4M3Nv_to_Fp16 = "{ \n"
                                       "cvt.rn.f16x2.e4m3x2 $0, $1; \n"
@@ -797,7 +760,6 @@ const std::string Fp8E4M3Nv_to_Fp16 = "{ \n"
 const std::string Fp16_to_Fp8E4M3Nv = "{ \n"
                                       "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
                                       "}";
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 
 /* ----- Packed integer to BF16 ------ */
 #ifndef USE_ROCM
@@ -1245,18 +1207,23 @@ struct FpToFpOpConversion
         // F8 -> F16
         {{F8E4M3B15TyID, F16TyID}, Fp8E4M3B15_to_Fp16},
         {{F8E4M3FNTyID, F16TyID}, Fp8E4M3B15x4_to_Fp16},
-        {{F8E4M3TyID, F16TyID}, Fp8E4M3Nv_to_Fp16},
+        {{F8E4M3TyID, F16TyID}, Fp8E4M3_to_Fp16},
         {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16},
         // F16 -> F8
+#ifdef USE_ROCM
+        {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15},
+#else
         {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15(computeCapability >= 80)},
+#endif
         {{F16TyID, F8E4M3FNTyID}, Fp16_to_Fp8E4M3B15x4},
-        {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3Nv},
+        {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3},
         {{F16TyID, F8E5M2TyID}, Fp16_to_Fp8E5M2},
         // F8 -> BF16
         {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16},
         // BF16 -> F8
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2},
     };
+
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
     if (srcTy.isFloat8E4M3FNUZ()) {
@@ -1274,15 +1241,9 @@ struct FpToFpOpConversion
                    << "\n";
       llvm_unreachable("");
     }
-<<<<<<< HEAD
 #ifdef USE_ROCM
     return srcMap.lookup(key);
 #else
-    return makeConverterFromPtx(srcMap.lookup(key),
-                                getTypeConverter()->convertType(srcTy),
-                                getTypeConverter()->convertType(dstTy));
-#endif
-=======
     if (computeCapability < 90 &&
         (srcTy.isFloat8E4M3FNUZ() || dstTy.isFloat8E4M3FNUZ())) {
       llvm::errs() << "Conversion from/to f8e4m3nv is only supported on "
@@ -1294,7 +1255,7 @@ struct FpToFpOpConversion
                                 getTypeConverter()->convertType(srcTy),
                                 getTypeConverter()->convertType(dstTy),
                                 inVecWidthBits, outVecWidthBits);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+#endif
   }
 
   SmallVector<Value> createDestOps(triton::FpToFpOp op, OpAdaptor adaptor,
@@ -1712,9 +1673,8 @@ struct FSubOpConversion
 #ifdef USE_ROCM
 static SmallVector<Value>
 S8_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
-		   const Value &v0, const Value &v1, const Value &v2,
-		   const Value &v3) {
-  SmallVector<Value> inValues = {v0, v1, v2, v3};
+		   const SmallVector<Value> &v) {
+  SmallVector<Value> inValues = {v[0], v[1], v[2], v[3]};
   SmallVector<Value> outValues = {};
   for (Value inVal : inValues) {
     Value i32Val = sext(i32_ty, inVal);
@@ -1751,21 +1711,17 @@ struct SIToFPOpConversion
     Type outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
       #if USE_ROCM
-      auto outVals = S8_to_Bf16(loc, rewriter, operands[0][0], operands[1][0],
-                             operands[2][0], operands[3][0]);
+        SmallVector<Value> inVals = {operands[0][0], operands[1][0],
+                                    operands[2][0], operands[3][0]};
+        auto outVals = S8_to_Bf16(loc, rewriter, inVals);
       #else
-      auto cvtFunc = makeConverterFromPtx(
-          S8_to_Bf16, getTypeConverter()->convertType(inElemTy),
-          getTypeConverter()->convertType(outElemTy));
-<<<<<<< HEAD
-      auto outVals = cvtFunc(loc, rewriter, operands[0][0], operands[1][0],
-                             operands[2][0], operands[3][0]);
+        auto cvtFunc = makeConverterFromPtx(
+            S8_to_Bf16, getTypeConverter()->convertType(inElemTy),
+            getTypeConverter()->convertType(outElemTy));
+        SmallVector<Value> inVals = {operands[0][0], operands[1][0],
+                                    operands[2][0], operands[3][0]};
+        auto outVals = cvtFunc(loc, rewriter, inVals);
       #endif
-=======
-      SmallVector<Value> inVals = {operands[0][0], operands[1][0],
-                                   operands[2][0], operands[3][0]};
-      auto outVals = cvtFunc(loc, rewriter, inVals);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
       assert(outVals.size() == 4);
       return outVals;
     } else if (outElemTy.isBF16()) {

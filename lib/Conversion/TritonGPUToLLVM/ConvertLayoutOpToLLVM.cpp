@@ -253,7 +253,7 @@ private:
     }
 #ifdef USE_ROCM
     if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-      auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, type);
+      auto multiDimBase = emitBaseIndexForLayout(loc, rewriter, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;
       assert(rank == 2);
       SmallVector<Value> multiDimOffset(rank);

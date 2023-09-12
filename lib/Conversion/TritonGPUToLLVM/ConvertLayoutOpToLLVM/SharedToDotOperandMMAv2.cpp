@@ -573,11 +573,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
   int matShapeM = 8, matShapeN = 8, matShapeK = 2 * 64 / bitwidth;
 
-<<<<<<< HEAD
-  auto numRep = encoding.getMMAv2Rep(tensorTy.getShape(), bitwidth);
-=======
   auto numRep = encoding.getMMAv2Rep(shapePerCTA, bitwidth);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
   int kWidth = encoding.getKWidth();
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();

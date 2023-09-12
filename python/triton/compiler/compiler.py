@@ -73,17 +73,13 @@ def optimize_ttir(mod, arch):
     return mod
 
 
-<<<<<<< HEAD
-def ttir_to_ttgir(mod, num_warps, warpsize):
+def ttir_to_ttgir(mod, num_warps, warpsize, num_ctas, arch):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_convert_triton_to_tritongpu_pass(num_warps, warpsize)
-=======
-def ttir_to_ttgir(mod, num_warps, num_ctas, arch):
-    pm = ir.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_convert_triton_to_tritongpu_pass(num_warps, 32, num_ctas, arch)
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+     if is_hip():
+        pm.add_convert_triton_to_tritongpu_pass(num_warps, warpsize, num_ctas, 0)
+    else:
+        pm.add_convert_triton_to_tritongpu_pass(num_warps, warpsize, num_ctas, arch)
     pm.run(mod)
     return mod
 
@@ -109,26 +105,16 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     if optimize_epilogue:
         pm.add_tritongpu_optimize_epilogue_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
-<<<<<<< HEAD
     if num_stages == 0 and is_hip() and gpu_matrix_core_version() != 0:
         pm.add_tritongpu_stream_pipeline_pass()
         pm.add_canonicalizer_pass()
-    else:
-        pm.add_tritongpu_pipeline_pass(num_stages)
-    pm.add_tritongpu_prefetch_pass()
-    pm.add_tritongpu_optimize_dot_operands_pass()
-    pm.add_tritongpu_remove_layout_conversions_pass()
-    pm.add_tritongpu_decompose_conversions_pass()
-    if num_stages != 0:
-        pm.add_tritongpu_reorder_instructions_pass()
-=======
     ws_enabled = False
     # `num_warps` does not mean the total number of warps of a CTA when
     # warp specialization is enabled.
     # it's the responsibility of the compiler to figure out the exact
     # `num_warps` to use.
     # TODO: support the case where `num_warps` from user is not 4.
-    if arch // 10 >= 9 and enable_warp_specialization and num_warps == 4:
+    if _is_cuda(arch) and arch // 10 >= 9 and enable_warp_specialization and num_warps == 4:
         pm.add_tritongpu_ws_feasibility_checking_pass(arch)
         pm.run(mod)
         ws_enabled = ir.is_ws_supported(mod)
@@ -142,20 +128,27 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
         pm.add_tritongpu_wsmaterialization_pass(arch)
         pm.add_cse_pass()
     else:
-        pm.add_tritongpu_pipeline_pass(
-            num_stages, num_warps, num_ctas, arch)
-    pm.add_tritongpu_materialize_load_store_pass(num_warps, arch)
-    if arch // 10 <= 8:
+        if is_hip():
+            pm.add_tritongpu_pipeline_pass(
+                num_stages, num_warps, num_ctas, 0)
+        else:
+            pm.add_tritongpu_pipeline_pass(
+                num_stages, num_warps, num_ctas, arch)
+    if is_hip():
+        pm.add_tritongpu_materialize_load_store_pass(num_warps, 0)
+    else:
+        pm.add_tritongpu_materialize_load_store_pass(num_warps, arch)
+    if _is_cuda(arch) and arch // 10 <= 8:
         pm.add_tritongpu_prefetch_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
     pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-    pm.add_tritongpu_reorder_instructions_pass()
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+    if num_stages != 0:
+        pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
-    if arch // 10 >= 9:
+    if _is_cuda(arch) and arch // 10 >= 9:
         pm.add_tritongpu_fence_insertion_pass()
     pm.add_tritongpu_ws_fixup_missing_attrs_pass()
     pm.run(mod)
@@ -475,10 +468,6 @@ def compile(fn, **kwargs):
     warp_size = CUDA_DEFAULT_WARP_SIZE if _is_cuda(arch) else arch[3]
     context = ir.context()
     constants = kwargs.get("constants", dict())
-<<<<<<< HEAD
-    num_warps = kwargs.get("num_warps", 4)
-    num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else (1 if is_hip else 2))
-=======
     num_warps = kwargs.get("num_warps", get_arch_default_num_warps(device_type))
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
@@ -487,7 +476,6 @@ def compile(fn, **kwargs):
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
     enable_persistent = kwargs.get("enable_persistent", enable_warp_specialization)
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
     extern_libs = kwargs.get("extern_libs", dict())
     if extern_libs is None:
         extern_libs = dict()
@@ -509,11 +497,7 @@ def compile(fn, **kwargs):
     stages["ttir"] = (lambda path: parse_mlir_module(path, context),
                       lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, arch=arch), arch))
     stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-<<<<<<< HEAD
-                       lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size), num_stages, arch))
-=======
-                       lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
+                       lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
     stages["llir"] = (lambda path: Path(path).read_text(),
                       lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
     if is_cuda:
@@ -584,11 +568,8 @@ def compile(fn, **kwargs):
                     InfoFromBackendForTensorMap(e) for e in metadata['tensormaps_info']]
     else:
         metadata = {"num_warps": num_warps,
-<<<<<<< HEAD
                     "warp_size": warp_size,
-=======
                     "num_ctas": num_ctas,
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
                     "num_stages": num_stages,
                     "enable_warp_specialization": enable_warp_specialization,
                     "enable_persistent": enable_persistent,
@@ -705,11 +686,8 @@ class CompiledKernel:
         # initialize metadata
         self.shared = metadata["shared"]
         self.num_warps = metadata["num_warps"]
-<<<<<<< HEAD
         self.warp_size = metadata["warp_size"]
-=======
         self.num_ctas = metadata["num_ctas"]
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
         self.num_stages = metadata["num_stages"]
         self.clusterDims = metadata["clusterDims"]
         if "tensormaps_info" in metadata:

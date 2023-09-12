@@ -147,11 +147,11 @@ compared to 1*64 when the hasLeadingOffset is false.
             int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
             int maxPhase = SIMDWidth / perPhase;
 
-            return $_get(context, vecSize, perPhase, maxPhase, order);
+            return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
           } else {
             // Do not swizzle in case k dimension is not innermost.
             // In this case accesses will go in different banks even without swizzling.
-            return $_get(context, 1, 1, 1, order);
+            return get(context, 1, 1, 1, order, CTALayout);
           }
         }
 #endif
@@ -185,20 +185,12 @@ compared to 1*64 when the hasLeadingOffset is false.
 
         // ---- begin Ampere ----
         if (mmaEnc.isAmpere()) {
-<<<<<<< HEAD
-          int perPhase = 128 / (shape[order[0]] * 4 / dotOpEnc.getKWidth());
-=======
           int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
           perPhase = std::max<int>(perPhase, 1);
           std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
           // for now, disable swizzle when using transposed int8 tensor cores
           if ((32 / typeWidthInBit != dotOpEnc.getKWidth()) && order[0] == inner)
-<<<<<<< HEAD
-            return $_get(context, 1, 1, 1, order);
-=======
             return get(context, 1, 1, 1, order, CTALayout);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 
           // --- handle A operand ---
           if (opIdx == 0) { // compute swizzling for A operand

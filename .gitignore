@@ -25,14 +25,5 @@ venv.bak/
 .idea
 cmake-build-*
 
-<<<<<<< HEAD
-# cache dumps
-triton_cache*
-log_*
-
-#
-python/triton/third_party/cuda/bin/ptxas
-=======
 # Third-party binaries
 ptxas
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272

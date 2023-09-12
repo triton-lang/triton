@@ -331,13 +331,9 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-<<<<<<< HEAD
                  int i, Value laneId);
 
-=======
-                 int i);
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
->>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 

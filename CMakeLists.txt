@@ -200,6 +200,10 @@ include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 
+set(ROCM_LIBRARIES
+  ${CMAKE_CURRENT_SOURCE_DIR}/lib/rocm/libhsa-runtime64.so
+)
+
 # link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
@@ -237,10 +241,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRNVVMToLLVMIRTranslation
     MLIRROCDLToLLVMIRTranslation
     MLIRIR
-  )
-
-  set(ROCM_LIBRARIES
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/rocm/libhsa-runtime64.so
   )
 
   if(WIN32)
