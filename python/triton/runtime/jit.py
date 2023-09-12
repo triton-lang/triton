@@ -250,6 +250,8 @@ class JITFunction(KernelInterface[T]):
             "float8e5": "fp8e5",
             "float8e4b15": "fp8e4b15",
             "float8e4b15x4": "fp8e4b15x4",
+            "float8_e4m3fn": "fp8e4nv",
+            "float8_e5m2": "fp8e5",
             "float16": "fp16",
             "bfloat16": "bf16",
             "float32": "fp32",
