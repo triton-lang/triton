@@ -1,3 +1,4 @@
+import functools
 import subprocess
 import tempfile
 
@@ -49,11 +50,33 @@ def kernel_multi_files(X, Y, BLOCK: tl.constexpr):
     tl.store(Y + tl.arange(0, BLOCK), y)
 
 
+@functools.lru_cache()
+def _path_to_binary(binary: str):
+    import os
+    import re
+    base_dir = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
+    paths = [
+        os.environ.get("TRITON_PTXAS_PATH", ""),
+        os.path.join(base_dir, "triton", "third_party", "cuda", "bin", binary)
+    ]
+
+    for p in paths:
+        bin = p.split(" ")[0]
+        if os.path.exists(bin) and os.path.isfile(bin):
+            result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
+            if result is not None:
+                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+                if version is not None:
+                    return p, version.group(1)
+    raise RuntimeError(f"Cannot find {binary}")
+
+
 def extract_file_lines(asm):
+    nvdisasm, _ = _path_to_binary("nvdisasm")
     fd, path = tempfile.mkstemp()
     with open(fd, 'wb') as cubin:
         cubin.write(asm)
-    asm = subprocess.check_output(["nvdisasm", "-g", path]).decode("utf-8")
+    asm = subprocess.check_output([nvdisasm, "-g", path]).decode("utf-8")
     file_lines = []
     lines = asm.splitlines()
     for line in lines:
@@ -80,7 +103,7 @@ func_types = ["single", "call", "call_noinline", "multi_files"]
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
     try:
-        subprocess.check_output(["nvdisasm", "-h"])
+        nvdisasm, _ = _path_to_binary("nvdisasm")
     except BaseException:
         pytest.skip("nvdisasm is not available")
 
