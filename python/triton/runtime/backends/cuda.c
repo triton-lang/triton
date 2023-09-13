@@ -330,7 +330,7 @@ static PyObject *memFree(PyObject *self, PyObject *args) {
 // Helper function to convert a Python list to a cuuint64_t array
 static cuuint64_t *list_to_cuuint64_array(PyObject *listObj) {
   Py_ssize_t len = PyList_Size(listObj);
-  cuuint64_t *array = malloc(len * sizeof(cuuint64_t));
+  cuuint64_t *array = (cuuint64_t *)malloc(len * sizeof(cuuint64_t));
   for (Py_ssize_t i = 0; i < len; i++) {
     PyObject *item = PyList_GetItem(listObj, i);
     array[i] = (cuuint64_t)PyLong_AsUnsignedLongLong(item);
@@ -341,7 +341,7 @@ static cuuint64_t *list_to_cuuint64_array(PyObject *listObj) {
 // Helper function to convert a Python list to a cuuint32_t array
 static cuuint32_t *list_to_cuuint32_array(PyObject *listObj) {
   Py_ssize_t len = PyList_Size(listObj);
-  cuuint32_t *array = malloc(len * sizeof(cuuint32_t));
+  cuuint32_t *array = (cuuint32_t *)malloc(len * sizeof(cuuint32_t));
   for (Py_ssize_t i = 0; i < len; i++) {
     PyObject *item = PyList_GetItem(listObj, i);
     array[i] = (cuuint32_t)PyLong_AsUnsignedLong(item);

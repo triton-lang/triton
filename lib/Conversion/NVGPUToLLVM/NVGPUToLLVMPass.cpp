@@ -6,6 +6,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 
