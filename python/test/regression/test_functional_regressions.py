@@ -227,4 +227,4 @@ def test_iv_dependent_matmul(type):
                  b.stride(0), b.stride(1), triton_output.stride(0), triton_output.stride(1),
                  BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
                  type=type, num_stages=num_stages)
-    torch.testing.assert_allclose(torch_output, triton_output, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(torch_output, triton_output, rtol=1e-2, atol=1e-2)

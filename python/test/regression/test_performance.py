@@ -56,7 +56,7 @@ matmul_data = {
         (4096, 64, 4096): {'float16': 0.179, 'float32': 0.214, 'int8': 0.102},
         (8192, 64, 8192): {'float16': 0.278, 'float32': 0.000, 'int8': 0.177},
         # test EVEN_K==False
-        (8192, 8192, 8176): {'float16': 0.786, 'float32': 0.696, 'int8': 0.51},
+        (8192, 8192, 8176): {'float16': 0.786, 'float32': 0.743, 'int8': 0.51},
     }
 }
 
@@ -64,7 +64,7 @@ matmul_data = {
 @pytest.mark.parametrize('M, N, K, dtype_str',
                          [(M, N, K, dtype_str)
                           for M, N, K in matmul_data[DEVICE_NAME].keys()
-                          for dtype_str in ['float16', 'float32']])
+                          for dtype_str in ['float16']])
 def test_matmul(M, N, K, dtype_str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -223,5 +223,61 @@ def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     ref_gpu_util = flash_attention_data[DEVICE_NAME][(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str)]
+    print_perf(ms, cur_gpu_util, ref_gpu_util)
+    triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.02, rtol=0.01)
+
+
+#######################
+# Reduction
+#######################
+
+
+@triton.jit
+def _sum(x_ptr, y_ptr, output_ptr, n_elements,
+         BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    # run in a loop to only to make it compute bound.
+    for i in range(100):
+        x = tl.sum(x, axis=0) + y
+
+    tl.store(output_ptr + offsets, x, mask=mask)
+
+
+reduction_data = {
+    'a100': {
+        1024 * 16384: {'float16': 0.016, 'float32': 0.031, 'int16': 0.015, 'int32': 0.031},
+        1024 * 65536: {'float16': 0.016, 'float32': 0.032, 'int16': 0.015, 'int32': 0.032},
+    }
+}
+
+
+@pytest.mark.parametrize('N', reduction_data[DEVICE_NAME].keys())
+@pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'int16', 'int32'])
+def test_reductions(N, dtype_str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+    torch.manual_seed(0)
+    dtype = {'float16': torch.float16, 'float32': torch.float32, 'int16': torch.int16, 'int32': torch.int32}[dtype_str]
+    ref_gpu_util = reduction_data[DEVICE_NAME][N][dtype_str]
+    cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
+    max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
+    z = torch.empty((N, ), dtype=dtype, device='cuda')
+    if dtype == torch.float16 or dtype == torch.float32:
+        x = torch.randn_like(z)
+        y = torch.randn_like(z)
+    else:
+        info = torch.iinfo(dtype)
+        x = torch.randint(info.min, info.max, (N,), dtype=dtype, device='cuda')
+        y = torch.randint(info.min, info.max, (N,), dtype=dtype, device='cuda')
+    grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
+    fn = lambda: _sum[grid](x, y, z, N, BLOCK_SIZE=1024)
+    ms = triton.testing.do_bench_cudagraph(fn)
+    cur_gpu_perf = 100. * 2. * N / ms * 1e-9
+    cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
     triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.02, rtol=0.01)

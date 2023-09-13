@@ -1,10 +1,10 @@
 from __future__ import annotations  # remove after python 3.11
 
-import warnings
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
 from .._C.libtriton.triton import ir
+from ..common.build import is_hip
 from . import core as tl
 
 T = TypeVar('T')
@@ -136,6 +136,8 @@ def add(input: tl.tensor,
     # ptr + offset
     if other_scalar_ty.is_ptr() and not input_scalar_ty.is_ptr():
         input, other = other, input
+        input_scalar_ty = input.type.scalar
+        other_scalar_ty = other.type.scalar
     if input_scalar_ty.is_ptr():
         return tl.tensor(builder.create_addptr(input.handle, other.handle), input.type)
     # float + float
@@ -195,7 +197,7 @@ def truediv(input: tl.tensor,
     elif input_scalar_ty.is_int() and other_scalar_ty.is_int():
         input = cast(input, tl.float32, builder)
         other = cast(other, tl.float32, builder)
-    # float / float (cast to highest exponent type)
+    # float / float (cast to the highest exponent type)
     elif input_scalar_ty.is_floating() and other_scalar_ty.is_floating():
         if input_scalar_ty.fp_mantissa_width > other_scalar_ty.fp_mantissa_width:
             other = cast(other, input_scalar_ty, builder)
@@ -502,24 +504,30 @@ def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.te
     if isinstance(value, tl.tensor):
         assert value.numel.value == 1, "only accepts size-1 tensor"
         value = cast(value, dtype, builder)
-        ret_ty = tl.block_type(value.dtype, shape)
-        return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
     else:
         # scalar
+        if dtype is None:
+            raise ValueError("dtype must be specified when value is not a tensor")
         if value == 0:
             value = builder.get_null_value(dtype.to_ir(builder))
         else:
             get_value_fn = getattr(builder, f"get_{dtype.name}")
             value = get_value_fn(value)
-        if dtype is None:
-            raise ValueError("dtype must be specified when value is not a tensor")
-        ret_ty = tl.block_type(dtype, shape)
-        return tl.tensor(builder.create_splat(value, shape), ret_ty)
+        value = tl.tensor(value, dtype)
+
+    return splat(value, shape, builder)
 
 
 # ===----------------------------------------------------------------------===//
 #                               Shape Manipulation
 # ===----------------------------------------------------------------------===//
+
+def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
+    assert not value.type.is_block(), "Cannot splat a block tensor"
+    if len(shape) == 0:
+        return value
+    ret_ty = tl.block_type(value.dtype, shape)
+    return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
 
 
 def view(input: tl.tensor,
@@ -545,8 +553,12 @@ def reshape(input: tl.tensor,
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    dst_shape = list(input.type.shape)
+    dst_shape = [tl._constexpr_to_value(x) for x in input.shape]
     dst_shape.insert(axis, 1)
+
+    if not input.type.is_block():
+        return splat(input, shape=dst_shape, builder=builder)
+
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_expand_dims(input.handle, axis), ret_ty)
 
@@ -686,9 +698,8 @@ def cast(input: tl.tensor,
     dst_sca_ty = dst_ty.scalar
 
     if _is_cuda(builder.arch) and builder.arch < 89 and \
-       (src_sca_ty.is_fp8e4() or dst_sca_ty.is_fp8e4()):
-        warnings.warn("Standard tl.float8e4 format will be deprecated on SM < 89. "
-                      "Please use tl.float8e4b15.", DeprecationWarning)
+       (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
+        assert False, "fp8e4nv data type is not supported on CUDA arch < 89"
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
@@ -982,8 +993,8 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     if not val.type.is_block():
         val = broadcast_impl_shape(val, block_shape, builder)
     assert val.type.is_block(), "Value argument must be block type or a scalar"
-    assert block_shape == val.type.get_block_shapes(), "Block shape and value shape mismatch"
-    assert ptr.type.element_ty.element_ty == val.type.element_ty, "Block element type and value element type mismatch"
+    assert block_shape == val.type.get_block_shapes(), f"Block shape({block_shape}) and value shape({val.type.get_block_shapes()}) mismatch"
+    assert ptr.type.element_ty.element_ty == val.type.element_ty, f"Block element type({ptr.type.element_ty.element_ty}) and value element type({val.type.element_ty}) mismatch"
 
     elt_ty = ptr.type.element_ty.element_ty
     assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
@@ -1242,18 +1253,58 @@ def atomic_xchg(ptr: tl.tensor,
 # ===----------------------------------------------------------------------===//
 
 
+def gpu_has_mfma() -> bool:
+    if not is_hip():
+        return False
+    return True  # mfma supported in ['gfx908', 'gfx90a']
+
+
+def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
+    if not gpu_has_mfma():
+        return False
+    # TODO: Add check for configurations and types.
+    return True
+
+
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         allow_tf32: bool,
         out_dtype: tl.dtype,
         builder: ir.builder) -> tl.tensor:
+    def assert_dtypes_valid(lhs_dtype, rhs_dtype, arch):
+        # Checks for non-cuda archs
+        if not _is_cuda(builder.arch):
+            assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
+            return
+        # Checks for cuda arch
+        if arch < 90:
+            assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(), "Dot op does not support fp8e4nv on CUDA arch < 90"
+            if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
+                return
+            assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
+        else:
+            assert not lhs_dtype.is_fp8e4b15() and not rhs_dtype.is_fp8e4b15(), "Dot op does not support fp8e4b15 on CUDA arch >= 90"
+            assert not lhs_dtype.is_fp8e4b15x4() and not rhs_dtype.is_fp8e4b15x4(), "Dot op does not support fp8e4b15x4 on CUDA arch >= 90"
+            if lhs_dtype.is_int() or rhs_dtype.is_int():
+                assert lhs_dtype == rhs_dtype, f"Both operands must be same type. First operand ({lhs_dtype}) and second operand ({rhs_dtype})"
+                assert lhs_dtype.is_int8() or lhs_dtype.is_uint8(), f"Both operands must be either int8 or uint8. Operand type ({lhs_dtype})"
+            elif lhs_dtype.is_fp8() or rhs_dtype.is_fp8():
+                assert lhs_dtype.is_fp8e4nv() or lhs_dtype.is_fp8e5(), f"Only supports fp8e4nv or fp8e5. First operand ({lhs_dtype})"
+                assert rhs_dtype.is_fp8e4nv() or rhs_dtype.is_fp8e5(), f"Only supports fp8e4nv or fp8e5. Second operand ({rhs_dtype})"
+            else:
+                assert lhs_dtype.is_fp16() or lhs_dtype.is_bf16() or lhs_dtype.is_fp32() or lhs_dtype.is_int1(), f"Unsupported dtype {lhs_dtype}"
+                assert rhs_dtype.is_fp16() or rhs_dtype.is_bf16() or rhs_dtype.is_fp32() or rhs_dtype.is_int1(), f"Unsupported dtype {rhs_dtype}"
+                assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
+
     assert lhs.type.is_block() and rhs.type.is_block()
-    assert lhs.dtype == rhs.dtype, f"First input ({lhs.dtype}) and second input ({rhs.dtype}) must have the same dtype!"
+
+    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.arch)
+
     assert len(lhs.shape) == 2, f"First input shape ({lhs.shape}) is not two dimensional!"
     assert len(rhs.shape) == 2, f"Second input shape ({rhs.shape}) is not two dimensional!"
     assert lhs.shape[1].value == rhs.shape[0].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[1].value}) must be equal to first index of second shape ({rhs.shape[0].value})"
     assert lhs.shape[0].value >= 16 and lhs.shape[1].value >= 16 \
-        and rhs.shape[1].value >= 16,\
+        and rhs.shape[1].value >= 16, \
         f"All values in both first input shape ({lhs.shape}) and second input shape ({rhs.shape}) must be >= 16!"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
@@ -1270,6 +1321,32 @@ def dot(lhs: tl.tensor,
 
     M = lhs.type.shape[0]
     N = rhs.type.shape[1]
+
+    # Cast operands of types f16 and i8 for configurations where FMA only supported.
+    if is_hip() and not mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty):
+        ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
+        lhs = cast(lhs, ret_cast_scalar_ty, builder)
+        rhs = cast(rhs, ret_cast_scalar_ty, builder)
+        if ret_cast_scalar_ty == tl.float16:
+            _0 = builder.create_splat(builder.get_fp16(0), [M, N])
+        else:
+            _0 = builder.create_splat(builder.get_fp32(0), [M, N])
+        ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
+        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
+                        ret_ty)
+        return cast(ret, ret_scalar_ty, builder)
+    if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth < 32:
+        if lhs.type.scalar.is_int():
+            ret_dot_scalar_ty = tl.int32
+            _0 = builder.create_splat(builder.get_int32(0), [M, N])
+        else:
+            ret_dot_scalar_ty = tl.float32
+            _0 = builder.create_splat(builder.get_fp32(0), [M, N])
+        ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
+        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
+                        ret_ty)
+        return cast(ret, ret_scalar_ty, builder)
+
     _0 = builder.create_splat(_0, [M, N])
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
     return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
@@ -1367,7 +1444,7 @@ def associative_scan(
 
 def _check_dtype(dtypes: List[str]) -> T:
     """
-    We following libdevice's convention to check accepted data types for math functions.
+    We're following libdevice's convention to check accepted data types for math functions.
     It is not a good practice to support all data types as accelerators/GPUs don't support
     many float16 and bfloat16 math operations.
     We should let the users know that they are using and invoke explicit cast to convert
@@ -1442,7 +1519,7 @@ def abs(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
-    if len(x.shape) != len(values):
+    if max(1, len(x.shape)) != len(values):
         raise ValueError("Shape of input to multiple_of does not match the length of values")
     x.handle.set_attr("tt.divisibility", ir.make_attr(values, x.handle.get_context()))
     return x

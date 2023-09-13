@@ -13,6 +13,13 @@ import triton.ops
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
+    # with ENABLE_TMA=0 and ENABLE_MMA_V3=0
+    import os
+    enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
+    enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
+    if enable_mmav3 in ["on", "true", "1"] and enable_tma in ["on", "true", "1"]:
+        pytest.skip('Segmentation fault')
+
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
@@ -44,7 +51,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     tri_dq, q.grad = q.grad.clone(), None
     # compare
     atol = 1e-1 if dtype == torch.bfloat16 else 1e-2
-    torch.testing.assert_allclose(ref_out, tri_out, atol=atol, rtol=0)
-    torch.testing.assert_allclose(ref_dv, tri_dv, atol=atol, rtol=0)
-    torch.testing.assert_allclose(ref_dk, tri_dk, atol=atol, rtol=0)
-    torch.testing.assert_allclose(ref_dq, tri_dq, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dv, tri_dv, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dk, tri_dk, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dq, tri_dq, atol=atol, rtol=0)

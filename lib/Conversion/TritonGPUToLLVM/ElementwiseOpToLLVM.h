@@ -8,8 +8,9 @@ using namespace mlir::triton;
 
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit);
-
-bool isLegalElementwiseOp(Operation *op);
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    ModuleAllocation &allocation,
+    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
+    int computeCapability, PatternBenefit benefit);
 
 #endif

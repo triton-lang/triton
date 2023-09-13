@@ -23,14 +23,27 @@ def TritonGPU_Dialect : Dialect {
   let extraClassDeclaration = [{
     static std::string getNumWarpsAttrName() { return "triton_gpu.num-warps"; }
     static int getNumWarps(ModuleOp mod) {
-      Attribute numWarps = mod->getDiscardableAttr("triton_gpu.num-warps");
-      if(!numWarps)
+      if(!mod->hasAttr("triton_gpu.num-warps"))
         llvm::report_fatal_error(
             "TritonGPU module should contain a triton_gpu.num-warps attribute");
-      return numWarps.cast<IntegerAttr>().getInt();
+      return mod->getAttr("triton_gpu.num-warps").cast<IntegerAttr>().getInt();
     }
+    static int getNumCTAs(ModuleOp mod) {
+      if(!mod->hasAttr("triton_gpu.num-ctas"))
+        llvm::report_fatal_error(
+            "TritonGPU module should contain a triton_gpu.num-ctas attribute");
+      return mod->getAttr("triton_gpu.num-ctas").cast<IntegerAttr>().getInt();
+    }
+    static int getComputeCapability(ModuleOp mod) {
+      if(!mod->hasAttr("triton_gpu.compute-capability"))
+        llvm::report_fatal_error(
+            "TritonGPU module should contain a triton_gpu.compute-capability attribute");
+      return mod->getAttrOfType<IntegerAttr>("triton_gpu.compute-capability").getInt();
+    }
+    void registerTypes();
 
     static std::string getThreadsPerWarpAttrName() { return "triton_gpu.threads-per-warp"; }
+
     static int getThreadsPerWarp(ModuleOp mod) {
       Attribute threadsPerWarp = mod->getDiscardableAttr("triton_gpu.threads-per-warp");
       if(!threadsPerWarp) {
@@ -38,7 +51,6 @@ def TritonGPU_Dialect : Dialect {
       }
       return threadsPerWarp.cast<IntegerAttr>().getInt();
     }
-
   }];
 
   let useDefaultAttributePrinterParser = 1;
