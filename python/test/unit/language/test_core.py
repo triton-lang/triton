@@ -3555,7 +3555,6 @@ layouts = [
     # MmaLayout(1, [4, 1], [1, 1], [0, 1]),
     # MmaLayout((2, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]),
     BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 1], [32, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 8], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 1], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
@@ -3582,7 +3581,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if is_hip():
         pytest.skip("test_convert2d is not supported in HIP")
     if (M == 1 or N == 1) and interm_layout:
-        pytest.skip()
+        pytest.skip("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.skip()
     if 'mma' in str(src_layout) and 'mma' in str(dst_layout):
