@@ -18,6 +18,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -386,6 +387,11 @@ struct ConvertTritonGPUToLLVM
     : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
   using ConvertTritonGPUToLLVMBase<
       ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
+                    NVVM::NVVMDialect>();
+  }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
                          mlir::triton::gpu::TMAMetadataTy *tmaMetadata)
