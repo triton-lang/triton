@@ -28,7 +28,7 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
 
   let results = (outs TT_Tensor:$result);
 
-  let hasCanonicalizeMethod = 1;
+  let hasCanonicalizer = 1;
 
   let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }

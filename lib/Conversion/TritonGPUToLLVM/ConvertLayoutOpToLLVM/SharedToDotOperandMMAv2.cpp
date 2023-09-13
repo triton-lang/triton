@@ -511,14 +511,6 @@ std::function<void(int, int)> getLoadMatrixFn(
   const int elemBytes = tensorTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 
-  if (tensor.getType()
-          .cast<RankedTensorType>()
-          .getElementType()
-          .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>()) {
-    bool noTrans = (isA ^ (order[0] == 0));
-    assert(noTrans && "float8e4b15 must have row-col layout");
-  }
-
   if (kWidth != (4 / elemBytes))
     assert(vecPhase == 1 || vecPhase == 4 * kWidth);
 

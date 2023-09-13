@@ -13,6 +13,7 @@ from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union,
 
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
+from ..language.core import dtype
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
@@ -249,6 +250,8 @@ class JITFunction(KernelInterface[T]):
             "float8e5": "fp8e5",
             "float8e4b15": "fp8e4b15",
             "float8e4b15x4": "fp8e4b15x4",
+            "float8_e4m3fn": "fp8e4nv",
+            "float8_e5m2": "fp8e5",
             "float16": "fp16",
             "bfloat16": "bf16",
             "float32": "fp32",
@@ -305,7 +308,7 @@ class JITFunction(KernelInterface[T]):
                         else (False,)'
         elif 'Tensor' in arg_annotation:
             return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)'
-        elif arg_annotation == 'int':
+        elif 'int' in arg_annotation or 'bool' in arg_annotation:
             return f'({arg} % {JITFunction.divisibility} == 0, {arg} % {JITFunction.divisibility_8} == 0, {arg} == 1)'
         else:
             return '(False,)'
@@ -358,10 +361,11 @@ class JITFunction(KernelInterface[T]):
 
         spec_keys = ', '.join(specializations)
         grid_args = ','.join([f'"{arg}": {arg}' for arg in self.arg_names])
-        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
+        args_signature = ', '.join(name if dflt == inspect._empty else f'{name} = triton.language.dtype(\'{dflt}\')' if dtype.is_dtype(f'{dflt}') else f'{name} = {dflt}' for name, dflt in zip(self.arg_names, self.arg_defaults))
         args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
 
         src = f"""
+import triton
 def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
     from ..compiler import compile, CompiledKernel, get_arch_default_num_warps, get_arch_default_num_stages
     sig_key = {f'{sig_keys},' if len(sig_keys) > 0 else ()}
@@ -381,20 +385,20 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
         device_type = self._conclude_device_type(device_types, {pinned_memory_flags})
 
     device_backend = None
-    if device_type not in ['cuda', 'hip']:
+    if device_type not in ['cuda']:
         device_backend = get_backend(device_type)
         if device_backend is None:
             raise ValueError('Cannot find backend for ' + device_type)
 
     if device is None:
-        if device_type in ['cuda', 'hip']:
+        if device_type in ['cuda']:
             device = get_current_device()
             set_current_device(device)
         else:
             device = device_backend.get_current_device()
             device_backend.set_current_device(device)
     if stream is None and not warmup:
-        if device_type in ['cuda', 'hip']:
+        if device_type in ['cuda']:
             stream = get_cuda_stream(device)
         else:
             stream = device_backend.get_stream()
@@ -466,9 +470,6 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
         self.arg_names = [v.name for v in signature.parameters.values()]
         self.arg_defaults = [v.default for v in signature.parameters.values()]
         self.has_defaults = any(v != inspect._empty for v in self.arg_defaults)
-        # specialization hints
-        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
-        self.do_not_specialize = {self.arg_names.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize}
         # function source code (without decorators)
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[self.src.find("def"):]
@@ -485,6 +486,10 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
         self.__annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         # index of constexprs
         self.constexprs = [self.arg_names.index(name) for name, ty in self.__annotations__.items() if 'constexpr' in ty]
+        # specialization hints
+        regular_args = [arg for i, arg in enumerate(self.arg_names) if i not in self.constexprs]
+        self.do_not_specialize = [] if do_not_specialize is None else do_not_specialize
+        self.do_not_specialize = {regular_args.index(arg) if isinstance(arg, str) else arg for arg in self.do_not_specialize}
         # tma info
         self.tensormaps_info = TMAInfos()
         # launcher
