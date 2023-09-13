@@ -23,6 +23,7 @@
 import os
 import re
 import subprocess
+import tempfile
 
 from ..common.backend import path_to_cuobjdump, path_to_nvdisasm
 
@@ -61,6 +62,17 @@ def processSassLines(fline, sline, labels):
         else:
             labels[target] = len(labels)
     return (f'{ctrl}', f'{asm}')
+
+
+def get_sass(cubin_asm, fun=None):
+    fd, path = tempfile.mkstemp()
+    try:
+        with open(fd, 'wb') as cubin:
+            cubin.write(cubin_asm)
+        sass = extract(path, fun)
+    finally:
+        os.remove(path)
+    return sass
 
 
 def extract(file_path, fun):

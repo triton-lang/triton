@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from collections import namedtuple
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_ma
 from ..runtime.driver import driver
 from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device,
                            get_device_capability, version_key)
-from ..tools.disasm import extract
+from ..tools.disasm import get_sass
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
 from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
@@ -332,17 +331,6 @@ def add_cuda_stages(arch, extern_libs, stages):
                      lambda src: llir_to_ptx(src, arch))
     stages["cubin"] = (lambda path: Path(path).read_bytes(),
                        lambda src: ptx_to_cubin(src, arch))
-
-
-def get_sass(cubin_asm, fun=None):
-    fd, path = tempfile.mkstemp()
-    try:
-        with open(fd, 'wb') as cubin:
-            cubin.write(cubin_asm)
-        sass = extract(path, fun)
-    finally:
-        os.remove(path)
-    return sass
 
 
 def compile(fn, **kwargs):
