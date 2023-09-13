@@ -10,6 +10,14 @@ def default_cache_dir():
     return os.path.join(Path.home(), ".triton", "cache")
 
 
+def default_override_dir():
+    return os.path.join(Path.home(), ".triton", "override")
+
+
+def default_dump_dir():
+    return os.path.join(Path.home(), ".triton", "dump")
+
+
 class CacheManager(ABC):
     def __init__(self, key):
         pass
@@ -36,17 +44,26 @@ class CacheManager(ABC):
 
 
 class FileCacheManager(CacheManager):
-    def __init__(self, key):
+    def __init__(self, key, override=False, dump=False):
         self.key = key
         self.lock_path = None
-        # create cache directory if it doesn't exist
-        self.cache_dir = os.getenv('TRITON_CACHE_DIR', "").strip() or default_cache_dir()
-        if self.cache_dir:
+        if (dump):
+            self.cache_dir = default_dump_dir()
             self.cache_dir = os.path.join(self.cache_dir, self.key)
             self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
+        elif (override):
+            self.cache_dir = default_override_dir()
+            self.cache_dir = os.path.join(self.cache_dir, self.key)
         else:
-            raise RuntimeError("Could not create or locate cache dir")
+            # create cache directory if it doesn't exist
+            self.cache_dir = os.getenv('TRITON_CACHE_DIR', "").strip() or default_cache_dir()
+            if self.cache_dir:
+                self.cache_dir = os.path.join(self.cache_dir, self.key)
+                self.lock_path = os.path.join(self.cache_dir, "lock")
+                os.makedirs(self.cache_dir, exist_ok=True)
+            else:
+                raise RuntimeError("Could not create or locate cache dir")
 
     def _make_path(self, filename) -> str:
         return os.path.join(self.cache_dir, filename)
@@ -131,3 +148,11 @@ def get_cache_manager(key) -> CacheManager:
         __cache_cls_nme = user_cache_manager
 
     return __cache_cls(key)
+
+
+def get_override_manager(key) -> CacheManager:
+    return __cache_cls(key, override=True)
+
+
+def get_dump_manager(key) -> CacheManager:
+    return __cache_cls(key, dump=True)
