@@ -531,9 +531,7 @@ class tensor:
         # IR handle
         self.handle = handle
         # Block shape
-        self.shape = (1, )
-        if type.is_block():
-            self.shape = type.shape
+        self.shape = type.shape if type.is_block() else ()
         self.numel = 1
         for s in self.shape:
             self.numel *= s
@@ -743,7 +741,7 @@ class tensor:
 
     @builtin
     def __getitem__(self, slices, _builder=None):
-        if isinstance(slices, slice):
+        if isinstance(slices, (slice, constexpr)):
             slices = [slices]
         ret = self
         for dim, sl in enumerate(slices):

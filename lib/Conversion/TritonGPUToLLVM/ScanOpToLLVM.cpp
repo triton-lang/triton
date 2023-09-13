@@ -59,7 +59,7 @@ static void scanThreadContiguousElements(SmallVector<Value> &srcValues,
 // contiguous group of elements.
 static void warpScan(SmallVector<Value> &srcValues,
                      ConversionPatternRewriter &rewriter,
-                     ScanLoweringHelper &helper, Value laneId) {
+                     ScanLoweringHelper &helper, Value laneIdAxis) {
   Location loc = helper.getLoc();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
@@ -76,7 +76,7 @@ static void warpScan(SmallVector<Value> &srcValues,
       Value shfl = shflUpSync(loc, rewriter, acc, i * threadStride);
       Value tempAcc = acc;
       accumulate(rewriter, helper.getCombineOp(), tempAcc, shfl);
-      Value mask = icmp_slt(laneId, i32_val(i));
+      Value mask = icmp_slt(laneIdAxis, i32_val(i));
       acc = select(mask, acc, tempAcc);
     }
     srcValues[srcIndex] = acc;
@@ -124,7 +124,8 @@ static void storeWarpAccumulator(SmallVector<Value> &srcValues,
 static void AddPartialReduce(SmallVector<Value> &srcValues,
                              ConversionPatternRewriter &rewriter,
                              ScanLoweringHelper &helper, Value sharedMemoryPtr,
-                             Value warpId, Value laneId, Value parallelLaneId) {
+                             Value warpId, Value laneIdAxis,
+                             Value parallelLaneId) {
   Location loc = helper.getLoc();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
   unsigned numWarps = helper.getAxisNumWarps();
@@ -133,7 +134,7 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
-  Value maskFirstLane = icmp_eq(laneId, i32_val(0));
+  Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
   struct Accumulator {
     Value acc;
@@ -228,7 +229,8 @@ public:
 private:
   std::tuple<Value, Value, Value>
   getDelinearizedIds(ConversionPatternRewriter &rewriter,
-                     ScanLoweringHelper &helper) const;
+                     ScanLoweringHelper &helper, Value laneId,
+                     Value warpId) const;
   LogicalResult emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
                              ConversionPatternRewriter &rewriter) const;
 };
@@ -237,15 +239,11 @@ private:
 // compute a flat id for the parallel dimensions.
 std::tuple<Value, Value, Value>
 ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
-                                     ScanLoweringHelper &helper) const {
+                                     ScanLoweringHelper &helper, Value laneId,
+                                     Value warpId) const {
   auto loc = helper.getLoc();
   unsigned axis = helper.getAxis();
   auto srcEncoding = helper.getEncoding();
-
-  Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(32);
-  Value warpId = udiv(threadId, warpSize);
-  Value laneId = urem(threadId, warpSize);
 
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
@@ -281,8 +279,15 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   if (!helper.isSupported())
     return failure();
 
+  Value threadId = getThreadId(rewriter, loc);
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value warpSize = i32_val(iWarpSize);
+  Value warpId = udiv(threadId, warpSize);
+  Value laneId = urem(threadId, warpSize);
+
   auto [laneIdAxis, warpIdAxis, flatIdParallel] =
-      getDelinearizedIds(rewriter, helper);
+      getDelinearizedIds(rewriter, helper, laneId, warpId);
   auto input = adaptor.getOperands()[0];
   auto type = op.getOperand(0).getType().cast<RankedTensorType>();
   SmallVector<Value> srcValues =

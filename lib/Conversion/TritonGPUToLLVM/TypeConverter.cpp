@@ -130,14 +130,9 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto mmaParent = dotOpLayout.getParent().dyn_cast<MmaEncodingAttr>();
   if (!mmaParent)
     return elemTy;
-  if (mmaParent.isAmpere()) {
-    int bitwidth = elemTy.getIntOrFloatBitWidth();
-    assert(bitwidth <= 32);
-    return IntegerType::get(ctx, 32);
-  } else {
-    assert(mmaParent.isVolta());
-    return vec_ty(elemTy, 2);
-  }
+  int bitwidth = elemTy.getIntOrFloatBitWidth();
+  assert(bitwidth <= 32);
+  return IntegerType::get(ctx, 32);
 }
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(

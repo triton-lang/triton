@@ -21,6 +21,7 @@ class AllocationAnalysis;
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec);
+SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op);
 
 } // namespace triton
 
