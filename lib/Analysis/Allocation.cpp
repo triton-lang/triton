@@ -51,9 +51,7 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   return {inOrd, outOrd};
 }
 
-SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op,
-                                              unsigned &inVec,
-                                              unsigned &outVec) {
+SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
@@ -78,15 +76,6 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op,
   }
 
   assert(srcLayout && dstLayout && "Unexpected layout in getRepShape()");
-  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  unsigned srcContigPerThread =
-      getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
-  unsigned dstContigPerThread =
-      getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
-  outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
 
   auto srcShapePerCTA = getShapePerCTA(srcTy);
   auto dstShapePerCTA = getShapePerCTA(dstTy);
@@ -106,13 +95,26 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op,
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
-  auto repShape = getRepShapeForCvtLayout(op, inVec, outVec);
+  auto repShape = getRepShapeForCvtLayout(op);
+
+  auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+  Attribute srcLayout = srcTy.getEncoding();
+  Attribute dstLayout = dstTy.getEncoding();
+
+  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
+  unsigned srcContigPerThread =
+      getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
+  unsigned dstContigPerThread =
+      getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
+  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+  //       that we cannot do vectorization.
+  inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
+  outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
 
   if (repShape.size() <= 1)
     return repShape;
   unsigned paddedDim = 1;
-  auto dstTy = op.getResult().getType().cast<RankedTensorType>();
-  Attribute dstLayout = dstTy.getEncoding();
   if (auto dstBlockedLayout = dstLayout.dyn_cast<BlockedEncodingAttr>()) {
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
