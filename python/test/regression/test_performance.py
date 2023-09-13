@@ -1,13 +1,10 @@
-import subprocess
-import sys
-
 import pytest
 import torch
 
 import triton
 import triton.language as tl
 import triton.ops
-from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
+from triton.testing import get_dram_gbps, get_max_tensorcore_tflops, nvsmi
 
 DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
 
@@ -19,15 +16,6 @@ DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
 def print_perf(cur_ms, cur_util, ref_util):
     # print on the same line cur_ms, cur_util and ref_util with 3 decimal places
     print(f'{cur_ms:.3f} ms \t cur: {cur_util:.3f} \t ref: {ref_util:.3f} \t dif={cur_util - ref_util:.3f}', end='\t')
-
-
-def nvsmi(attrs):
-    attrs = ','.join(attrs)
-    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
-    out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(',')
-    ret = [int(x) for x in ret]
-    return ret
 
 
 #######################
