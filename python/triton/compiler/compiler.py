@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from collections import namedtuple
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_ma
 from ..runtime.driver import driver
 from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device,
                            get_device_capability, version_key)
-from ..tools.disasm import extract
+from ..tools.disasm import get_sass
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
 from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
@@ -500,7 +499,6 @@ def compile(fn, **kwargs):
                     metadata_group[extra_file_name] = fn_cache_manager.put(next_module[1], extra_file_name)
                 else:
                     metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
-                    fn_cache_manager.put(next_module, ir_filename)
                     fn_dump_manager.put(next_module, ir_filename)
                     if (enable_override and fn_override_manager.has_file(ir_filename)):
                         print(f"\nOverriding kernel with file {ir_filename}")
@@ -517,6 +515,11 @@ def compile(fn, **kwargs):
 
         if ir_name == "cubin":
             asm[ir_name] = next_module
+            sass_ir = "sass"
+            sass_fname = f"{name}.{sass_ir}"
+            asm[sass_ir] = get_sass(next_module)
+            metadata_group[sass_fname] = fn_cache_manager.put(asm[sass_ir], sass_fname)
+
         elif ir_name == "amdgcn":
             asm[ir_name] = str(next_module[0])
         else:
@@ -669,16 +672,3 @@ class CompiledKernel:
                            self.clusterDims[1], self.clusterDims[2], self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
         return runner
-
-    def get_sass(self, fun=None):
-        if 'sass' in self.asm:
-            return self.asm['sass']
-        fd, path = tempfile.mkstemp()
-        try:
-            with open(fd, 'wb') as cubin:
-                cubin.write(self.asm['cubin'])
-            self.sass = extract(path, fun)
-        finally:
-            os.remove(path)
-        self.asm['sass'] = self.sass
-        return self.sass
