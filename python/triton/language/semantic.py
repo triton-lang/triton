@@ -501,24 +501,30 @@ def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.te
     if isinstance(value, tl.tensor):
         assert value.numel.value == 1, "only accepts size-1 tensor"
         value = cast(value, dtype, builder)
-        ret_ty = tl.block_type(value.dtype, shape)
-        return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
     else:
         # scalar
+        if dtype is None:
+            raise ValueError("dtype must be specified when value is not a tensor")
         if value == 0:
             value = builder.get_null_value(dtype.to_ir(builder))
         else:
             get_value_fn = getattr(builder, f"get_{dtype.name}")
             value = get_value_fn(value)
-        if dtype is None:
-            raise ValueError("dtype must be specified when value is not a tensor")
-        ret_ty = tl.block_type(dtype, shape)
-        return tl.tensor(builder.create_splat(value, shape), ret_ty)
+        value = tl.tensor(value, dtype)
+
+    return splat(value, shape, builder)
 
 
 # ===----------------------------------------------------------------------===//
 #                               Shape Manipulation
 # ===----------------------------------------------------------------------===//
+
+def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
+    assert not value.type.is_block(), "Cannot splat a block tensor"
+    if len(shape) == 0:
+        return value
+    ret_ty = tl.block_type(value.dtype, shape)
+    return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
 
 
 def view(input: tl.tensor,
@@ -544,8 +550,12 @@ def reshape(input: tl.tensor,
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    dst_shape = list(input.type.shape)
+    dst_shape = [tl._constexpr_to_value(x) for x in input.shape]
     dst_shape.insert(axis, 1)
+
+    if not input.type.is_block():
+        return splat(input, shape=dst_shape, builder=builder)
+
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_expand_dims(input.handle, axis), ret_ty)
 
@@ -1266,6 +1276,8 @@ def dot(lhs: tl.tensor,
         # Checks for cuda arch
         if arch < 90:
             assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(), "Dot op does not support fp8e4nv on CUDA arch < 90"
+            if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
+                return
             assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
         else:
             assert not lhs_dtype.is_fp8e4b15() and not rhs_dtype.is_fp8e4b15(), "Dot op does not support fp8e4b15 on CUDA arch >= 90"
@@ -1504,7 +1516,7 @@ def abs(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
-    if len(x.shape) != len(values):
+    if max(1, len(x.shape)) != len(values):
         raise ValueError("Shape of input to multiple_of does not match the length of values")
     x.handle.set_attr("tt.divisibility", ir.make_attr(values, x.handle.get_context()))
     return x

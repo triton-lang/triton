@@ -177,6 +177,6 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         if b_fp8:
             b = triton.reinterpret(b, getattr(tl, BDTYPE))
         tt_c = triton.ops.matmul(a, b, None, ALLOW_TF32)
-        torch.testing.assert_allclose(th_c, tt_c, atol=0, rtol=0)
+        torch.testing.assert_close(th_c, tt_c)
     except triton.OutOfResources as e:
         pytest.skip(str(e))

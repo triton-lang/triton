@@ -21,7 +21,8 @@ enum Target { NVVM, ROCDL, Default = NVVM };
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(const ConvertTritonGPUToLLVMOptions &options);
+createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target,
+                                 mlir::triton::gpu::TMAMetadataTy *tmaMetadata);
 
 } // namespace triton
 
