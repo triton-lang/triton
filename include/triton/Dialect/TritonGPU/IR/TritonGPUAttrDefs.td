@@ -585,6 +585,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     bool isVolta() const;
+    bool isTuring() const;
     bool isAmpere() const;
     bool isHopper() const;
 

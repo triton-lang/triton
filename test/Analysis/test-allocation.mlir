@@ -265,14 +265,14 @@ tt.func @alloc_m_barrier_scalar() {
 // CHECK-LABEL: scratch
 tt.func @scratch() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
-  // CHECK: scratch offset = 0, size = 512
+  // CHECK: scratch offset = 0, size = 128
   %b = "tt.reduce" (%cst0) ({
   ^bb0(%arg0: f16, %arg1: f16):
     %add = arith.addf %arg0, %arg1 : f16
     tt.reduce.return %add : f16
   }) {axis = 0 : i32} : (tensor<16x16xf16, #AL>) -> tensor<16xf16, #sliceAd0>
   tt.return
-  // CHECK-NEXT: size = 512
+  // CHECK-NEXT: size = 128
 }
 
 // CHECK-LABEL: trans

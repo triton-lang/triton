@@ -498,24 +498,6 @@ struct TritonAtomicRMWPattern
   }
 };
 
-template <class T>
-struct TritonExternElementwisePattern : public OpConversionPattern<T> {
-  using OpConversionPattern<T>::OpConversionPattern;
-  using OpConversionPattern<T>::typeConverter;
-  typedef typename OpConversionPattern<T>::OpAdaptor OpAdaptor;
-
-  LogicalResult
-  matchAndRewrite(T op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<T>(
-                      op, typeConverter->convertType(op.getType()),
-                      adaptor.getArgs(), adaptor.getLibname(),
-                      adaptor.getLibpath(), adaptor.getSymbol()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
 template <class Op>
 struct TritonGenericPattern : public OpConversionPattern<Op> {
   using OpConversionPattern<Op>::OpConversionPattern;
@@ -618,6 +600,24 @@ struct TritonScanReturnPattern
   }
 };
 
+struct TritonExternElementwisePattern
+    : public OpConversionPattern<triton::ExternElementwiseOp> {
+  using OpConversionPattern<triton::ExternElementwiseOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ExternElementwiseOp op,
+                  typename triton::ExternElementwiseOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type retType = this->getTypeConverter()->convertType(op.getType());
+    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExternElementwiseOp>(
+                      op, retType, adaptor.getOperands(), op.getLibnameAttr(),
+                      op.getLibpathAttr(), op.getSymbolAttr(),
+                      op.getPureAttr()),
+                  adaptor.getAttributes());
+    return success();
+  }
+};
+
 struct TritonPrintPattern : public OpConversionPattern<triton::PrintOp> {
   using OpConversionPattern<triton::PrintOp>::OpConversionPattern;
 
@@ -695,26 +695,24 @@ public:
 void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns, unsigned numCTAs) {
   MLIRContext *context = patterns.getContext();
-  patterns
-      .insert< // TODO: view should have custom pattern that views the layout
-          TritonGenericPattern<triton::AdvanceOp>,
-          TritonGenericPattern<triton::MakeTensorPtrOp>,
-          TritonGenericPattern<triton::ViewOp>,
-          TritonGenericPattern<triton::BitcastOp>,
-          TritonGenericPattern<triton::FpToFpOp>,
-          TritonGenericPattern<triton::IntToPtrOp>,
-          TritonGenericPattern<triton::PtrToIntOp>,
-          TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
-          TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-          TritonReducePattern, TritonReduceReturnPattern, TritonScanPattern,
-          TritonScanReturnPattern, TritonTransPattern, TritonExpandDimsPattern,
-          TritonMakeRangePattern, TritonDotPattern, TritonLoadPattern,
-          TritonStorePattern,
-          TritonExternElementwisePattern<triton::PureExternElementwiseOp>,
-          TritonExternElementwisePattern<triton::ImpureExternElementwiseOp>,
-          TritonPrintPattern, TritonAssertPattern, TritonAtomicRMWPattern,
-          TritonFuncOpPattern, TritonReturnOpPattern, TritonCallOpPattern>(
-          typeConverter, context);
+  patterns.insert< // TODO: view should have custom pattern that views the
+                   // layout
+      TritonGenericPattern<triton::AdvanceOp>,
+      TritonGenericPattern<triton::MakeTensorPtrOp>,
+      TritonGenericPattern<triton::ViewOp>,
+      TritonGenericPattern<triton::BitcastOp>,
+      TritonGenericPattern<triton::FpToFpOp>,
+      TritonGenericPattern<triton::IntToPtrOp>,
+      TritonGenericPattern<triton::PtrToIntOp>,
+      TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
+      TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
+      TritonGenericPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
+      TritonReduceReturnPattern, TritonScanPattern, TritonScanReturnPattern,
+      TritonTransPattern, TritonExpandDimsPattern, TritonMakeRangePattern,
+      TritonDotPattern, TritonLoadPattern, TritonStorePattern,
+      TritonExternElementwisePattern, TritonPrintPattern, TritonAssertPattern,
+      TritonAtomicRMWPattern, TritonFuncOpPattern, TritonReturnOpPattern,
+      TritonCallOpPattern>(typeConverter, context);
 }
 
 //

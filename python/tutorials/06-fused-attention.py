@@ -96,8 +96,7 @@ def _fwd_kernel(
         alpha = tl.math.exp2(m_i - m_i_new)
         p = tl.math.exp2(qk - m_i_new[:, None])
         # -- scale and update acc --
-        acc_scale = l_i * 0 + alpha  # workaround some compiler bug
-        acc *= acc_scale[:, None]
+        acc *= alpha[:, None]
         acc += tl.dot(p.to(tl.float16), v)
         # -- update m_i and l_i --
         l_i = l_i * alpha + tl.sum(p, 1)

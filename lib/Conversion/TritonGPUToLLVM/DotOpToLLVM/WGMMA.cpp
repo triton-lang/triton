@@ -21,8 +21,8 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "DotOpToLLVM.h"
-#include "Utility.h"
+#include "../DotOpToLLVM.h"
+#include "../Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -58,7 +58,7 @@ triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
     return triton::nvgpu::WGMMAEltType::s8;
   } else if (aTy.isFloat8E5M2()) {
     return triton::nvgpu::WGMMAEltType::e5m2;
-  } else if (aTy.isFloat8E4M3FN()) {
+  } else if (aTy.isFloat8E4M3FNUZ()) {
     return triton::nvgpu::WGMMAEltType::e4m3;
   } else {
     llvm::report_fatal_error("Unsupported mma operand type found");
@@ -115,7 +115,7 @@ public:
     mode = getModeFromLayout(sharedLayout, widthInByte);
 
     baseDesc = rewriter.create<triton::nvgpu::WGMMADescCreateOp>(
-        loc, i64_ty, base, i32_val(shape[ord[1]]), mode);
+        loc, base, i32_val(shape[ord[1]]), mode);
   }
 
   Value smemLoad(int a, int b) {
@@ -298,7 +298,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
   triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
-  triton::nvgpu::WGMMAEltType eltTypeB = eltTypeA;
+  triton::nvgpu::WGMMAEltType eltTypeB = getMmaOperandType(b, allowTF32);
 
   triton::nvgpu::WGMMALayout layoutA = transA ? triton::nvgpu::WGMMALayout::col
                                               : triton::nvgpu::WGMMALayout::row;
