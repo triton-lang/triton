@@ -279,8 +279,7 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", []> {
 }
 
 def TTNG_StoreAsyncOp : TTNG_Op<"store_async",
-                              [Source1IsSharedEncoding,
-                               MemoryEffects<[MemWrite]>]> {
+                              [MemoryEffects<[MemWrite]>]> {
   let summary = "store asynchronous by a tensor pointer";
   let arguments = (ins TT_TensorPtr:$dst, TT_Tensor:$src,
                        DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache);
@@ -372,7 +371,7 @@ def TTNG_RegAllocOp : TTNG_Op<"reg_alloc", []> {
 
   let arguments = (ins I32Attr: $regCount);
 
-  let assemblyFormat = "$regCount attr-dict `:` type(operands)";
+  let assemblyFormat = "$regCount attr-dict";
 }
 
 def TTNG_RegDeallocOp : TTNG_Op<"reg_dealloc", []> {
@@ -380,7 +379,7 @@ def TTNG_RegDeallocOp : TTNG_Op<"reg_dealloc", []> {
 
   let arguments = (ins I32Attr: $regCount);
 
-  let assemblyFormat = "$regCount attr-dict `:` type(operands)";
+  let assemblyFormat = "$regCount attr-dict";
 }
 
 #endif

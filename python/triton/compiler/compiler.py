@@ -5,23 +5,22 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import tempfile
 from collections import namedtuple
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any
 
-import triton
-import triton._C.libtriton.triton as _triton
-from .._C.libtriton.triton import (add_external_libs, compile_ptx_to_cubin,
-                                   get_num_warps, get_shared_memory_size, ir,
-                                   translate_llvmir_to_hsaco, translate_llvmir_to_ptx,
+from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs,
+                                   compile_ptx_to_cubin, get_env_vars, get_num_warps,
+                                   get_shared_memory_size, ir, runtime,
+                                   translate_llvmir_to_ptx,
                                    translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend, path_to_ptxas
+from ..common.build import is_hip
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
-from ..runtime.cache import get_cache_manager
+from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device,
                            get_device_capability, version_key)
@@ -101,8 +100,8 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     if arch // 10 >= 9 and enable_warp_specialization and num_warps == 4:
         pm.add_tritongpu_ws_feasibility_checking_pass(arch)
         pm.run(mod)
-        ws_enabled = _triton.ir.is_ws_supported(mod)
-        pm = _triton.ir.pass_manager(mod.context)
+        ws_enabled = ir.is_ws_supported(mod)
+        pm = ir.pass_manager(mod.context)
         pm.enable_debug()
     if ws_enabled:
         pm.add_tritongpu_wsdecomposing_pass(arch)
@@ -120,11 +119,13 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
     pm.add_tritongpu_decompose_conversions_pass()
+    pm.add_tritongpu_ws_fixup_missing_attrs_pass()
     pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
     if arch // 10 >= 9:
         pm.add_tritongpu_fence_insertion_pass()
+    pm.add_tritongpu_ws_fixup_missing_attrs_pass()
     pm.run(mod)
     return mod
 
@@ -141,9 +142,9 @@ def ttgir_to_llir(mod, extern_libs, arch, tma_infos):
         _add_external_libs(mod, extern_libs)
     # TODO: separate tritongpu_to_llvmir for different backends
     if _is_cuda(arch):
-        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, False)
+        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, runtime.TARGET.NVVM)
     else:
-        return translate_triton_gpu_to_llvmir(mod, 0, True)
+        return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.ROCDL)
 
 
 # PTX translation
@@ -187,72 +188,6 @@ def ptx_to_cubin(ptx: str, arch: int):
     return compile_ptx_to_cubin(ptx, ptxas, arch)
 
 
-# AMDGCN translation
-
-def get_amdgcn_bitcode_paths(arch):
-    gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
-                                           "ocml.bc",
-                                           "ockl.bc",
-                                           "oclc_finite_only_off.bc",
-                                           "oclc_daz_opt_off.bc",
-                                           "oclc_correctly_rounded_sqrt_on.bc",
-                                           "oclc_unsafe_math_off.bc",
-                                           "oclc_wavefrontsize64_on.bc"]
-
-    gfx_arch = arch[1]
-    gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
-
-    gpu_arch_specific_bitcode_library = 'oclc_isa_version_' + gfx_arch_id + ".bc"
-    bitcode_path_dir = os.path.join(Path(__file__).parent.resolve(), "third_party/rocm/lib/bitcode/")
-
-    amdgcn_bitcode_paths = {}
-    i = 1
-    for bc_lib in gpu_arch_agnostic_bitcode_libraries:
-        bc_path = bitcode_path_dir + bc_lib
-        if os.path.exists(bc_path):
-            amdgcn_bitcode_paths['library_' + str(i)] = bc_path
-            i += 1
-    bc_gfx_path = bitcode_path_dir + gpu_arch_specific_bitcode_library
-    if os.path.exists(bc_gfx_path):
-        amdgcn_bitcode_paths['library_' + str(i)] = bc_gfx_path
-
-    return amdgcn_bitcode_paths
-
-
-def get_amdgpu_arch_fulldetails():
-    """
-    get the amdgpu fulll ISA details for compiling:
-    i.e., arch_triple: amdgcn-amd-amdhsa; arch_name: gfx906; arch_features: sramecc+:xnack-
-    """
-    try:
-        # TODO: package rocm.cc with Triton
-        rocm_path_dir = os.getenv("ROCM_PATH", default="/opt/rocm")
-        rocminfo = subprocess.check_output(rocm_path_dir + '/bin/rocminfo').decode()
-        gfx_arch_details = re.search('amd.*', rocminfo).group(0).strip().split('--')
-        arch_triple = gfx_arch_details[0]
-        arch_name_features = gfx_arch_details[1].split(':')
-        arch_name = arch_name_features[0]
-        arch_features = ""
-
-        if (len(arch_name_features) == 3):
-            arch_features = "+" + re.search('\\w+', arch_name_features[1]).group(0) + ","\
-                            "-" + re.search('\\w+', arch_name_features[2]).group(0)
-        return [arch_triple, arch_name, arch_features]
-    except BaseException:
-        return None
-
-
-def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str, gfx_triple: str, gfx_features: str) -> Tuple[str, str]:
-    '''
-    Translate TritonGPU module to HSACO code based on full details of gpu architecture.
-    :param mod: a TritonGPU dialect module
-    :return:
-        - AMDGCN code
-        - Path to HSACO object
-    '''
-    return translate_llvmir_to_hsaco(mod, gfx_arch, gfx_triple, gfx_features)
-
-
 # ------------------------------------------------------------------------------
 # compiler
 # ------------------------------------------------------------------------------
@@ -294,6 +229,9 @@ def make_hash(fn, arch, env_vars, **kwargs):
         key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{arch}-{env_vars_list}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
+    ignore_version = kwargs.get('ignore_version', False)
+    if (ignore_version):
+        return hashlib.md5((Path(fn).read_text()).encode("utf-8")).hexdigest()
     return hashlib.md5((Path(fn).read_text() + version_key()).encode("utf-8")).hexdigest()
 
 
@@ -319,8 +257,10 @@ arg_type_pattern = {
     "ttgir": mlir_arg_type_pattern,
     "ptx": ptx_arg_type_pattern,
 }
-
-ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
+if is_hip():
+    ttgir_num_warps_pattern = r'"triton_gpu_rocm.num-warps"\s?=\s?(\d+)\s?:'
+else:
+    ttgir_num_warps_pattern = r'"triton_gpu.num-warps"\s?=\s?(\d+)\s?:'
 
 
 def _get_jsonable_constants(constants):
@@ -353,35 +293,37 @@ def _is_cuda(arch):
 
 
 def get_architecture_descriptor(capability):
-    try:
-        import torch
-    except ImportError:
-        raise ImportError("Triton requires PyTorch to be installed")
     if capability is None:
-        if torch.version.hip is None:
-            device = get_current_device()
-            capability = get_device_capability(device)
-            capability = capability[0] * 10 + capability[1]
-        else:
-            capability = get_amdgpu_arch_fulldetails()
+        device = get_current_device()
+        capability = get_device_capability(device)
+        capability = capability[0] * 10 + capability[1]
     return capability
 
 
-def add_rocm_stages(arch, extern_libs, stages):
-    extern_libs.update(get_amdgcn_bitcode_paths(arch))
+def get_arch_default_num_warps(device_type):
+    if device_type in ["cuda", "hip"]:
+        num_warps = 4
+    else:
+        _device_backend = get_backend(device_type)
+        assert _device_backend
+        arch = _device_backend.get_architecture_descriptor()
+        num_warps = arch["num_warps"]
 
-    for key in list(extern_libs):
-        if extern_libs[key] == '' or extern_libs[key] is None:
-            extern_libs.pop(key)
+    return num_warps
 
-    gfx_arch_full_details = arch
-    gfx_arch = os.environ.get('MI_GPU_ARCH', gfx_arch_full_details[1])
-    if gfx_arch is None:
-        raise RuntimeError('gfx_arch is None (not specified)')
-    stages["amdgcn"] = (lambda path: Path(path).read_text(),
-                        lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch,
-                                                             gfx_arch_full_details[0],
-                                                             gfx_arch_full_details[2]))
+
+def get_arch_default_num_stages(device_type, capability=None):
+    if device_type in ["cuda", "hip"]:
+        arch = get_architecture_descriptor(capability)
+        is_cuda = device_type == "cuda" and _is_cuda(arch)
+        num_stages = 3 if is_cuda and arch >= 75 else 2
+    else:
+        _device_backend = get_backend(device_type)
+        assert _device_backend
+        arch = _device_backend.get_architecture_descriptor()
+        num_stages = arch["num_stages"]
+
+    return num_stages
 
 
 def add_cuda_stages(arch, extern_libs, stages):
@@ -395,22 +337,28 @@ def add_cuda_stages(arch, extern_libs, stages):
 def compile(fn, **kwargs):
     # Get device type to decide which backend should be used
     device_type = kwargs.get("device_type", "cuda")
-    _device_backend = get_backend(device_type)
+    capability = kwargs.get("cc", None)
 
-    if device_type in ["cuda", "hip"]:
-        arch = get_architecture_descriptor(kwargs.get("cc", None))
+    if is_hip():
+        device_type = "hip"
+
+    if device_type == "cuda":
+        _device_backend = get_backend(device_type)
+        arch = get_architecture_descriptor(capability)
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
         arch = _device_backend.get_architecture_descriptor(**kwargs)
 
     is_cuda = device_type == "cuda" and _is_cuda(arch)
-    is_hip = device_type in ["cuda", "hip"] and not is_cuda
+    if is_hip():
+        is_cuda = False
     context = ir.context()
     constants = kwargs.get("constants", dict())
-    num_warps = kwargs.get("num_warps", 4)
+    num_warps = kwargs.get("num_warps", get_arch_default_num_warps(device_type))
+    assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
-    num_stages = kwargs.get("num_stages", 3 if is_cuda and arch >= 75 else 2)
+    num_stages = kwargs.get("num_stages", get_arch_default_num_stages(device_type, capability=capability))
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
@@ -424,26 +372,36 @@ def compile(fn, **kwargs):
     if os.environ.get('OPTIMIZE_EPILOGUE', '') == '1':
         optimize_epilogue = True
     #
-    cluster_info = _triton.ClusterInfo()
+    cluster_info = ClusterInfo()
     if "clusterDims" in kwargs:
         cluster_info.clusterDimX = kwargs["clusterDims"][0]
         cluster_info.clusterDimY = kwargs["clusterDims"][1]
         cluster_info.clusterDimZ = kwargs["clusterDims"][2]
-    tma_infos = _triton.TMAInfos()
+    tma_infos = TMAInfos()
     # build compilation stages
     stages = dict()
     stages["ast"] = (lambda path: fn, None)
     stages["ttir"] = (lambda path: parse_mlir_module(path, context),
                       lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, arch=arch), arch))
-    stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                       lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
-    stages["llir"] = (lambda path: Path(path).read_text(),
-                      lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
     if is_cuda:
+        stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
+                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
+        stages["llir"] = (lambda path: Path(path).read_text(),
+                          lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
         add_cuda_stages(arch, extern_libs, stages)
-    elif is_hip:
-        add_rocm_stages(arch, extern_libs, stages)
+    elif device_type == "hip":
+        _device_backend.add_stages(arch, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
+    elif device_type == "xpu":
+        stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
+                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
+        stages["llir"] = (lambda path: Path(path).read_text(),
+                          lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
+        _device_backend.add_stages(arch, extern_libs, stages)
     else:
+        # pass the user's configuration to the backend device.
+        arch["num_warps"] = num_warps
+        arch["num_stages"] = num_stages
+        arch["num_ctas"] = num_ctas
         _device_backend.add_stages(arch, extern_libs, stages)
 
     # find out the signature of the function
@@ -477,7 +435,12 @@ def compile(fn, **kwargs):
         first_stage = list(stages.keys()).index(ir_name)
 
     # create cache manager
-    fn_cache_manager = get_cache_manager(make_hash(fn, arch, _triton.get_env_vars(), **kwargs))
+    fn_cache_manager = get_cache_manager(make_hash(fn, arch, get_env_vars(), **kwargs))
+    # managers used to dump and override IR for debugging
+    enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
+    fn_override_manager = get_override_manager(make_hash(fn, arch, get_env_vars(), **kwargs, ignore_version=True))
+    fn_dump_manager = get_dump_manager(make_hash(fn, arch, get_env_vars(), **kwargs, ignore_version=True))
+
     # determine name and extension type of provided function
     if isinstance(fn, JITFunction):
         name, ext = fn.__name__, "ast"
@@ -510,14 +473,13 @@ def compile(fn, **kwargs):
                     "constants": _get_jsonable_constants(constants),
                     "debug": debug,
                     "arch": arch, }
-        metadata.update(_triton.get_env_vars())
+        metadata.update(get_env_vars())
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
             metadata["shared"] = kwargs["shared"]
 
     # Add device type to meta information
     metadata["device_type"] = device_type
-    metadata["cache_key"] = fn_cache_manager.key
 
     first_stage = list(stages.keys()).index(ext)
     asm = dict()
@@ -532,13 +494,18 @@ def compile(fn, **kwargs):
             path = metadata_group.get(ir_filename)
             if path is None:
                 next_module = compile_kernel(module)
-                if ir == "amdgcn":
+                if ir_name == "amdgcn":
                     extra_file_name = f"{name}.hsaco_path"
                     metadata_group[ir_filename] = fn_cache_manager.put(next_module[0], ir_filename)
                     metadata_group[extra_file_name] = fn_cache_manager.put(next_module[1], extra_file_name)
                 else:
                     metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
                     fn_cache_manager.put(next_module, ir_filename)
+                    fn_dump_manager.put(next_module, ir_filename)
+                    if (enable_override and fn_override_manager.has_file(ir_filename)):
+                        print(f"\nOverriding kernel with file {ir_filename}")
+                        full_name = fn_override_manager.get_file(ir_filename)
+                        next_module = parse(full_name)
             else:
                 if ir_name == "amdgcn":
                     extra_file_name = f"{name}.hsaco_path"
@@ -555,21 +522,27 @@ def compile(fn, **kwargs):
         else:
             asm[ir_name] = str(next_module)
         if ir_name == "llir" and "shared" not in metadata:
-            metadata["shared"] = get_shared_memory_size(module)
-        if ir_name == "ttgir" and enable_warp_specialization:
-            metadata["num_warps"] = get_num_warps(module)
+            if is_hip():
+                metadata["shared"] = _device_backend.get_shared_memory_size(module)
+            else:
+                metadata["shared"] = get_shared_memory_size(module)
+        if ir_name == "ttgir":
+            if is_hip():
+                metadata["num_warps"] = _device_backend.get_num_warps(next_module)
+            else:
+                metadata["enable_warp_specialization"] = ir.is_ws_supported(next_module)
+                if metadata["enable_warp_specialization"]:
+                    metadata["num_warps"] = get_num_warps(next_module)
         if ir_name == "ptx":
             metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
         if ir_name == "amdgcn":
             metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
             asm["hsaco_path"] = next_module[1]
-        if ir_name == "ttgir":
-            metadata["enable_warp_specialization"] = _triton.ir.is_ws_supported(next_module)
-        if not is_cuda and not is_hip:
+        if not is_cuda and not is_hip():
             _device_backend.add_meta_info(ir_name, module, next_module, metadata, asm)
         module = next_module
 
-    ids_of_folded_args = tuple([int(k) for k in configs[0].ids_of_folded_args]) if isinstance(fn, triton.runtime.JITFunction) else ()
+    ids_of_folded_args = tuple([int(k) for k in configs[0].ids_of_folded_args]) if isinstance(fn, JITFunction) else ()
     if "clusterDims" not in metadata:
         metadata["clusterDims"] = [
             cluster_info.clusterDimX,
@@ -584,13 +557,13 @@ def compile(fn, **kwargs):
             metadata["tensormaps_info"][i].ids_of_folded_args = ids_of_folded_args
 
     ids_of_tensormaps = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
-    if isinstance(fn, triton.runtime.JITFunction) and "tensormaps_info" in metadata:
+    if isinstance(fn, JITFunction) and "tensormaps_info" in metadata:
         fn.tensormaps_info = metadata["tensormaps_info"]
 
-    ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, triton.runtime.JITFunction) else ()
+    ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, JITFunction) else ()
     ids = {"ids_of_tensormaps": ids_of_tensormaps, "ids_of_folded_args": ids_of_folded_args, "ids_of_const_exprs": ids_of_const_exprs}
     # cache manager
-    if is_cuda or is_hip:
+    if is_cuda:
         so_path = make_stub(name, signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
     else:
         so_path = _device_backend.make_launcher_stub(name, signature, constants, ids)
@@ -627,9 +600,8 @@ class CompiledKernel:
         if "tensormaps_info" in metadata:
             self.tensormaps_info = metadata["tensormaps_info"]
         self.constants = metadata["constants"]
-        self.cache_key = metadata["cache_key"]
         self.device_type = metadata["device_type"]
-        self.device_backend = get_backend(self.device_type) if self.device_type not in ["cuda", "hip"] else None
+        self.device_backend = get_backend(self.device_type) if self.device_type not in ["cuda"] else None
         # initialize asm dict
         self.asm = asm
         # binaries are lazily initialized
@@ -643,7 +615,7 @@ class CompiledKernel:
         if self.cu_module is not None:
             return
 
-        if self.device_type in ["cuda", "hip"]:
+        if self.device_type in ["cuda"]:
             device = get_current_device()
             bin_path = {
                 driver.HIP: "hsaco_path",
@@ -674,22 +646,22 @@ class CompiledKernel:
         return super().__getattribute__(name)
 
     # capture args and expand args with cutensormap*
-    def assemble_tensormap_to_arg(self, args, constants):
+    def assemble_tensormap_to_arg(self, args):
         args_with_tma = list(args)
         if hasattr(self, 'tensormaps_info'):
             # tuple for hashable
             args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
             for i, e in enumerate(self.tensormaps_info):
-                args_with_tma.append(CompiledKernel.tensormap_manager[(self.cache_key, e, args_ptr)])
+                args_with_tma.append(CompiledKernel.tensormap_manager[(e, args_ptr)])
         return args_with_tma
 
     def __getitem__(self, grid):
         self._init_handles()
 
         def runner(*args, stream=None):
-            args_expand = self.assemble_tensormap_to_arg(args, self.constants)
+            args_expand = self.assemble_tensormap_to_arg(args)
             if stream is None:
-                if self.device_type in ["cuda", "rocm"]:
+                if self.device_type in ["cuda"]:
                     stream = get_cuda_stream()
                 else:
                     stream = get_backend(self.device_type).get_stream(None)

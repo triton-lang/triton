@@ -24,3 +24,15 @@ venv.bak/
 # JetBrains project files
 .idea
 cmake-build-*
+
+# Third-party binaries
+ptxas
+
+# Docs
+docs/_build/
+docs/python-api/generated/
+docs/dialects/
+docs/getting-started/tutorials
+python/tutorials/
+!python/tutorials/*.py
+!python/tutorials/*.rst

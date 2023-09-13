@@ -15,10 +15,12 @@ class LinkerError(Exception):
 
 @dataclass
 class KernelLinkerMeta:
+    orig_kernel_name: str
     arg_names: Sequence[str]
     arg_ctypes: Sequence[str]
     sizes: Sequence[Union[int, None]]
     sig_hash: str
+    triton_suffix: str
     suffix: str
     num_specs: int
     """ number of specialized arguments """
@@ -29,8 +31,8 @@ class HeaderParser:
         import re
 
         # [kernel_name, c signature]
-        self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+)")
-        # [name, suffix]
+        self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+):(.+)")
+        # [name, hash, suffix]
         self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]+)$")
         # [(type, name)]
         self.c_sig = re.compile("[\\s]*(\\w+)\\s(\\w+)[,]?")
@@ -45,17 +47,19 @@ class HeaderParser:
             if ln.startswith("//"):
                 m = self.linker_directives.match(ln)
                 if _exists(m):
-                    ker_name, c_sig = m.group(1), m.group(2)
+                    ker_name, c_sig, algo_info = m.group(1), m.group(2), m.group(3)
                     name, sig_hash, suffix = self._match_name(ker_name)
                     c_types, arg_names = self._match_c_sig(c_sig)
                     num_specs, sizes = self._match_suffix(suffix, c_sig)
                     self._add_kernel(
-                        name,
+                        "_".join([name, algo_info]),
                         KernelLinkerMeta(
+                            orig_kernel_name=name,
                             arg_names=arg_names,
                             arg_ctypes=c_types,
                             sizes=sizes,
                             sig_hash=sig_hash,
+                            triton_suffix=suffix,
                             suffix=suffix,
                             num_specs=num_specs,
                         ),
@@ -126,28 +130,48 @@ def gen_signature(m):
     return sig
 
 
-def make_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
+# generate declarations of kernels with meta-parameter and constant values
+def make_algo_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     return f"""
-CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature_with_full_args(metas[-1])});
+CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])});
 void load_{name}();
 void unload_{name}();
     """
 
 
-def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
+# generate declarations of kernels with meta-parameter and constant values
+def make_global_decl(meta: KernelLinkerMeta) -> str:
+    return f"""
+CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)});
+CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id);
+void load_{meta.orig_kernel_name}();
+void unload_{meta.orig_kernel_name}();
+    """
+
+
+# generate dispatcher function for kernels with different meta-parameter and constant values
+def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
+    src = f"CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)}){{\n"
+    src += f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n"
+    src += "}\n"
+    return src
+
+
+# generate dispatcher function for kernels with different integer value hints
+def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        src += f"CUresult {name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature(meta)});\n"
+        src += f"CUresult {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, {gen_signature(meta)});\n"
     src += "\n"
 
-    src += f"CUresult {name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {gen_signature_with_full_args(metas[-1])}){{"
+    src += f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{"
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
         cond_fn = lambda val, hint: f"({val} % {hint} == 0)" if hint == 16 else f"({val} == {hint})" if hint == 1 else None
         conds = " && ".join([cond_fn(val, hint) for val, hint in zip(meta.arg_names, meta.sizes) if hint is not None])
         src += f"  if ({conds})\n"
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
-        src += f"    return {name}_{meta.sig_hash}_{meta.suffix}(stream, gX, gY, gZ, {', '.join(arg_names)});\n"
+        src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
     src += "\n"
     src += "  return CUDA_ERROR_INVALID_VALUE;\n"
     src += "}\n"
@@ -155,12 +179,55 @@ def make_kernel_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     for mode in ["load", "unload"]:
         src += f"\n// {mode} for: {name}\n"
         for meta in sorted(metas, key=lambda m: -m.num_specs):
-            src += f"void {mode}_{name}_{meta.sig_hash}_{meta.suffix}();\n"
+            src += f"void {mode}_{meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}();\n"
         src += f"void {mode}_{name}() {{"
         src += "\n"
         for meta in sorted(metas, key=lambda m: -m.num_specs):
-            src += f"  {mode}_{name}_{meta.sig_hash}_{meta.suffix}();\n"
+            src += f"  {mode}_{meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}();\n"
         src += "}\n"
+    return src
+
+
+# generate dispatcher function for kernels with different meta-parameter and constant values
+def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
+    src = f"CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+    src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
+    src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
+    src += "}\n"
+    return src
+
+
+# generate definition of function pointers of kernel dispatchers based on meta-parameter and constant values
+def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
+    # the table of hint dispatchers
+    src = f"typedef CUresult (*kernel_func_t)(CUstream stream, {gen_signature_with_full_args(meta)});\n"
+    src += f"kernel_func_t {meta.orig_kernel_name}_kernels[] = {{\n"
+    for name in names:
+        src += f"  {name},\n"
+    src += "};\n"
+    return src
+
+
+# generate definition for load/unload functions for kernels with different meta-parameter and constant values
+def make_kernel_load_def(names: str, meta: KernelLinkerMeta) -> str:
+    src = ""
+    for mode in ["load", "unload"]:
+        src += f"void {mode}_{meta.orig_kernel_name}(void){{\n"
+        for name in names:
+            src += f"  {mode}_{name}();\n"
+        src += "}\n\n"
+    return src
+
+
+def make_get_num_algos_decl(meta: KernelLinkerMeta) -> str:
+    src = f"int {meta.orig_kernel_name}_get_num_algos(void);"
+    return src
+
+
+def make_get_num_algos_def(meta: KernelLinkerMeta) -> str:
+    src = f"int {meta.orig_kernel_name}_get_num_algos(void){{\n"
+    src += f"  return (int)sizeof({meta.orig_kernel_name}_kernels);\n"
+    src += "}\n"
     return src
 
 
@@ -198,16 +265,43 @@ if __name__ == "__main__":
         parser.extract_linker_meta(h_str)
 
     # generate headers
-    decls = [make_decls(name, meta) for name, meta in parser.kernels.items()]
+    algo_decls = [make_algo_decls(name, meta) for name, meta in parser.kernels.items()]
+    meta_lists = [meta for name, meta in parser.kernels.items()]
+    meta = meta_lists[0][0]
+    get_num_algos_decl = make_get_num_algos_decl(meta)
+    global_decl = make_global_decl(meta)
     with args.out.with_suffix(".h").open("w") as fp:
-        fp.write("#include <cuda.h>\n" + "\n".join(decls))
+        out = "#include <cuda.h>\n"
+        out += "\n".join(algo_decls)
+        out += "\n"
+        out += get_num_algos_decl
+        out += "\n"
+        out += global_decl
+        fp.write(out)
 
     # generate source
-    defs = [make_kernel_dispatcher(name, meta) for name, meta in parser.kernels.items()]
+    defs = [make_kernel_hints_dispatcher(name, meta) for name, meta in parser.kernels.items()]
+    names = [name for name in parser.kernels.keys()]
+    func_pointers_def = make_func_pointers(names, meta)
+    meta_const_def = make_kernel_meta_const_dispatcher(meta)
+    load_unload_def = make_kernel_load_def(names, meta)
+    get_num_algos_def = make_get_num_algos_def(meta)
+    default_algo_kernel = make_default_algo_kernel(meta)
     with args.out.with_suffix(".c").open("w") as fp:
         out = ""
         out += "#include <cuda.h>\n"
         out += "#include <stdint.h>\n"
+        out += "#include <assert.h>\n"
         out += "\n"
         out += "\n".join(defs)
+        out += "\n"
+        out += func_pointers_def
+        out += "\n"
+        out += get_num_algos_def
+        out += "\n"
+        out += meta_const_def
+        out += "\n"
+        out += load_unload_def
+        out += "\n"
+        out += default_algo_kernel
         fp.write(out)

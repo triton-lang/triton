@@ -27,6 +27,9 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](mlir::Float8E4M3B11FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
+  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
   addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
@@ -127,14 +130,9 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto mmaParent = dotOpLayout.getParent().dyn_cast<MmaEncodingAttr>();
   if (!mmaParent)
     return elemTy;
-  if (mmaParent.isAmpere()) {
-    int bitwidth = elemTy.getIntOrFloatBitWidth();
-    assert(bitwidth <= 32);
-    return IntegerType::get(ctx, 32);
-  } else {
-    assert(mmaParent.isVolta());
-    return vec_ty(elemTy, 2);
-  }
+  int bitwidth = elemTy.getIntOrFloatBitWidth();
+  assert(bitwidth <= 32);
+  return IntegerType::get(ctx, 32);
 }
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(

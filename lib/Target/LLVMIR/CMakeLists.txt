@@ -1,6 +1,7 @@
 add_mlir_translation_library(TritonLLVMIR
         LLVMIRTranslation.cpp
         LLVMDIScope.cpp
+        LLVMIRBreakPhiStruct.cpp
 
         LINK_COMPONENTS
         Core
@@ -23,7 +24,6 @@ add_mlir_translation_library(TritonLLVMIR
         MLIRSCFToControlFlow
         MLIRSupport
         MLIRTargetLLVMIRExport
-        NVGPUToLLVMIR
         TritonGPUToLLVM
         )
 

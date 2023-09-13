@@ -11,6 +11,8 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include <set>
 
@@ -31,6 +33,7 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::TMAMetadataTy;
+namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
@@ -238,24 +241,24 @@ public:
     return llvmStruct;
   }
 
-  Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
-    auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
+  // Returns CTA level thread idx
+  Value getThreadIdInCTA(ConversionPatternRewriter &rewriter,
+                         Location loc) const {
+    Value tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
         loc, ::mlir::gpu::Dimension::x);
     return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
   }
 
-  static Value getSRegValue(OpBuilder &b, Location loc,
-                            const std::string &sRegStr) {
-    PTXBuilder builder;
-    auto &mov = builder.create("mov")->o("u32");
-    auto *destOpr = builder.newOperand("=r");
-    auto *sRegOpr = builder.newConstantOperand(sRegStr);
-    mov(destOpr, sRegOpr);
-    Value val = builder.launch(b, loc, b.getIntegerType(32), false);
-
-    auto cast = b.create<UnrealizedConversionCastOp>(
-        loc, TypeRange{b.getIntegerType(32)}, ValueRange{val});
-    return cast.getResult(0);
+  // Returns CTA level thread idx for not ws mode.
+  // Returns agent level thread idx for ws mode.
+  Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
+    Value tid = getThreadIdInCTA(rewriter, loc);
+    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    if (ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod)) {
+      Value _128 = rewriter.create<arith::ConstantIntOp>(loc, 128, 32);
+      tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
+    }
+    return tid;
   }
 
   Value getClusterCTAId(ConversionPatternRewriter &rewriter,
@@ -336,6 +339,8 @@ public:
     // Order
     auto inOrder = triton::gpu::getOrder(srcEncoding);
     auto outOrder = triton::gpu::getOrder(resSharedLayout);
+    assert(outVec * (maxPhase - 1) <= srcShape[outOrder[0]] &&
+           "Swizzling would generate out of bounds memory accesses");
     // Tensor indices held by the current thread, as LLVM values
     auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcTy, false);
     // Swizzling with leading offsets (e.g. Hopper GMMA)
@@ -449,10 +454,10 @@ public:
     auto dstElemTy = dstTy.getElementType();
     auto inOrd = triton::gpu::getOrder(srcSharedLayout);
     auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
-    unsigned outVec =
-        inOrd == outOrd
-            ? triton::gpu::getContigPerThread(dstDistributedLayout)[outOrd[0]]
-            : 1;
+    unsigned outVec = inOrd == outOrd
+                          ? triton::gpu::getUniqueContigPerThread(
+                                dstDistributedLayout, dstShape)[outOrd[0]]
+                          : 1;
     unsigned inVec = srcSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
@@ -498,10 +503,10 @@ public:
     auto dstElemTy = dstTy.getElementType();
     auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
     auto outOrd = dstSharedLayout.getOrder();
-    unsigned inVec =
-        inOrd == outOrd
-            ? triton::gpu::getContigPerThread(srcDistributedLayout)[inOrd[0]]
-            : 1;
+    unsigned inVec = inOrd == outOrd
+                         ? triton::gpu::getUniqueContigPerThread(
+                               srcDistributedLayout, srcShape)[inOrd[0]]
+                         : 1;
     unsigned outVec = dstSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
@@ -539,6 +544,7 @@ public:
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Value mask = int_val(1, 1);
     auto tid = tid_val();
+    auto clusterCTAId = getClusterCTAId(rewriter, loc);
     if (tensorTy) {
       auto layout = tensorTy.getEncoding();
       auto shape = tensorTy.getShape();
@@ -567,9 +573,39 @@ public:
         mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
                                    i32_val(shape[dim])));
       }
+      // Do not write duplicated data when multicast is enabled
+      if (triton::gpu::getNumCTAs(layout) > 1) {
+        auto _0 = i32_val(0);
+        auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
+        auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
+        auto CTAOrder = triton::gpu::getCTAOrder(layout);
+
+        auto multiDimClusterCTAId =
+            delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
+
+        for (unsigned dim = 0; dim < rank; ++dim) {
+          // Skip when multicast is not enabled in this dimension
+          if (CTAsPerCGA[dim] == CTASplitNum[dim])
+            continue;
+          // This wrapping rule must be consistent with emitCTAOffsetForLayout
+          unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
+          Value repId = udiv(multiDimClusterCTAId[dim], i32_val(splitNum));
+          // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
+          //     CTA0 and CTA2 holds data of block0,
+          //     CTA1 and CTA3 holds data of block1.
+          // Only CTA0 and CTA1 are expected to write while CTA2 and CTA3 should
+          // be masked. We add the following mask:
+          //     multiDimClusterCTAId[dim] / splitNum == 0
+          // Actually in all existing cases of multicast, splitNum is always 1.
+          // The mask is equivalent to:
+          //     multiDimClusterCTAId[dim] == 0
+          mask = and_(mask, icmp_eq(repId, _0));
+        }
+      }
     } else {
-      // If the tensor is not ranked, then it is a scalar and only thread 0 can
-      // write
+      // If the tensor is not ranked, then it is a scalar and only thread 0 of
+      // CTA0 can write
+      mask = and_(mask, icmp_eq(clusterCTAId, i32_val(0)));
       mask = and_(mask, icmp_eq(tid, i32_val(0)));
     }
     return mask;
@@ -984,32 +1020,6 @@ private:
     return ret;
   }
 
-  SmallVector<Value>
-  emitBaseIndexForMmaLayoutV2(Location loc, ConversionPatternRewriter &rewriter,
-                              const MmaEncodingAttr &mmaLayout,
-                              RankedTensorType type) const {
-    auto shape = type.getShape();
-    auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-    assert(warpsPerCTA.size() == 2);
-    auto order = triton::gpu::getOrder(mmaLayout);
-    Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
-    Value laneId = urem(threadId, warpSize);
-    Value warpId = udiv(threadId, warpSize);
-
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-    multiDimWarpId[0] = urem(multiDimWarpId[0], i32_val(shape[0] / 16));
-    multiDimWarpId[1] = urem(multiDimWarpId[1], i32_val(shape[1] / 8));
-    Value offWarp0 = mul(multiDimWarpId[0], i32_val(16));
-    Value offWarp1 = mul(multiDimWarpId[1], i32_val(8));
-
-    SmallVector<Value> multiDimBase(2);
-    multiDimBase[0] = add(udiv(laneId, i32_val(4)), offWarp0);
-    multiDimBase[1] = add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarp1);
-    return multiDimBase;
-  }
-
   SmallVector<SmallVector<unsigned>>
   emitOffsetForMmaLayoutV2(const MmaEncodingAttr &mmaLayout,
                            RankedTensorType type) const {
@@ -1062,8 +1072,18 @@ private:
     else
       warpsN = shape[1] / instrShape[1];
 
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, _warpsPerCTA, order);
+    SmallVector<Value> multiDimWarpId(2);
+    if (mmaLayout.isHopper()) {
+      // TODO[goostavz]: the tiling order from CTA->warp level is different for
+      // MMAv2/3. This is a workaround since we don't explicitly have warpGrp
+      // level in the layout definition, and the tiling order of warpGrp->warp
+      // must be fixed to meet the HW's needs. We may need to consider to
+      // explicitly define warpGrpPerCTA for MMAv3 layout.
+      multiDimWarpId[0] = urem(warpId, warpsPerCTA[0]);
+      multiDimWarpId[1] = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
+    } else {
+      multiDimWarpId = delinearize(rewriter, loc, warpId, _warpsPerCTA, order);
+    }
     Value warpId0 = urem(multiDimWarpId[0], i32_val(warpsM));
     Value warpId1 = urem(multiDimWarpId[1], i32_val(warpsN));
 

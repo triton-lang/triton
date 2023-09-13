@@ -24,7 +24,10 @@
 
 
 import os
+import shutil
 import sys
+import sysconfig
+from pathlib import Path
 
 import sphinx_rtd_theme
 from sphinx_gallery.sorting import FileNameSortKey
@@ -36,6 +39,58 @@ def process_sig(app, what, name, obj, options, signature, return_annotation):
     return (signature, return_annotation)
 
 
+def get_cmake_dir():
+    plat_name = sysconfig.get_platform()
+    python_version = sysconfig.get_python_version()
+    dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
+    cmake_dir = Path("../python") / "build" / dir_name
+    return cmake_dir
+
+
+def setup_generated_mlir_docs():
+    dst_path = Path("dialects")
+    os.makedirs(dst_path, exist_ok=True)
+
+    cmake_dir = get_cmake_dir()
+    src_dir = cmake_dir / "docs" / "dialects"
+    assert os.path.isdir(src_dir)
+
+    shutil.copytree(src_dir, dst_path, dirs_exist_ok=True)
+
+    files = os.listdir(dst_path)
+
+    dialects = "\n   ".join(["./" + f for f in files if "Dialect" in f])
+    ops = [f for f in files if "Ops" in f]
+
+    # Add titles
+    for op in ops:
+        with open(dst_path / op, 'r+') as f:
+            lines = f.readlines()
+            lines.insert(0, "# " + op.split(".md")[0])
+            f.seek(0)
+            f.writelines(lines)
+    ops = "\n   ".join(["./" + op for op in ops])
+
+    rst_string = f"""
+Triton MLIR Dialects and Ops
+=====================
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Dialects
+
+   {dialects}
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Dialect Ops
+
+   {ops}
+"""
+    with open(dst_path / "dialects.rst", "w+") as f:
+        f.write(rst_string)
+
+
 def setup(app):
     """Customize function args retrieving to get args under decorator."""
     import os
@@ -44,6 +99,7 @@ def setup(app):
 
     app.connect("autodoc-process-signature", process_sig)
     os.system("pip install -e ../python")
+    setup_generated_mlir_docs()
 
     def forward_jit_fn(func):
         old = func
@@ -82,7 +138,8 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx.ext.coverage',
     'sphinx.ext.napoleon',
-    'sphinx_multiversion']
+    'sphinx_multiversion',
+    'myst_parser']
 autosummary_generate = True
 
 # versioning config
@@ -101,11 +158,12 @@ sphinx_gallery_conf = {
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
     # XXX: Temporarily disable fused attention tutorial on V100
-    'ignore_pattern': r'__init__\.py',
+    'ignore_pattern': r'(__init__\.py|09.*\.py|10.*\.py)',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {
         'sphinx_gallery': None,
-    }
+    },
+    'abort_on_example_error': True,
 }
 
 # Add any paths that contain templates here, relative to this directory.
@@ -144,7 +202,7 @@ release = ''
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = 'en'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.

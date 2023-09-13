@@ -33,12 +33,37 @@ SmallVector<unsigned> getParentOrder(Attribute layout) {
 
 } // namespace
 
-bool ReduceOpHelper::isFastReduction() {
-  // Disable fast reduction only for debugging purpose
-  if (::triton::tools::getBoolEnv("DISABLE_FAST_REDUCTION"))
-    return false;
+bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
   return getParentAxis(getSrcLayout(), axis) ==
          getParentOrder(getSrcLayout())[0];
+}
+
+// Thread offset is the thread index offset of two adjacent threads on the
+// reduction axis within the warp.
+unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
+  auto srcLayout = getSrcLayout();
+
+  // If the reduction axis is the fast axis of the parent layout
+  if (isReductionOnLayoutFastAxis()) {
+    return 1;
+  }
+
+  unsigned threadOffset = 1;
+  if (auto sliceLayout =
+          srcLayout.dyn_cast<mlir::triton::gpu::SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(parentLayout);
+    threadOffset = threadsPerWarp[sliceLayout.getDim()];
+  } else {
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
+    if (threadsPerWarp.size() == 1) {
+      threadOffset = 1;
+    } else {
+      assert(threadsPerWarp.size() == 2 && "Only supports 2D layouts");
+      threadOffset = axis == 0 ? threadsPerWarp[1] : threadsPerWarp[0];
+    }
+  }
+  return threadOffset;
 }
 
 // Cases where distributed shared memory is not required in ConvertLayout:
@@ -124,62 +149,49 @@ unsigned ReduceOpHelper::getThreadsReductionAxis() {
          triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
 }
 
-SmallVector<unsigned> ReduceOpHelper::getScratchConfigBasic() {
-  auto smemShape = convertType<unsigned>(getSrcShape());
-  smemShape[axis] = std::min(smemShape[axis], getThreadsReductionAxis());
+bool ReduceOpHelper::isWarpSynchronous() {
+  auto argsLayout = getSrcLayout();
+  return triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1;
+}
+
+SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
+  SmallVector<unsigned> smemShape;
+  // that case doesn't need inter-warp communication
+  if (isWarpSynchronous())
+    return {0, 0};
+
+  smemShape = convertType<unsigned>(getSrcShape());
+  smemShape[axis] = getInterWarpSizeWithUniqueData();
+
   return smemShape;
 }
 
-bool ReduceOpHelper::isWarpSynchronous() {
-  auto argsLayout = getSrcLayout();
-  return isFastReduction() &&
-         (triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1);
-}
-
-SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
-  SmallVector<SmallVector<unsigned>> smemShapes(3);
-
-  auto argLayout = getSrcLayout();
-  auto argLayoutMma = argLayout.dyn_cast<triton::gpu::MmaEncodingAttr>();
-
-  // that case doesn't need inter-warp communication
-  if (isWarpSynchronous())
-    return {{0, 0}, {0, 0}};
-
-  /// shared memory block0
-  smemShapes[0] = convertType<unsigned>(getSrcShape());
-  smemShapes[0][axis] = getInterWarpSize();
-
-  /// FIXME(Qingyi): This size is actually larger than required.
-  /// shared memory block1:
-  auto mod = op->getParentOfType<ModuleOp>();
-  unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-  unsigned threadsPerWarp =
-      triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-  smemShapes[1].push_back(numWarps * threadsPerWarp);
-
-  return smemShapes;
-}
-
 unsigned ReduceOpHelper::getScratchSizeInBytes() {
-  unsigned elems = 0;
-  if (isFastReduction()) {
-    auto smemShapes = getScratchConfigsFast();
-    for (const auto &smemShape : smemShapes)
-      elems = std::max(elems, product<unsigned>(smemShape));
-  } else {
-    auto smemShape = getScratchConfigBasic();
-    elems = product<unsigned>(smemShape);
-  }
+  auto smemShape = getScratchConfig();
+  auto elems = product<unsigned>(smemShape);
 
   unsigned bytesPerElem = 0;
   for (const auto &ty : srcElementTypes) {
-    bytesPerElem += ty.getIntOrFloatBitWidth() / 8;
+    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
   }
   return bytesPerElem * elems;
 }
 
+bool ReduceOpHelper::isReduceWithinCTA() {
+  auto axis = getAxis();
+  auto srcLayout = getSrcLayout();
+  auto CTASplitNum = mlir::triton::gpu::getCTASplitNum(srcLayout);
+  assert(axis < CTASplitNum.size());
+  return CTASplitNum[axis] == 1;
+}
+
 bool ReduceOpHelper::isSupportedLayout() {
+  // Layout optimization passes such as PlanCTAPass and
+  // RemoveLayoutConversionPass should avoid cross-CTA reduction
+  if (!isReduceWithinCTA()) {
+    return false;
+  }
+
   auto srcLayout = getSrcLayout();
   if (srcLayout.isa<triton::gpu::BlockedEncodingAttr>()) {
     return true;
@@ -317,8 +329,9 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= type.getShape()[dim] /
-              (sizePerThreads[dim] * threadsPerWarp[dim] * warpsPerCTA[dim]);
+    stride *= ceil<unsigned int>(type.getShape()[dim], sizePerThreads[dim] *
+                                                           threadsPerWarp[dim] *
+                                                           warpsPerCTA[dim]);
   }
   llvm_unreachable("Axis not found in order");
 }
@@ -361,7 +374,7 @@ bool supportMMA(triton::DotOp op, int version) {
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     if (!(numWarps % 4 == 0 && retShapePerCTA[0] % 64 == 0 &&
           retShapePerCTA[1] % 8 == 0 &&
-          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN() ||
+          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ() ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
       return false;
@@ -383,7 +396,8 @@ bool supportMMA(Value value, int version) {
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
-               elemTy.isFloat8E5M2FNUZ() || elemTy.isFloat8E4M3FNUZ();
+               elemTy.isFloat8E5M2FNUZ() || elemTy.isFloat8E4M3FNUZ() ||
+               elemTy.isFloat8E4M3B11FNUZ();
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
@@ -473,9 +487,11 @@ struct DFSState {
   SmallVector<Operation *, 16> topologicalCounts;
   DenseSet<Operation *> seen;
 
-  /// We mark each op as ready if all its operands are seen. If an op is ready,
-  /// we add it to the queue. Otherwise, we keep adding its operands to the
-  /// ancestors set.
+  /// We mark each op as ready if all its operands and parents ops are seen. If
+  /// an op is ready, we add it to the queue. Otherwise, we keep adding its
+  /// operands to the ancestors set.
+  /// We always want an op to be scheduled after all its parents to handle
+  /// correctly cases with scf operations.
   void addToReadyQueue(Operation *op, DFSSubgraphState &subGraph,
                        SmallVector<Operation *, 4> &readyQueue) {
     bool ready = true;
@@ -485,6 +501,14 @@ struct DFSState {
         subGraph.push_back(def);
         ready = false;
       }
+    }
+    Operation *parent = op->getParentOp();
+    while (parent) {
+      if (!seen.count(parent)) {
+        subGraph.push_back(parent);
+        ready = false;
+      }
+      parent = parent->getParentOp();
     }
     if (ready)
       readyQueue.push_back(op);

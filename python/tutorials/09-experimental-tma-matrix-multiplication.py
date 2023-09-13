@@ -1,3 +1,10 @@
+"""
+Matrix Multiplication with TMA (Experimental)
+================================================
+In this tutorial, you will write a very short high-performance multiplication kernel that achieves
+performance on parallel with cuBLAS.
+"""
+
 # Copyright (c) 2023 NVIDIA Corporation & Affiliates. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining
@@ -24,6 +31,11 @@ from torch.testing import assert_close
 
 import triton
 import triton.language as tl
+
+if torch.cuda.get_device_capability()[0] < 9:
+    import sys
+    print("Skipping TMA benchmark for GPU with compute capability < 9")
+    sys.exit(0)
 
 
 @triton.autotune(

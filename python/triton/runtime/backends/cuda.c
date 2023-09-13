@@ -1,4 +1,5 @@
 #include "cuda.h"
+#include <dlfcn.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -10,15 +11,16 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {
     char err[1024] = {0};
     strcat(err, prefix);
     strcat(err, str);
+    PyGILState_STATE gil_state;
+    gil_state = PyGILState_Ensure();
     PyErr_SetString(PyExc_RuntimeError, err);
+    PyGILState_Release(gil_state);
   }
 }
 
 #define CUDA_CHECK(ans)                                                        \
   {                                                                            \
-    gpuAssert((ans), __FILE__, __LINE__);                                      \
-    if (PyErr_Occurred())                                                      \
-      return NULL;                                                             \
+    { gpuAssert((ans), __FILE__, __LINE__); }                                  \
   }
 
 #define ADD_ENUM_ITEM(value)                                                   \
@@ -233,6 +235,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   int32_t n_spills = 0;
   // create driver handles
   CUcontext pctx = 0;
+
+  Py_BEGIN_ALLOW_THREADS;
   CUDA_CHECK(cuCtxGetCurrent(&pctx));
   if (!pctx) {
     CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
@@ -263,6 +267,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
         cuFuncSetAttribute(fun, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
                            shared_optin - shared_static));
   }
+  Py_END_ALLOW_THREADS;
 
   if (PyErr_Occurred()) {
     return NULL;
@@ -280,7 +285,9 @@ static PyObject *memAlloc(PyObject *self, PyObject *args) {
     return NULL; // Error parsing arguments
   }
 
+  Py_BEGIN_ALLOW_THREADS;
   CUDA_CHECK(cuMemAlloc(&dptr, bytesize));
+  Py_END_ALLOW_THREADS;
 
   return PyLong_FromUnsignedLongLong((unsigned long long)dptr);
 }
@@ -299,7 +306,9 @@ static PyObject *memcpyHtoD(PyObject *self, PyObject *args) {
   dstDevice = (CUdeviceptr)dstDevicePtr;
   srcHost = (const void *)srcHostPtr;
 
+  Py_BEGIN_ALLOW_THREADS;
   CUDA_CHECK(cuMemcpyHtoD(dstDevice, srcHost, byteCount));
+  Py_END_ALLOW_THREADS;
 
   Py_RETURN_NONE;
 }
@@ -311,7 +320,9 @@ static PyObject *memFree(PyObject *self, PyObject *args) {
     return NULL; // Error parsing arguments
   }
 
+  Py_BEGIN_ALLOW_THREADS;
   CUDA_CHECK(cuMemFree(dptr));
+  Py_END_ALLOW_THREADS;
 
   Py_RETURN_NONE;
 }
@@ -319,7 +330,7 @@ static PyObject *memFree(PyObject *self, PyObject *args) {
 // Helper function to convert a Python list to a cuuint64_t array
 static cuuint64_t *list_to_cuuint64_array(PyObject *listObj) {
   Py_ssize_t len = PyList_Size(listObj);
-  cuuint64_t *array = malloc(len * sizeof(cuuint64_t));
+  cuuint64_t *array = (cuuint64_t *)malloc(len * sizeof(cuuint64_t));
   for (Py_ssize_t i = 0; i < len; i++) {
     PyObject *item = PyList_GetItem(listObj, i);
     array[i] = (cuuint64_t)PyLong_AsUnsignedLongLong(item);
@@ -330,12 +341,42 @@ static cuuint64_t *list_to_cuuint64_array(PyObject *listObj) {
 // Helper function to convert a Python list to a cuuint32_t array
 static cuuint32_t *list_to_cuuint32_array(PyObject *listObj) {
   Py_ssize_t len = PyList_Size(listObj);
-  cuuint32_t *array = malloc(len * sizeof(cuuint32_t));
+  cuuint32_t *array = (cuuint32_t *)malloc(len * sizeof(cuuint32_t));
   for (Py_ssize_t i = 0; i < len; i++) {
     PyObject *item = PyList_GetItem(listObj, i);
     array[i] = (cuuint32_t)PyLong_AsUnsignedLong(item);
   }
   return array;
+}
+
+typedef CUresult (*cuTensorMapEncodeTiled_t)(
+    CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
+    cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
+    const cuuint64_t *globalStrides, const cuuint32_t *boxDim,
+    const cuuint32_t *elementStrides, CUtensorMapInterleave interleave,
+    CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
+    CUtensorMapFloatOOBfill oobFill);
+
+static cuTensorMapEncodeTiled_t getCuTensorMapEncodeTiledHandle() {
+  // Open the shared library
+  void *handle = dlopen("libcuda.so", RTLD_LAZY);
+  if (!handle) {
+    PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");
+    return NULL;
+  }
+  // Clear any existing error
+  dlerror();
+  cuTensorMapEncodeTiled_t cuTensorMapEncodeTiledHandle =
+      (cuTensorMapEncodeTiled_t)dlsym(handle, "cuTensorMapEncodeTiled");
+  // Check for errors
+  const char *dlsym_error = dlerror();
+  if (dlsym_error) {
+    PyErr_SetString(
+        PyExc_RuntimeError,
+        "Failed to retrieve cuTensorMapEncodeTiled from libcuda.so");
+    return NULL;
+  }
+  return cuTensorMapEncodeTiledHandle;
 }
 
 static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
@@ -364,18 +405,23 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   cuuint32_t *boxDim = list_to_cuuint32_array(boxDimObj);
   cuuint32_t *elementStrides = list_to_cuuint32_array(elementStridesObj);
 
+  static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiledHandle = NULL;
+  if (cuTensorMapEncodeTiledHandle == NULL) {
+    cuTensorMapEncodeTiledHandle = getCuTensorMapEncodeTiledHandle();
+  }
   // Call the function
-  CUDA_CHECK(cuTensorMapEncodeTiled(tensorMap, tensorDataType, tensorRank,
-                                    globalAddress, globalDim, globalStrides,
-                                    boxDim, elementStrides, interleave, swizzle,
-                                    l2Promotion, oobFill));
+  Py_BEGIN_ALLOW_THREADS;
+  CUDA_CHECK(cuTensorMapEncodeTiledHandle(
+      tensorMap, tensorDataType, tensorRank, globalAddress, globalDim,
+      globalStrides, boxDim, elementStrides, interleave, swizzle, l2Promotion,
+      oobFill));
+  Py_END_ALLOW_THREADS;
 
   // Clean up
   free(globalDim);
   free(globalStrides);
   free(boxDim);
   free(elementStrides);
-
   // Return the tensor map as a normal pointer
   return PyLong_FromUnsignedLongLong((unsigned long long)tensorMap);
 }

@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "TypeConverter.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -250,6 +251,24 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return builder.launch(rewriter, loc, void_ty(ctx));
 }
 
+Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                 Value pred) {
+  MLIRContext *ctx = rewriter.getContext();
+  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
+  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
+  auto elemTy = ptrTy.getElementType();
+  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+
+  const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
+
+  PTXBuilder builder;
+  auto *dOpr = builder.newOperand(c);
+  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
+  auto &ld = builder.create<>("ld")->shared().b(bitwidth);
+  ld(dOpr, ptrOpr).predicate(pred, "b");
+  return builder.launch(rewriter, loc, elemTy);
+}
+
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, int i, const std::string &shuffleType,
                             const std::string &clamp) {
@@ -287,6 +306,15 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
   return commonShflSync(loc, rewriter, val, i, "up", "0x0");
+}
+Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
+  PTXBuilder builder;
+  auto &mov = builder.create("mov")->o("u32");
+  auto *destOpr = builder.newOperand("=r");
+  auto *sRegOpr = builder.newConstantOperand(sRegStr);
+  mov(destOpr, sRegOpr);
+  Value val = builder.launch(b, loc, b.getIntegerType(32), false);
+  return val;
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,

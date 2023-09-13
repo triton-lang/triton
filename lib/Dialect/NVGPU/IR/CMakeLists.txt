@@ -6,4 +6,5 @@ add_mlir_dialect_library(NVGPUIR
   NVGPUAttrDefsIncGen
 
   LINK_LIBS PUBLIC
+  MLIRLLVMDialect
 )

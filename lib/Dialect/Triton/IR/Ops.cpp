@@ -80,6 +80,16 @@ void LoadOp::print(OpAsmPrinter &printer) {
   printer.printStrippedAttrOrType(getResult().getType());
 }
 
+void LoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), getPtr(),
+                       SideEffects::DefaultResource::get());
+  if (getIsVolatile())
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         SideEffects::DefaultResource::get());
+}
+
 ParseResult StoreOp::parse(OpAsmParser &parser, OperationState &result) {
   // Parse operands
   SmallVector<OpAsmParser::UnresolvedOperand, 4> allOperands;
@@ -401,8 +411,10 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
 LogicalResult mlir::triton::DotOp::verify() {
   auto aTy = getOperand(0).getType().cast<RankedTensorType>();
   auto bTy = getOperand(1).getType().cast<RankedTensorType>();
-  if (aTy.getElementType() != bTy.getElementType())
-    return emitError("element types of operands A and B must match");
+  if (aTy.getElementType().getIntOrFloatBitWidth() !=
+      bTy.getElementType().getIntOrFloatBitWidth())
+    return emitError(
+        "element types of operands A and B must have same bit width");
   auto aEncoding = aTy.getEncoding();
   auto bEncoding = bTy.getEncoding();
   if (!aEncoding && !bEncoding)
@@ -414,6 +426,16 @@ LogicalResult mlir::triton::DotOp::verify() {
   auto interface = cast<DialectInferLayoutInterface>(&dialect);
   return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
                                                      bEncoding);
+}
+
+//-- MakeRangeOp --
+OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
+  // make_range(start, start + 1) -> constant(start)
+  if (adaptor.getStart() + 1 == adaptor.getEnd()) {
+    auto shapedType = getType().cast<ShapedType>();
+    return SplatElementsAttr::get(shapedType, adaptor.getStartAttr());
+  }
+  return {};
 }
 
 //-- ReduceOp --
@@ -868,6 +890,30 @@ LogicalResult triton::ReturnOp::verify() {
                          << " in function @" << function.getName();
 
   return success();
+}
+
+// -- ElementwiseInlineAsmOp --
+void ElementwiseInlineAsmOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  if (getPure())
+    return;
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       SideEffects::DefaultResource::get());
+}
+
+// -- ExternElementwiseOp --
+void ExternElementwiseOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  if (getPure())
+    return;
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       SideEffects::DefaultResource::get());
 }
 
 } // namespace triton

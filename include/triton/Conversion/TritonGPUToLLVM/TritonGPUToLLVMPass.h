@@ -14,10 +14,15 @@ template <typename T> class OperationPass;
 
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass(
-    int computeCapability = 80,
-    mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr,
-    bool isROCM = false);
+enum Target { NVVM, ROCDL, Default = NVVM };
+
+#define GEN_PASS_DECL
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target,
+                                 mlir::triton::gpu::TMAMetadataTy *tmaMetadata);
 
 } // namespace triton
 
