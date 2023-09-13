@@ -125,14 +125,14 @@ def get_thirdparty_packages(triton_cache_path):
 # ---- package data ---
 
 
-def download_and_copy(src_path, version, urlFunc):
+def download_and_copy(src_path, version, url_func):
     base_dir = os.path.dirname(__file__)
     # src_path = "bin/ptxas"
     # version = "12.1.105"
     arch = platform.machine()
     if arch == "x86_64":
         arch = "64"
-    url = urlFunc(arch, version)
+    url = url_func(arch, version)
     # url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2"
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
@@ -280,9 +280,9 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-download_and_copy(src_path='bin/ptxas', version='12.1.105', urlFunc=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
-download_and_copy(src_path='bin/cuobjdump', version='12.1.111', urlFunc=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2")
-download_and_copy(src_path='bin/nvdisasm', version='12.1.105', urlFunc=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2")
+download_and_copy(src_path='bin/ptxas', version='12.1.105', url_func=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
+download_and_copy(src_path='bin/cuobjdump', version='12.1.111', url_func=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2")
+download_and_copy(src_path='bin/nvdisasm', version='12.1.105', url_func=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2")
 
 setup(
     name="triton",
