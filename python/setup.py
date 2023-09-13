@@ -282,6 +282,7 @@ class CMakeBuild(build_ext):
 
 download_and_copy(src_path='bin/ptxas', version='12.1.105', urlFunc=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
 download_and_copy(src_path='bin/cuobjdump', version='12.1.111', urlFunc=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2")
+download_and_copy(src_path='bin/nvdisasm', version='12.1.105', urlFunc=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2")
 
 setup(
     name="triton",

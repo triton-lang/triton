@@ -20,10 +20,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
 import re
 import subprocess
 
-from ..common.backend import path_to_cuobjdump
+from ..common.backend import path_to_cuobjdump, path_to_nvdisasm
 
 FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
 SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')
@@ -64,6 +65,8 @@ def processSassLines(fline, sline, labels):
 
 def extract(file_path, fun):
     cuobjdump, _ = path_to_cuobjdump()
+    nvdisasm, _ = path_to_nvdisasm()
+    os.environ["NVDISASM_PATH"] = nvdisasm
     if fun is None:
         sass_str = subprocess.check_output([cuobjdump, "-sass", file_path])
     else:
