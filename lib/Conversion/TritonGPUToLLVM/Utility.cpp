@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "TypeConverter.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -248,6 +249,24 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   auto &st = builder.create<>("st")->shared().b(bits);
   st(ptrOpr, valOpr).predicate(pred, "b");
   return builder.launch(rewriter, loc, void_ty(ctx));
+}
+
+Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                 Value pred) {
+  MLIRContext *ctx = rewriter.getContext();
+  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
+  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
+  auto elemTy = ptrTy.getElementType();
+  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+
+  const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
+
+  PTXBuilder builder;
+  auto *dOpr = builder.newOperand(c);
+  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
+  auto &ld = builder.create<>("ld")->shared().b(bitwidth);
+  ld(dOpr, ptrOpr).predicate(pred, "b");
+  return builder.launch(rewriter, loc, elemTy);
 }
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,

@@ -30,7 +30,6 @@
 #include "mlir/IR/Dialect.h"
 
 // TritonNvidiaGPU depends on Triton
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"

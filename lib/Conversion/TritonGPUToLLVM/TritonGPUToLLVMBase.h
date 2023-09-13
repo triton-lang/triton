@@ -11,6 +11,7 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include <set>
@@ -338,6 +339,8 @@ public:
     // Order
     auto inOrder = triton::gpu::getOrder(srcEncoding);
     auto outOrder = triton::gpu::getOrder(resSharedLayout);
+    assert(outVec * (maxPhase - 1) <= srcShape[outOrder[0]] &&
+           "Swizzling would generate out of bounds memory accesses");
     // Tensor indices held by the current thread, as LLVM values
     auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcTy, false);
     // Swizzling with leading offsets (e.g. Hopper GMMA)
@@ -451,10 +454,10 @@ public:
     auto dstElemTy = dstTy.getElementType();
     auto inOrd = triton::gpu::getOrder(srcSharedLayout);
     auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
-    unsigned outVec =
-        inOrd == outOrd
-            ? triton::gpu::getContigPerThread(dstDistributedLayout)[outOrd[0]]
-            : 1;
+    unsigned outVec = inOrd == outOrd
+                          ? triton::gpu::getUniqueContigPerThread(
+                                dstDistributedLayout, dstShape)[outOrd[0]]
+                          : 1;
     unsigned inVec = srcSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
@@ -500,10 +503,10 @@ public:
     auto dstElemTy = dstTy.getElementType();
     auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
     auto outOrd = dstSharedLayout.getOrder();
-    unsigned inVec =
-        inOrd == outOrd
-            ? triton::gpu::getContigPerThread(srcDistributedLayout)[inOrd[0]]
-            : 1;
+    unsigned inVec = inOrd == outOrd
+                         ? triton::gpu::getUniqueContigPerThread(
+                               srcDistributedLayout, srcShape)[inOrd[0]]
+                         : 1;
     unsigned outVec = dstSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);

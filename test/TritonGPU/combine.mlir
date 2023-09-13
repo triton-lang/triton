@@ -3,6 +3,10 @@
 #layout0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 #layout1 = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 
+#layout2 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#layout3 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+
+
 module attributes {"triton_gpu.num-warps" = 4 : i32} {
 
 // CHECK: [[$target_layout:#.*]] = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
@@ -105,6 +109,19 @@ tt.func @hoist_above_ext2(%arg0: tensor<1024xf16, #layout0>, %arg1: f16) -> tens
   tt.return %4 : tensor<1024xf32, #layout1>
 }
 
+// Hoist the convert on top of broadcast to make it cheaper.
+// CHECK-LABEL: hoist_above_broadcast
+tt.func @hoist_above_broadcast(%arg0: tensor<1024x1xf32, #layout2>, %arg1: f32) -> tensor<1024x128xf32, #layout3> {
+// CHECK: %[[CVT:.+]] = triton_gpu.convert_layout
+// CHECK: tt.broadcast %[[CVT]]
+// CHECK-NOT: triton_gpu.convert_layout
+// CHECK: tt.return
+  %0 = tt.broadcast %arg0 : (tensor<1024x1xf32, #layout2>) -> tensor<1024x128xf32, #layout2>
+  %1 = tt.splat %arg1 : (f32) -> tensor<1024x128xf32, #layout2>
+  %2 = arith.addf %0, %1 : tensor<1024x128xf32, #layout2>
+  %3 = triton_gpu.convert_layout %2 : (tensor<1024x128xf32, #layout2>) -> tensor<1024x128xf32, #layout3>
+  tt.return %3 : tensor<1024x128xf32, #layout3>
+}
 
 
 // CHECK-LABEL: if

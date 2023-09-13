@@ -18,6 +18,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -386,6 +387,11 @@ struct ConvertTritonGPUToLLVM
     : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
   using ConvertTritonGPUToLLVMBase<
       ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
+                    NVVM::NVVMDialect>();
+  }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
                          mlir::triton::gpu::TMAMetadataTy *tmaMetadata)
@@ -845,7 +851,7 @@ private:
         bool isNativeHopperFP8 =
             AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
         bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
-                     AElType.isFloat8E4M3FN();
+                     AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
         if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
           return;
         promoteType = builder.getF16Type();
