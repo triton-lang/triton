@@ -30,6 +30,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
+#include <set>
+
 using namespace mlir;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;

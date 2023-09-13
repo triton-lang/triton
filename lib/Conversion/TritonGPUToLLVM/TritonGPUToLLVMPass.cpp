@@ -18,6 +18,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -40,12 +41,16 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
+namespace mlir {
+namespace triton {
+#define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+} // namespace triton
+} // namespace mlir
+
 using namespace mlir;
 using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
-
-#define GEN_PASS_CLASSES
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 
 namespace {
 
@@ -59,14 +64,17 @@ static void addWSNamedAttrs(Operation *op,
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, bool isROCM)
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-    if (isROCM) {
-      addLegalDialect<ROCDL::ROCDLDialect>();
-    } else {
+    switch (target) {
+    case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
+      break;
+    case Target::ROCDL:
+      addLegalDialect<ROCDL::ROCDLDialect>();
+      break;
     }
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
@@ -355,13 +363,16 @@ private:
 
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx, bool isROCM)
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    if (isROCM) {
-      addLegalDialect<ROCDL::ROCDLDialect>();
-    } else {
+    switch (target) {
+    case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
+      break;
+    case Target::ROCDL:
+      addLegalDialect<ROCDL::ROCDLDialect>();
+      break;
     }
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
@@ -372,15 +383,20 @@ public:
   }
 };
 
-class ConvertTritonGPUToLLVM
-    : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
+struct ConvertTritonGPUToLLVM
+    : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
+  using ConvertTritonGPUToLLVMBase<
+      ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
 
-public:
-  explicit ConvertTritonGPUToLLVM(int computeCapability,
-                                  mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-                                  bool isROCM)
-      : computeCapability(computeCapability), tmaMetadata(tmaMetadata),
-        isROCM(isROCM) {}
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
+                    NVVM::NVVMDialect>();
+  }
+
+  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
+                         mlir::triton::gpu::TMAMetadataTy *tmaMetadata)
+      : ConvertTritonGPUToLLVMBase({computeCapability, target}),
+        tmaMetadata(tmaMetadata) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -388,7 +404,7 @@ public:
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget target(*context, isROCM);
+    TritonLLVMConversionTarget convTarget(*context, target);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -442,7 +458,7 @@ public:
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
@@ -462,7 +478,7 @@ public:
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
@@ -523,7 +539,7 @@ public:
     populatePatterns1(populateTritonGPUToLLVMPatterns);
     populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
     populatePatterns2(populateDotOpToLLVMPatterns);
-    populatePatterns2(populateElementwiseOpToLLVMPatterns);
+    populatePatterns4(populateElementwiseOpToLLVMPatterns);
     populatePatterns3(populateLoadStoreOpToLLVMPatterns);
     populatePatterns4(populateReduceOpToLLVMPatterns);
     populatePatterns1(populateScanOpToLLVMPatterns);
@@ -540,16 +556,19 @@ public:
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     // Native lowering patterns
-    if (isROCM) {
+    switch (target) {
+    case Target::NVVM:
+      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+      break;
+    case Target::ROCDL:
       mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
                                                  mlir::gpu::amd::HIP);
-    } else {
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+      break;
     }
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
 
     // Fold CTAId when there is only 1 CTA.
@@ -568,10 +587,7 @@ private:
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
            CacheKeyDenseMapInfo>
       indexCache;
-
-  int computeCapability{};
-  bool isROCM{};
-  mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
+  mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
@@ -833,9 +849,9 @@ private:
                                       .dyn_cast<MmaEncodingAttr>();
       if (mmaLayout) {
         bool isNativeHopperFP8 =
-            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FN();
+            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
         bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
-                     AElType.isFloat8E4M3FNUZ();
+                     AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
         if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
           return;
         promoteType = builder.getF16Type();
@@ -862,12 +878,14 @@ private:
 namespace mlir {
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int computeCapability,
-                                 mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-                                 bool isROCM) {
-  return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability,
-                                                    tmaMetadata, isROCM);
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
+  return std::make_unique<ConvertTritonGPUToLLVM>();
+}
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass(
+    int32_t computeCapability, Target target,
+    mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target,
+                                                  tmaMetadata);
 }
 
 } // namespace triton

@@ -237,12 +237,30 @@ private:
     llvm_unreachable("unexpected layout in getMultiDimOffset");
   }
 
+  SmallVector<Value>
+  getWrappedMultiDimOffset(ConversionPatternRewriter &rewriter, Location loc,
+                           ArrayRef<Value> multiDimOffset,
+                           ArrayRef<unsigned> shape,
+                           SmallVector<unsigned> shapePerCTATile,
+                           SmallVector<int64_t> shapePerCTA) const {
+    unsigned rank = shape.size();
+    SmallVector<Value> multiDimOffsetWrapped(rank);
+    for (unsigned d = 0; d < rank; ++d) {
+      if (shapePerCTATile[d] > shapePerCTA[d])
+        multiDimOffsetWrapped[d] = urem(multiDimOffset[d], i32_val(shape[d]));
+      else
+        multiDimOffsetWrapped[d] = multiDimOffset[d];
+    }
+    return multiDimOffsetWrapped;
+  }
+
   // shared memory rd/st for blocked or mma layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
                       ArrayRef<unsigned> numCTAsEachRep,
                       ArrayRef<unsigned> multiDimRepId, unsigned vec,
                       ArrayRef<unsigned> paddedRepShape,
+                      ArrayRef<unsigned> origRepShape,
                       ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
                       Value smemBase) const {
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
@@ -286,8 +304,11 @@ private:
         SmallVector<Value> multiDimOffset =
             getMultiDimOffset(layout, loc, rewriter, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
-        Value offset =
-            linearize(rewriter, loc, multiDimOffset, paddedRepShape, outOrd);
+        SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
+            rewriter, loc, multiDimOffset, origRepShape, shapePerCTATile,
+            shapePerCTA);
+        Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
+                                 paddedRepShape, outOrd);
         auto elemPtrTy = ptr_ty(llvmElemTy, 3);
         Value ptr = gep(elemPtrTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
@@ -346,7 +367,7 @@ private:
     SmallVector<unsigned> numCTAsEachRep(rank, 1);
     SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(layout, shape);
     SmallVector<int64_t> shapePerCTA = getShapePerCTA(layout, shape);
-    auto elemTy = type.getElementType();
+    auto elemTy = getTypeConverter()->convertType(type.getElementType());
 
     int ctaId = 0;
 
@@ -575,6 +596,7 @@ private:
                                                      rewriter, srcTy);
     unsigned inVec = 0;
     unsigned outVec = 0;
+    auto origRepShape = getRepShapeForCvtLayout(op);
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
     if (getElementTypeOrSelf(op.getType())
             .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>()) {
@@ -618,7 +640,7 @@ private:
         else
           processReplica(loc, rewriter, /*stNotRd*/ true, srcTy,
                          inNumCTAsEachRep, multiDimRepId, inVec, paddedRepShape,
-                         outOrd, vals, smemBase);
+                         origRepShape, outOrd, vals, smemBase);
       } else {
         assert(0 && "ConvertLayout with input layout not implemented");
         return failure();
@@ -651,7 +673,8 @@ private:
         else
           processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
                          outNumCTAsEachRep, multiDimRepId, outVec,
-                         paddedRepShape, outOrd, outVals, smemBase);
+                         paddedRepShape, origRepShape, outOrd, outVals,
+                         smemBase);
       } else {
         assert(0 && "ConvertLayout with output layout not implemented");
         return failure();
@@ -697,15 +720,6 @@ private:
     rewriter.replaceOp(op, result);
 
     return success();
-  }
-
-  // Pack two 16-bit values into a 32-bit register.
-  static Value pack16bitsTo32(ConversionPatternRewriter &rewriter, Location loc,
-                              Value hb, Value lb) {
-    hb = zext(i32_ty, bitcast(hb, i16_ty));
-    lb = zext(i32_ty, bitcast(lb, i16_ty));
-    Value pack = or_(lb, shl(hb, i32_val(16)));
-    return pack;
   }
 
   // blocked -> shared.
@@ -766,6 +780,14 @@ private:
       Value warpId0 = urem(urem(warpId, i32_val(warpsPerCTA[0])),
                            i32_val(srcShape[0] / instrShape[0]));
 
+      unsigned inVec =
+          inOrd == outOrd ? triton::gpu::getContigPerThread(mmaLayout)[inOrd[0]]
+                          : 1;
+      unsigned outVec = dstSharedLayout.getVec();
+      unsigned minVec = std::min(outVec, inVec);
+      assert(minVec == 2);
+      auto wordTy = vec_ty(elemTy, minVec);
+
       for (int rep = 0; rep < repM; ++rep) {
         Value rowOfWarp = add(mul(warpId0, i32_val(instrShape[0])),
                               i32_val(rep * rowsPerRep));
@@ -779,18 +801,19 @@ private:
               numElemsPerSwizzlingRow, true);
 
           Value addr = gep(elemPtrTy, smemBase, offset);
-          Value data0 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 1],
-                                       inVals[elemIdx + 0]);
-          Value data1 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 3],
-                                       inVals[elemIdx + 2]);
-          Value data2 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 5],
-                                       inVals[elemIdx + 4]);
-          Value data3 = pack16bitsTo32(rewriter, loc, inVals[elemIdx + 7],
-                                       inVals[elemIdx + 6]);
+
+          Value words[4];
+          for (unsigned i = 0; i < 8; ++i) {
+            if (i % minVec == 0)
+              words[i / 2] = undef(wordTy);
+            words[i / 2] = insert_element(
+                wordTy, words[i / 2], inVals[elemIdx + i], i32_val(i % minVec));
+          }
 
           rewriter.create<triton::nvgpu::StoreMatrixOp>(
               loc, bitcast(addr, ptrI8SharedTy),
-              ValueRange{data0, data1, data2, data3});
+              ValueRange{bitcast(words[0], i32_ty), bitcast(words[1], i32_ty),
+                         bitcast(words[2], i32_ty), bitcast(words[3], i32_ty)});
         }
       }
       // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent

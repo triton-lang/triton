@@ -24,7 +24,9 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <set>
 #include <string>
+
 namespace triton {
 
 const std::set<std::string> ENV_VARS = {
@@ -44,7 +46,7 @@ inline std::string getenv(const char *name) {
 
 inline bool getBoolEnv(const std::string &env) {
   std::string msg = "Environment variable " + env + " is not recognized";
-  assert(triton::ENV_VARS.find(env.c_str()) != triton::ENV_VARS.end() &&
+  assert(::triton::ENV_VARS.find(env.c_str()) != ::triton::ENV_VARS.end() &&
          msg.c_str());
   const char *s = std::getenv(env.c_str());
   std::string str(s ? s : "");

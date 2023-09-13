@@ -44,7 +44,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     tri_dq, q.grad = q.grad.clone(), None
     # compare
     atol = 1e-1 if dtype == torch.bfloat16 else 1e-2
-    torch.testing.assert_allclose(ref_out, tri_out, atol=atol, rtol=0)
-    torch.testing.assert_allclose(ref_dv, tri_dv, atol=atol, rtol=0)
-    torch.testing.assert_allclose(ref_dk, tri_dk, atol=atol, rtol=0)
-    torch.testing.assert_allclose(ref_dq, tri_dq, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dv, tri_dv, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dk, tri_dk, atol=atol, rtol=0)
+    torch.testing.assert_close(ref_dq, tri_dq, atol=atol, rtol=0)

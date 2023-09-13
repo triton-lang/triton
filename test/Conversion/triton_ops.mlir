@@ -201,5 +201,12 @@ tt.func @scan_op(%ptr: tensor<1x2x4x!tt.ptr<f32>>, %v : tensor<1x2x4xf32>) {
   }) : (tensor<1x2x4xf32>) -> tensor<1x2x4xf32>
   tt.store %ptr, %a : tensor<1x2x4xf32>
   tt.return
+}
 
+// CHECK-LABEL: inline_asm
+// CHECK: tt.elementwise_inline_asm "shl.b32 $0, $0, 3;"
+tt.func @inline_asm(%0: tensor<512xi8>) {
+  %1 = tt.elementwise_inline_asm "shl.b32 $0, $0, 3;"
+    {constraints = "=r,r", packed_element = 4 : i32, pure = true} %0 : tensor<512xi8> -> tensor<512xi8>
+  tt.return
 }
