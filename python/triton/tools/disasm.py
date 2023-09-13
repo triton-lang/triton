@@ -23,6 +23,8 @@
 import re
 import subprocess
 
+from ..common.backend import path_to_cuobjdump
+
 FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
 SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')
 FNAME_RE = re.compile(r'\s*Function : (\w+)\s*')
@@ -61,10 +63,11 @@ def processSassLines(fline, sline, labels):
 
 
 def extract(file_path, fun):
+    cuobjdump, _ = path_to_cuobjdump()
     if fun is None:
-        sass_str = subprocess.check_output(["cuobjdump", "-sass", file_path])
+        sass_str = subprocess.check_output([cuobjdump, "-sass", file_path])
     else:
-        sass_str = subprocess.check_output(["cuobjdump", "-fun", fun, "-sass", file_path])
+        sass_str = subprocess.check_output([cuobjdump, "-fun", fun, "-sass", file_path])
     sass_lines = sass_str.splitlines()
     line_idx = 0
     while line_idx < len(sass_lines):

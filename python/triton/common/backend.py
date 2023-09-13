@@ -118,3 +118,22 @@ def path_to_ptxas():
                 if version is not None:
                     return ptxas, version.group(1)
     raise RuntimeError("Cannot find ptxas")
+
+
+@functools.lru_cache()
+def path_to_cuobjdump():
+    base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
+    paths = [
+        os.environ.get("TRITON_CUOBJDUMP_PATH", ""),
+        os.path.join(base_dir, "third_party", "cuda", "bin", "cuobjdump")
+    ]
+
+    for ptxas in paths:
+        ptxas_bin = ptxas.split(" ")[0]
+        if os.path.exists(ptxas_bin) and os.path.isfile(ptxas_bin):
+            result = subprocess.check_output([ptxas_bin, "--version"], stderr=subprocess.STDOUT)
+            if result is not None:
+                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+                if version is not None:
+                    return ptxas, version.group(1)
+    raise RuntimeError("Cannot find cuobjdump")

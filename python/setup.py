@@ -125,15 +125,15 @@ def get_thirdparty_packages(triton_cache_path):
 # ---- package data ---
 
 
-def download_and_copy_ptxas():
-
+def download_and_copy(src_path, version, urlFunc):
     base_dir = os.path.dirname(__file__)
-    src_path = "bin/ptxas"
-    version = "12.1.105"
+    # src_path = "bin/ptxas"
+    # version = "12.1.105"
     arch = platform.machine()
     if arch == "x86_64":
         arch = "64"
-    url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2"
+    url = urlFunc(arch, version)
+    # url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2"
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
@@ -156,8 +156,8 @@ def download_and_copy_ptxas():
             shutil.copy(src_path, dst_path)
     return dst_suffix
 
-
 # ---- cmake extension ----
+
 
 def get_base_dir():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -280,8 +280,8 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-download_and_copy_ptxas()
-
+download_and_copy(src_path='bin/ptxas', version='12.1.105', urlFunc=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
+download_and_copy(src_path='bin/cuobjdump', version='12.1.111', urlFunc=lambda arch, version: f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2")
 
 setup(
     name="triton",
