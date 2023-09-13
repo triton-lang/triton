@@ -338,6 +338,8 @@ public:
     // Order
     auto inOrder = triton::gpu::getOrder(srcEncoding);
     auto outOrder = triton::gpu::getOrder(resSharedLayout);
+    assert(outVec * (maxPhase - 1) <= srcShape[outOrder[0]] &&
+           "Swizzling would generate out of bounds memory accesses");
     // Tensor indices held by the current thread, as LLVM values
     auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcTy, false);
     // Swizzling with leading offsets (e.g. Hopper GMMA)
