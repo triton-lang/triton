@@ -116,6 +116,7 @@ struct MoveBroadcastAfterElementwisePattern
 
     auto operands = op->getOperands();
     bool seenBroadcast = false;
+    Type srcType;
     for (auto operand : operands) {
       auto definingOp = operand.getDefiningOp();
       if (!definingOp) {
@@ -123,11 +124,13 @@ struct MoveBroadcastAfterElementwisePattern
       }
 
       if (auto broadcastOp = llvm::dyn_cast<triton::BroadcastOp>(definingOp)) {
-        if (seenBroadcast) {
-          // Only support one broadcasted argument for now
+        if (!seenBroadcast) {
+          seenBroadcast = true;
+          srcType = broadcastOp.getSrc().getType();
+        } else if (srcType != broadcastOp.getSrc().getType()) {
+          // If the broadcast have different types we cannot re-order.
           return mlir::failure();
         }
-        seenBroadcast = true;
       } else if (!isSplat(definingOp)) {
         // Not splat or broadcast
         return mlir::failure();
@@ -149,8 +152,7 @@ struct MoveBroadcastAfterElementwisePattern
       }
     }
 
-    auto src = broadcastOp.getSrc();
-    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
+    auto srcTy = broadcastOp.getSrc().getType().dyn_cast<RankedTensorType>();
     auto srcShape = srcTy.getShape();
     auto srcEncoding = srcTy.getEncoding();
 
@@ -158,8 +160,9 @@ struct MoveBroadcastAfterElementwisePattern
     llvm::SmallVector<Value, 4> newOperands;
     for (auto operand : operands) {
       auto definingOp = operand.getDefiningOp();
-      if (llvm::isa<triton::BroadcastOp>(definingOp)) {
-        newOperands.push_back(src);
+      if (auto broadcastSrcOp =
+              llvm::dyn_cast<triton::BroadcastOp>(definingOp)) {
+        newOperands.push_back(broadcastSrcOp.getSrc());
         continue;
       }
       auto elemTy =
