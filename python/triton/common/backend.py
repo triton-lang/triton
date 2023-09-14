@@ -101,20 +101,34 @@ def get_backend(device_type: str):
     return _backends[device_type] if device_type in _backends else None
 
 
-@functools.lru_cache()
-def path_to_ptxas():
+def _path_to_binary(binary: str):
     base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
     paths = [
         os.environ.get("TRITON_PTXAS_PATH", ""),
-        os.path.join(base_dir, "third_party", "cuda", "bin", "ptxas")
+        os.path.join(base_dir, "third_party", "cuda", "bin", binary)
     ]
 
-    for ptxas in paths:
-        ptxas_bin = ptxas.split(" ")[0]
-        if os.path.exists(ptxas_bin) and os.path.isfile(ptxas_bin):
-            result = subprocess.check_output([ptxas_bin, "--version"], stderr=subprocess.STDOUT)
+    for p in paths:
+        bin = p.split(" ")[0]
+        if os.path.exists(bin) and os.path.isfile(bin):
+            result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                 if version is not None:
-                    return ptxas, version.group(1)
-    raise RuntimeError("Cannot find ptxas")
+                    return p, version.group(1)
+    raise RuntimeError(f"Cannot find {binary}")
+
+
+@functools.lru_cache()
+def path_to_ptxas():
+    return _path_to_binary("ptxas")
+
+
+@functools.lru_cache()
+def path_to_cuobjdump():
+    return _path_to_binary("cuobjdump")
+
+
+@functools.lru_cache()
+def path_to_nvdisasm():
+    return _path_to_binary("nvdisasm")
