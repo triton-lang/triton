@@ -204,7 +204,9 @@ def get_kernel_name(src: str, pattern: str) -> str:
 
 
 def convert_type_repr(x):
-    match = re.search(r'!tt\.ptr<(.*)>', x)
+    # Currently we only capture the pointer type and assume the pointer is on global memory.
+    # TODO: Capture and support shared memory space
+    match = re.search(r'!tt\.ptr<([^,]+)', x)
     if match is not None:
         return '*' + convert_type_repr(match.group(1))
     return x
@@ -241,7 +243,8 @@ def make_hash(fn, arch, env_vars, **kwargs):
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-mlir_prototype_pattern = r'^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+# - (attributes \{[\S\s]+\})? : optionally match attributes enclosed in braces and capture it as group 3
+mlir_prototype_pattern = r"^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: [\S\s]+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*(attributes \{[\S\s]+\})?\s+\{\s*$"
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
     "ttir": mlir_prototype_pattern,
@@ -249,7 +252,11 @@ prototype_pattern = {
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ([^,^\)\s]+)(?: \{\S+ = \S+ : \S+\})?,?'
+# - ((?:[^,\s<]+|<[^>]+>)+): Capturing group that matches one or more of either:
+#   [^,\s<]+: One or more characters that are not a comma, whitespace, or the < symbol.
+#   |: OR
+#   <[^>]+>: A string that starts with < and ends with >, containing any characters except > in between.
+mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<]+|<[^>]+>)+),?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
@@ -422,6 +429,7 @@ def compile(fn, **kwargs):
         src = Path(fn).read_text()
         import re
         match = re.search(prototype_pattern[ir_name], src, re.MULTILINE)
+        # TODO: support function attributes at group 3 (e.g., device function)
         name, signature = match.group(1), match.group(2)
         types = re.findall(arg_type_pattern[ir_name], signature)
         if ir_name == 'ttgir':
