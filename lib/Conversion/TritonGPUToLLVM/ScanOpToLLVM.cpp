@@ -85,13 +85,14 @@ static void warpScan(SmallVector<Value> &srcValues,
 
     if (axisNumWarps == 1) {
       // Fast path for the case where we have only one warp.
-      for (unsigned i = 0; i < srcIndex; ++i) {
-        Value laneValue = srcValues[i];
+      for (unsigned i = 1; i < elementIdx; ++i) {
+        Value laneValue = srcValues[srcIndex - i * elementStride];
         accumulate(rewriter, helper.getCombineOp(), laneValue, acc);
         // For the first chunk we don't have anything to
         // accumulate.
-        laneValue = select(maskFirstLane, srcValues[i], laneValue);
-        srcValues[i] = laneValue;
+        laneValue = select(maskFirstLane,
+                           srcValues[srcIndex - i * elementStride], laneValue);
+        srcValues[srcIndex - i * elementStride] = laneValue;
       }
     }
   }
