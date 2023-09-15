@@ -1309,6 +1309,8 @@ def dot(lhs: tl.tensor,
         assert lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
+    elif out_dtype.is_bf16():
+        assert False, "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32 and cast with `.to(tl.bfloat16)`"
     elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
         _0 = builder.get_fp32(0)
         ret_scalar_ty = tl.float32
