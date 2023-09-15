@@ -1482,9 +1482,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_dot",
            [](TritonOpBuilder &self, mlir::Value &a, mlir::Value &b,
-              mlir::Value &c, bool allowTF32) -> mlir::Value {
-             return self.create<mlir::triton::DotOp>(c.getType(), a, b, c,
-                                                     allowTF32);
+              mlir::Value &c, bool allowTF32,
+              int maxNumImpreciseAcc) -> mlir::Value {
+             return self.create<mlir::triton::DotOp>(
+                 c.getType(), a, b, c, allowTF32, maxNumImpreciseAcc);
            })
       .def("create_exp",
            [](TritonOpBuilder &self, mlir::Value &val) -> mlir::Value {

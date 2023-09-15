@@ -708,13 +708,13 @@ public:
     // TODO (zahi): Return type must always be a struct for wgmma, currently
     // we rely on the size of output constraints vector to determine whether
     // the output is a struct or not. We should find a way to pass this info
-    auto opC = op.getOpC();
-    auto typeC = opC.getType();
+    auto resultType = op.getType();
 
-    auto structTypeC = typeC.dyn_cast<LLVM::LLVMStructType>();
-    uint32_t numCRegs = structTypeC.getBody().size();
-    std::string c = structTypeC.getBody().front().isF32() ? "=f" : "=r";
-    return std::vector<std::string>(numCRegs, c);
+    auto outputStructType = resultType.dyn_cast<LLVM::LLVMStructType>();
+    uint32_t numOutputRegs = outputStructType.getBody().size();
+    std::string output =
+        outputStructType.getBody().front().isF32() ? "=f" : "=r";
+    return std::vector<std::string>(numOutputRegs, output);
   }
 
   OperandsAndConstraints getOperandsAndConstraints(ttn::WGMMAOp op) const {
@@ -727,7 +727,8 @@ public:
     auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
 
     // TODO (zahi): is this the best way to tie inputs/outputs ?
-    operandsAndConstraints.push_back({opC, "0"});
+    if (opC)
+      operandsAndConstraints.push_back({opC, "0"});
 
     if (structTypeA) {
       operandsAndConstraints.push_back({opA, "f"});
@@ -744,7 +745,6 @@ public:
     using namespace ttn;
     auto opA = op.getOpA();
     auto opB = op.getOpB();
-    auto opC = op.getOpC();
     auto m = op.getM();
     auto n = op.getN();
     auto k = op.getK();
@@ -757,12 +757,12 @@ public:
     // Register checks
     auto typeA = opA.getType();
     auto typeB = opB.getType();
-    auto typeC = opC.getType();
+    auto typeOutput = op.getType();
     auto structTypeA = typeA.dyn_cast<LLVM::LLVMStructType>();
     auto structTypeB = typeB.dyn_cast<LLVM::LLVMStructType>();
-    auto structTypeC = typeC.dyn_cast<LLVM::LLVMStructType>();
+    auto structTypeOutput = typeOutput.dyn_cast<LLVM::LLVMStructType>();
     assert(!structTypeB && "Operand B can not be registers");
-    assert(structTypeC && "Operand C must be registers");
+    assert(structTypeOutput && "Output and C operand must be registers");
 
     // Element type, MNK shape and transposing support check
     // Reference:
@@ -804,18 +804,20 @@ public:
 
     // Operands
     uint32_t asmOpIdx = 0;
-
-    // Operand C
-    uint32_t numCRegs = structTypeC.getBody().size();
-
     std::string args = "";
+
+    // Output and operand C
+    uint32_t numCRegs = structTypeOutput.getBody().size();
+
     args += "{";
     for (uint32_t i = 0; i < numCRegs; ++i) {
       args += "$" + std::to_string(asmOpIdx++) + (i == numCRegs - 1 ? "" : ",");
     }
     args += "}, ";
 
-    asmOpIdx += numCRegs;
+    if (op.getOpC())
+      asmOpIdx += numCRegs;
+
     // Operand A
     if (structTypeA) {
       uint32_t numARegs = m * k / 128;
@@ -833,8 +835,8 @@ public:
     // Operand B (must be `desc`)
     args += "$" + std::to_string(asmOpIdx++) + ", ";
 
-    // `scale-d` is 1 by default
-    args += "1";
+    // `scale-d` is 1 if we have a C operand.
+    args += op.getOpC() ? "1" : "0";
 
     // `imm-scale-a`, and `imm-scale-b` are 1 by default only for float-based
     // WGMMA
