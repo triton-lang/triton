@@ -241,8 +241,16 @@ unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
   unsigned numParallelWarpsPerCTA = product<unsigned>(warpsPerCTA);
   return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
 }
+
 unsigned ScanLoweringHelper::getAxisNumWarps() {
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  return warpsPerCTA[getAxis()];
+}
+
+unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData(
+    ArrayRef<int64_t> tensorShape) {
+  auto warpsPerCTA =
+      triton::gpu::getWarpsPerCTAWithUniqueData(srcEncoding, tensorShape);
   return warpsPerCTA[getAxis()];
 }
 

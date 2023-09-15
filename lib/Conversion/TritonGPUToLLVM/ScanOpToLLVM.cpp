@@ -171,7 +171,7 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
       Value index = add(parallelLaneId,
                         i32_val(numParallelLane * (i + chunkId * numWarps)));
       Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
-      Value partialReduce = numWarps > 1 ? load(ptr) : srcValues[srcIndex];
+      Value partialReduce = load(ptr);
       if (!accumulator.acc) {
         accumulator.acc = partialReduce;
         accumulator.maskedAcc = partialReduce;
@@ -292,6 +292,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
       getDelinearizedIds(rewriter, helper, laneId, warpId);
   auto input = adaptor.getOperands()[0];
   auto type = op.getOperand(0).getType().cast<RankedTensorType>();
+  warpIdAxis =
+      urem(warpIdAxis,
+           i32_val(helper.getAxisNumWarpsWithUniqueData(type.getShape())));
   SmallVector<Value> srcValues =
       getTypeConverter()->unpackLLElements(loc, input, rewriter, type);
 
@@ -305,12 +308,10 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   Value baseSharedMemPtr = bitcast(
       getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys);
 
-  if (helper.getAxisNumWarps() > 1) {
-    // Store the partial reducing for each warp into shared memory.
-    storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
-                         baseSharedMemPtr, flatIdParallel);
-    barrier();
-  }
+  // Store the partial reducing for each warp into shared memory.
+  storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
+                       baseSharedMemPtr, flatIdParallel);
+  barrier();
 
   // Read back the partial reduction of each warp and accumulate them based on
   // warpId. Then update each chunk of contiguous elements by adding the
