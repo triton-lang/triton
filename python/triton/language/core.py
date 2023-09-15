@@ -672,8 +672,6 @@ class tensor:
         else:
             return semantic.lshr(other, self, _builder)
 
-    # comparison operators
-
     # >
     @builtin
     def __gt__(self, other, _builder=None):

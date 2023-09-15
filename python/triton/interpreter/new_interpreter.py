@@ -122,6 +122,12 @@ class Builder:
     def get_float_ty(self):
         return tl.float32
 
+    def get_int64_ty(self):
+        return tl.int64
+
+    def get_ptr_ty(self, elt_ty, addr_space):
+        return tl.pointer_type(elt_ty, addr_space)
+
     def get_block_ty(self, dtype, shape):
         return tl.tensor(shape, dtype)
 
@@ -289,6 +295,8 @@ class Builder:
     def create_broadcast(self, arg, shape):
         return TensorHandle(np.broadcast_to(arg.data, shape), arg.dtype)
 
+    def create_int_to_ptr(self, val, dst_ty):
+        return TensorHandle(val.data.astype(np.uint64), dst_ty)
     # def create_cat(self, lhs, rhs):
     #     pass
 
@@ -360,6 +368,7 @@ def _patch_lang_tensor(tensor, builder):
     for name, member in inspect.getmembers(tensor):
         if tl.core.is_builtin(member):
             patch_attr(tensor, name, member, builder)
+    tensor.__index__ = lambda self: int(self.handle.data)
 
 
 def _patch_lang_core(lang, builder):
