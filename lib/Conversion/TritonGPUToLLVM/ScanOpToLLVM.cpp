@@ -170,7 +170,7 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
       Value index = add(parallelLaneId,
                         i32_val(numParallelLane * (i + chunkId * axisNumWarps)));
       Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
-      Value partialReduce = load(ptr);
+      Value partialReduce = axisNumWarps > 1 ? load(ptr) : srcValues[srcIndex];
       if (!accumulator.acc) {
         accumulator.acc = partialReduce;
         accumulator.maskedAcc = partialReduce;
