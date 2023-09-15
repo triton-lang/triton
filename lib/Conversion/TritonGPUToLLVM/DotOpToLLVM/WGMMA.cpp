@@ -333,7 +333,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   // WGMMA fp8 -> fp32 accumulates in lower precision than fp32.
   bool needsPartialAccumulator = isFP8(eltTypeA) &&
                                  eltTypeC == triton::nvgpu::WGMMAEltType::f32 &&
-                                 maxNumImpreciseAcc < aTensorTy.getShape()[1];
+                                 maxNumImpreciseAcc <= aTensorTy.getShape()[1];
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
@@ -356,7 +356,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
         // accumulation than allowed do a separate allocation.
         bool requireAddAccumulator =
             needsPartialAccumulator &&
-            (numLowPrecisionAcc > maxNumImpreciseAcc || k == numRepK - 1);
+            (numLowPrecisionAcc >= maxNumImpreciseAcc || k == numRepK - 1);
         Value mmaAcc = needsPartialAccumulator ? partialAcc : d;
         mmaAcc = rewriter.create<triton::nvgpu::WGMMAOp>(
             loc, accTy, a, b, mmaAcc, M, N, K, eltTypeC, eltTypeA, eltTypeB,

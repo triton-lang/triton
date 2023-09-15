@@ -96,7 +96,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: nvgpu.wgmma
     // CHECK-COUNT-128: llvm.fadd
     %m = triton_nvidia_gpu.dot_async %a, %b, %c
-      {maxNumImpreciseAcc = 0 : i32, allowTF32 = true} :
+      {maxNumImpreciseAcc = 32 : i32, allowTF32 = true} :
       tensor<128x128xf8E5M2, #shared> * tensor<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
   }
@@ -120,7 +120,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK-NOT: llvm.fadd
     // CHECK: llvm.return
     %m = triton_nvidia_gpu.dot_async %a, %b, %c
-      {maxNumImpreciseAcc = 128 : i32, allowTF32 = true} :
+      {maxNumImpreciseAcc = 129 : i32, allowTF32 = true} :
       tensor<128x128xf8E5M2, #shared> * tensor<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
   }
@@ -144,7 +144,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK-COUNT-128: llvm.fadd
     // CHECK: llvm.return
     %m = triton_nvidia_gpu.dot_async %a, %b, %c
-      {maxNumImpreciseAcc = 32 : i32, allowTF32 = true} :
+      {maxNumImpreciseAcc = 64 : i32, allowTF32 = true} :
       tensor<128x128xf8E5M2, #shared> * tensor<128x256xf8E5M2, #shared1> -> tensor<128x256xf32, #mma>
     tt.return
   }
