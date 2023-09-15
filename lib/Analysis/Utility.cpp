@@ -247,10 +247,11 @@ unsigned ScanLoweringHelper::getAxisNumWarps() {
   return warpsPerCTA[getAxis()];
 }
 
-unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData(
-    ArrayRef<int64_t> tensorShape) {
+unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
+  auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
+  auto shape = type.getShape();
   auto warpsPerCTA =
-      triton::gpu::getWarpsPerCTAWithUniqueData(srcEncoding, tensorShape);
+      triton::gpu::getWarpsPerCTAWithUniqueData(srcEncoding, shape);
   return warpsPerCTA[getAxis()];
 }
 
@@ -295,9 +296,12 @@ bool ScanLoweringHelper::isSupported() {
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
+  auto shape = type.getShape();
+  auto warpsPerCTA =
+      triton::gpu::getWarpsPerCTAWithUniqueData(srcEncoding, shape);
   unsigned elementSizeInBytes = type.getElementTypeBitWidth() / 8;
   auto mod = scanOp->getParentOfType<ModuleOp>();
-  unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  unsigned numWarps = product<unsigned>(warpsPerCTA);
   unsigned numNonAxisElementsPerWapr =
       getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
   unsigned numElements = numWarps * numNonAxisElementsPerWapr *

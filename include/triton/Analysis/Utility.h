@@ -91,7 +91,7 @@ public:
   // Return the number of warps per CTA along axis dim.
   unsigned getAxisNumWarps();
   // Return the number of warps per CTA along axis dim with unique data.
-  unsigned getAxisNumWarpsWithUniqueData(ArrayRef<int64_t> tensorShape);
+  unsigned getAxisNumWarpsWithUniqueData();
   // Return the number of threads per warp along axis dim.
   unsigned getAxisNumThreadsPerWarp();
   // Return the number of blocks along axis dim.
