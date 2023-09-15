@@ -292,9 +292,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
       getDelinearizedIds(rewriter, helper, laneId, warpId);
   auto input = adaptor.getOperands()[0];
   auto type = op.getOperand(0).getType().cast<RankedTensorType>();
-  warpIdAxis =
-      urem(warpIdAxis,
-           i32_val(helper.getAxisNumWarpsWithUniqueData(type.getShape())));
+  warpIdAxis = urem(warpIdAxis, i32_val(helper.getAxisNumWarpsWithUniqueData()));
   SmallVector<Value> srcValues =
       getTypeConverter()->unpackLLElements(loc, input, rewriter, type);
 
