@@ -167,32 +167,30 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
                                 parallelBlockId * parallelElementsPerThread;
     Accumulator &accumulator = accumulators[accumulatorIndex];
     unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
-    if (numWarps > 1) {
-      for (unsigned i = 0; i < numWarps; ++i) {
-        Value index = add(parallelLaneId,
-                          i32_val(numParallelLane * (i + chunkId * numWarps)));
-        Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
-        Value partialReduce = load(ptr);
-        if (!accumulator.acc) {
-          accumulator.acc = partialReduce;
-          accumulator.maskedAcc = partialReduce;
-          continue;
-        }
-        accumulate(rewriter, helper.getCombineOp(), accumulator.acc,
-                   partialReduce);
-        Value mask = icmp_slt(warpId, i32_val(i + 1));
-        accumulator.maskedAcc =
-            select(mask, accumulator.maskedAcc, accumulator.acc);
+    for (unsigned i = 0; i < numWarps; ++i) {
+      Value index = add(parallelLaneId,
+                        i32_val(numParallelLane * (i + chunkId * numWarps)));
+      Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
+      Value partialReduce = numWarps > 1 ? load(ptr) : srcValues[srcIndex];
+      if (!accumulator.acc) {
+        accumulator.acc = partialReduce;
+        accumulator.maskedAcc = partialReduce;
+        continue;
       }
-      Value temp = srcValues[srcIndex];
-      accumulate(rewriter, helper.getCombineOp(), temp, accumulator.maskedAcc);
-      if (axisBlockId == 0) {
-        // For the first warp and first chunk we don't have anything to
-        // accumulate.
-        temp = select(maskFirstWarp, srcValues[srcIndex], temp);
-      }
-      srcValues[srcIndex] = temp;
+      accumulate(rewriter, helper.getCombineOp(), accumulator.acc,
+                 partialReduce);
+      Value mask = icmp_slt(warpId, i32_val(i + 1));
+      accumulator.maskedAcc =
+          select(mask, accumulator.maskedAcc, accumulator.acc);
     }
+    Value temp = srcValues[srcIndex];
+    accumulate(rewriter, helper.getCombineOp(), temp, accumulator.maskedAcc);
+    if (axisBlockId == 0) {
+      // For the first warp and first chunk we don't have anything to
+      // accumulate.
+      temp = select(maskFirstWarp, srcValues[srcIndex], temp);
+    }
+    srcValues[srcIndex] = temp;
     // Update the rest of the contiguous elements.
     Value lastElement =
         shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
