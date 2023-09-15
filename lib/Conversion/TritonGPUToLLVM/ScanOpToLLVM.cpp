@@ -65,6 +65,8 @@ static void warpScan(SmallVector<Value> &srcValues,
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned scanDim = helper.getAxisNumThreadsPerWarp();
+  unsigned axisNumWarps = helper.getAxisNumWarps();
+  Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
@@ -80,6 +82,18 @@ static void warpScan(SmallVector<Value> &srcValues,
       acc = select(mask, acc, tempAcc);
     }
     srcValues[srcIndex] = acc;
+
+    if (axisNumWarps == 1) {
+      // Fast path for the case where we have only one warp.
+      for (unsigned i = 0; i < srcIndex; ++i) {
+        Value laneValue = srcValues[i];
+        accumulate(rewriter, helper.getCombineOp(), laneValue, acc);
+        // For the first chunk we don't have anything to
+        // accumulate.
+        laneValue = select(maskFirstLane, srcValues[i], laneValue);
+        srcValues[i] = laneValue;
+      }
+    }
   }
 }
 
@@ -299,8 +313,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   // elements.
   warpScan(srcValues, rewriter, helper, laneIdAxis);
 
-  auto shape = type.getShape();
-  if (helper.getAxisNumElementsPerWarp() > shape[helper.getAxis()]) {
+  if (helper.getAxisNumWarps() > 1) {
     // Store the partial reducing for each warp into shared memory.
     Type elemPtrTys = LLVM::LLVMPointerType::get(srcValues[0].getType(), 3);
     Value baseSharedMemPtr = bitcast(
