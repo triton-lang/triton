@@ -299,18 +299,21 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   // elements.
   warpScan(srcValues, rewriter, helper, laneIdAxis);
 
-  // Store the partial reducing for each warp into shared memory.
-  Type elemPtrTys = LLVM::LLVMPointerType::get(srcValues[0].getType(), 3);
-  Value baseSharedMemPtr = bitcast(
-      getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys);
-  storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
-                       baseSharedMemPtr, flatIdParallel);
-  barrier();
-  // Read back the partial reduction of each warp and accumulate them based on
-  // warpId. Then update each chunk of contiguous elements by adding the
-  // accumulated value from the previous lane.
-  AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
-                   laneIdAxis, flatIdParallel);
+  auto shape = type.getShape();
+  if (helper.getAxisNumElementsPerWarp() > shape[helper.getAxis()]) {
+    // Store the partial reducing for each warp into shared memory.
+    Type elemPtrTys = LLVM::LLVMPointerType::get(srcValues[0].getType(), 3);
+    Value baseSharedMemPtr = bitcast(
+        getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys);
+    storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
+                         baseSharedMemPtr, flatIdParallel);
+    barrier();
+    // Read back the partial reduction of each warp and accumulate them based on
+    // warpId. Then update each chunk of contiguous elements by adding the
+    // accumulated value from the previous lane.
+    AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
+                     laneIdAxis, flatIdParallel);
+  }
 
   Value results = getTypeConverter()->packLLElements(loc, srcValues, rewriter,
                                                      input.getType());

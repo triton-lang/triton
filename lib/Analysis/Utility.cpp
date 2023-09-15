@@ -211,6 +211,10 @@ unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
   return getEncoding().getSizePerThread()[getAxis()];
 }
 
+unsigned ScanLoweringHelper::getAxisNumElementsPerWarp() {
+  return getAxisNumElementsPerThread() * getAxisNumThreadsPerWarp();
+}
+
 unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
   SmallVector<unsigned> sizePerThreads = getContigPerThread(getEncoding());
   sizePerThreads[getAxis()] = 1;
