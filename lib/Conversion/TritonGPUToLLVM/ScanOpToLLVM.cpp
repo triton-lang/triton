@@ -179,7 +179,7 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
           continue;
         }
         accumulate(rewriter, helper.getCombineOp(), accumulator.acc,
-                  partialReduce);
+                   partialReduce);
         Value mask = icmp_slt(warpId, i32_val(i + 1));
         accumulator.maskedAcc =
             select(mask, accumulator.maskedAcc, accumulator.acc);
@@ -318,7 +318,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   // warpId. Then update each chunk of contiguous elements by adding the
   // accumulated value from the previous lane.
   AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
-                    laneIdAxis, flatIdParallel);
+                   laneIdAxis, flatIdParallel);
 
   Value results = getTypeConverter()->packLLElements(loc, srcValues, rewriter,
                                                      input.getType());
