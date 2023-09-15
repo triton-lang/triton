@@ -523,10 +523,14 @@ def compile(fn, **kwargs):
 
         if ir_name == "cubin":
             asm[ir_name] = next_module
-            sass_ir = "sass"
-            sass_fname = f"{name}.{sass_ir}"
-            asm[sass_ir] = get_sass(next_module)
-            metadata_group[sass_fname] = fn_cache_manager.put(asm[sass_ir], sass_fname)
+            sass = "sass"
+            sass_fname = f"{name}.{sass}"
+            sass_path = metadata_group.get(sass_fname)
+            if sass_path is None:
+                asm[sass] = get_sass(next_module)
+                metadata_group[sass_fname] = fn_cache_manager.put(asm[sass], sass_fname)
+            else:
+                asm[sass] = parse(sass_path)
 
         elif ir_name == "amdgcn":
             asm[ir_name] = str(next_module[0])
