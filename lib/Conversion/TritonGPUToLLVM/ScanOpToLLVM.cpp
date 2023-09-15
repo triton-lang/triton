@@ -65,7 +65,6 @@ static void warpScan(SmallVector<Value> &srcValues,
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned scanDim = helper.getAxisNumThreadsPerWarp();
-  unsigned axisNumWarps = helper.getAxisNumWarps();
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
@@ -100,7 +99,7 @@ static void storeWarpAccumulator(SmallVector<Value> &srcValues,
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned scanDim = helper.getAxisNumThreadsPerWarp();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
-  unsigned numWarps = helper.getAxisNumWarps();
+  unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
   unsigned chunkId = 0;
   unsigned elementStride = helper.getAxisElementStride();
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
@@ -111,7 +110,7 @@ static void storeWarpAccumulator(SmallVector<Value> &srcValues,
     Value lastElement = srcValues[srcIndex];
     Value mask = icmp_eq(laneId, i32_val(scanDim - 1));
     Value index = add(parallelLaneId, mul(warpId, i32_val(numParallelLane)));
-    index = add(index, i32_val(chunkId * numParallelLane * numWarps));
+    index = add(index, i32_val(chunkId * numParallelLane * axisNumWarps));
     Value writePtr = gep(baseSharedMemPtr.getType(), baseSharedMemPtr, index);
     storeShared(rewriter, loc, writePtr, lastElement, mask);
     chunkId++;
@@ -130,11 +129,11 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
                              Value parallelLaneId) {
   Location loc = helper.getLoc();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
-  unsigned numWarps = helper.getAxisNumWarps();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
+  unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
@@ -167,9 +166,9 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
                                 parallelBlockId * parallelElementsPerThread;
     Accumulator &accumulator = accumulators[accumulatorIndex];
     unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
-    for (unsigned i = 0; i < numWarps; ++i) {
+    for (unsigned i = 0; i < axisNumWarps; ++i) {
       Value index = add(parallelLaneId,
-                        i32_val(numParallelLane * (i + chunkId * numWarps)));
+                        i32_val(numParallelLane * (i + chunkId * axisNumWarps)));
       Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
       Value partialReduce = load(ptr);
       if (!accumulator.acc) {
@@ -292,7 +291,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
       getDelinearizedIds(rewriter, helper, laneId, warpId);
   auto input = adaptor.getOperands()[0];
   auto type = op.getOperand(0).getType().cast<RankedTensorType>();
-  warpIdAxis = urem(warpIdAxis, i32_val(helper.getAxisNumWarpsWithUniqueData()));
+  auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
+  warpIdAxis = urem(warpIdAxis, i32_val(axisNumWarps));
   SmallVector<Value> srcValues =
       getTypeConverter()->unpackLLElements(loc, input, rewriter, type);
 
@@ -307,9 +307,11 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
       getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys);
 
   // Store the partial reducing for each warp into shared memory.
-  storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
-                       baseSharedMemPtr, flatIdParallel);
-  barrier();
+  if (axisNumWarps > 1) {
+    storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
+                        baseSharedMemPtr, flatIdParallel);
+    barrier();
+  }
 
   // Read back the partial reduction of each warp and accumulate them based on
   // warpId. Then update each chunk of contiguous elements by adding the
