@@ -20,6 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import functools
 import os
 import re
 import subprocess
@@ -64,6 +65,7 @@ def processSassLines(fline, sline, labels):
     return (f'{ctrl}', f'{asm}')
 
 
+@functools.lru_cache()
 def get_sass(cubin_asm, fun=None):
     fd, path = tempfile.mkstemp()
     try:
