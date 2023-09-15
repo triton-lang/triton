@@ -30,6 +30,14 @@ from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
                     get_ids_of_tensormaps, parse_tma_info)
 
 
+class LazyDict(dict):
+    def __getitem__(self, key):
+        val = dict.__getitem__(self, key)
+        if callable(val):
+            return val()
+        return val
+
+
 def inline_triton_ir(mod):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
@@ -489,7 +497,7 @@ def compile(fn, **kwargs):
     metadata["device_type"] = device_type
 
     first_stage = list(stages.keys()).index(ext)
-    asm = dict()
+    asm = LazyDict()
     module = fn
     # run compilation pipeline  and populate metadata
     for ir_name, (parse, compile_kernel) in list(stages.items())[first_stage:]:
@@ -523,16 +531,7 @@ def compile(fn, **kwargs):
 
         if ir_name == "cubin":
             asm[ir_name] = next_module
-            if os.environ.get("TRITON_ENABLE_SASS_DUMP", '') == '1':
-                sass = "sass"
-                sass_fname = f"{name}.{sass}"
-                sass_path = metadata_group.get(sass_fname)
-                if sass_path is None:
-                    asm[sass] = get_sass(next_module)
-                    metadata_group[sass_fname] = fn_cache_manager.put(asm[sass], sass_fname)
-                else:
-                    asm[sass] = parse(sass_path)
-
+            asm["sass"] = lambda: get_sass(next_module)
         elif ir_name == "amdgcn":
             asm[ir_name] = str(next_module[0])
         else:
