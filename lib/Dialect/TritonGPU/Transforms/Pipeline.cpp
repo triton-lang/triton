@@ -1640,7 +1640,8 @@ void PipelinePass::asyncLaunchDots(scf::ForOp forOp) {
     auto dotOp = cast<tt::DotOp>(dot.getDefiningOp());
     builder.setInsertionPoint(dot.getDefiningOp());
     auto dotAsync = builder.create<tt::nvidia_gpu::DotAsyncOp>(
-        loc, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32());
+        loc, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32(),
+        dotOp.getMaxNumImpreciseAcc());
     dot.replaceAllUsesWith(dotAsync.getResult());
     updateConsumerReleaseInfo(dot.getDefiningOp(), dotWait, /*stage=*/1);
     dot.getDefiningOp()->erase();

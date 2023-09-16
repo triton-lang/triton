@@ -131,8 +131,8 @@ def check_type_supported(dtype, device):
         cc = torch.cuda.get_device_capability()
         if cc[0] < 8 and (dtype is tl.bfloat16 or dtype == "bfloat16" or dtype is torch.bfloat16):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
-        if cc[0] < 9 and (dtype is tl.float8e4nv or dtype == "float8e4"):
-            pytest.skip("float8e4 is only supported on NVGPU with cc >= 90")
+        if cc[0] < 9 and (dtype is tl.float8e4nv or dtype == "float8e4nv"):
+            pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
 
 
 class MmaLayout:
@@ -3750,3 +3750,86 @@ def test_ptx_cast(dtype_str, device):
     buf14 = -torch.ones((s0, 6, 197, 197), device=device, dtype=torch_dtype)
     kernel[(4728,)](buf11, buf14, 1182 * s0, 197, triton_dtype, 1, 256, num_warps=2)
     assert buf14.to(torch.float32).mean() == -2.0
+
+# -----------------------
+# test fp8 -> fp32 dot
+# -----------------------
+
+
+def f8_to_f16(x, dtype):
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        tl.store(Y + offs, x, mask=mask)
+
+    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
+    dtype = getattr(tl, dtype)
+    kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
+    return ret
+
+
+@triton.jit
+def matmul_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    low_precision_acc: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
+        accumulator = tl.dot(a, b, acc=accumulator, max_num_imprecise_acc=low_precision_acc)
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
+    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    tl.store(c_ptrs, accumulator)
+
+
+@pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv'])
+@pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
+def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
+    check_type_supported(in_type_str, device)
+    M, N, K = 128, 256, 256
+    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
+    A = numpy_random((M, K), dtype_str=in_type_str)
+    B = numpy_random((K, N), dtype_str=in_type_str)
+    Bt = B.T
+    C = torch.empty((M, N), dtype=torch.float32, device='cuda')
+    num_warps = 8
+    a = to_triton(A, device='cuda', dst_type=in_type_str)
+    b = to_triton(B, device='cuda', dst_type=in_type_str)
+    grid = (triton.cdiv(M, BLOCK_M), 1)
+    matmul_kernel[grid](a, b, C, M, N, K,
+                        a.stride(0), a.stride(1), b.stride(0), b.stride(
+                            1), C.stride(0), C.stride(1),
+                        BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
+    torch_a = torch.from_numpy(A)
+    th_a = f8_to_f16(torch_a.cuda(), in_type_str)
+    torch_b = torch.from_numpy(B)
+    th_b = f8_to_f16(torch_b.cuda(), in_type_str)
+    ref_out = torch.matmul(th_a, th_b).to(torch.float32)
+    if in_type_str == 'float8e4nv':
+        torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
+    elif low_precision_acc > 32:
+        torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+    else:
+        torch.testing.assert_close(ref_out, C)

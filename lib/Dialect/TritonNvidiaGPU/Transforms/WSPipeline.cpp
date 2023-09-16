@@ -736,7 +736,7 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
       auto dotAsync =
           builder.createWithAgentIds<triton::nvidia_gpu::DotAsyncOp>(
               loc, dotOp.getA(), dotOp.getB(), dotOp.getC(),
-              dotOp.getAllowTF32());
+              dotOp.getAllowTF32(), dotOp.getMaxNumImpreciseAcc());
       dot.replaceAllUsesWith(dotAsync.getResult());
       builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(loc, 1);
 

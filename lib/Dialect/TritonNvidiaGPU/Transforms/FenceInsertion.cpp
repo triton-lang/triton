@@ -50,9 +50,9 @@ public:
                                .getEncoding()
                                .dyn_cast<ttg::MmaEncodingAttr>();
         auto isHopperEncoding = mmaEncoding && mmaEncoding.isHopper();
-        if (isHopperEncoding && (isa<ttg::ConvertLayoutOp>(a.getDefiningOp()) &&
+        if (isHopperEncoding && (a.getDefiningOp<ttg::ConvertLayoutOp>() &&
                                  ttg::isSharedEncoding(a)) ||
-            (isa<ttg::ConvertLayoutOp>(b.getDefiningOp()) &&
+            (b.getDefiningOp<ttg::ConvertLayoutOp>() &&
              ttg::isSharedEncoding(b))) {
 
           // TODO: check whether cluster fence is needed
