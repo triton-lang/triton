@@ -162,7 +162,6 @@ jobs:
 
   Integration-Tests-Third-Party:
     needs: Runner-Preparation
-    if: false
 
     runs-on: ${{ matrix.runner }}
 
