@@ -226,7 +226,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
-  Value parallelLaneId = udiv(laneId, i32_val(scanDim));
+  Value parallelLaneId = mul(udiv(laneId, i32_val(scanDim)), i32_val(scanDim));
   unsigned numScanBlocks = helper.getAxisNumBlocks();
   assert(numScanBlocks * parallelElementsPerThread * scanElementsPerThreads ==
          srcValues.size());
