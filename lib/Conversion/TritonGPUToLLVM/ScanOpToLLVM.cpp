@@ -247,16 +247,16 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
         ((blockId / blockStride) / numScanBlocks) * blockStride;
     unsigned accumulatorIndex = chunkId % parallelElementsPerThread +
                                 parallelBlockId * parallelElementsPerThread;
-    Value &accumulator = accumulators[accumulatorIndex];
+    Value accumulator = accumulators[accumulatorIndex];
     unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
     Value partialReduce = srcValues[srcIndex];
-    if (!accumulator) // First chunk
+    if (!accumulator) // First chunk and first block
       accumulator = partialReduce;
     else
       accumulate(rewriter, helper.getCombineOp(), accumulator, partialReduce);
     // Update the rest of the contiguous elements.
     Value lastElement =
-        shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
+        shflUpSync(loc, rewriter, accumulator, threadStride);
     lastElement = select(maskFirstLane, accumulator, lastElement);
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
@@ -271,6 +271,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     }
     // For the next chunk start back from the value containing the
     // accumulated value of all the warps.
+    accumulators[accumulatorIndex] = accumulator;
     chunkId++;
   }
 }
