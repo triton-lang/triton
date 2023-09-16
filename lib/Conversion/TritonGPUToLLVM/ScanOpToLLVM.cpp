@@ -250,7 +250,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     Value &accumulator = accumulators[accumulatorIndex];
     unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
     Value partialReduce = srcValues[srcIndex];
-    if (accumulator) // First chunk
+    if (!accumulator) // First chunk
       accumulator = partialReduce;
     else
       accumulate(rewriter, helper.getCombineOp(), accumulator, partialReduce);
