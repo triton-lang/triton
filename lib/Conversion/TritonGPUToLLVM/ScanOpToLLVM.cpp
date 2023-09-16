@@ -256,9 +256,12 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
       accumulate(rewriter, helper.getCombineOp(), srcValues[srcIndex],
                  accumulator);
     // Update the rest of the contiguous elements.
-    Value lastElement =
-        shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
-    lastElement = select(maskFirstLane, accumulator, lastElement);
+    Value lastElement = srcValues[srcIndex];
+    if (scanDim > 1) {
+      lastElement =
+          shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
+      lastElement = select(maskFirstLane, accumulator, lastElement);
+    }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
       accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
@@ -382,13 +385,12 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // accumulated value from the previous lane.
     AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
                      laneIdAxis, flatIdParallel);
-  } else if (axisNumThreads > 1) {
+  } else if (srcValues.size() > 1) {
     // Fast path for the case where there is only one warp with unique data on
     // the axis.
     AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis,
                             laneIdAxis);
-
-  } // else all the elements are handled within a single thread
+  } // else axisNumWarps == 1 and srcValues.size() == 1, nothing to do.
 
   Value results = getTypeConverter()->packLLElements(loc, srcValues, rewriter,
                                                      input.getType());
