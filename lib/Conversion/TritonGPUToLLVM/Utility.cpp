@@ -307,6 +307,7 @@ Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
   return commonShflSync(loc, rewriter, val, i, "up", "0x0");
 }
+
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   PTXBuilder builder;
   auto &mov = builder.create("mov")->o("u32");

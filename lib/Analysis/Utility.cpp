@@ -291,6 +291,9 @@ bool ScanLoweringHelper::isSupported() {
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
+  unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
+  if (axisNumWarps == 1)
+    return 0;
   auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
   unsigned elementSizeInBytes = type.getElementTypeBitWidth() / 8;
   auto mod = scanOp->getParentOfType<ModuleOp>();
