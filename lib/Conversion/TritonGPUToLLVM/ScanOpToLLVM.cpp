@@ -218,9 +218,6 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
                                     Value laneIdAxis) {
   Location loc = helper.getLoc();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
-  unsigned numChunks = srcValues.size() / scanElementsPerThreads;
-  if (numChunks == 1) // No need to accumulate across chunks
-    return;
   unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
@@ -383,12 +380,13 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // accumulated value from the previous lane.
     AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
                      laneIdAxis, flatIdParallel);
-  } else {
+  } else if (srcValues.size() > 1) {
     // Fast path for the case where there is only one warp with unique data on
     // the axis.
     AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis,
                             laneIdAxis);
   }
+  // else srcValues.size() == 1 and axisNumWarps == 1, nothing to do.
 
   Value results = getTypeConverter()->packLLElements(loc, srcValues, rewriter,
                                                      input.getType());
