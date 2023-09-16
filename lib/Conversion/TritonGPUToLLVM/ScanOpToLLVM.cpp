@@ -226,12 +226,9 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
   unsigned numScanBlocks = helper.getAxisNumBlocks();
-  unsigned numParallelBlocks = helper.getNonAxisNumBlocks();
-  assert(numScanBlocks * numParallelBlocks * parallelElementsPerThread *
-             scanElementsPerThreads ==
+  assert(numScanBlocks * parallelElementsPerThread * scanElementsPerThreads ==
          srcValues.size());
-  SmallVector<Value> accumulators(numParallelBlocks *
-                                  parallelElementsPerThread);
+  SmallVector<Value> accumulators(parallelElementsPerThread);
   unsigned chunkId = 0;
   unsigned blockStride = helper.getAxisBlockStride();
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
@@ -239,15 +236,8 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     // Only consider the last element of each contiguous chunk of elements.
     if (elementIdx != scanElementsPerThreads - 1)
       continue;
-    // Accumulate the partial reduction from shared memory. Decide which
-    // accumulator to combine based on whether the elements belong to the same
-    // dimension along axis.
     unsigned blockId = chunkId / parallelElementsPerThread;
-    unsigned parallelBlockId =
-        blockId % blockStride +
-        ((blockId / blockStride) / numScanBlocks) * blockStride;
-    unsigned accumulatorIndex = chunkId % parallelElementsPerThread +
-                                parallelBlockId * parallelElementsPerThread;
+    unsigned accumulatorIndex = chunkId % parallelElementsPerThread;
     Value &accumulator = accumulators[accumulatorIndex];
     unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
     if (axisBlockId == 0) // First chunk and first block
