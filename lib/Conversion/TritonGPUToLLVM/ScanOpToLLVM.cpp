@@ -41,7 +41,6 @@ static void scanThreadContiguousElements(SmallVector<Value> &srcValues,
   // contiguous in srcValues. Keep track of what elements belong to the same
   // chunk of contiguous elements.
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
-  unsigned parallelElementsPerThread = helper.getAxisNumElementsPerThread();
   unsigned numChunks = srcValues.size() / scanElementsPerThreads;
   unsigned stride = helper.getAxisElementStride();
   SmallVector<Value> accs(numChunks);
@@ -65,7 +64,6 @@ static void warpScan(SmallVector<Value> &srcValues,
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned scanDim = helper.getAxisNumThreadsPerWarp();
-  Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
@@ -222,6 +220,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
+  unsigned scanDim = helper.getAxisNumThreadsPerWarp();
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
@@ -254,10 +253,15 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     if (!accumulator) // First chunk and first block
       accumulator = partialReduce;
     else
-      accumulate(rewriter, helper.getCombineOp(), accumulator, partialReduce);
+      accumulate(rewriter, helper.getCombineOp(), srcValues[srcIndex],
+                 accumulator);
     // Update the rest of the contiguous elements.
-    Value lastElement = shflUpSync(loc, rewriter, accumulator, threadStride);
-    lastElement = select(maskFirstLane, accumulator, lastElement);
+    Value lastElement = srcValues[srcIndex];
+    if (scanDim > 1) {
+      Value lastElement =
+          shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
+      lastElement = select(maskFirstLane, accumulator, lastElement);
+    }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
       accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
