@@ -256,12 +256,9 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
       accumulate(rewriter, helper.getCombineOp(), srcValues[srcIndex],
                  accumulator);
     // Update the rest of the contiguous elements.
-    Value lastElement = srcValues[srcIndex];
-    if (scanDim > 1) {
-      Value lastElement =
-          shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
-      lastElement = select(maskFirstLane, accumulator, lastElement);
-    }
+    Value lastElement =
+        shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
+    lastElement = select(maskFirstLane, accumulator, lastElement);
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
       accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
@@ -359,6 +356,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto input = adaptor.getOperands()[0];
   auto type = op.getOperand(0).getType().cast<RankedTensorType>();
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
+  auto axisNumThreads = helper.getAxisNumThreadsPerWarp();
   warpIdAxis = urem(warpIdAxis, i32_val(axisNumWarps));
   SmallVector<Value> srcValues =
       getTypeConverter()->unpackLLElements(loc, input, rewriter, type);
@@ -384,19 +382,13 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // accumulated value from the previous lane.
     AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
                      laneIdAxis, flatIdParallel);
-  } else {
-    auto axisNumElementsPerThreadTotal = helper.getAxisNumElementsPerThread() *
-                                         helper.getAxisNumThreadsPerWarp() *
-                                         axisNumWarps;
-    auto shape = type.getShape();
-    if (axisNumElementsPerThreadTotal > shape[helper.getAxis()]) {
-      // Fast path for the case where there is only one warp with unique data on
-      // the axis.
-      AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis,
-                              laneIdAxis);
-    }
-    // else all the elements are handled within a single thread
-  }
+  } else if (axisNumThreads > 1) {
+    // Fast path for the case where there is only one warp with unique data on
+    // the axis.
+    AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis,
+                            laneIdAxis);
+
+  } // else all the elements are handled within a single thread
 
   Value results = getTypeConverter()->packLLElements(loc, srcValues, rewriter,
                                                      input.getType());
