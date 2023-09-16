@@ -226,12 +226,9 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
   unsigned numScanBlocks = helper.getAxisNumBlocks();
-  unsigned numParallelBlocks = helper.getNonAxisNumBlocks();
-  assert(numScanBlocks * numParallelBlocks * parallelElementsPerThread *
-             scanElementsPerThreads ==
+  assert(numScanBlocks * parallelElementsPerThread * scanElementsPerThreads ==
          srcValues.size());
-  SmallVector<Value> accumulators(numParallelBlocks *
-                                  parallelElementsPerThread);
+  SmallVector<Value> accumulators(parallelElementsPerThread);
   unsigned chunkId = 0;
   unsigned blockStride = helper.getAxisBlockStride();
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
@@ -240,11 +237,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     if (elementIdx != scanElementsPerThreads - 1)
       continue;
     unsigned blockId = chunkId / parallelElementsPerThread;
-    unsigned parallelBlockId =
-        blockId % blockStride +
-        ((blockId / blockStride) / numScanBlocks) * blockStride;
-    unsigned accumulatorIndex = chunkId % parallelElementsPerThread +
-                                parallelBlockId * parallelElementsPerThread;
+    unsigned accumulatorIndex = chunkId % parallelElementsPerThread;
     Value &accumulator = accumulators[accumulatorIndex];
     unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
     if (axisBlockId == 0) // First chunk and first block
@@ -261,9 +254,8 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
       llvm::errs() << "scanDim: " << scanDim << " numScanBlocks: "
                    << numScanBlocks << "\n";
       // Update accumulator with the value from the last lane.
-      if (numScanBlocks > 1)
-        accumulator = shflIdxSync(loc, rewriter, lastElement,
-                                  threadStride * (scanDim - 1));
+      accumulator =
+          shflIdxSync(loc, rewriter, lastElement, threadStride * (scanDim - 1));
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
