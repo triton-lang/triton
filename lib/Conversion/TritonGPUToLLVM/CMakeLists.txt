@@ -43,7 +43,7 @@ add_mlir_conversion_library(TritonGPUToLLVM
     ASMBuilder
     MLIRIR
     MLIRPass
-    MLIRGPUOps
+    ${MLIRGPUDIALECT_LIB_NAME}
     MLIRGPUToNVVMTransforms
     MLIRGPUToROCDLTransforms
     MLIRGPUTransforms

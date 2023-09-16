@@ -203,6 +203,20 @@ set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
+# LLVM renamed the library "MLIRGPUOps" to "MLIRGPUDialect" in
+# https://github.com/llvm/llvm-project/commit/61223c49dd9a7d1d3efd1389db11b433cab38ccb.
+#
+# Detect which one we have.  Targets should use "${MLIRGPUDIALECT_LIB_NAME}"
+# rather than "MLIRGPUDialect" or "MLIRGPUOps".
+find_library(MLIRGPUDIALECT_LIB_NAME
+  NAMES MLIRGPUDialect MLIRGPUOps
+  PATHS ${LLVM_LIBRARY_DIR}
+  NO_DEFAULT_PATH
+)
+if (NOT MLIRGPUDIALECT_LIB_NAME)
+  message(FATAL_ERROR "LLVM build does not contain MLIRGPUDialect or MLIRGPUOps library; one of these is necessary.")
+endif()
+
 if(TRITON_BUILD_PYTHON_MODULE)
   add_library(triton SHARED ${PYTHON_SRC})
   set(TRITON_LIBRARIES
