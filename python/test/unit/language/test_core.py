@@ -1830,7 +1830,7 @@ def test_scan_layouts(M, N, src_layout, axis, device):
 @pytest.mark.parametrize("num_warps", [1, 4])
 def test_scan2d_broadcast(RBLOCK, num_warps, device):
     @triton.jit
-    def fn(out_ptr, in_ptr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
+    def fn(in_ptr, out_ptr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
         rindex = tl.arange(0, RBLOCK)[None, :]
         data = tl.load(in_ptr + rindex)
         scan = tl.cumsum(data, 1)
