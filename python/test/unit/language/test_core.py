@@ -1836,12 +1836,13 @@ def test_scan2d_broadcast(RBLOCK, num_warps, device):
         scan = tl.cumsum(data, 1)
         tl.store(out_ptr + tl.arange(0, XBLOCK)[:, None] * RBLOCK + tl.arange(0, RBLOCK)[None, :], scan)
 
+    XBLOCK = 4
     rs = RandomState(17)
     input = rs.randint(-100, 100, (1, RBLOCK)).astype('int32')
-    output = np.empty((4, RBLOCK))
+    output = np.empty((XBLOCK, RBLOCK))
     input_tri = to_triton(input, device=device)
     output_tri = to_triton(output, device=device)
-    fn[(1,)](input_tri, output_tri, 1, RBLOCK, num_warps=num_warps)
+    fn[(1,)](input_tri, output_tri, XBLOCK, RBLOCK, num_warps=num_warps)
     ref = np.cumsum(input, axis=1)
     np.testing.assert_equal(ref, to_numpy(output_tri))
 
