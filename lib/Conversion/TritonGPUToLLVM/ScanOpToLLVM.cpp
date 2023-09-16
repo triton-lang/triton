@@ -8,6 +8,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::shflUpSync;
+using ::mlir::LLVM::shflIdxSync;
 using ::mlir::LLVM::storeShared;
 
 // Apply the region of the scan op to the acc and cur values and update acc
@@ -261,7 +262,8 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
           shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
       lastElement = select(maskFirstLane, accumulator, lastElement);
       // Update accumulator with the value from the last lane.
-      accumulator = lastElement;
+      accumulator =
+          shflIdxSync(loc, rewriter, accumulator, threadStride * (scanDim - 1));
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
