@@ -105,7 +105,10 @@ def _path_to_binary(binary: str):
     base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
     paths = [
         os.environ.get("TRITON_PTXAS_PATH", ""),
-        os.path.join(base_dir, "third_party", "cuda", "bin", binary)
+        os.path.join(base_dir, "third_party", "cuda", "bin", binary),
+        os.path.join(os.environ.get("CUDA_ROOT", ""), "bin", binary),
+        os.path.join(os.environ.get("CUDA_HOME", ""), "bin", binary),
+        os.path.join(os.environ.get("CUDA_PATH", ""), "bin", binary),
     ]
 
     for p in paths:
