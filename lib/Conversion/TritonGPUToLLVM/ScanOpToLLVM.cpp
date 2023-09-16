@@ -257,6 +257,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     // Update the rest of the contiguous elements.
     Value lastElement =
         shflUpSync(loc, rewriter, accumulator, threadStride);
+    LLVM::vprintf("last element %f\n", {lastElement}, rewriter);
     lastElement = select(maskFirstLane, accumulator, lastElement);
     srcValues[srcIndex] = lastElement;
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
