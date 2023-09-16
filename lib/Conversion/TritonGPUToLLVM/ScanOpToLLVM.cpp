@@ -262,8 +262,9 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
           shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
       lastElement = select(maskFirstLane, accumulator, lastElement);
       // Update accumulator with the value from the last lane.
-      accumulator =
-          shflIdxSync(loc, rewriter, accumulator, threadStride * (scanDim - 1));
+      if (numScanBlocks > 1)
+        accumulator = shflIdxSync(loc, rewriter, lastElement,
+                                  threadStride * (scanDim - 1));
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
