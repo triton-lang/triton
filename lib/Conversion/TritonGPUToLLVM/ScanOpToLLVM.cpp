@@ -239,9 +239,6 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     // Only consider the last element of each contiguous chunk of elements.
     if (elementIdx != scanElementsPerThreads - 1)
       continue;
-    // Accumulate the partial reduction from shared memory. Decide which
-    // accumulator to combine based on whether the elements belong to the same
-    // dimension along axis.
     unsigned blockId = chunkId / parallelElementsPerThread;
     unsigned parallelBlockId =
         blockId % blockStride +
@@ -261,6 +258,8 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
       lastElement =
           shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
       lastElement = select(maskFirstLane, accumulator, lastElement);
+      llvm::errs() << "scanDim: " << scanDim << " numScanBlocks: "
+                   << numScanBlocks << "\n";
       // Update accumulator with the value from the last lane.
       if (numScanBlocks > 1)
         accumulator = shflIdxSync(loc, rewriter, lastElement,
