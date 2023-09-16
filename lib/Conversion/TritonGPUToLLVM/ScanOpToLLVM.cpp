@@ -258,9 +258,9 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     Value lastElement =
         shflUpSync(loc, rewriter, accumulator, threadStride);
     lastElement = select(maskFirstLane, accumulator, lastElement);
+    srcValues[srcIndex] = lastElement;
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
-      LLVM::vprintf("laneValue: %f\n", {laneValue}, rewriter);
       accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
       if (axisBlockId == 0) {
         // For the first warp and first chunk we don't have anything to
