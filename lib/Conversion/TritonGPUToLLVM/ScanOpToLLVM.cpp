@@ -7,8 +7,8 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::shflUpSync;
 using ::mlir::LLVM::shflIdxSync;
+using ::mlir::LLVM::shflUpSync;
 using ::mlir::LLVM::storeShared;
 
 // Apply the region of the scan op to the acc and cur values and update acc
