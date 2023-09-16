@@ -1826,6 +1826,26 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     np.testing.assert_equal(z_ref, z_tri.cpu().numpy())
 
 
+@pytest.mark.parametrize("RBLOCK", [32, 64, 128])
+@pytest.mark.parametrize("num_warps", [1, 4])
+def test_scan2d_broadcast(RBLOCK, num_warps, device):
+    @triton.jit
+    def fn(out_ptr, in_ptr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
+        rindex = tl.arange(0, RBLOCK)[None, :]
+        data = tl.load(in_ptr + rindex)
+        scan = tl.cumsum(data, 1)
+        tl.store(out_ptr + tl.arange(0, XBLOCK)[:, None] * RBLOCK + tl.arange(0, RBLOCK)[None, :], scan)
+
+    rs = RandomState(17)
+    input = rs.randint(-100, 100, (1, RBLOCK)).astype('int32')
+    output = np.empty((4, RBLOCK))
+    input_tri = to_triton(input, device=device)
+    output_tri = to_triton(output, device=device)
+    fn[(1,)](input_tri, output_tri, 1, RBLOCK, num_warps=num_warps)
+    ref = np.cumsum(input, axis=1)
+    np.testing.assert_equal(ref, to_numpy(output_tri))
+
+
 layouts = [
     BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
