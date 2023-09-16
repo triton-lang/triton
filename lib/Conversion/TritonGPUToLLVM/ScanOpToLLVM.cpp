@@ -167,10 +167,10 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
     Accumulator &accumulator = accumulators[accumulatorIndex];
     unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
     for (unsigned i = 0; i < axisNumWarps; ++i) {
-      Value index = add(parallelLaneId,
-                        i32_val(numParallelLane * (i + chunkId * axisNumWarps)));
+      Value index = add(parallelLaneId, i32_val(numParallelLane *
+                                                (i + chunkId * axisNumWarps)));
       Value ptr = gep(sharedMemoryPtr.getType(), sharedMemoryPtr, index);
-      Value partialReduce = axisNumWarps > 1 ? load(ptr) : srcValues[srcIndex];
+      Value partialReduce = load(ptr);
       if (!accumulator.acc) {
         accumulator.acc = partialReduce;
         accumulator.maskedAcc = partialReduce;
@@ -208,6 +208,67 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
     // For the next chunk start back from the value containing the
     // accumulated value of all the warps.
     accumulator.maskedAcc = accumulator.acc;
+    chunkId++;
+  }
+}
+
+static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
+                                    ConversionPatternRewriter &rewriter,
+                                    ScanLoweringHelper &helper, Value warpId,
+                                    Value laneIdAxis) {
+  Location loc = helper.getLoc();
+  unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
+  unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
+  unsigned elementStride = helper.getAxisElementStride();
+  unsigned threadStride = helper.getAxisThreadStride();
+  unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
+  Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
+  Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
+  Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
+  Value maskedAcc;
+  unsigned numScanBlocks = helper.getAxisNumBlocks();
+  unsigned numParallelBlocks = helper.getNonAxisNumBlocks();
+  assert(numScanBlocks * numParallelBlocks * parallelElementsPerThread *
+             scanElementsPerThreads ==
+         srcValues.size());
+  SmallVector<Value> accumulators(numParallelBlocks *
+                                  parallelElementsPerThread);
+  unsigned chunkId = 0;
+  unsigned blockStride = helper.getAxisBlockStride();
+  for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
+    unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
+    // Only consider the last element of each contiguous chunk of elements.
+    if (elementIdx != scanElementsPerThreads - 1)
+      continue;
+    // Accumulate the partial reduction from shared memory. Decide which
+    // accumulator to combine based on whether the elements belong to the same
+    // dimension along axis.
+    unsigned blockId = chunkId / parallelElementsPerThread;
+    unsigned parallelBlockId =
+        blockId % blockStride +
+        ((blockId / blockStride) / numScanBlocks) * blockStride;
+    unsigned accumulatorIndex = chunkId % parallelElementsPerThread +
+                                parallelBlockId * parallelElementsPerThread;
+    Value &accumulator = accumulators[accumulatorIndex];
+    unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
+    if (!accumulator)
+      accumulator = srcValues[srcIndex];
+    // Update the rest of the contiguous elements.
+    Value lastElement =
+        shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
+    for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
+      Value laneValue = srcValues[srcIndex - i * elementStride];
+      accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
+      if (axisBlockId == 0) {
+        // For the first warp and first chunk we don't have anything to
+        // accumulate.
+        laneValue = select(maskFirstThread,
+                           srcValues[srcIndex - i * elementStride], laneValue);
+      }
+      srcValues[srcIndex - i * elementStride] = laneValue;
+    }
+    // For the next chunk start back from the value containing the
+    // accumulated value of all the warps.
     chunkId++;
   }
 }
@@ -302,22 +363,27 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   // elements.
   warpScan(srcValues, rewriter, helper, laneIdAxis);
 
-  Type elemPtrTys = LLVM::LLVMPointerType::get(srcValues[0].getType(), 3);
-  Value baseSharedMemPtr = bitcast(
-      getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys);
-
-  // Store the partial reducing for each warp into shared memory.
   if (axisNumWarps > 1) {
+    // Slow path for the case where there are multiple warps with unique data on
+    // the axis.
+    Type elemPtrTys = LLVM::LLVMPointerType::get(srcValues[0].getType(), 3);
+    Value baseSharedMemPtr = bitcast(
+        getSharedMemoryBase(loc, rewriter, op.getOperation()), elemPtrTys);
+    // Store the partial reducing for each warp into shared memory.
     storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
-                        baseSharedMemPtr, flatIdParallel);
+                         baseSharedMemPtr, flatIdParallel);
     barrier();
+    // Read back the partial reduction of each warp and accumulate them based on
+    // warpId. Then update each chunk of contiguous elements by adding the
+    // accumulated value from the previous lane.
+    AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
+                     laneIdAxis, flatIdParallel);
+  } else {
+    // Fast path for the case where there is only one warp with unique data on
+    // the axis.
+    AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis,
+                            laneIdAxis);
   }
-
-  // Read back the partial reduction of each warp and accumulate them based on
-  // warpId. Then update each chunk of contiguous elements by adding the
-  // accumulated value from the previous lane.
-  AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
-                   laneIdAxis, flatIdParallel);
 
   Value results = getTypeConverter()->packLLElements(loc, srcValues, rewriter,
                                                      input.getType());

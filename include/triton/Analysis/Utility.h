@@ -80,8 +80,6 @@ public:
   bool isSupported();
   // Return the number of elements per thread along axis dim.
   unsigned getAxisNumElementsPerThread();
-  // Return the number of elements per warp along axis dim.
-  unsigned getAxisNumElementsPerWarp();
   // Return the number of elements per thread along non-axis dims.
   unsigned getNonAxisNumElementsPerThread();
   // Return the number of threads per warp along non-axis dims.
