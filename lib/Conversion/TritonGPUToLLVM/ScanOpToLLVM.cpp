@@ -226,7 +226,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
-  Value parallelLaneId = urem(laneId, i32_val(numParallelLane));
+  Value parallelLaneId = udiv(laneId, i32_val(scanDim));
   unsigned numScanBlocks = helper.getAxisNumBlocks();
   assert(numScanBlocks * parallelElementsPerThread * scanElementsPerThreads ==
          srcValues.size());
@@ -253,11 +253,13 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
       lastElement =
           shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
       lastElement = select(maskFirstLane, accumulator, lastElement);
-      Value lastLane =
-          add(parallelLaneId, i32_val((scanDim - 1) * threadStride));
-      // Update accumulator with the value from the last lane.
-      accumulator =
-          shflIdxSync(loc, rewriter, lastElement, lastLane);
+      if (numScanBlocks > 1) {
+        Value lastLane =
+            add(parallelLaneId, i32_val((scanDim - 1) * threadStride));
+        // Update accumulator with the value from the last lane.
+        accumulator =
+            shflIdxSync(loc, rewriter, lastElement, lastLane);
+      }
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
