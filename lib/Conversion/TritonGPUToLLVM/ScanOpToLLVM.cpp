@@ -257,11 +257,9 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
                  accumulator);
     // Update the rest of the contiguous elements.
     Value lastElement = srcValues[srcIndex];
-    if (scanDim > 1) {
-      Value lastElement =
-          shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
-      lastElement = select(maskFirstLane, accumulator, lastElement);
-    }
+    Value lastElement =
+        shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
+    lastElement = select(maskFirstLane, accumulator, lastElement);
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
       accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
