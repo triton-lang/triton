@@ -1839,7 +1839,7 @@ def test_scan2d_broadcast(RBLOCK, num_warps, device):
     XBLOCK = 4
     rs = RandomState(17)
     input = rs.randint(-100, 100, (1, RBLOCK)).astype('int32')
-    output = np.empty((XBLOCK, RBLOCK))
+    output = np.empty((XBLOCK, RBLOCK)).astype('int32')
     input_tri = to_triton(input, device=device)
     output_tri = to_triton(output, device=device)
     fn[(1,)](input_tri, output_tri, XBLOCK, RBLOCK, num_warps=num_warps)
