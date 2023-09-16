@@ -218,6 +218,9 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
                                     Value laneIdAxis) {
   Location loc = helper.getLoc();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
+  unsigned numChunks = srcValues.size() / scanElementsPerThreads;
+  if (numChunks == 1) // No need to accumulate across chunks
+    return;
   unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
@@ -257,9 +260,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     // Update the rest of the contiguous elements.
     Value lastElement =
         shflUpSync(loc, rewriter, accumulator, threadStride);
-    LLVM::vprintf("last element %f\n", {lastElement}, rewriter);
     lastElement = select(maskFirstLane, accumulator, lastElement);
-    srcValues[srcIndex] = lastElement;
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
       accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
