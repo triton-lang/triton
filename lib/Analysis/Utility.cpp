@@ -232,7 +232,7 @@ unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
 // Return the flat numbers of threads computing independent scan results.
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
   unsigned numParallelThreadsPerWarp = getNonAxisNumThreadsPerWarp();
-  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(getEncoding());
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTAWithUniqueData(getEncoding());
   warpsPerCTA[getAxis()] = 1;
   unsigned numParallelWarpsPerCTA = product<unsigned>(warpsPerCTA);
   return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
