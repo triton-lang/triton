@@ -384,13 +384,19 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // accumulated value from the previous lane.
     AddPartialReduce(srcValues, rewriter, helper, baseSharedMemPtr, warpIdAxis,
                      laneIdAxis, flatIdParallel);
-  } else if (srcValues.size() > 1) {
-    // Fast path for the case where there is only one warp with unique data on
-    // the axis.
-    AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis,
-                            laneIdAxis);
+  } else {
+    auto axisNumElementsPerThreadTotal = helper.getAxisNumElementsPerThread() *
+                                         helper.getAxisNumThreadsPerWarp() *
+                                         axisNumWarps;
+    auto shape = type.getShape();
+    if (axisNumElementsPerThreadTotal > shape[helper.getAxis()]) {
+      // Fast path for the case where there is only one warp with unique data on
+      // the axis.
+      AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis,
+                              laneIdAxis);
+    }
+    // else all the elements are handled within a single thread
   }
-  // else srcValues.size() == 1 and axisNumWarps == 1, nothing to do.
 
   Value results = getTypeConverter()->packLLElements(loc, srcValues, rewriter,
                                                      input.getType());
