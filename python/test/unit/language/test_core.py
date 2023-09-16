@@ -1844,7 +1844,7 @@ def test_scan2d_broadcast(RBLOCK, num_warps, device):
     output_tri = to_triton(output, device=device)
     fn[(1,)](input_tri, output_tri, XBLOCK, RBLOCK, num_warps=num_warps)
     ref = np.cumsum(input, axis=1)
-    np.testing.assert_equal(ref, to_numpy(output_tri))
+    np.testing.assert_equal(np.tile(ref, (XBLOCK, 1)), to_numpy(output_tri))
 
 
 layouts = [
