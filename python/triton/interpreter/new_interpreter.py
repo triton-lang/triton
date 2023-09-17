@@ -492,6 +492,8 @@ class InterpretedFunction:
 
     def __init__(self, fn) -> None:
         self.fn = fn
+        signature = inspect.signature(fn)
+        self.arg_names = [v.name for v in signature.parameters.values()]
 
     def __getitem__(self, grid):
         return GridExecutor(self.fn, grid)
