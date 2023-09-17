@@ -10,10 +10,8 @@ We're hiring! If you are interested in working on Triton at OpenAI, we have role
 ------------------- |
 [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/)
 
-# Triton Developer Conference Registration Open
-The Triton Developer Conference will be held in a hybrid mode at the Microsoft Silicon Valley Campus in Mountain View, California. The conference will be held on September 20th from 10am to 4pm, followed by a reception till 5:30 pm. Please use the link below to register to attend either in-person or virtually online.
-
-Registration Link for Triton Developer Conference is [here](https://forms.office.com/r/m4jQXShDts)
+# Triton Developer Conference Registration Now Closed
+The Triton Developer Conference will be held in a hybrid mode at the Microsoft Silicon Valley Campus in Mountain View, California. The conference will be held on September 20th from 10am to 4pm, followed by a reception till 5:30 pm.
 
 Tentative Agenda for the conference (subject to change):
 
@@ -64,12 +62,24 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 
 ```
 git clone https://github.com/openai/triton.git;
-cd triton/python;
-pip install cmake; # build-time dependency
-pip install -e .
+cd triton;
+
+pip install ninja cmake; # build-time dependencies
+pip install -e python
 ```
 
+Or with a virtualenv:
 
+```
+git clone https://github.com/openai/triton.git;
+cd triton;
+
+python -m venv .venv --prompt triton;
+source .venv/bin/activate;
+
+pip install ninja cmake; # build-time dependencies
+pip install -e python
+```
 
 # Changelog
 

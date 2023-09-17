@@ -1265,7 +1265,9 @@ def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
 
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
+        acc: tl.tensor,
         allow_tf32: bool,
+        max_num_imprecise_acc: int,
         out_dtype: tl.dtype,
         builder: ir.builder) -> tl.tensor:
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, arch):
@@ -1309,6 +1311,8 @@ def dot(lhs: tl.tensor,
         assert lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
+    elif out_dtype.is_bf16():
+        raise ValueError("out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`")
     elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
         _0 = builder.get_fp32(0)
         ret_scalar_ty = tl.float32
@@ -1343,10 +1347,20 @@ def dot(lhs: tl.tensor,
         ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
                         ret_ty)
         return cast(ret, ret_scalar_ty, builder)
-
-    _0 = builder.create_splat(_0, [M, N])
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
-    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
+    if acc is None:
+        acc_handle = builder.create_splat(_0, [M, N])
+    else:
+        acc_handle = acc.handle
+        assert acc.type == ret_ty
+
+    # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
+    if not (_is_cuda(builder.arch) and builder.arch == 90 and lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and ret_scalar_ty.is_fp32()):
+        max_num_imprecise_acc = 0
+    if max_num_imprecise_acc is None:
+        max_num_imprecise_acc = 2**30
+
+    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, allow_tf32, max_num_imprecise_acc),
                      ret_ty)
 
 
@@ -1556,6 +1570,8 @@ def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: 
 
 
 def _convert_elem_to_ir_value(builder, elem, require_i64):
+    if isinstance(elem, int):
+        elem = tl.constexpr(elem)
     if isinstance(elem, tl.constexpr):
         return builder.get_int64(elem.value) if require_i64 else builder.get_int32(elem.value)
     elif isinstance(elem, tl.tensor):

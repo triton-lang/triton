@@ -391,6 +391,12 @@ bool supportMMA(triton::DotOp op, int version) {
            aElemTy.isF32()))) {
       return false;
     }
+    // We cannot use MMA_V3 if we need to accumulate in F32 within the MMA op.
+    if (op.getMaxNumImpreciseAcc() < 32 &&
+        (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FNUZ()) &&
+        op.getType().cast<RankedTensorType>().getElementType().isF32()) {
+      return false;
+    }
   }
   if (aElemTy.isF32() && bElemTy.isF32()) {
     return op.getAllowTF32() && version >= 2;
