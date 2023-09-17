@@ -63,7 +63,7 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 ```
 git clone https://github.com/openai/triton.git;
 cd triton/python;
-pip install cmake; # build-time dependency
+pip install ninja cmake; # build-time dependencies
 pip install -e .
 ```
 
