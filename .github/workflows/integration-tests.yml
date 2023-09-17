@@ -34,7 +34,7 @@ jobs:
           fi
 
   Integration-Tests-Interpreter:
-    runs-on: ubuntu-22.04-x64,
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
