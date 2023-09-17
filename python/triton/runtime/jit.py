@@ -586,7 +586,7 @@ def jit(
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
         if os.getenv("TRITON_INTERPRET", "0") == "1":
-            from ..interpreter.new_interpreter import InterpretedFunction
+            from .interpreter import InterpretedFunction
             return InterpretedFunction(fn)
         else:
             return JITFunction(
