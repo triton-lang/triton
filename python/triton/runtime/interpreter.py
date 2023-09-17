@@ -168,7 +168,7 @@ class Builder:
         dtype_tt = ptrs.dtype.element_ty
         dtype_np = self.np_dtype(dtype_tt)
         if other is None:
-            other = np.ones_like(ptrs.data, dtype=dtype_np)
+            other = TensorHandle(np.ones_like(ptrs.data, dtype=dtype_np), dtype_tt)
         ret = _interpreter.load(ptrs.data, mask.data, other.data, dtype_np)
         return TensorHandle(ret, dtype_tt)
 
@@ -430,7 +430,12 @@ to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
             setattr(math, name, make_fallback(name))
 
 
+# TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
+    if isinstance(arg, int):
+        ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
+        handle = TensorHandle(np.array([arg], dtype=np.int32), ty)
+        return tl.tensor(handle, ty)
     if hasattr(arg, 'data_ptr'):
         ty = str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)

@@ -5,10 +5,10 @@ import triton
 import triton.ops
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(4, 48, 1024, 16),
-                                                 (4, 48, 1024, 32),
-                                                 (4, 48, 1024, 64),
-                                                 (4, 48, 1024, 128)])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(2, 4, 512, 16),
+                                                 (2, 4, 512, 32),
+                                                 (2, 4, 512, 64),
+                                                 (2, 4, 512, 128)])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
