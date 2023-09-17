@@ -95,7 +95,9 @@ public:
     auto ptrTensorType = RankedTensorType::get(tensorShape, ptrType);
 
     // Generate offsets per dimension
-    Value ptr = builder.create<triton::SplatOp>(loc, ptrTensorType, base);
+    Value zero =
+        builder.create<arith::ConstantIntOp>(loc, 0, builder.getI64Type());
+    Value offset = builder.create<triton::SplatOp>(loc, indexTensorType, zero);
     for (unsigned i = 0; i < tensorShape.size(); ++i) {
       auto offsetWithRange = getExpandedOffsetWithRange(builder, loc, i);
 
@@ -107,11 +109,11 @@ public:
           builder.create<arith::MulIOp>(loc, offsetWithRange, splatStride);
       Value broadcasted = builder.create<triton::BroadcastOp>(
           loc, indexTensorType, offsetWithStride);
-
-      // Add to the pointer
-      ptr = builder.create<triton::AddPtrOp>(loc, ptrTensorType, ptr,
-                                             broadcasted);
+      offset = builder.create<arith::AddIOp>(loc, offset, broadcasted);
     }
+    // Add to the pointer
+    Value ptr = builder.create<triton::SplatOp>(loc, ptrTensorType, base);
+    ptr = builder.create<triton::AddPtrOp>(loc, ptrTensorType, ptr, offset);
 
     return ptr;
   }
