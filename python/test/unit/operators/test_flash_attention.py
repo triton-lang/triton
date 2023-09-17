@@ -21,7 +21,8 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
         pytest.skip('Segmentation fault')
 
     capability = torch.cuda.get_device_capability()
-    if capability[0] < 8:
+    interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]
+    if not interpreter and capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
