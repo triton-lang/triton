@@ -542,8 +542,8 @@ class tensor:
         self.shape = [constexpr(s) for s in self.shape]
 
     def __str__(self) -> str:
-        # ex. "float32[3,4]"
-        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
+        # ex. "float32[16, 32]"
+        return str(self.dtype) + '[' + ', '.join(str(s) for s in self.shape) + ']'
 
     @builtin
     def __add__(self, other, _builder=None):
