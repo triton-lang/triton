@@ -30,6 +30,14 @@ from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
                     get_ids_of_tensormaps, parse_tma_info)
 
 
+class LazyDict(dict):
+    def __getitem__(self, key):
+        val = dict.__getitem__(self, key)
+        if callable(val):
+            return val()
+        return val
+
+
 def inline_triton_ir(mod):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
@@ -397,12 +405,6 @@ def compile(fn, **kwargs):
         add_cuda_stages(arch, extern_libs, stages)
     elif device_type == "hip":
         _device_backend.add_stages(arch, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
-    elif device_type == "xpu":
-        stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
-        stages["llir"] = (lambda path: Path(path).read_text(),
-                          lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
-        _device_backend.add_stages(arch, extern_libs, stages)
     else:
         # pass the user's configuration to the backend device.
         arch["num_warps"] = num_warps
@@ -489,7 +491,7 @@ def compile(fn, **kwargs):
     metadata["device_type"] = device_type
 
     first_stage = list(stages.keys()).index(ext)
-    asm = dict()
+    asm = LazyDict()
     module = fn
     # run compilation pipeline  and populate metadata
     for ir_name, (parse, compile_kernel) in list(stages.items())[first_stage:]:
@@ -523,11 +525,7 @@ def compile(fn, **kwargs):
 
         if ir_name == "cubin":
             asm[ir_name] = next_module
-            sass_ir = "sass"
-            sass_fname = f"{name}.{sass_ir}"
-            asm[sass_ir] = get_sass(next_module)
-            metadata_group[sass_fname] = fn_cache_manager.put(asm[sass_ir], sass_fname)
-
+            asm["sass"] = lambda: get_sass(next_module)
         elif ir_name == "amdgcn":
             asm[ir_name] = str(next_module[0])
         else:
