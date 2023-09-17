@@ -41,7 +41,7 @@ git checkout triton-mlir
 # Build
 ```
 cd python
-pip3 install cmake; # build time dependency
+pip3 install ninja cmake; # build time dependencies
 pip3 install -e .
 ```
 # Run tests:
@@ -60,7 +60,7 @@ lit -v test
 ```
 git clone https://github.com/openai/triton.git;
 cd triton/python;
-pip install cmake; # build-time dependency
+pip install ninja cmake; # build-time dependencies
 pip install -e .
 ```
 
