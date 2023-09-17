@@ -299,21 +299,6 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), "bfly", "0x1f");
-}
-
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), "up", "0x0");
-}
-
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), "idx", "0x0");
-}
-
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                Value i) {
   return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
 }
