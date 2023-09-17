@@ -55,7 +55,7 @@ jobs:
           python3 -m pip install cmake==3.24
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
           python3 -m pip install pytest-xdist
-          python3 -m pip instal pytest
+          python3 -m pip install pytest
 
       - name: Run interpreter tests
         env:
