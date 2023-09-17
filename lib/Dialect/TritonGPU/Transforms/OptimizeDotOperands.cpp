@@ -60,9 +60,14 @@ public:
     // used here. For tests where numCTAs = 1, this is not a problem since all
     // CTALayouts are the same.
     auto newXOrder = triton::gpu::getOrder(argEncoding);
+    // set needTrans to true here. newXEncoding is computed based on argEncoding
+    // which is before the transpose. without needTrans we will compute vec and
+    // maxPhase based on incorrect m, n and k size of mma. the type inference of
+    // TransOp simply swap the order but doesn't fix the vec and maxPhase for
+    // the YType, hence it would causing incorrect swizzling code.
     auto newXEncoding = triton::gpu::SharedEncodingAttr::get(
         getContext(), ZEncoding, XType.getShape(), newXOrder,
-        XEncoding.getCTALayout(), XType.getElementType());
+        XEncoding.getCTALayout(), XType.getElementType(), true);
     auto newXType = RankedTensorType::get(XType.getShape(),
                                           XType.getElementType(), newXEncoding);
     if (XEncoding == newXEncoding)
@@ -120,6 +125,9 @@ public:
     if (!isa<triton::FpToFpOp, triton::BitcastOp>(cvtArgOp) &&
         cvtArgOp->getDialect()->getTypeID() !=
             mlir::TypeID::get<arith::ArithDialect>())
+      return mlir::failure();
+    // not handled in elementwise lowering.
+    if (isa<arith::TruncIOp, arith::TruncFOp>(cvtArgOp))
       return mlir::failure();
     // only considers conversions to dot operand
     if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
@@ -244,7 +252,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<ConvertTransConvert>(context);
-    patterns.add<MoveOpAfterLayoutConversion>(context);
+    if (triton::gpu::TritonGPUDialect::getComputeCapability(m) >= 80)
+      patterns.add<MoveOpAfterLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();

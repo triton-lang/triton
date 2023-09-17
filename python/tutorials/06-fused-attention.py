@@ -11,7 +11,7 @@ Extra Credits:
 
 """
 
-# import pytest
+import pytest
 import torch
 
 import triton
@@ -96,9 +96,7 @@ def _fwd_kernel(
         alpha = tl.math.exp2(m_i - m_i_new)
         p = tl.math.exp2(qk - m_i_new[:, None])
         # -- scale and update acc --
-        # breakpoint()
-        acc_scale = l_i * 0 + alpha  # workaround some compiler bug
-        acc *= acc_scale[:, None]
+        acc *= alpha[:, None]
         acc += tl.dot(p.to(tl.float16), v)
         # -- update m_i and l_i --
         l_i = l_i * alpha + tl.sum(p, 1)
@@ -307,8 +305,8 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
-# @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD, P_SEQ', [(6, 9, 1024, 64, 128)])
-# @pytest.mark.parametrize('causal', [False, True])
+@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD, P_SEQ', [(6, 9, 1024, 64, 128)])
+@pytest.mark.parametrize('causal', [False, True])
 def test_op(Z, H, N_CTX, D_HEAD, P_SEQ, causal, dtype=torch.float16):
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
@@ -411,5 +409,4 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
 
 
 # only works on post-Ampere GPUs right now
-# bench_flash_attention.run(save_path='.', print_data=True)
-test_op(1, 1, 128, 64, 128, False, torch.float16)
+bench_flash_attention.run(save_path='.', print_data=True)

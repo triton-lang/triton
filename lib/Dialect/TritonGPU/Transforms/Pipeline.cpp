@@ -652,10 +652,12 @@ void LoopPipeliner::createBufferTypes() {
                             .getEncoding()
                             .dyn_cast<ttg::DotOperandEncodingAttr>()) {
       // MMAv1 and MMAv2
+      bool needTrans = dyn_cast_or_null<tt::TransOp>(
+          cvt.getDefiningOp()->getOperand(0).getDefiningOp());
       unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
       sharedEnc = ttg::SharedEncodingAttr::get(
           ty.getContext(), dotOpEnc, ty.getShape(),
-          ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth);
+          ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
     } else {
       // MMAv3
       sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
@@ -1638,7 +1640,8 @@ void PipelinePass::asyncLaunchDots(scf::ForOp forOp) {
     auto dotOp = cast<tt::DotOp>(dot.getDefiningOp());
     builder.setInsertionPoint(dot.getDefiningOp());
     auto dotAsync = builder.create<tt::nvidia_gpu::DotAsyncOp>(
-        loc, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32());
+        loc, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32(),
+        dotOp.getMaxNumImpreciseAcc());
     dot.replaceAllUsesWith(dotAsync.getResult());
     updateConsumerReleaseInfo(dot.getDefiningOp(), dotWait, /*stage=*/1);
     dot.getDefiningOp()->erase();
