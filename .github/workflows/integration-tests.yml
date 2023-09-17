@@ -33,35 +33,6 @@ jobs:
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
           fi
 
-  Integration-Tests-Interpreter:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: 'true'
-
-      - name: Check pre-commit
-        run: |
-          python3 -m pip install --upgrade pre-commit
-          python3 -m pre_commit run --all-files --verbose
-
-      - name: Install Triton
-        run: |
-          cd python
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cmake==3.24
-          python3 -m pip install --no-build-isolation -vvv '.[tests]'
-          python3 -m pip install pytest
-
-      - name: Run interpreter tests
-        env:
-          TRITON_INTERPRET: 1
-        run: |
-          cd python/test/unit
-          python3 -m pytest -vs operators/test_flash_attention.py
-
 
   Integration-Tests-Nvidia:
     needs: Runner-Preparation
@@ -147,6 +118,13 @@ jobs:
       - name: Clear cache
         run: |
           rm -rf ~/.triton
+
+      - name: Run interpreter tests
+        env:
+          TRITON_INTERPRET: 1
+        run: |
+          cd python/test/unit
+          python3 -m pytest -vs operators/test_flash_attention.py
 
       - name: Run partial tests on CUDA with ENABLE_TMA=1 and ENABLE_MMA_V3=1
         if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1' && env.ENABLE_MMA_V3 == '1'}}
