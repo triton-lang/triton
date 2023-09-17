@@ -542,14 +542,15 @@ class tensor:
         self.shape = [constexpr(s) for s in self.shape]
 
     def __str__(self) -> str:
-        # ex. "float32[3,4]"
-        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
+        # ex. "float32[16, 32]"
+        return str(self.dtype) + '[' + ', '.join(str(s) for s in self.shape) + ']'
 
     @builtin
     def __add__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.add(self, other, _builder)
 
+    @builtin
     def __radd__(self, other, _builder=None):
         return self.__add__(other, _builder=_builder)
 
@@ -558,6 +559,7 @@ class tensor:
         other = _to_tensor(other, _builder)
         return semantic.sub(self, other, _builder)
 
+    @builtin
     def __rsub__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.sub(other, self, _builder)
@@ -567,6 +569,7 @@ class tensor:
         other = _to_tensor(other, _builder)
         return semantic.mul(self, other, _builder)
 
+    @builtin
     def __rmul__(self, other, _builder=None):
         return self.__mul__(other, _builder=_builder)
 
@@ -575,6 +578,7 @@ class tensor:
         other = _to_tensor(other, _builder)
         return semantic.truediv(self, other, _builder)
 
+    @builtin
     def __rtruediv__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.truediv(other, self, _builder)
@@ -666,8 +670,6 @@ class tensor:
         else:
             return semantic.lshr(other, self, _builder)
 
-    # comparison operators
-
     # >
     @builtin
     def __gt__(self, other, _builder=None):
@@ -745,7 +747,7 @@ class tensor:
             slices = [slices]
         ret = self
         for dim, sl in enumerate(slices):
-            if isinstance(sl, constexpr) and sl.value is None:
+            if sl is None or isinstance(sl, constexpr) and sl.value is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
             elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
                 pass
@@ -830,6 +832,8 @@ def arange(start, end, _builder=None):
 def _shape_check_impl(shape):
     shape = _constexpr_to_value(shape)
     for i, d in enumerate(shape):
+        if isinstance(d, int):
+            d = constexpr(d)
         if not isinstance(d, constexpr):
             raise TypeError(f"Shape element {i} must have type `constexpr`")
         if not isinstance(d.value, int):
