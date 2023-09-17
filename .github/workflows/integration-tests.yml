@@ -48,13 +48,11 @@ jobs:
           python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton
-        if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
-          python3 -m pip install pytest-xdist
           python3 -m pip install pytest
 
       - name: Run interpreter tests
