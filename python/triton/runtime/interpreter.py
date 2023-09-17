@@ -370,6 +370,7 @@ def _patch_lang_tensor(tensor, builder):
             patch_attr(tensor, name, member, builder)
     tensor.__index__ = lambda self: int(self.handle.data)
     tensor.__bool__ = lambda self: True
+    tensor.__str__ = lambda self: str(self.handle.data)
 
 
 def _patch_lang_core(lang, builder):
