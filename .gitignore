@@ -26,6 +26,8 @@ venv.bak/
 cmake-build-*
 
 # Third-party binaries
+cuobjdump
+nvdisasm
 ptxas
 
 # Docs
