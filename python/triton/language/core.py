@@ -741,9 +741,6 @@ class tensor:
     def __not__(self, _builder=None):
         return semantic.not_(self, _builder)
 
-    def __bool__(self):
-        return bool(self.handle)
-
     @builtin
     def __getitem__(self, slices, _builder=None):
         if isinstance(slices, (slice, constexpr)):
