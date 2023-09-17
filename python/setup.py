@@ -229,8 +229,6 @@ class CMakeBuild(build_ext):
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
         # python directories
-        print("ninja dir is:")
-        print(ninja_dir)
         python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
             "-G", "Ninja",  # Ninja is much faster than make
