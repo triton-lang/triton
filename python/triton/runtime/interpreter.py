@@ -156,12 +156,12 @@ class Builder:
 
     # memory ops
     def create_load(self, ptr, _0, _1, is_volatile):
-        mask = np.ones_like(ptr.data, dtype=bool)
+        mask = TensorHandle(np.ones_like(ptr.data, dtype=bool), tl.int1)
         other = None
         return self.create_masked_load(ptr, mask, other, _0, _1, is_volatile)
 
     def create_store(self, ptr, val, _0, _1):
-        mask = np.ones_like(ptr.data, dtype=bool)
+        mask = TensorHandle(np.ones_like(ptr.data, dtype=bool), tl.int1)
         return self.create_masked_store(ptr, val, mask, None, None)
 
     def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
@@ -169,7 +169,7 @@ class Builder:
         dtype_np = self.np_dtype(dtype_tt)
         if other is None:
             other = np.ones_like(ptrs.data, dtype=dtype_np)
-        ret = _interpreter.load(ptrs.data, mask.data, other, dtype_np)
+        ret = _interpreter.load(ptrs.data, mask.data, other.data, dtype_np)
         return TensorHandle(ret, dtype_tt)
 
     def create_masked_store(self, ptrs, value, mask, cache_modifier, eviction_policy):
@@ -267,7 +267,7 @@ class Builder:
     create_view = lambda self, arg, shape: TensorHandle(arg.data.reshape(shape), arg.dtype)
     create_trans = lambda self, arg: self.unary_op(arg, np.transpose)
 
-    def create_dot(self, a, b, d, allow_tf32):
+    def create_dot(self, a, b, d, allow_tf32, maxNumImpreciseAcc):
         return TensorHandle(np.dot(a.data, b.data) + d.data, a.dtype)
 
     def create_make_range(self, start, stop):
@@ -369,6 +369,7 @@ def _patch_lang_tensor(tensor, builder):
         if tl.core.is_builtin(member):
             patch_attr(tensor, name, member, builder)
     tensor.__index__ = lambda self: int(self.handle.data)
+    tensor.__bool__ = lambda self: True
 
 
 def _patch_lang_core(lang, builder):
@@ -445,13 +446,15 @@ def _unwrap(tensor):
 
 builder = Builder()
 
+RESERVED_KWS = ['num_warps', 'num_stages', 'num_ctas', 'enable_warp_specialization']
+
 
 class GridExecutor:
 
-    def __init__(self, fn, grid):
-        assert len(grid) <= 3
+    def __init__(self, fn, arg_names, grid):
         self.fn = fn
-        self.grid = tuple(grid) + (1,) * (3 - len(grid))
+        self.arg_names = arg_names
+        self.grid = grid
 
     def _patch_lang(self, builder):
         lang = [value for _, value in self.fn.__globals__.items() if value in [tl, tl.core]]
@@ -462,7 +465,7 @@ class GridExecutor:
 
     def __call__(self, *args_dev, **kwargs):
         # removes reserved keywords from kwargs
-        kwargs = {k: v for k, v in kwargs.items() if k not in ['num_warps', 'num_stages', 'num_ctas']}
+        kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS}
         # remaps core language functions to interpreted ones
         self._patch_lang(builder)
         # we need to copy arguments to the host for the interpreter
@@ -470,10 +473,15 @@ class GridExecutor:
         # implicitly convert tensor arguments to their base pointers
         wrapped_args = [_implicit_cvt(arg) for arg in args_hst]
         # iterate through grid
-        builder.set_grid_dim(*self.grid)
-        for x in range(self.grid[0]):
-            for y in range(self.grid[1]):
-                for z in range(self.grid[2]):
+        grid_args = {name: val for name, val in zip(self.arg_names, args_dev)}
+        grid_args.update(kwargs)
+        grid = self.grid(grid_args) if callable(self.grid) else self.grid
+        assert len(grid) <= 3
+        grid = grid + (1,) * (3 - len(grid))
+        builder.set_grid_dim(*grid)
+        for x in range(grid[0]):
+            for y in range(grid[1]):
+                for z in range(grid[2]):
                     builder.set_grid_idx(x, y, z)
                     self.fn(*wrapped_args, **kwargs)
         # copy arguments back to propagate side-effects
@@ -492,11 +500,18 @@ class InterpretedFunction:
 
     def __init__(self, fn) -> None:
         self.fn = fn
+
+        def run(*args, **kwargs):
+            grid = kwargs['grid']
+            kwargs = {k: v for k, v in kwargs.items() if k not in RESERVED_KWS + ['grid']}
+
+            return GridExecutor(self.fn, self.arg_names, grid)(*args, **kwargs)
+        self.run = run
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
 
     def __getitem__(self, grid):
-        return GridExecutor(self.fn, grid)
+        return GridExecutor(self.fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
         self._patch_lang(builder)

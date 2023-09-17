@@ -36,6 +36,8 @@ class Autotuner(KernelInterface):
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
             self.configs = configs
+        print(fn)
+        self.configs = configs[:1]
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = {}
         # hook to reset all required tensor to zeros before relaunching a kernel
