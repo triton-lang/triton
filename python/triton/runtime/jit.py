@@ -14,6 +14,7 @@ from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union,
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
 from ..language.core import dtype
+from .interpreter import InterpretedFunction
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
@@ -586,7 +587,6 @@ def jit(
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
         if os.getenv("TRITON_INTERPRET", "0") == "1":
-            from .interpreter import InterpretedFunction
             return InterpretedFunction(fn)
         else:
             return JITFunction(
