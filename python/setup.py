@@ -230,7 +230,7 @@ class CMakeBuild(build_ext):
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
-            "-G", "Ninja", # Ninja is much faster than make
+            "-G", "Ninja",  # Ninja is much faster than make
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
