@@ -214,7 +214,7 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
 static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
                                     ConversionPatternRewriter &rewriter,
                                     ScanLoweringHelper &helper, Value warpId,
-                                    Value laneIdAxis, Value laneIdNonAxis) {
+                                    Value laneIdAxis, Value laneIdLast) {
   Location loc = helper.getLoc();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
@@ -226,11 +226,13 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
-  Value lastLane = add(laneIdNonAxis, i32_val((scanDim - 1) * threadStride));
   unsigned numScanBlocks = helper.getAxisNumBlocks();
-  assert(numScanBlocks * parallelElementsPerThread * scanElementsPerThreads ==
+  unsigned numParallelBlocks = helper.getNonAxisNumBlocks();
+  assert(numScanBlocks * numParallelBlocks * parallelElementsPerThread *
+             scanElementsPerThreads ==
          srcValues.size());
-  SmallVector<Value> accumulators(parallelElementsPerThread);
+  SmallVector<Value> accumulators(numParallelBlocks *
+                                  parallelElementsPerThread);
   unsigned chunkId = 0;
   unsigned blockStride = helper.getAxisBlockStride();
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
@@ -239,7 +241,11 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     if (elementIdx != scanElementsPerThreads - 1)
       continue;
     unsigned blockId = chunkId / parallelElementsPerThread;
-    unsigned accumulatorIndex = chunkId % parallelElementsPerThread;
+    unsigned parallelBlockId =
+        blockId % blockStride +
+        ((blockId / blockStride) / numScanBlocks) * blockStride;
+    unsigned accumulatorIndex = chunkId % parallelElementsPerThread +
+                                parallelBlockId * parallelElementsPerThread;
     Value &accumulator = accumulators[accumulatorIndex];
     unsigned axisBlockId = (blockId / blockStride) % numScanBlocks;
     if (axisBlockId == 0) // First chunk and first block
@@ -252,21 +258,20 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     if (scanDim > 1) {
       lastElement =
           shflUpSync(loc, rewriter, srcValues[srcIndex], i32_val(threadStride));
-      if (numScanBlocks > 1) {
-        // Update accumulator with the value from the last lane.
-        accumulator = shflIdxSync(loc, rewriter, srcValues[srcIndex], lastLane);
-      }
       lastElement = select(maskFirstLane, accumulator, lastElement);
+      if (numScanBlocks > 1)
+        // Update accumulator with the value from the last lane.
+        accumulator =
+            shflIdxSync(loc, rewriter, srcValues[srcIndex], laneIdLast);
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
       accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
-      if (axisBlockId == 0) {
+      if (axisBlockId == 0)
         // For the first warp and first chunk we don't have anything to
         // accumulate.
         laneValue = select(maskFirstThread,
                            srcValues[srcIndex - i * elementStride], laneValue);
-      }
       srcValues[srcIndex - i * elementStride] = laneValue;
     }
     // For the next chunk start back from the value containing the
@@ -291,6 +296,12 @@ public:
   }
 
 private:
+  SmallVector<Value> getMultiDimLaneId(ConversionPatternRewriter &rewriter,
+                                       ScanLoweringHelper &helper,
+                                       Value laneId) const;
+  SmallVector<Value> getMultiDimWarpId(ConversionPatternRewriter &rewriter,
+                                       ScanLoweringHelper &helper,
+                                       Value warpId) const;
   std::tuple<Value, Value, Value>
   getDelinearizedIds(ConversionPatternRewriter &rewriter,
                      ScanLoweringHelper &helper, Value laneId,
@@ -298,6 +309,34 @@ private:
   LogicalResult emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
                              ConversionPatternRewriter &rewriter) const;
 };
+
+SmallVector<Value>
+ScanOpConversion::getMultiDimLaneId(ConversionPatternRewriter &rewriter,
+                                    ScanLoweringHelper &helper,
+                                    Value laneId) const {
+  auto loc = helper.getLoc();
+  unsigned axis = helper.getAxis();
+  auto srcEncoding = helper.getEncoding();
+
+  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  auto order = triton::gpu::getOrder(srcEncoding);
+  return delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+}
+
+SmallVector<Value>
+ScanOpConversion::getMultiDimWarpId(ConversionPatternRewriter &rewriter,
+                                    ScanLoweringHelper &helper,
+                                    Value warpId) const {
+  auto loc = helper.getLoc();
+  unsigned axis = helper.getAxis();
+  auto srcEncoding = helper.getEncoding();
+
+  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
+  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  auto order = triton::gpu::getOrder(srcEncoding);
+  return delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+}
 
 // Break up the threadId into lane and warp id along the scan dimension and
 // compute a flat id for the parallel dimensions.
@@ -385,11 +424,13 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // Fast path for the case where there is only one warp with unique data on
     // the axis.
     unsigned scanDim = helper.getAxisNumThreadsPerWarp();
-    Value laneIdNonAxis = mul(udiv(laneId, i32_val(scanDim)), i32_val(scanDim));
-    LLVM::vprintf("laneIdAxis: %d, laneIdNonAxis: %d", {laneIdAxis,
-                                                        laneIdNonAxis}, rewriter);
+    auto multiDimLaneId = getMultiDimLaneId(rewriter, helper, laneId);
+    multiDimLaneId[helper.getAxis()] = i32_val(scanDim - 1);
+    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(helper.getEncoding());
+    auto laneIdLast = linearize(rewriter, loc, multiDimLaneId, threadsPerWarp,
+                                triton::gpu::getOrder(helper.getEncoding()));
     AddPartialReduceOneWarp(srcValues, rewriter, helper, warpIdAxis, laneIdAxis,
-                            laneIdNonAxis);
+                            laneIdLast);
   } // else axisNumWarps == 1 and srcValues.size() == 1, nothing to do.
 
   Value results = getTypeConverter()->packLLElements(loc, srcValues, rewriter,
