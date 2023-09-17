@@ -589,7 +589,7 @@ operation ::= `nvgpu.wgmma_fence` attr-dict
 Syntax:
 
 ```
-operation ::= `nvgpu.wgmma` $opA `,` $opB `,` $opC attr-dict `:` functional-type(operands, $res)
+operation ::= `nvgpu.wgmma` $opA `,` $opB (`,` $opC^)? attr-dict `:` functional-type(operands, $res)
 ```
 
 

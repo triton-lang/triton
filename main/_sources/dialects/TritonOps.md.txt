@@ -419,6 +419,7 @@ Effects: MemoryEffects::Effect{}
 | Attribute | MLIR Type | Description |
 | :-------: | :-------: | ----------- |
 | `allowTF32` | ::mlir::BoolAttr | bool attribute
+| `maxNumImpreciseAcc` | ::mlir::IntegerAttr | 32-bit signless integer attribute
 
 #### Operands:
 

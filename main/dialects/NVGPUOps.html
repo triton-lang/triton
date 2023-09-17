@@ -1035,7 +1035,7 @@
 <section id="nvgpu-wgmma-mlir-triton-nvgpu-wgmmaop">
 <h2><code class="docutils literal notranslate"><span class="pre">nvgpu.wgmma</span></code> (::mlir::triton::nvgpu::WGMMAOp)<a class="headerlink" href="#nvgpu-wgmma-mlir-triton-nvgpu-wgmmaop" title="Permalink to this heading">¶</a></h2>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.wgmma` $opA `,` $opB `,` $opC attr-dict `:` functional-type(operands, $res)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvgpu.wgmma` $opA `,` $opB (`,` $opC^)? attr-dict `:` functional-type(operands, $res)
 </pre></div>
 </div>
 <section id="id29">
