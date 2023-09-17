@@ -62,12 +62,24 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 
 ```
 git clone https://github.com/openai/triton.git;
-cd triton/python;
+cd triton;
+
 pip install cmake; # build-time dependency
-pip install -e .
+pip install -e python
 ```
 
+Or with a virtualenv:
 
+```
+git clone https://github.com/openai/triton.git;
+cd triton;
+
+python -m venv .venv --prompt triton;
+source .venv/bin/activate;
+
+pip install cmake; # build-time dependency
+pip install -e python
+```
 
 # Changelog
 
