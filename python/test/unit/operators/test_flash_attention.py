@@ -55,5 +55,3 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     torch.testing.assert_close(ref_dv, tri_dv, atol=atol, rtol=0)
     torch.testing.assert_close(ref_dk, tri_dk, atol=atol, rtol=0)
     torch.testing.assert_close(ref_dq, tri_dq, atol=atol, rtol=0)
-    if os.getenv("TRITON_INTERPRET") == 1:
-        assert False
