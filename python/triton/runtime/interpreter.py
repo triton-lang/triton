@@ -371,6 +371,7 @@ def _patch_lang_tensor(tensor, builder):
     tensor.__index__ = lambda self: int(self.handle.data)
     tensor.__bool__ = lambda self: True
     tensor.__str__ = lambda self: str(self.handle.data)
+    tensor.__getitem__ = lambda self, slices: self.handle.data.__getitem__(slices)
 
 
 def _patch_lang_core(lang, builder):
