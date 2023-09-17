@@ -241,7 +241,7 @@ def matmul_kernel(
     # while the accumulator is still in FP32!
     if ACTIVATION == "leaky_relu":
         accumulator = leaky_relu(accumulator)
-    c = accumulator.to(tl.float32)
+    c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
     # Write back the block of the output matrix C with masks.
@@ -274,20 +274,16 @@ def matmul(a, b, activation=""):
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
-    # grid = lambda META: (
-    #     triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
-    # )
-    matmul_kernel[(M // 128 * N // 128,)](
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+    )
+    matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        ACTIVATION=activation,
-        BLOCK_SIZE_M=128,
-        BLOCK_SIZE_N=128,
-        BLOCK_SIZE_K=32,
-        GROUP_SIZE_M=8,
+        ACTIVATION=activation
     )
     return c
 
@@ -299,8 +295,8 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.randn((256, 64), device='cuda', dtype=torch.float32)
-b = torch.randn((64, 256), device='cuda', dtype=torch.float32)
+a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
@@ -309,7 +305,6 @@ if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
-exit(1)
 
 # %%
 # Benchmark
