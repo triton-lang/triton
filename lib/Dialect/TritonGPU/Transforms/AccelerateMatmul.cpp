@@ -131,24 +131,28 @@ public:
     return false;
   }
 
+  /// @brief Choose MFMA instruction parameters
+  /// @param dot target dot operation
+  /// @param mfmaVersion
+  /// @return pair {nonKDim, kDim} sizes of one MFMA instruction arguments
   std::pair<int64_t, int64_t> chooseMfmaDimensions(triton::DotOp dot, int mfmaVersion) const {
     int64_t nonKDim = 32;
-    // number of consecutive matrix elements along k dim per thread
+    // number of matrix elements along k dim per one MFMA intruction
     int64_t kDim = -1;
     auto opType = dot.getA().getType().cast<RankedTensorType>();
     auto elemType = opType.getElementType();
     if (elemType.isF32())
-      kDim = 1;
+      kDim = 2;
     if (elemType.isF16())
-      kDim = 4;
+      kDim = 8;
     if (elemType.isBF16()) {
       if (mfmaVersion == 1)
-        kDim = 2;
-      if (mfmaVersion == 2)
         kDim = 4;
+      if (mfmaVersion == 2)
+        kDim = 8;
     }
     if (elemType.isInteger(8))
-      kDim = 4;
+      kDim = 8;
     assert(kDim != -1);
     return {nonKDim, kDim};
   }
@@ -206,12 +210,14 @@ public:
                          .cast<triton::gpu::BlockedEncodingAttr>()
                          .getOrder();
 
+    // kWidth is a number of consecutive elements per one instruction per one thread
+    auto kWidth = kDim / 2;
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kDim));
+        triton::gpu::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));
     auto newBType = RankedTensorType::get(
         oldBType.getShape(), oldBType.getElementType(),
-        triton::gpu::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kDim));
+        triton::gpu::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth));
     a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), newBType, b);
     auto newDot = rewriter.create<triton::DotOp>(
