@@ -48,6 +48,7 @@ jobs:
       - name: Install Triton
         run: |
           cd python
+          pip3 install ninja
           # Install in system, because need to override system triton. Otherwise lit tests will use wrong version
           DEBUG=TRUE TRITON_USE_ROCM=TRUE TRITON_USE_ASSERT_ENABLED_LLVM=TRUE python3 -m pip install --no-build-isolation -vvv -e .
 
