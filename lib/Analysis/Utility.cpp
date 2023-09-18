@@ -237,8 +237,17 @@ unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
   unsigned numParallelWarpsPerCTA = product<unsigned>(warpsPerCTA);
   return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
 }
+
 unsigned ScanLoweringHelper::getAxisNumWarps() {
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
+  return warpsPerCTA[getAxis()];
+}
+
+unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
+  auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
+  auto shape = type.getShape();
+  auto warpsPerCTA =
+      triton::gpu::getWarpsPerCTAWithUniqueData(srcEncoding, shape);
   return warpsPerCTA[getAxis()];
 }
 
@@ -282,6 +291,9 @@ bool ScanLoweringHelper::isSupported() {
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
+  unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
+  if (axisNumWarps == 1)
+    return 0;
   auto type = scanOp.getOperand(0).getType().cast<RankedTensorType>();
   unsigned elementSizeInBytes = type.getElementTypeBitWidth() / 8;
   auto mod = scanOp->getParentOfType<ModuleOp>();
