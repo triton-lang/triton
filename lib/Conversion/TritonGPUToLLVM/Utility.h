@@ -329,10 +329,6 @@ Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   int i);
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               Value i);
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 Value i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i);
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);

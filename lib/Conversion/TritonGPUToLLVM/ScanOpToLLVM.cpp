@@ -73,7 +73,7 @@ static void warpScan(SmallVector<Value> &srcValues,
     // Reduce within warps.
     Value acc = srcValues[srcIndex];
     for (unsigned i = 1; i <= (scanDim) / 2; i = i << 1) {
-      Value shfl = shflUpSync(loc, rewriter, acc, i32_val(i * threadStride));
+      Value shfl = shflUpSync(loc, rewriter, acc, i * threadStride);
       Value tempAcc = acc;
       accumulate(rewriter, helper.getCombineOp(), tempAcc, shfl);
       Value mask = icmp_slt(laneIdAxis, i32_val(i));
@@ -191,7 +191,7 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
     srcValues[srcIndex] = temp;
     // Update the rest of the contiguous elements.
     Value lastElement =
-        shflUpSync(loc, rewriter, srcValues[srcIndex], i32_val(threadStride));
+        shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
     lastElement = select(maskFirstLane, accumulator.maskedAcc, lastElement);
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
@@ -257,7 +257,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     Value lastElement = srcValues[srcIndex];
     if (scanDim > 1) {
       lastElement =
-          shflUpSync(loc, rewriter, srcValues[srcIndex], i32_val(threadStride));
+          shflUpSync(loc, rewriter, srcValues[srcIndex], threadStride);
       lastElement = select(maskFirstLane, accumulator, lastElement);
       if (numScanBlocks > 1)
         // Update accumulator with the value from the last lane.
