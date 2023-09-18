@@ -1007,7 +1007,7 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   // We need this to update operands for yield
   // original block arg => new arg's idx
   SmallVector<Value> newLoopArgs;
-  for (auto v : forOp.getIterOperands())
+  for (auto v : forOp.getInitArgs())
     newLoopArgs.push_back(v);
 
   bufferIdx = newLoopArgs.size();
