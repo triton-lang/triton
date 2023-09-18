@@ -116,18 +116,20 @@ struct MoveBroadcastAfterElementwisePattern
 
     auto operands = op->getOperands();
     bool seenBroadcast = false;
-    Type srcType;
+    ArrayRef<int64_t> srcShape;
     for (auto operand : operands) {
       auto definingOp = operand.getDefiningOp();
       if (!definingOp) {
         return mlir::failure();
       }
-
+      auto getSrcShape = [](triton::BroadcastOp b) {
+        return b.getSrc().getType().cast<RankedTensorType>().getShape();
+      };
       if (auto broadcastOp = llvm::dyn_cast<triton::BroadcastOp>(definingOp)) {
         if (!seenBroadcast) {
           seenBroadcast = true;
-          srcType = broadcastOp.getSrc().getType();
-        } else if (srcType != broadcastOp.getSrc().getType()) {
+          srcShape = getSrcShape(broadcastOp);
+        } else if (srcShape != getSrcShape(broadcastOp)) {
           // If the broadcast have different types we cannot re-order.
           return mlir::failure();
         }
