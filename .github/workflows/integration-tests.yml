@@ -73,9 +73,11 @@ jobs:
         if: ${{ env.BACKEND == 'CUDA'}}
         run: |
           cd python
+          export TRITON_BUILD_WITH_CLANG_LLD=1
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
           python3 -m pip install ninja
+          python3 -m pip install clang
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
           python3 -m pip install pytest-xdist
 
