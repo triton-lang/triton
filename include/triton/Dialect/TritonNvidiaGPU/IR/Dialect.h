@@ -30,7 +30,6 @@
 #include "mlir/IR/Dialect.h"
 
 // TritonNvidiaGPU depends on Triton
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
@@ -42,5 +41,16 @@
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.h.inc"
+
+namespace mlir {
+
+// Returns null if the op is not inside a agent region (warp specialization
+// mode). Note that there should be at most one agent id attached to the
+// operation.
+std::optional<int> getWSAgentId(Operation *op);
+std::optional<int> getWSRoleId(Operation *op);
+void setRoleId(Operation *op, int roleId);
+
+} // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_

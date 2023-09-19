@@ -203,8 +203,8 @@ static Value loadA(Value tensor, const SharedMemoryObject &smemObj,
   SmallVector<Value> elems;
   elems.reserve(has.size() * 2);
   for (auto item : has) { // has is a map, the key should be ordered.
-    elems.push_back(item.second.first);
-    elems.push_back(item.second.second);
+    elems.push_back(bitcast(item.second.first, i32_ty));
+    elems.push_back(bitcast(item.second.second, i32_ty));
   }
 
   Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);
@@ -327,8 +327,8 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
 
   SmallVector<Value> elems;
   for (auto &item : hbs) { // has is a map, the key should be ordered.
-    elems.push_back(item.second.first);
-    elems.push_back(item.second.second);
+    elems.push_back(bitcast(item.second.first, i32_ty));
+    elems.push_back(bitcast(item.second.second, i32_ty));
   }
 
   Value res = typeConverter->packLLElements(loc, elems, rewriter, resultTy);

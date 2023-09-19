@@ -19,7 +19,7 @@ config.name = 'TRITON'
 config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
 
 # suffixes: A list of file extensions to treat as test files.
-config.suffixes = ['.mlir']
+config.suffixes = ['.mlir', '.ll']
 
 # test_source_root: The root path where tests are located.
 config.test_source_root = os.path.dirname(__file__)
@@ -62,6 +62,7 @@ for d in tool_dirs:
     llvm_config.with_environment('PATH', d, append_path=True)
 tools = [
     'triton-opt',
+    'triton-llvm-opt',
     ToolSubst('%PYTHON', config.python_executable, unresolved='ignore'),
 ]
 

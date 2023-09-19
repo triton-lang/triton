@@ -117,7 +117,8 @@ public:
         op->getLoc(), dotOp.getResult().getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
         op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
-        dotOp.getOperand(1), _0, dotOp.getAllowTF32());
+        dotOp.getOperand(1), _0, dotOp.getAllowTF32(),
+        dotOp.getMaxNumImpreciseAcc());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), dstTy, newDot.getResult());
     rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getOperand());
@@ -175,9 +176,11 @@ public:
   Operation *rewriteOp(Operation *op);
   // Rewrite a for op based on the layout picked by the analysis.
   Operation *rewriteForOp(scf::ForOp forOp);
+  Operation *rewriteWhileOp(scf::WhileOp whileOp);
   Operation *rewriteIfOp(scf::IfOp ifOp);
-  Operation *rewriteYieldOp(scf::YieldOp yieldOp);
-  Operation *rewriteReduceToScalar(Operation *reduceOp);
+  void rewriteYieldOp(scf::YieldOp yieldOp);
+  void rewriteConditionOp(scf::ConditionOp conditionOp);
+  void rewriteReduceToScalar(Operation *reduceOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -239,7 +242,8 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 static bool isLayoutAnchor(Operation *op) {
   if (isa<triton::LoadOp, triton::StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<triton::DotOp, triton::AtomicRMWOp, triton::AtomicCASOp>(op))
+  if (isa<triton::ViewOp, triton::DotOp, triton::AtomicRMWOp,
+          triton::AtomicCASOp>(op))
     return true;
   return false;
 }
@@ -256,7 +260,7 @@ void LayoutPropagation::initAnchorLayout() {
           if (tensorType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() &&
               !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
-          layouts.insert({result, tensorType.getEncoding()});
+          layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
         }
       }
     }
@@ -291,16 +295,36 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding({arg, result}, info, changed, user);
       continue;
     }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+      Value arg = whileOp.getBeforeArguments()[use.getOperandNumber()];
+      setEncoding({arg}, info, changed, user);
+      continue;
+    }
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
-      SmallVector<Value> valuesToPropagate = {
-          parent->getResult(use.getOperandNumber())};
+      SmallVector<Value> valuesToPropagate;
+      if (isa<scf::ForOp, scf::IfOp>(parent))
+        valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
             forOp.getRegionIterArg(use.getOperandNumber()));
-      if (isa<scf::ForOp, scf::IfOp>(parent))
-        setEncoding({valuesToPropagate}, info, changed, user);
-      // TODO: handle while.
+      if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+        valuesToPropagate.push_back(
+            whileOp.getBeforeArguments()[use.getOperandNumber()]);
+        valuesToPropagate.push_back(
+            whileOp->getOperand(use.getOperandNumber()));
+      }
+      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
+        setEncoding(valuesToPropagate, info, changed, user);
+      continue;
+    }
+    if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
+      auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
+      // Skip arg 0 as it is the condition.
+      unsigned argIndex = use.getOperandNumber() - 1;
+      Value afterArg = whileOp.getAfterArguments()[argIndex];
+      Value result = whileOp->getResult(argIndex);
+      setEncoding({afterArg, result}, info, changed, user);
       continue;
     }
     // Workaround: don't propagate through truncI
@@ -333,14 +357,20 @@ void LayoutPropagation::propagateLayout() {
 
 void LayoutPropagation::resolveConflicts() {
   for (auto &it : layouts) {
+    Operation *op = it.first.getDefiningOp();
     LayoutInfo &info = it.second;
     if (info.encodings.size() <= 1)
       continue;
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
+    int maxSizePerThread = 1;
     Attribute encoding = *info.encodings.begin();
+    bool isLoadOrStore =
+        op && isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
+                  triton::AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
-      if (e.isa<triton::gpu::BlockedEncodingAttr>()) {
+      if ((isLoadOrStore && e.isa<triton::gpu::BlockedEncodingAttr>()) ||
+          (!isLoadOrStore && e.isa<triton::gpu::MmaEncodingAttr>())) {
         encoding = e;
         break;
       }
@@ -402,6 +432,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           queue.push_back(&R);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(&op)) {
         rewriteYieldOp(yieldOp);
+      } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(&op)) {
+        rewriteConditionOp(conditionOp);
       } else if (reduceToScalar(&op)) {
         rewriteReduceToScalar(&op);
       } else {
@@ -519,6 +551,66 @@ Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
   return newForOp.getOperation();
 }
 
+Operation *LayoutPropagation::rewriteWhileOp(scf::WhileOp whileOp) {
+  SmallVector<Value> operands;
+  SmallVector<Type> returnTypes;
+  OpBuilder rewriter(whileOp);
+  for (auto [operand, arg] :
+       llvm::zip(whileOp->getOperands(), whileOp.getBeforeArguments())) {
+    Value convertedOperand = operand;
+    if (layouts.count(arg))
+      convertedOperand = getValueAs(operand, *layouts[arg].encodings.begin());
+    operands.push_back(convertedOperand);
+  }
+  for (Value ret : whileOp.getResults()) {
+    auto it = layouts.find(ret);
+    if (it == layouts.end()) {
+      returnTypes.push_back(ret.getType());
+      continue;
+    }
+    auto origType = ret.getType().dyn_cast<RankedTensorType>();
+    auto newType =
+        RankedTensorType::get(origType.getShape(), origType.getElementType(),
+                              it->second.encodings[0]);
+    returnTypes.push_back(newType);
+  }
+
+  auto newWhileOp =
+      rewriter.create<scf::WhileOp>(whileOp.getLoc(), returnTypes, operands);
+  SmallVector<Type> argsTypesBefore;
+  for (Value operand : operands)
+    argsTypesBefore.push_back(operand.getType());
+  SmallVector<Location> bbArgLocsBefore(argsTypesBefore.size(),
+                                        whileOp.getLoc());
+  SmallVector<Location> bbArgLocsAfter(returnTypes.size(), whileOp.getLoc());
+  rewriter.createBlock(&newWhileOp.getBefore(), {}, argsTypesBefore,
+                       bbArgLocsBefore);
+  rewriter.createBlock(&newWhileOp.getAfter(), {}, returnTypes, bbArgLocsAfter);
+
+  for (int i = 0; i < whileOp.getNumRegions(); ++i) {
+    newWhileOp->getRegion(i).front().getOperations().splice(
+        newWhileOp->getRegion(i).front().getOperations().begin(),
+        whileOp->getRegion(i).front().getOperations());
+  }
+
+  auto remapArg = [&](Value oldVal, Value newVal) {
+    if (oldVal.getType() == newVal.getType())
+      oldVal.replaceAllUsesWith(newVal);
+    else
+      map(oldVal, newVal);
+  };
+  for (auto [oldResult, newResult] :
+       llvm::zip(whileOp.getResults(), newWhileOp.getResults()))
+    remapArg(oldResult, newResult);
+  for (auto [oldArg, newArg] :
+       llvm::zip(whileOp.getBeforeArguments(), newWhileOp.getBeforeArguments()))
+    remapArg(oldArg, newArg);
+  for (auto [oldArg, newArg] :
+       llvm::zip(whileOp.getAfterArguments(), newWhileOp.getAfterArguments()))
+    remapArg(oldArg, newArg);
+  return newWhileOp.getOperation();
+}
+
 Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
   SmallVector<Value> operands;
   OpBuilder rewriter(ifOp);
@@ -547,25 +639,37 @@ Operation *LayoutPropagation::rewriteIfOp(scf::IfOp ifOp) {
   return newIfOp.getOperation();
 }
 
-Operation *LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
-  OpBuilder rewriter(yieldOp);
-  Operation *newYield = rewriter.clone(*yieldOp.getOperation());
+void LayoutPropagation::rewriteYieldOp(scf::YieldOp yieldOp) {
   Operation *parentOp = yieldOp->getParentOp();
   for (OpOperand &operand : yieldOp->getOpOperands()) {
     Type yieldType = operand.get().getType();
     if (isa<scf::ForOp, scf::IfOp>(parentOp))
       yieldType = parentOp->getResult(operand.getOperandNumber()).getType();
+    if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
+      yieldType =
+          whileOp.getBeforeArguments()[operand.getOperandNumber()].getType();
     auto tensorType = yieldType.dyn_cast<RankedTensorType>();
     if (!tensorType)
       continue;
     Value newOperand = getValueAs(operand.get(), tensorType.getEncoding());
-    newYield->setOperand(operand.getOperandNumber(), newOperand);
+    yieldOp->setOperand(operand.getOperandNumber(), newOperand);
   }
-  opToDelete.push_back(yieldOp.getOperation());
-  return newYield;
 }
 
-Operation *LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
+void LayoutPropagation::rewriteConditionOp(scf::ConditionOp conditionOp) {
+  scf::WhileOp whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
+  for (unsigned i = 1; i < conditionOp->getNumOperands(); ++i) {
+    OpOperand &operand = conditionOp->getOpOperand(i);
+    Type argType = whileOp->getResult(operand.getOperandNumber() - 1).getType();
+    auto tensorType = argType.dyn_cast<RankedTensorType>();
+    if (!tensorType)
+      continue;
+    Value newOperand = getValueAs(operand.get(), tensorType.getEncoding());
+    conditionOp->setOperand(operand.getOperandNumber(), newOperand);
+  }
+}
+
+void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
   OpBuilder rewriter(reduceOp);
   Attribute srcEncoding;
   // Since all the operands need to have the same encoding pick the first one
@@ -578,18 +682,19 @@ Operation *LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
     }
   }
   if (!srcEncoding)
-    return reduceOp;
+    return;
   for (OpOperand &operand : reduceOp->getOpOperands()) {
     Value newOperand = getValueAs(operand.get(), srcEncoding);
     reduceOp->setOperand(operand.getOperandNumber(), newOperand);
   }
-  return reduceOp;
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
   opToDelete.push_back(op);
   if (auto forOp = dyn_cast<scf::ForOp>(op))
     return rewriteForOp(forOp);
+  if (auto whileOp = dyn_cast<scf::WhileOp>(op))
+    return rewriteWhileOp(whileOp);
   if (auto ifOp = dyn_cast<scf::IfOp>(op))
     return rewriteIfOp(ifOp);
   OpBuilder rewriter(op);
@@ -811,7 +916,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
 
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
-static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
+static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
       triton::gpu::isSharedEncoding(convertOp.getOperand()))
@@ -822,29 +927,34 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
-  auto isExtOp = [](Operation *op) {
-    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp>(op);
+  auto isExtOrBroadcastOp = [](Operation *op) {
+    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp,
+               triton::BroadcastOp, triton::ExpandDimsOp>(op);
   };
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
-  LogicalResult result = getRematerializableSlice(
-      convertOp.getOperand(), targetType.getEncoding(), slice, layout, isExtOp);
+  LogicalResult result =
+      getRematerializableSlice(convertOp.getOperand(), targetType.getEncoding(),
+                               slice, layout, isExtOrBroadcastOp);
   if (result.failed())
     return;
 
-  Operation *extOp = nullptr;
+  Operation *extOrBroadcatOp = nullptr;
   unsigned sliceSize = slice.size();
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
     Operation *op = v.getDefiningOp();
     if (!op)
       continue;
-    if (isExtOp(op)) {
+    if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
+      std::optional<Attribute> srcEncoding = inferSrcEncoding(op, layout[v]);
+      if (!srcEncoding)
+        return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), layout[v], tempSlice, tempLayout);
+          op->getOperand(0), *srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {
@@ -854,24 +964,28 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
       }
       // Only apply it if there is a single ext op otherwise we would have to
       // duplicate the convert.
-      if (extOp != nullptr)
+      if (extOrBroadcatOp != nullptr)
         return;
-      extOp = op;
+      extOrBroadcatOp = op;
     }
   }
 
-  if (extOp == nullptr)
+  if (extOrBroadcatOp == nullptr)
+    return;
+  std::optional<Attribute> srcEncoding =
+      inferSrcEncoding(extOrBroadcatOp, layout[extOrBroadcatOp->getResult(0)]);
+  if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
-  OpBuilder builder(extOp);
-  auto tensorType = extOp->getOperand(0).getType().cast<RankedTensorType>();
-  auto newType =
-      RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(),
-                            layout[extOp->getResult(0)]);
+  OpBuilder builder(extOrBroadcatOp);
+  auto tensorType =
+      extOrBroadcatOp->getOperand(0).getType().cast<RankedTensorType>();
+  auto newType = RankedTensorType::get(
+      tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
-      convertOp.getLoc(), newType, extOp->getOperand(0));
+      convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
   IRMapping mapping;
-  mapping.map(extOp->getOperand(0), newConvertOp.getResult());
+  mapping.map(extOrBroadcatOp->getOperand(0), newConvertOp.getResult());
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp, mapping);
 }
@@ -890,7 +1004,7 @@ static void hoistConvert(ModuleOp module) {
   module.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    hoistConvertOnTopOfExt(convertOp);
+    hoistConvertOnTopOfExtOrBroadcast(convertOp);
   }
 }
 

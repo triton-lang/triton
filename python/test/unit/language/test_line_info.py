@@ -6,6 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.common.backend import path_to_nvdisasm
 
 
 @triton.jit
@@ -50,10 +51,11 @@ def kernel_multi_files(X, Y, BLOCK: tl.constexpr):
 
 
 def extract_file_lines(asm):
+    nvdisasm, _ = path_to_nvdisasm()
     fd, path = tempfile.mkstemp()
     with open(fd, 'wb') as cubin:
         cubin.write(asm)
-    asm = subprocess.check_output(["nvdisasm", "-g", path]).decode("utf-8")
+    asm = subprocess.check_output([nvdisasm, "-g", path]).decode("utf-8")
     file_lines = []
     lines = asm.splitlines()
     for line in lines:
@@ -80,7 +82,7 @@ func_types = ["single", "call", "call_noinline", "multi_files"]
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
     try:
-        subprocess.check_output(["nvdisasm", "-h"])
+        _, _ = path_to_nvdisasm()
     except BaseException:
         pytest.skip("nvdisasm is not available")
 
@@ -99,20 +101,20 @@ def test_line_info(func: str):
 
     file_lines = extract_file_lines(kernel_info.asm["cubin"])
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 15))
         assert (check_file_lines(file_lines, "test_line_info.py", 16))
+        assert (check_file_lines(file_lines, "test_line_info.py", 17))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 28))
-        assert (check_file_lines(file_lines, "test_line_info.py", 21))
-        assert (check_file_lines(file_lines, "test_line_info.py", 30))
+        assert (check_file_lines(file_lines, "test_line_info.py", 29))
+        assert (check_file_lines(file_lines, "test_line_info.py", 22))
+        assert (check_file_lines(file_lines, "test_line_info.py", 31))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 42))
-        assert (check_file_lines(file_lines, "test_line_info.py", 35))
+        assert (check_file_lines(file_lines, "test_line_info.py", 43))
         assert (check_file_lines(file_lines, "test_line_info.py", 36))
         assert (check_file_lines(file_lines, "test_line_info.py", 37))
+        assert (check_file_lines(file_lines, "test_line_info.py", 38))
     elif func == "multi_files":
-        assert (check_file_lines(file_lines, "test_line_info.py", 47))
-        assert (check_file_lines(file_lines, "test_line_info.py", 49))
+        assert (check_file_lines(file_lines, "test_line_info.py", 48))
+        assert (check_file_lines(file_lines, "test_line_info.py", 50))
         assert (check_file_lines(file_lines, "standard.py", 33))
         assert (check_file_lines(file_lines, "standard.py", 34))
         assert (check_file_lines(file_lines, "standard.py", 36))
