@@ -26,4 +26,14 @@ venv.bak/
 cmake-build-*
 
 # Third-party binaries
+cuobjdump
+nvdisasm
 ptxas
+
+# Docs
+docs/_build/
+docs/python-api/generated/
+docs/dialects/
+docs/getting-started/tutorials
+!python/tutorials/*.py
+!python/tutorials/*.rst

@@ -181,8 +181,9 @@ public:
         op->getLoc(), newAccType,
         rewriter.create<arith::ConstantOp>(op->getLoc(),
                                            rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<triton::DotOp>(
-        op, expandLhsOp.getOperand(), expandRhsOp.getOperand(), newAcc, true);
+    rewriter.replaceOpWithNewOp<triton::DotOp>(op, expandLhsOp.getOperand(),
+                                               expandRhsOp.getOperand(), newAcc,
+                                               true, 0);
     return mlir::success();
   }
 };

@@ -26,12 +26,11 @@ from ..runtime import driver
 
 def generate_cu_signature(constants, signature, ids):
     # CUtensorMap*s are always the last arguments
+    num_regular_signatures = max(signature.keys()) + 1 if len(signature) > 0 else 0
     if ids["ids_of_tensormaps"] is not None:
-        signature = signature.copy()
-        num_signature = len(signature)
         for i, _ in enumerate(ids["ids_of_tensormaps"]):
-            signature[num_signature + i] = '*CUtensorMap'
-    return signature
+            signature[num_regular_signatures + i] = '*CUtensorMap'
+    return signature, num_regular_signatures
 
 
 def dummy_tensormaps_info(n=2):
