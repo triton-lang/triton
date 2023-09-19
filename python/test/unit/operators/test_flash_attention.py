@@ -13,17 +13,11 @@ import triton.ops
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
-    # with ENABLE_TMA=0 and ENABLE_MMA_V3=0
     import os
-    enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
-    enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
-    if enable_mmav3 in ["on", "true", "1"] and enable_tma in ["on", "true", "1"]:
-        pytest.skip('Segmentation fault')
-
     capability = torch.cuda.get_device_capability()
     interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]
     if not interpreter and capability[0] < 8:
-        pytest.skip("Flash attention only supported for compute capability < 80")
+        pytest.skip("Flash attention only supported for compute capability >= 80")
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
