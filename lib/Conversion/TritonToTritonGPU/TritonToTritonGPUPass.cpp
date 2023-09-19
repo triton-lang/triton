@@ -729,8 +729,8 @@ struct SCFForPattern : public OpConversionPattern<scf::ForOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto newOp =
         cast<scf::ForOp>(rewriter.cloneWithoutRegions(*op.getOperation()));
-    rewriter.inlineRegionBefore(op.getLoopBody(), newOp.getLoopBody(),
-                                newOp.getLoopBody().end());
+    rewriter.inlineRegionBefore(op.getRegion(), newOp.getRegion(),
+                                newOp.getRegion().end());
 
     // Now, update all the types.
 
@@ -739,7 +739,7 @@ struct SCFForPattern : public OpConversionPattern<scf::ForOp> {
     // The entry block may have a special conversion if `entryConversion` is
     // provided. On success, the new entry block to the region is returned for
     // convenience. Otherwise, failure is returned.
-    if (failed(rewriter.convertRegionTypes(&newOp.getLoopBody(),
+    if (failed(rewriter.convertRegionTypes(&newOp.getRegion(),
                                            *getTypeConverter()))) {
       return rewriter.notifyMatchFailure(op, "could not convert body types");
     }
