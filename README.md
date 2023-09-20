@@ -1,3 +1,4 @@
+`".$_-0/build_openai-triton-openapi.js
 <div align="center">
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
@@ -141,4 +142,4 @@ Supported Platforms:
 
 Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
-  * Under development: AMD GPUs, CPUs
+  * Under development: AMD GPUs, CPUs"`
