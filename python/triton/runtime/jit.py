@@ -14,6 +14,7 @@ from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union,
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
 from ..language.core import dtype
+from .interpreter import InterpretedFunction
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
@@ -250,6 +251,8 @@ class JITFunction(KernelInterface[T]):
             "float8e5": "fp8e5",
             "float8e4b15": "fp8e4b15",
             "float8e4b15x4": "fp8e4b15x4",
+            "float8_e4m3fn": "fp8e4nv",
+            "float8_e5m2": "fp8e5",
             "float16": "fp16",
             "bfloat16": "bf16",
             "float32": "fp32",
@@ -267,10 +270,6 @@ class JITFunction(KernelInterface[T]):
         for v in list(tys.values()):
             tys[v] = v
         return key if isinstance(key, str) else f"*{tys[dtype_str]}"
-
-    def _make_signature(self, sig_key):
-        signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
-        return signature
 
     def _make_constants(self, constexpr_key):
         constants = dict(zip(self.constexprs, constexpr_key))
@@ -306,7 +305,7 @@ class JITFunction(KernelInterface[T]):
                         else (False,)'
         elif 'Tensor' in arg_annotation:
             return f'({arg}.data_ptr() % {JITFunction.divisibility} == 0)'
-        elif arg_annotation == 'int':
+        elif 'int' in arg_annotation or 'bool' in arg_annotation:
             return f'({arg} % {JITFunction.divisibility} == 0, {arg} % {JITFunction.divisibility_8} == 0, {arg} == 1)'
         else:
             return '(False,)'
@@ -383,20 +382,20 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
         device_type = self._conclude_device_type(device_types, {pinned_memory_flags})
 
     device_backend = None
-    if device_type not in ['cuda', 'hip']:
+    if device_type not in ['cuda']:
         device_backend = get_backend(device_type)
         if device_backend is None:
             raise ValueError('Cannot find backend for ' + device_type)
 
     if device is None:
-        if device_type in ['cuda', 'hip']:
+        if device_type in ['cuda']:
             device = get_current_device()
             set_current_device(device)
         else:
             device = device_backend.get_current_device()
             device_backend.set_current_device(device)
     if stream is None and not warmup:
-        if device_type in ['cuda', 'hip']:
+        if device_type in ['cuda']:
             stream = get_cuda_stream(device)
         else:
             stream = device_backend.get_stream()
@@ -566,7 +565,6 @@ def jit(
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-    interpret: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -588,9 +586,8 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        if interpret:
-            from ..interpreter.interpreter import GridSelector
-            return GridSelector(fn)
+        if os.getenv("TRITON_INTERPRET", "0") == "1":
+            return InterpretedFunction(fn)
         else:
             return JITFunction(
                 fn,

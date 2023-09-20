@@ -347,7 +347,7 @@ LogicalResult LoopPipeliner::collectOps(SetVector<Operation *> &ops) {
 void LoopPipeliner::collectValueDep(Value v, int stage,
                                     SetVector<Value> &deps) {
   // Loop-invariant value, skip
-  if (v.getParentRegion() != &forOp.getLoopBody())
+  if (v.getParentRegion() != &forOp.getRegion())
     return;
 
   // Since we only need to peel the loop numStages-1 times, don't worry
@@ -652,10 +652,12 @@ void LoopPipeliner::createBufferTypes() {
                             .getEncoding()
                             .dyn_cast<ttg::DotOperandEncodingAttr>()) {
       // MMAv1 and MMAv2
+      bool needTrans = dyn_cast_or_null<tt::TransOp>(
+          cvt.getDefiningOp()->getOperand(0).getDefiningOp());
       unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
       sharedEnc = ttg::SharedEncodingAttr::get(
           ty.getContext(), dotOpEnc, ty.getShape(),
-          ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth);
+          ttg::getOrder(ty.getEncoding()), CTALayout, bitWidth, needTrans);
     } else {
       // MMAv3
       sharedEnc = ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(),
@@ -669,7 +671,7 @@ void LoopPipeliner::createBufferTypes() {
 }
 
 void LoopPipeliner::createOrderedDeps() {
-  for (Operation &op : forOp.getLoopBody().front()) {
+  for (Operation &op : *forOp.getBody()) {
     if (depOps.contains(&op))
       orderedDeps.push_back(&op);
     else if (op.getNumResults() > 0 && validLoads.contains(op.getResult(0)))
@@ -1005,7 +1007,7 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   // We need this to update operands for yield
   // original block arg => new arg's idx
   SmallVector<Value> newLoopArgs;
-  for (auto v : forOp.getIterOperands())
+  for (auto v : forOp.getInitArgs())
     newLoopArgs.push_back(v);
 
   bufferIdx = newLoopArgs.size();
@@ -1638,7 +1640,8 @@ void PipelinePass::asyncLaunchDots(scf::ForOp forOp) {
     auto dotOp = cast<tt::DotOp>(dot.getDefiningOp());
     builder.setInsertionPoint(dot.getDefiningOp());
     auto dotAsync = builder.create<tt::nvidia_gpu::DotAsyncOp>(
-        loc, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32());
+        loc, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32(),
+        dotOp.getMaxNumImpreciseAcc());
     dot.replaceAllUsesWith(dotAsync.getResult());
     updateConsumerReleaseInfo(dot.getDefiningOp(), dotWait, /*stage=*/1);
     dot.getDefiningOp()->erase();

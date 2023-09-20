@@ -20,8 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import functools
+import os
 import re
 import subprocess
+import tempfile
+
+from ..common.backend import path_to_cuobjdump, path_to_nvdisasm
 
 FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
 SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')
@@ -60,11 +65,26 @@ def processSassLines(fline, sline, labels):
     return (f'{ctrl}', f'{asm}')
 
 
+@functools.lru_cache()
+def get_sass(cubin_asm, fun=None):
+    fd, path = tempfile.mkstemp()
+    try:
+        with open(fd, 'wb') as cubin:
+            cubin.write(cubin_asm)
+        sass = extract(path, fun)
+    finally:
+        os.remove(path)
+    return sass
+
+
 def extract(file_path, fun):
+    cuobjdump, _ = path_to_cuobjdump()
+    nvdisasm, _ = path_to_nvdisasm()
+    os.environ["NVDISASM_PATH"] = nvdisasm
     if fun is None:
-        sass_str = subprocess.check_output(["cuobjdump", "-sass", file_path])
+        sass_str = subprocess.check_output([cuobjdump, "-sass", file_path])
     else:
-        sass_str = subprocess.check_output(["cuobjdump", "-fun", fun, "-sass", file_path])
+        sass_str = subprocess.check_output([cuobjdump, "-fun", fun, "-sass", file_path])
     sass_lines = sass_str.splitlines()
     line_idx = 0
     while line_idx < len(sass_lines):

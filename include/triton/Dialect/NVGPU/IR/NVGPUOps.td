@@ -97,7 +97,15 @@ def WGMMADesc_ModeAttr : I32EnumAttr<"WGMMADescMode",
 }
 
 def NVGPU_WGMMADescCreateOp : NVGPU_Op<"wgmma_desc_create", []> {
-  let arguments = (ins LLVM_AnyPointer:$buffer, I32:$height, WGMMADesc_ModeAttr:$mode);
+  let arguments = (ins LLVM_AnyPointer:$buffer, I32:$height, WGMMADesc_ModeAttr:$mode, I64Attr:$swizzling);
+  let builders = [
+    OpBuilder<(ins "Value":$buffer,
+                     "Value":$height,
+                     "WGMMADescMode":$mode), [{
+                      uint32_t mode_ = static_cast<uint32_t>(mode);
+                      uint64_t swizzling = (mode_ == 1 ? 128 : mode_ == 2 ? 64 : 32);
+                      build($_builder, $_state, $_builder.getIntegerType(64), buffer, height, WGMMADescModeAttr::get($_builder.getContext(), mode), $_builder.getI64IntegerAttr(swizzling));
+                     }]>];
   let results = (outs I64:$res);
   let assemblyFormat = "$buffer `,` $height attr-dict `:` functional-type(operands, results)";
 }
@@ -140,12 +148,12 @@ def WGMMA_EltTypeAttr : I32EnumAttr<"WGMMAEltType",
 def WGMMA_OperandType : AnyTypeOf<[LLVM_AnyStruct, I64], "wgmma operand A/B type">;
 
 def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
-  let arguments = (ins WGMMA_OperandType:$opA, WGMMA_OperandType:$opB, LLVM_AnyStruct:$opC,
+  let arguments = (ins WGMMA_OperandType:$opA, WGMMA_OperandType:$opB, Optional<LLVM_AnyStruct>:$opC,
                    I32Attr:$m, I32Attr:$n, I32Attr:$k,
                    WGMMA_EltTypeAttr:$eltTypeC, WGMMA_EltTypeAttr:$eltTypeA, WGMMA_EltTypeAttr:$eltTypeB,
                    WGMMA_LayoutAttr:$layoutA, WGMMA_LayoutAttr:$layoutB);
   let results = (outs LLVM_AnyStruct:$res);
-  let assemblyFormat = "$opA `,` $opB `,` $opC attr-dict `:` functional-type(operands, $res)";
+  let assemblyFormat = "$opA `,` $opB (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
 }
 
 def NVGPU_CGABarrierSyncOp : NVGPU_Op<"cga_barrier_sync", []> {
