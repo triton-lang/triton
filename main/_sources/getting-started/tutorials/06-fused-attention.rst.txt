@@ -56,18 +56,18 @@ Extra Credits:
 
     fused-attention-batch4-head48-d64-fwd:
          N_CTX      Triton
-    0   1024.0  117.825653
-    1   2048.0  141.836374
-    2   4096.0  156.023725
-    3   8192.0  164.051927
-    4  16384.0  170.948505
+    0   1024.0  118.054935
+    1   2048.0  141.300990
+    2   4096.0  155.399943
+    3   8192.0  165.632729
+    4  16384.0  171.027929
     fused-attention-batch4-head48-d64-bwd:
          N_CTX      Triton
-    0   1024.0   71.913192
-    1   2048.0   92.305194
-    2   4096.0  107.457859
-    3   8192.0  117.926226
-    4  16384.0  122.766670
+    0   1024.0   71.879142
+    1   2048.0   92.378775
+    2   4096.0  108.367116
+    3   8192.0  118.026462
+    4  16384.0  122.646074
 
 
 
@@ -701,7 +701,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  9.367 seconds)
+   **Total running time of the script:** ( 0 minutes  9.354 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
