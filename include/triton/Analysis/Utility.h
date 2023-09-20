@@ -36,7 +36,9 @@ public:
 
   triton::ReduceOp getOperation() { return op; }
 
-  bool isFastReduction();
+  bool isReductionOnLayoutFastAxis();
+
+  unsigned getThreadOffsetOnReductionAxis();
 
   bool isWarpSynchronous();
 
@@ -50,13 +52,15 @@ public:
 
   unsigned getThreadsReductionAxis();
 
-  SmallVector<unsigned> getScratchConfigBasic();
-
-  SmallVector<SmallVector<unsigned>> getScratchConfigsFast();
+  SmallVector<unsigned> getScratchConfig();
 
   unsigned getScratchSizeInBytes();
 
   bool isSupportedLayout();
+
+  bool isReduceWithinCTA();
+
+  unsigned getAxis() { return axis; }
 
 private:
   triton::ReduceOp op;
@@ -84,6 +88,8 @@ public:
   unsigned getNonAxisNumThreadsPerCTA();
   // Return the number of warps per CTA along axis dim.
   unsigned getAxisNumWarps();
+  // Return the number of warps per CTA along axis dim with unique data.
+  unsigned getAxisNumWarpsWithUniqueData();
   // Return the number of threads per warp along axis dim.
   unsigned getAxisNumThreadsPerWarp();
   // Return the number of blocks along axis dim.

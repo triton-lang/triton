@@ -17,14 +17,6 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 2 :
     %ptr = llvm.mlir.null : !llvm.ptr<i32, 3>
 
     // CHECK: llvm.inline_asm
-    // CHECK: llvm.inline_asm
-    // CHECK: llvm.inline_asm
-    // CHECK: llvm.inline_asm
-    // CHECK: llvm.inline_asm
-    // CHECK: llvm.mul
-    // CHECK: llvm.add
-    // CHECK: llvm.mul
-    // CHECK: llvm.add
     %v = nvgpu.cluster_id
     llvm.store %v, %ptr : !llvm.ptr<i32, 3>
 
