@@ -258,7 +258,11 @@ def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [Pure,
         $d = matrix_multiply($a, $b) + $c
     }];
 
-    let arguments = (ins TT_FpIntTensor:$a, TT_FpIntTensor:$b, TT_FpIntTensor:$c, BoolAttr:$allowTF32);
+    let arguments = (ins TT_FpIntTensor:$a,
+                         TT_FpIntTensor:$b,
+                         TT_FpIntTensor:$c,
+                         BoolAttr:$allowTF32,
+                         I32Attr:$maxNumImpreciseAcc);
 
     let results = (outs TT_FpIntTensor:$d);
 
@@ -279,8 +283,7 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", []> {
 }
 
 def TTNG_StoreAsyncOp : TTNG_Op<"store_async",
-                              [Source1IsSharedEncoding,
-                               MemoryEffects<[MemWrite]>]> {
+                              [MemoryEffects<[MemWrite]>]> {
   let summary = "store asynchronous by a tensor pointer";
   let arguments = (ins TT_TensorPtr:$dst, TT_Tensor:$src,
                        DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache);

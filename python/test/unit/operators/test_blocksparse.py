@@ -86,9 +86,9 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     da_tri = a_tri.grad
     db_tri = b_tri.grad
     # compare
-    torch.testing.assert_allclose(c_ref, c_tri)
-    torch.testing.assert_allclose(da_ref, da_tri)
-    torch.testing.assert_allclose(db_ref, db_tri)
+    torch.testing.assert_close(c_ref, c_tri)
+    torch.testing.assert_close(da_ref, da_tri)
+    torch.testing.assert_close(db_ref, db_tri)
 
 
 configs = [
@@ -138,8 +138,8 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     out_tri.backward(dout_tri)
     da_tri = a_tri.grad
     # compare
-    torch.testing.assert_allclose(out_tri, out_ref)
-    torch.testing.assert_allclose(da_tri, da_ref)
+    torch.testing.assert_close(out_tri, out_ref, equal_nan=True)
+    torch.testing.assert_close(da_tri, da_ref, equal_nan=True)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])
@@ -195,9 +195,9 @@ def test_attention_fwd_bwd(
 
     # comparison
     # print(f"Triton loss {loss} and torch loss {torch_loss}.  Also checking grads...")
-    torch.testing.assert_allclose(loss, torch_loss, atol=1e-3, rtol=0)
+    torch.testing.assert_close(loss, torch_loss, atol=1e-3, rtol=0)
     for g1, g2 in zip(grads, torch_grads):
-        torch.testing.assert_allclose(g1, g2)
+        torch.testing.assert_close(g1, g2)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])
