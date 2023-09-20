@@ -459,15 +459,16 @@ class _attention(torch.autograd.Function):
         if torch.version.hip is None:
             BLOCK_N = 64 if Lk <= 64 else 32
             num_stages = 4 if Lk <= 64 else 3
+            num_warps = 4 if Lk <= 64 else 8
         else:
             BLOCK_N = 64
+            num_warps = 4
             num_stages = 1
-        num_warps = 4
+
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         P_SEQ = 0 if q.shape[-2] == k.shape[-2] else k.shape[-2] - q.shape[-2]
 
-        num_warps = 4 if Lk <= 64 else 8
         _fwd_kernel[grid](
             q, k, v, sm_scale,
             L,
