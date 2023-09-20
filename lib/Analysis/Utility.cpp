@@ -212,7 +212,8 @@ unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
-  SmallVector<unsigned> sizePerThreads = getContigPerThread(getEncoding());
+  SmallVector<unsigned> sizePerThreads =
+      triton::gpu::getContigPerThread(getEncoding());
   sizePerThreads[getAxis()] = 1;
   return product<unsigned>(sizePerThreads);
 }
@@ -221,6 +222,11 @@ Region &ScanLoweringHelper::getCombineOp() { return scanOp.getCombineOp(); }
 
 unsigned ScanLoweringHelper::getAxisNumThreadsPerWarp() {
   return triton::gpu::getThreadsPerWarp(getEncoding())[getAxis()];
+}
+
+unsigned ScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
+  return triton::gpu::getThreadsPerWarpWithUniqueData(getEncoding(),
+                                                      getShape())[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
@@ -307,6 +313,10 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
 
 triton::gpu::BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
   return srcEncoding.cast<triton::gpu::BlockedEncodingAttr>();
+}
+
+llvm::ArrayRef<int64_t> ScanLoweringHelper::getShape() {
+  return scanOp.getOperand(0).getType().cast<RankedTensorType>().getShape();
 }
 
 unsigned ScanLoweringHelper::getAxisElementStride() {

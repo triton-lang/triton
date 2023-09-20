@@ -64,7 +64,7 @@ static void warpScan(SmallVector<Value> &srcValues,
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
-  unsigned scanDim = helper.getAxisNumThreadsPerWarp();
+  unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
@@ -96,7 +96,7 @@ static void storeWarpAccumulator(SmallVector<Value> &srcValues,
                                  Value parallelLaneId) {
   Location loc = helper.getLoc();
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
-  unsigned scanDim = helper.getAxisNumThreadsPerWarp();
+  unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
   unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
   unsigned chunkId = 0;
@@ -222,7 +222,7 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
-  unsigned scanDim = helper.getAxisNumThreadsPerWarp();
+  unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
   Value maskFirstWarp = icmp_eq(warpId, i32_val(0));
   Value maskFirstLane = icmp_eq(laneIdAxis, i32_val(0));
   Value maskFirstThread = and_(maskFirstWarp, maskFirstLane);
@@ -394,7 +394,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto input = adaptor.getOperands()[0];
   auto type = op.getOperand(0).getType().cast<RankedTensorType>();
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
-  auto axisNumThreads = helper.getAxisNumThreadsPerWarp();
+  auto axisNumThreads = helper.getAxisNumThreadsPerWarpWithUniqueData();
   warpIdAxis = urem(warpIdAxis, i32_val(axisNumWarps));
   SmallVector<Value> srcValues =
       getTypeConverter()->unpackLLElements(loc, input, rewriter, type);
@@ -423,7 +423,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   } else if (srcValues.size() > 1) {
     // Fast path for the case where there is only one warp with unique data on
     // the axis.
-    unsigned scanDim = helper.getAxisNumThreadsPerWarp();
+    unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
     auto multiDimLaneId = getMultiDimLaneId(rewriter, helper, laneId);
     multiDimLaneId[helper.getAxis()] = i32_val(scanDim - 1);
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(helper.getEncoding());
