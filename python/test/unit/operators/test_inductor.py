@@ -156,7 +156,7 @@ def test_avg_pool_bw():
     torch.testing.assert_close(out, out_ref)
 
 
-@pytest.mark.parametrize("RBLOCK", [32, 64, 128])
+@pytest.mark.parametrize("RBLOCK", [1, 16, 32, 64, 128])
 @pytest.mark.parametrize("num_warps", [1, 4])
 def test_scan2d_broadcast(RBLOCK, num_warps):
     @triton.jit(debug=True)
