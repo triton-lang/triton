@@ -306,7 +306,7 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
 }
 
 triton::gpu::BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
-  return getEncoding().cast<triton::gpu::BlockedEncodingAttr>();
+  return srcEncoding.cast<triton::gpu::BlockedEncodingAttr>();
 }
 
 llvm::ArrayRef<int64_t> ScanLoweringHelper::getShape() {
