@@ -501,24 +501,30 @@ def full(shape: List[int], value, dtype: tl.dtype, builder: ir.builder) -> tl.te
     if isinstance(value, tl.tensor):
         assert value.numel.value == 1, "only accepts size-1 tensor"
         value = cast(value, dtype, builder)
-        ret_ty = tl.block_type(value.dtype, shape)
-        return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
     else:
         # scalar
+        if dtype is None:
+            raise ValueError("dtype must be specified when value is not a tensor")
         if value == 0:
             value = builder.get_null_value(dtype.to_ir(builder))
         else:
             get_value_fn = getattr(builder, f"get_{dtype.name}")
             value = get_value_fn(value)
-        if dtype is None:
-            raise ValueError("dtype must be specified when value is not a tensor")
-        ret_ty = tl.block_type(dtype, shape)
-        return tl.tensor(builder.create_splat(value, shape), ret_ty)
+        value = tl.tensor(value, dtype)
+
+    return splat(value, shape, builder)
 
 
 # ===----------------------------------------------------------------------===//
 #                               Shape Manipulation
 # ===----------------------------------------------------------------------===//
+
+def splat(value: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
+    assert not value.type.is_block(), "Cannot splat a block tensor"
+    if len(shape) == 0:
+        return value
+    ret_ty = tl.block_type(value.dtype, shape)
+    return tl.tensor(builder.create_splat(value.handle, shape), ret_ty)
 
 
 def view(input: tl.tensor,
@@ -544,8 +550,12 @@ def reshape(input: tl.tensor,
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    dst_shape = list(input.type.shape)
+    dst_shape = [tl._constexpr_to_value(x) for x in input.shape]
     dst_shape.insert(axis, 1)
+
+    if not input.type.is_block():
+        return splat(input, shape=dst_shape, builder=builder)
+
     ret_ty = tl.block_type(input.type.scalar, dst_shape)
     return tl.tensor(builder.create_expand_dims(input.handle, axis), ret_ty)
 
@@ -1255,7 +1265,9 @@ def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
 
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
+        acc: tl.tensor,
         allow_tf32: bool,
+        max_num_imprecise_acc: int,
         out_dtype: tl.dtype,
         builder: ir.builder) -> tl.tensor:
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, arch):
@@ -1266,6 +1278,8 @@ def dot(lhs: tl.tensor,
         # Checks for cuda arch
         if arch < 90:
             assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(), "Dot op does not support fp8e4nv on CUDA arch < 90"
+            if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
+                return
             assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
         else:
             assert not lhs_dtype.is_fp8e4b15() and not rhs_dtype.is_fp8e4b15(), "Dot op does not support fp8e4b15 on CUDA arch >= 90"
@@ -1297,6 +1311,8 @@ def dot(lhs: tl.tensor,
         assert lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
+    elif out_dtype.is_bf16():
+        raise ValueError("out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`")
     elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
         _0 = builder.get_fp32(0)
         ret_scalar_ty = tl.float32
@@ -1331,10 +1347,20 @@ def dot(lhs: tl.tensor,
         ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
                         ret_ty)
         return cast(ret, ret_scalar_ty, builder)
-
-    _0 = builder.create_splat(_0, [M, N])
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
-    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
+    if acc is None:
+        acc_handle = builder.create_splat(_0, [M, N])
+    else:
+        acc_handle = acc.handle
+        assert acc.type == ret_ty
+
+    # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
+    if not (_is_cuda(builder.arch) and builder.arch == 90 and lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and ret_scalar_ty.is_fp32()):
+        max_num_imprecise_acc = 0
+    if max_num_imprecise_acc is None:
+        max_num_imprecise_acc = 2**30
+
+    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, allow_tf32, max_num_imprecise_acc),
                      ret_ty)
 
 
@@ -1504,7 +1530,7 @@ def abs(x: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
-    if len(x.shape) != len(values):
+    if max(1, len(x.shape)) != len(values):
         raise ValueError("Shape of input to multiple_of does not match the length of values")
     x.handle.set_attr("tt.divisibility", ir.make_attr(values, x.handle.get_context()))
     return x
@@ -1544,6 +1570,8 @@ def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: 
 
 
 def _convert_elem_to_ir_value(builder, elem, require_i64):
+    if isinstance(elem, int):
+        elem = tl.constexpr(elem)
     if isinstance(elem, tl.constexpr):
         return builder.get_int64(elem.value) if require_i64 else builder.get_int32(elem.value)
     elif isinstance(elem, tl.tensor):
