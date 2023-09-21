@@ -1549,6 +1549,16 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     // will be processed in the consequent OptimizeBarriers pass.
     for (const auto &item : consumerReleaseMap)
       emitConsumerRelease(item.first, item.second, numStages);
+
+    // Dead code elimination due to cloneForOp
+    MLIRContext *context = &getContext();
+    ModuleOp m = getOperation();
+    mlir::RewritePatternSet cleanupPattern(context);
+    populateForOpDeadArgumentElimination(cleanupPattern);
+    if (mlir::applyPatternsAndFoldGreedily(m, std::move(cleanupPattern))
+            .failed()) {
+      signalPassFailure();
+    }
   }
 
 private:
