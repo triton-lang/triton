@@ -2473,10 +2473,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
         if capability[0] == 7 and capability[1] == 5:  # Turing
-          assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
+            assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
         else:
-          assert 'wgmma.mma_async.sync.aligned' in ptx or\
-              'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
+            assert 'wgmma.mma_async.sync.aligned' in ptx or\
+                'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])
