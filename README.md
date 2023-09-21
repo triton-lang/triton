@@ -10,7 +10,10 @@ We're hiring! If you are interested in working on Triton at OpenAI, we have role
 ------------------- |
 [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/)
 
-# Triton Developer Conference Registration Now Closed
+# Triton Developer Conference
+
+Thank you for attending the Triton Developer Conference, both in-person and virtually. Please provide feedback through [this quick survey](https://forms.office.com/r/EBBqWuahis)
+
 The Triton Developer Conference will be held in a hybrid mode at the Microsoft Silicon Valley Campus in Mountain View, California. The conference will be held on September 20th from 10am to 4pm, followed by a reception till 5:30 pm.
 
 Tentative Agenda for the conference (subject to change):
