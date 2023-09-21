@@ -25,10 +25,14 @@ class IncompatibleTypeErrorImpl(Exception):
 # ===----------------------------------------------------------------------===##
 
 def program_id(axis: int, builder: ir.builder) -> tl.tensor:
+    if axis not in (0, 1, 2):
+        raise ValueError(f"program_id axis must be 0, 1, or 2 but got {axis}")
     return tl.tensor(builder.create_get_program_id(axis), tl.int32)
 
 
 def num_programs(axis: int, builder: ir.builder) -> tl.tensor:
+    if axis not in (0, 1, 2):
+        raise ValueError(f"num_programs axis must be 0, 1, or 2 but got {axis}")
     return tl.tensor(builder.create_get_num_programs(axis), tl.int32)
 
 # ===----------------------------------------------------------------------===//
@@ -128,6 +132,8 @@ def add(input: tl.tensor,
     input, other = binary_op_type_checking_impl(input, other, builder, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
+    if input_scalar_ty.is_ptr() and other_scalar_ty.is_ptr():
+        raise ValueError("cannot add pointers together")
 
     # offset + ptr
     # ptr + offset
