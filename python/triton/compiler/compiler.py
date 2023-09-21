@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from collections import namedtuple
 from pathlib import Path
 from typing import Any
@@ -20,15 +19,23 @@ from ..common.build import is_hip
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
-from ..runtime.cache import get_cache_manager
+from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device,
                            get_device_capability, version_key)
-from ..tools.disasm import extract
+from ..tools.disasm import get_sass
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
 from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
                     get_ids_of_tensormaps, parse_tma_info)
+
+
+class LazyDict(dict):
+    def __getitem__(self, key):
+        val = dict.__getitem__(self, key)
+        if callable(val):
+            return val()
+        return val
 
 
 def inline_triton_ir(mod):
@@ -205,7 +212,9 @@ def get_kernel_name(src: str, pattern: str) -> str:
 
 
 def convert_type_repr(x):
-    match = re.search(r'!tt\.ptr<(.*)>', x)
+    # Currently we only capture the pointer type and assume the pointer is on global memory.
+    # TODO: Capture and support shared memory space
+    match = re.search(r'!tt\.ptr<([^,]+)', x)
     if match is not None:
         return '*' + convert_type_repr(match.group(1))
     return x
@@ -229,6 +238,9 @@ def make_hash(fn, arch, env_vars, **kwargs):
         key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{arch}-{env_vars_list}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
+    ignore_version = kwargs.get('ignore_version', False)
+    if (ignore_version):
+        return hashlib.md5((Path(fn).read_text()).encode("utf-8")).hexdigest()
     return hashlib.md5((Path(fn).read_text() + version_key()).encode("utf-8")).hexdigest()
 
 
@@ -239,7 +251,8 @@ def make_hash(fn, arch, env_vars, **kwargs):
 #   (letters, digits, or underscores), and capture it as group 1 (the function name)
 # - (\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\)) : match a pair of parentheses enclosing
 #   zero or more arguments separated by commas, and capture it as group 2 (the argument list)
-mlir_prototype_pattern = r'^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: \S+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*\{\s*$'
+# - (attributes \{[\S\s]+\})? : optionally match attributes enclosed in braces and capture it as group 3
+mlir_prototype_pattern = r"^\s*tt\.func\s+(?:public\s+)?(@\w+)(\((?:%\w+: [\S\s]+(?: \{\S+ = \S+ : \S+\})?(?:, )?)*\))\s*(attributes \{[\S\s]+\})?\s+\{\s*$"
 ptx_prototype_pattern = r"\.(?:visible|extern)\s+\.(?:entry|func)\s+(\w+)\s*\(([^)]*)\)"
 prototype_pattern = {
     "ttir": mlir_prototype_pattern,
@@ -247,7 +260,11 @@ prototype_pattern = {
     "ptx": ptx_prototype_pattern,
 }
 
-mlir_arg_type_pattern = r'%\w+: ([^,^\)\s]+)(?: \{\S+ = \S+ : \S+\})?,?'
+# - ((?:[^,\s<]+|<[^>]+>)+): Capturing group that matches one or more of either:
+#   [^,\s<]+: One or more characters that are not a comma, whitespace, or the < symbol.
+#   |: OR
+#   <[^>]+>: A string that starts with < and ends with >, containing any characters except > in between.
+mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<]+|<[^>]+>)+),?'
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
@@ -388,12 +405,6 @@ def compile(fn, **kwargs):
         add_cuda_stages(arch, extern_libs, stages)
     elif device_type == "hip":
         _device_backend.add_stages(arch, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
-    elif device_type == "xpu":
-        stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
-        stages["llir"] = (lambda path: Path(path).read_text(),
-                          lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
-        _device_backend.add_stages(arch, extern_libs, stages)
     else:
         # pass the user's configuration to the backend device.
         arch["num_warps"] = num_warps
@@ -420,6 +431,7 @@ def compile(fn, **kwargs):
         src = Path(fn).read_text()
         import re
         match = re.search(prototype_pattern[ir_name], src, re.MULTILINE)
+        # TODO: support function attributes at group 3 (e.g., device function)
         name, signature = match.group(1), match.group(2)
         types = re.findall(arg_type_pattern[ir_name], signature)
         if ir_name == 'ttgir':
@@ -433,6 +445,11 @@ def compile(fn, **kwargs):
 
     # create cache manager
     fn_cache_manager = get_cache_manager(make_hash(fn, arch, get_env_vars(), **kwargs))
+    # managers used to dump and override IR for debugging
+    enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
+    fn_override_manager = get_override_manager(make_hash(fn, arch, get_env_vars(), **kwargs, ignore_version=True))
+    fn_dump_manager = get_dump_manager(make_hash(fn, arch, get_env_vars(), **kwargs, ignore_version=True))
+
     # determine name and extension type of provided function
     if isinstance(fn, JITFunction):
         name, ext = fn.__name__, "ast"
@@ -474,7 +491,7 @@ def compile(fn, **kwargs):
     metadata["device_type"] = device_type
 
     first_stage = list(stages.keys()).index(ext)
-    asm = dict()
+    asm = LazyDict()
     module = fn
     # run compilation pipeline  and populate metadata
     for ir_name, (parse, compile_kernel) in list(stages.items())[first_stage:]:
@@ -492,7 +509,11 @@ def compile(fn, **kwargs):
                     metadata_group[extra_file_name] = fn_cache_manager.put(next_module[1], extra_file_name)
                 else:
                     metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
-                    fn_cache_manager.put(next_module, ir_filename)
+                    fn_dump_manager.put(next_module, ir_filename)
+                    if (enable_override and fn_override_manager.has_file(ir_filename)):
+                        print(f"\nOverriding kernel with file {ir_filename}")
+                        full_name = fn_override_manager.get_file(ir_filename)
+                        next_module = parse(full_name)
             else:
                 if ir_name == "amdgcn":
                     extra_file_name = f"{name}.hsaco_path"
@@ -504,6 +525,7 @@ def compile(fn, **kwargs):
 
         if ir_name == "cubin":
             asm[ir_name] = next_module
+            asm["sass"] = lambda: get_sass(next_module)
         elif ir_name == "amdgcn":
             asm[ir_name] = str(next_module[0])
         else:
@@ -656,16 +678,3 @@ class CompiledKernel:
                            self.clusterDims[1], self.clusterDims[2], self.shared, stream, self.cu_function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
         return runner
-
-    def get_sass(self, fun=None):
-        if 'sass' in self.asm:
-            return self.asm['sass']
-        fd, path = tempfile.mkstemp()
-        try:
-            with open(fd, 'wb') as cubin:
-                cubin.write(self.asm['cubin'])
-            self.sass = extract(path, fun)
-        finally:
-            os.remove(path)
-        self.asm['sass'] = self.sass
-        return self.sass

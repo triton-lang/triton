@@ -117,7 +117,8 @@ public:
         op->getLoc(), dotOp.getResult().getType(), _0f);
     auto newDot = rewriter.create<triton::DotOp>(
         op->getLoc(), dotOp.getResult().getType(), dotOp.getOperand(0),
-        dotOp.getOperand(1), _0, dotOp.getAllowTF32());
+        dotOp.getOperand(1), _0, dotOp.getAllowTF32(),
+        dotOp.getMaxNumImpreciseAcc());
     auto newCvt = rewriter.create<triton::gpu::ConvertLayoutOp>(
         op->getLoc(), dstTy, newDot.getResult());
     rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getOperand());
@@ -915,7 +916,7 @@ static void backwardRematerialization(ConvertLayoutOp convertOp) {
 
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
-static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
+static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
   // we don't want to rematerialize any conversion to/from shared
   if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
       triton::gpu::isSharedEncoding(convertOp.getOperand()))
@@ -926,29 +927,34 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
-  auto isExtOp = [](Operation *op) {
-    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp>(op);
+  auto isExtOrBroadcastOp = [](Operation *op) {
+    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp,
+               triton::BroadcastOp, triton::ExpandDimsOp>(op);
   };
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
-  LogicalResult result = getRematerializableSlice(
-      convertOp.getOperand(), targetType.getEncoding(), slice, layout, isExtOp);
+  LogicalResult result =
+      getRematerializableSlice(convertOp.getOperand(), targetType.getEncoding(),
+                               slice, layout, isExtOrBroadcastOp);
   if (result.failed())
     return;
 
-  Operation *extOp = nullptr;
+  Operation *extOrBroadcatOp = nullptr;
   unsigned sliceSize = slice.size();
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
     Operation *op = v.getDefiningOp();
     if (!op)
       continue;
-    if (isExtOp(op)) {
+    if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
+      std::optional<Attribute> srcEncoding = inferSrcEncoding(op, layout[v]);
+      if (!srcEncoding)
+        return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), layout[v], tempSlice, tempLayout);
+          op->getOperand(0), *srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {
@@ -958,24 +964,28 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
       }
       // Only apply it if there is a single ext op otherwise we would have to
       // duplicate the convert.
-      if (extOp != nullptr)
+      if (extOrBroadcatOp != nullptr)
         return;
-      extOp = op;
+      extOrBroadcatOp = op;
     }
   }
 
-  if (extOp == nullptr)
+  if (extOrBroadcatOp == nullptr)
+    return;
+  std::optional<Attribute> srcEncoding =
+      inferSrcEncoding(extOrBroadcatOp, layout[extOrBroadcatOp->getResult(0)]);
+  if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
-  OpBuilder builder(extOp);
-  auto tensorType = extOp->getOperand(0).getType().cast<RankedTensorType>();
-  auto newType =
-      RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(),
-                            layout[extOp->getResult(0)]);
+  OpBuilder builder(extOrBroadcatOp);
+  auto tensorType =
+      extOrBroadcatOp->getOperand(0).getType().cast<RankedTensorType>();
+  auto newType = RankedTensorType::get(
+      tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
-      convertOp.getLoc(), newType, extOp->getOperand(0));
+      convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
   IRMapping mapping;
-  mapping.map(extOp->getOperand(0), newConvertOp.getResult());
+  mapping.map(extOrBroadcatOp->getOperand(0), newConvertOp.getResult());
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp, mapping);
 }
@@ -994,7 +1004,7 @@ static void hoistConvert(ModuleOp module) {
   module.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    hoistConvertOnTopOfExt(convertOp);
+    hoistConvertOnTopOfExtOrBroadcast(convertOp);
   }
 }
 

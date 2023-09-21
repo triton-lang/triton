@@ -10,10 +10,8 @@ We're hiring! If you are interested in working on Triton at OpenAI, we have role
 ------------------- |
 [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/)
 
-# Triton Developer Conference Registration Open
-The Triton Developer Conference will be held in a hybrid mode at the Microsoft Silicon Valley Campus in Mountain View, California. The conference will be held on September 20th from 10am to 4pm, followed by a reception till 5:30 pm. Please use the link below to register to attend either in-person or virtually online.
-
-Registration Link for Triton Developer Conference is [here](https://forms.office.com/r/m4jQXShDts)
+# Triton Developer Conference Registration Now Closed
+The Triton Developer Conference will be held in a hybrid mode at the Microsoft Silicon Valley Campus in Mountain View, California. The conference will be held on September 20th from 10am to 4pm, followed by a reception till 5:30 pm.
 
 Tentative Agenda for the conference (subject to change):
 
@@ -64,12 +62,64 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 
 ```
 git clone https://github.com/openai/triton.git;
-cd triton/python;
-pip install cmake; # build-time dependency
-pip install -e .
+cd triton;
+
+pip install ninja cmake; # build-time dependencies
+pip install -e python
 ```
 
+Or with a virtualenv:
 
+```
+git clone https://github.com/openai/triton.git;
+cd triton;
+
+python -m venv .venv --prompt triton;
+source .venv/bin/activate;
+
+pip install ninja cmake; # build-time dependencies
+pip install -e python
+```
+
+# Building with a custom LLVM
+
+Triton uses LLVM to generate code for GPUs and CPUs.  Normally, the Triton build
+downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
+
+LLVM does not have a stable API, so the Triton build will not work at an
+arbitrary LLVM version.
+
+1. Find the version of LLVM that Triton builds against.  Check `python/setup.py`
+   for a line like
+
+       version = "llvm-17.0.0-c5dede880d17"
+
+   This means that the version of Triton you have builds against
+   [LLVM](https://github.com/llvm/llvm-project) c5dede880d17.
+
+2. `git checkout` LLVM at this revision.  Optionally, make additional
+   modifications to LLVM.
+
+3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
+
+       $ cd $HOME/llvm-project  # your clone of LLVM.
+       $ mkdir build
+       $ cd build
+       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON  ../llvm -DLLVM_ENABLE_PROJECTS="mlir"
+       $ ninja
+
+4. Grab a snack, this will take a while.
+
+5. Build Triton as above, but set the following environment variables.
+
+       # Modify as appropriate to point to your LLVM build.
+       $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
+
+       $ cd <triton install>/python
+       $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
+         LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR \
+         LLVM_SYSPATH=$LLVM_BUILD_DIR \
+         pip install -e python
 
 # Changelog
 

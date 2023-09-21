@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "TypeConverter.h"
+#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -269,7 +270,7 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 }
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, int i, const std::string &shuffleType,
+                            Value val, Value i, const std::string &shuffleType,
                             const std::string &clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
@@ -290,7 +291,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   auto &shfl = builder.create("shfl.sync")->o(shuffleType).o("b32");
   auto *dOpr = builder.newOperand("=r");
   auto *aOpr = builder.newOperand(val, "r");
-  auto *bOpr = builder.newConstantOperand(i);
+  auto *bOpr = builder.newOperand(i, "r");
   auto *cOpr = builder.newConstantOperand(clamp);
   auto *maskOpr = builder.newConstantOperand("0xffffffff");
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
@@ -299,13 +300,24 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
-  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
+  return commonShflSync(loc, rewriter, val, i32_val(i), "bfly", "0x1f");
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return commonShflSync(loc, rewriter, val, i, "up", "0x0");
+  return commonShflSync(loc, rewriter, val, i32_val(i), "up", "0x0");
 }
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i) {
+  return commonShflSync(loc, rewriter, val, i32_val(i), "idx", "0x1f");
+}
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  Value i) {
+  return commonShflSync(loc, rewriter, val, i, "idx", "0x1f");
+}
+
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   PTXBuilder builder;
   auto &mov = builder.create("mov")->o("u32");

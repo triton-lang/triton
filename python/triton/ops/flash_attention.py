@@ -24,6 +24,7 @@ def _fwd_kernel(
     stride_vz, stride_vh, stride_vn, stride_vk,
     stride_oz, stride_oh, stride_om, stride_on,
     Z, H, N_CTX,
+    Z_H_N_CTX,
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
     IS_CAUSAL: tl.constexpr,
@@ -31,27 +32,21 @@ def _fwd_kernel(
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     qvk_offset = off_hz * stride_qh
-    Q_block_ptr = tl.make_block_ptr(
-        base=Q + qvk_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
-        strides=(stride_qm, stride_qk),
-        offsets=(start_m * BLOCK_M, 0),
-        block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
-    )
+    vk_offset = qvk_offset // stride_qm
+
     K_block_ptr = tl.make_block_ptr(
-        base=K + qvk_offset,
-        shape=(BLOCK_DMODEL, N_CTX),
+        base=K,
+        shape=(BLOCK_DMODEL, Z_H_N_CTX),
         strides=(stride_kk, stride_kn),
-        offsets=(0, 0),
+        offsets=(0, vk_offset),
         block_shape=(BLOCK_DMODEL, BLOCK_N),
         order=(0, 1)
     )
     V_block_ptr = tl.make_block_ptr(
-        base=V + qvk_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
+        base=V,
+        shape=(Z_H_N_CTX, BLOCK_DMODEL),
         strides=(stride_vn, stride_vk),
-        offsets=(0, 0),
+        offsets=(vk_offset, 0),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
         order=(1, 0)
     )
@@ -68,7 +63,11 @@ def _fwd_kernel(
     # don't work as expected with `exp` in the loop
     qk_scale = sm_scale * 1.44269504
     # load q: it will stay in SRAM throughout
-    q = tl.load(Q_block_ptr)
+
+    offs_k = tl.arange(0, BLOCK_DMODEL)
+    Q_ptrs = Q + qvk_offset + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
+    q = tl.load(Q_ptrs)
+
     q = (q * qk_scale).to(K.dtype.element_ty)
     lo = 0
     hi = (start_m + 1) * BLOCK_M if IS_CAUSAL else N_CTX
@@ -100,13 +99,14 @@ def _fwd_kernel(
     tl.store(l_ptrs, m_i + tl.math.log2(l_i))
     # write back O
     O_block_ptr = tl.make_block_ptr(
-        base=Out + qvk_offset,
-        shape=(N_CTX, BLOCK_DMODEL),
+        base=Out,
+        shape=(Z_H_N_CTX, BLOCK_DMODEL),
         strides=(stride_om, stride_on),
-        offsets=(start_m * BLOCK_M, 0),
+        offsets=(vk_offset + start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
         order=(1, 0)
     )
+    # O_ptrs = Out + qvk_offset + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
     tl.store(O_block_ptr, acc.to(K.dtype.element_ty))
 
 
@@ -312,6 +312,7 @@ class _attention(torch.autograd.Function):
             v.stride(0), v.stride(1), v.stride(2), v.stride(3),
             o.stride(0), o.stride(1), o.stride(2), o.stride(3),
             q.shape[0], q.shape[1], q.shape[2],
+            q.shape[0] * q.shape[1] * q.shape[2],
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
             IS_CAUSAL=causal,
             num_warps=num_warps,

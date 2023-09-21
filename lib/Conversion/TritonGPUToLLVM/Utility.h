@@ -6,7 +6,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
@@ -328,6 +327,10 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i);
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i);
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  Value i);
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
