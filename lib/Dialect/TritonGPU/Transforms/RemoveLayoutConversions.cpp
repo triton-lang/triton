@@ -929,7 +929,7 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
 
   auto isExtOrBroadcastOp = [](Operation *op) {
     return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp,
-               triton::BroadcastOp>(op);
+               triton::BroadcastOp, triton::ExpandDimsOp>(op);
   };
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
@@ -950,8 +950,11 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
     if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
+      std::optional<Attribute> srcEncoding = inferSrcEncoding(op, layout[v]);
+      if (!srcEncoding)
+        return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), layout[v], tempSlice, tempLayout);
+          op->getOperand(0), *srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {
@@ -969,13 +972,16 @@ static void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp) {
 
   if (extOrBroadcatOp == nullptr)
     return;
+  std::optional<Attribute> srcEncoding =
+      inferSrcEncoding(extOrBroadcatOp, layout[extOrBroadcatOp->getResult(0)]);
+  if (!srcEncoding)
+    return;
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcatOp);
   auto tensorType =
       extOrBroadcatOp->getOperand(0).getType().cast<RankedTensorType>();
-  auto newType =
-      RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(),
-                            layout[extOrBroadcatOp->getResult(0)]);
+  auto newType = RankedTensorType::get(
+      tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
   IRMapping mapping;

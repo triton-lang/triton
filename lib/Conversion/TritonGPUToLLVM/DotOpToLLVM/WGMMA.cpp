@@ -278,6 +278,18 @@ static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
   return newStruct;
 }
 
+static bool isZero(Value v) {
+  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp)
+    return false;
+  if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero();
+  if (auto denseAttr =
+          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
+  return false;
+}
+
 LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
@@ -302,7 +314,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   int M = 4 * instrShape[0];
   int N = instrShape[1];
   int K = instrShape[2];
-
+  bool zeroAcc = isZero(c);
   auto shapePerCTATile = getShapePerCTATile(mmaEncoding);
   int numRepM = ceil<unsigned>(dShapePerCTA[0], shapePerCTATile[0]);
   int numRepN = ceil<unsigned>(dShapePerCTA[1], shapePerCTATile[1]);
@@ -344,7 +356,9 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
         elemTypes.push_back(accEl.getType());
       auto accTy =
           LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
-      Value d = typeConverter->packLLElements(loc, mmaOut, rewriter, accTy);
+      Value d;
+      if (!zeroAcc)
+        d = typeConverter->packLLElements(loc, mmaOut, rewriter, accTy);
       uint32_t numLowPrecisionAcc = 0;
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
