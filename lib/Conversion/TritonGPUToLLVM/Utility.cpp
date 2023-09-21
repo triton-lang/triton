@@ -240,7 +240,7 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred) {
   MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
 
   PTXBuilder builder;
@@ -257,7 +257,7 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   auto ptrTy = ptr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
   auto elemTy = ptrTy.getElementType();
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
 
   const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
 
