@@ -1103,7 +1103,7 @@ struct AtomicRMWOpConversion
         sTy = "b" + sBits;
         break;
       case RMWOp::ADD:
-        sTy = "s" + sBits;
+        sTy = "u" + sBits;
         break;
       case RMWOp::FADD:
         rmwOp = "add";

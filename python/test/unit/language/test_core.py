@@ -1119,8 +1119,11 @@ def test_noinline(mode, device):
     [
         ('add', 'float16', mode, sem),
         ('add', 'uint32', mode, sem), ('add', 'int32', mode, sem), ('add', 'float32', mode, sem),
+        ('add', 'uint64', mode, sem), ('add', 'int64', mode, sem), ('add', 'float64', mode, sem),
         ('max', 'uint32', mode, sem), ('max', 'int32', mode, sem), ('max', 'float32', mode, sem),
+        ('max', 'uint64', mode, sem), ('max', 'int64', mode, sem), ('max', 'float64', mode, sem),
         ('min', 'uint32', mode, sem), ('min', 'int32', mode, sem), ('min', 'float32', mode, sem),
+        ('min', 'uint64', mode, sem), ('min', 'int64', mode, sem), ('min', 'float64', mode, sem),
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
     for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
@@ -1139,6 +1142,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
         pid = tl.program_id(0)
         x = tl.load(X + pid)
         old = GENERATE_TEST_HERE
+        tl.static_assert(old.dtype == x.dtype)
 
     sem_arg = sem if sem is None else f'"{sem}"'
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem={sem_arg})'})

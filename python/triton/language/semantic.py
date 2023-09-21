@@ -1139,13 +1139,20 @@ def atomic_max(ptr: tl.tensor,
     # for float
     # return atomic_smax(i_ptr, i_val) if val >= 0
     # return atomic_umin(i_ptr, i_val) if val < 0
-    i_val = bitcast(val, tl.int32, builder)
-    i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
+    if sca_ty not in {tl.float32, tl.float64}:
+        raise TypeError(f"atomic_max not supported for dtype {sca_ty}")
+
+    itype = tl.int32 if sca_ty == tl.float32 else tl.float64
+    zero = full([], 0.0, sca_ty, builder)
+
+    i_val = bitcast(val, itype, builder)
+    i_ptr = bitcast(ptr, tl.pointer_type(itype, 1), builder)
+    pos = greater_equal(val, zero, builder)
+    neg = less_than(val, zero, builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr.handle, i_val.handle, and_(mask, pos, builder).handle, sem), i_val.type)
     neg_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, i_ptr.handle, i_val.handle, and_(mask, neg, builder).handle, sem), i_val.type)
-    return where(pos, pos_ret, neg_ret, builder)
+    ret = where(pos, pos_ret, neg_ret, builder)
+    return bitcast(ret, sca_ty, builder)
 
 
 def atomic_min(ptr: tl.tensor,
@@ -1175,10 +1182,16 @@ def atomic_min(ptr: tl.tensor,
     # for float
     # return atomic_smin(i_ptr, i_val) if val >= 0
     # return atomic_umax(i_ptr, i_val) if val < 0
-    i_val = bitcast(val, tl.int32, builder)
-    i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
+    if sca_ty not in {tl.float32, tl.float64}:
+        raise TypeError(f"atomic_min not supported for dtype {sca_ty}")
+
+    itype = tl.int32 if sca_ty == tl.float32 else tl.float64
+    zero = full([], 0.0, sca_ty, builder)
+
+    i_val = bitcast(val, itype, builder)
+    i_ptr = bitcast(ptr, tl.pointer_type(itype, 1), builder)
+    pos = greater_equal(val, zero, builder)
+    neg = less_than(val, zero, builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN,
                                                   i_ptr.handle,
                                                   i_val.handle,
@@ -1191,7 +1204,8 @@ def atomic_min(ptr: tl.tensor,
                                                   and_(mask, neg, builder).handle,
                                                   sem),
                         i_val.type)
-    return where(pos, pos_ret, neg_ret, builder)
+    ret = where(pos, pos_ret, neg_ret, builder)
+    return bitcast(ret, sca_ty, builder)
 
 
 def atomic_add(ptr: tl.tensor,
