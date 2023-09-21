@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 
+#include <memory>
 #include <mutex>
 #include <optional>
 
@@ -87,9 +88,9 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
-  llvm::TargetMachine *machine = target->createTargetMachine(
+  std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      std::nullopt, llvm::CodeGenOpt::Aggressive);
+      std::nullopt, llvm::CodeGenOpt::Aggressive)};
   // set data layout
   if (layout.empty())
     module.setDataLayout(machine->createDataLayout());
