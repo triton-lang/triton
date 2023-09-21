@@ -11,13 +11,15 @@ using ::mlir::LLVM::shflIdxSync;
 using ::mlir::LLVM::shflUpSync;
 using ::mlir::LLVM::storeShared;
 
-// Apply the region of the scan op to the acc and cur values and update acc
-// inplace with the result.
-static void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
-                       Value &acc, Value cur) {
-  if (!acc) {
-    acc = cur;
-    return;
+// apply combine region to a and b and return the result. If a or b is null,
+// return the other operand.
+static Value accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
+                        Value a, Value b) {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
   }
   // Create a new copy of the reduce block, and inline it
   Block *currentBlock = rewriter.getBlock();
@@ -25,13 +27,14 @@ static void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
   rewriter.cloneRegionBefore(combineOp, &parent.front());
   auto &newScan = parent.front();
   auto returnOp = dyn_cast<triton::ScanReturnOp>(newScan.getTerminator());
-  llvm::SmallVector<Value> combineArgs = {acc, cur};
+  llvm::SmallVector<Value> combineArgs = {a, b};
   rewriter.inlineBlockBefore(&newScan, &*rewriter.getInsertionPoint(),
                              combineArgs);
   auto results = returnOp.getResult();
-  acc = results[0];
+  Value acc = results[0];
   // Delete the terminator, which is no longer used
   rewriter.eraseOp(returnOp);
+  return acc;
 }
 
 // Scan a contiguous elements within a thread and update `srcValues` in place.
@@ -49,8 +52,8 @@ static void scanThreadContiguousElements(SmallVector<Value> &srcValues,
     unsigned accIndex = (srcIndex % stride) +
                         ((srcIndex / stride) / scanElementsPerThreads) * stride;
 
-    accumulate(rewriter, helper.getCombineOp(), accs[accIndex],
-               srcValues[srcIndex]);
+    accs[accIndex] = accumulate(rewriter, helper.getCombineOp(), accs[accIndex],
+                                srcValues[srcIndex]);
     srcValues[srcIndex] = accs[accIndex];
   }
 }
@@ -75,7 +78,7 @@ static void warpScan(SmallVector<Value> &srcValues,
     for (unsigned i = 1; i <= (scanDim) / 2; i = i << 1) {
       Value shfl = shflUpSync(loc, rewriter, acc, i * threadStride);
       Value tempAcc = acc;
-      accumulate(rewriter, helper.getCombineOp(), tempAcc, shfl);
+      tempAcc = accumulate(rewriter, helper.getCombineOp(), shfl, tempAcc);
       Value mask = icmp_slt(laneIdAxis, i32_val(i));
       acc = select(mask, acc, tempAcc);
     }
@@ -175,14 +178,14 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
         accumulator.maskedAcc = partialReduce;
         continue;
       }
-      accumulate(rewriter, helper.getCombineOp(), accumulator.acc,
-                 partialReduce);
+      accumulator.acc = accumulate(rewriter, helper.getCombineOp(),
+                                   accumulator.acc, partialReduce);
       Value mask = icmp_slt(warpId, i32_val(i + 1));
       accumulator.maskedAcc =
           select(mask, accumulator.maskedAcc, accumulator.acc);
     }
-    Value temp = srcValues[srcIndex];
-    accumulate(rewriter, helper.getCombineOp(), temp, accumulator.maskedAcc);
+    Value temp = accumulate(rewriter, helper.getCombineOp(),
+                            accumulator.maskedAcc, srcValues[srcIndex]);
     if (axisBlockId == 0) {
       // For the first warp and first chunk we don't have anything to
       // accumulate.
@@ -195,7 +198,8 @@ static void AddPartialReduce(SmallVector<Value> &srcValues,
     lastElement = select(maskFirstLane, accumulator.maskedAcc, lastElement);
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
-      accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
+      laneValue =
+          accumulate(rewriter, helper.getCombineOp(), lastElement, laneValue);
       if (axisBlockId == 0) {
         // For the first warp and first chunk we don't have anything to
         // accumulate.
@@ -251,8 +255,8 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     if (axisBlockId == 0) // First chunk and first block
       accumulator = srcValues[srcIndex];
     else
-      accumulate(rewriter, helper.getCombineOp(), srcValues[srcIndex],
-                 accumulator);
+      srcValues[srcIndex] = accumulate(rewriter, helper.getCombineOp(),
+                                       accumulator, srcValues[srcIndex]);
     // Update the rest of the contiguous elements.
     Value lastElement = srcValues[srcIndex];
     if (scanDim > 1) {
@@ -266,7 +270,8 @@ static void AddPartialReduceOneWarp(SmallVector<Value> &srcValues,
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       Value laneValue = srcValues[srcIndex - i * elementStride];
-      accumulate(rewriter, helper.getCombineOp(), laneValue, lastElement);
+      laneValue =
+          accumulate(rewriter, helper.getCombineOp(), lastElement, laneValue);
       if (axisBlockId == 0)
         // For the first warp and first chunk we don't have anything to
         // accumulate.
