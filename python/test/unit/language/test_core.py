@@ -746,7 +746,7 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
 
-    with pytest.raises(triton.CompilationError, match=r"program_id must be in \[0,3\]"):
+    with pytest.raises(triton.CompilationError, match=r"program_id must be 0, 1 or 2 but got 20"):
         _kernel[(1,)](dst)
 
 
