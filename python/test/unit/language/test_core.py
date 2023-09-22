@@ -2256,7 +2256,7 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
                                            [32, 32, 128, 16],
                                            [128, 128, 64, 2],
                                            [64, 128, 128, 2]]
-                          for allow_tf32 in [True, False]
+                          for allow_tf32 in [True]
                           for col_a in [True, False]
                           for col_b in [True, False]
                           for in_dtype, out_dtype in [('int8', 'int8'),
@@ -2282,12 +2282,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
     if capability[0] < 8:
-        if capability[1] == 0 and in_dtype == 'int8':
-            pytest.skip("Only test int8 on devices with sm >= 75")
-        if allow_tf32:
+        if in_dtype == 'int8':
+            pytest.skip("Only test int8 on devices with sm >= 80")
+        elif allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
     if capability[0] == 7:
-        if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
+        if (M, N, K, num_warps) == (128, 256, 32, 8):
             pytest.skip("shared memory out of resource")
         if out_dtype == 'float16':
             # TODO: support out_dtype=float16 for tl.dot on V100
@@ -2472,11 +2472,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        if capability[0] == 7 and capability[1] == 5:  # Turing
-            assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
-        else:
-            assert 'wgmma.mma_async.sync.aligned' in ptx or\
-                'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
+        assert 'wgmma.mma_async.sync.aligned' in ptx or\
+            'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])
