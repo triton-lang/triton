@@ -275,7 +275,7 @@ class dtype:
         return self.name
 
     def __repr__(self):
-        return f'triton.language.{self.name}'
+        return f'triton.language.{str(self)}'
 
 
 class pointer_type(dtype):
