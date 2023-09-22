@@ -368,7 +368,7 @@ def get_dram_gbps(backend=None, device=None):
     return bw_gbps
 
 
-def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None):
+def get_max_tensorcore_tflops(dtype, clock_rate, backend=None, device=None):
     import torch
 
     from .runtime import driver
@@ -378,8 +378,6 @@ def get_max_tensorcore_tflops(dtype, backend=None, device=None, clock_rate=None)
         device = torch.cuda.current_device()
 
     num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4
-    if not clock_rate:
-        clock_rate = driver.utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
     capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         assert dtype == torch.float16
@@ -423,21 +421,6 @@ def cuda_memcheck(**target_kwargs):
     return decorator
 
 
-def nvsmi_attr(attrs):
-    attrs = ",".join(attrs)
-    cmd = [
-        "nvidia-smi",
-        "-i",
-        "0",
-        "--query-gpu=" + attrs,
-        "--format=csv,noheader,nounits",
-    ]
-    out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(",")
-    ret = [int(x) for x in ret]
-    return ret
-
-
 @contextmanager
 def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
     try:
@@ -458,8 +441,8 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
                 f"--lock-memory-clocks={ref_mem_clock},{ref_mem_clock}",
             ]
         )
-        cur_sm_clock = nvsmi_attr(["clocks.current.sm"])[0]
-        cur_mem_clock = nvsmi_attr(["clocks.current.memory"])[0]
+        cur_sm_clock = nvsmi(["clocks.current.sm"])[0]
+        cur_mem_clock = nvsmi(["clocks.current.memory"])[0]
         assert abs(cur_sm_clock - ref_sm_clock) < 10, f"GPU SMs must run at {ref_sm_clock} MHz"
         assert abs(cur_mem_clock - ref_mem_clock) < 10, f"GPU SMs must run at {ref_mem_clock} MHz"
         tflops = 1e-6 * 2 * 108 * 4 * 256 * ref_sm_clock
@@ -471,7 +454,7 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
         subprocess.check_output(["nvidia-smi", "-i", "0", "-rmc"])
 
 
-def get_max_simd_tflops(dtype, backend=None, device=None):
+def get_max_simd_tflops(dtype, clock_rate, backend=None, device=None):
     import torch
 
     from .runtime import driver
@@ -481,7 +464,6 @@ def get_max_simd_tflops(dtype, backend=None, device=None):
         device = torch.cuda.current_device()
 
     num_subcores = driver.utils.get_device_properties(device)["multiprocessor_count"] * 4
-    clock_rate = driver.utils.get_device_properties(device)["sm_clock_rate"]  # in kHz
     capability = torch.cuda.get_device_capability()
     if capability[0] < 8:
         if dtype == torch.float32:

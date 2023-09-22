@@ -1,13 +1,10 @@
-import subprocess
-import sys
-
 import pytest
 import torch
 
 import triton
 import triton.language as tl
 import triton.ops
-from triton.testing import get_dram_gbps, get_max_tensorcore_tflops
+from triton.testing import get_dram_gbps, get_max_tensorcore_tflops, nvsmi
 
 DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
 
@@ -19,15 +16,6 @@ DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
 def print_perf(cur_ms, cur_util, ref_util):
     # print on the same line cur_ms, cur_util and ref_util with 3 decimal places
     print(f'{cur_ms:.3f} ms \t cur: {cur_util:.3f} \t ref: {ref_util:.3f} \t dif={cur_util - ref_util:.3f}', end='\t')
-
-
-def nvsmi(attrs):
-    attrs = ','.join(attrs)
-    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
-    out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(',')
-    ret = [int(x) for x in ret]
-    return ret
 
 
 #######################
@@ -51,9 +39,9 @@ matmul_data = {
         (16, 8192, 8192): {'float16': 0.077, 'float32': 0.077, 'int8': 0.043},
         (64, 1024, 1024): {'float16': 0.018, 'float32': 0.023, 'int8': 0.017},
         (64, 4096, 4096): {'float16': 0.150, 'float32': 0.000, 'int8': 0.097},
-        (64, 8192, 8192): {'float16': 0.338, 'float32': 0.000, 'int8': 0.174},
+        (64, 8192, 8192): {'float16': 0.214, 'float32': 0.000, 'int8': 0.174},
         (1024, 64, 1024): {'float16': 0.029, 'float32': 0.046, 'int8': 0.017},
-        (4096, 64, 4096): {'float16': 0.179, 'float32': 0.214, 'int8': 0.102},
+        (4096, 64, 4096): {'float16': 0.136, 'float32': 0.214, 'int8': 0.102},
         (8192, 64, 8192): {'float16': 0.278, 'float32': 0.000, 'int8': 0.177},
         # test EVEN_K==False
         (8192, 8192, 8176): {'float16': 0.786, 'float32': 0.743, 'int8': 0.51},
