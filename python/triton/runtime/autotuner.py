@@ -96,7 +96,7 @@ class Autotuner(KernelInterface):
                 key_values.append(kwargs[name])
             key = tuple(key_values)
 
-        return self.cache[key] if key in self.cache else Config()
+        return self.cache[key] if key in self.cache else Config({})
 
 
     def run(self, *args, **kwargs):
