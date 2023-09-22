@@ -25,10 +25,14 @@ class IncompatibleTypeErrorImpl(Exception):
 # ===----------------------------------------------------------------------===##
 
 def program_id(axis: int, builder: ir.builder) -> tl.tensor:
+    if axis not in (0, 1, 2):
+        raise ValueError(f"program_id axis must be 0, 1, or 2 but got {axis}")
     return tl.tensor(builder.create_get_program_id(axis), tl.int32)
 
 
 def num_programs(axis: int, builder: ir.builder) -> tl.tensor:
+    if axis not in (0, 1, 2):
+        raise ValueError(f"num_programs axis must be 0, 1, or 2 but got {axis}")
     return tl.tensor(builder.create_get_num_programs(axis), tl.int32)
 
 # ===----------------------------------------------------------------------===//
@@ -128,6 +132,8 @@ def add(input: tl.tensor,
     input, other = binary_op_type_checking_impl(input, other, builder, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
+    if input_scalar_ty.is_ptr() and other_scalar_ty.is_ptr():
+        raise ValueError("cannot add pointers together")
 
     # offset + ptr
     # ptr + offset
@@ -1139,13 +1145,20 @@ def atomic_max(ptr: tl.tensor,
     # for float
     # return atomic_smax(i_ptr, i_val) if val >= 0
     # return atomic_umin(i_ptr, i_val) if val < 0
-    i_val = bitcast(val, tl.int32, builder)
-    i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
+    if sca_ty not in {tl.float32, tl.float64}:
+        raise TypeError(f"atomic_max not supported for dtype {sca_ty}")
+
+    itype = tl.int32 if sca_ty == tl.float32 else tl.float64
+    zero = full([], 0.0, sca_ty, builder)
+
+    i_val = bitcast(val, itype, builder)
+    i_ptr = bitcast(ptr, tl.pointer_type(itype, 1), builder)
+    pos = greater_equal(val, zero, builder)
+    neg = less_than(val, zero, builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr.handle, i_val.handle, and_(mask, pos, builder).handle, sem), i_val.type)
     neg_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, i_ptr.handle, i_val.handle, and_(mask, neg, builder).handle, sem), i_val.type)
-    return where(pos, pos_ret, neg_ret, builder)
+    ret = where(pos, pos_ret, neg_ret, builder)
+    return bitcast(ret, sca_ty, builder)
 
 
 def atomic_min(ptr: tl.tensor,
@@ -1175,10 +1188,16 @@ def atomic_min(ptr: tl.tensor,
     # for float
     # return atomic_smin(i_ptr, i_val) if val >= 0
     # return atomic_umax(i_ptr, i_val) if val < 0
-    i_val = bitcast(val, tl.int32, builder)
-    i_ptr = bitcast(ptr, tl.pointer_type(tl.int32, 1), builder)
-    pos = greater_equal(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
-    neg = less_than(val, tl.tensor(builder.get_fp32(0), sca_ty), builder)
+    if sca_ty not in {tl.float32, tl.float64}:
+        raise TypeError(f"atomic_min not supported for dtype {sca_ty}")
+
+    itype = tl.int32 if sca_ty == tl.float32 else tl.float64
+    zero = full([], 0.0, sca_ty, builder)
+
+    i_val = bitcast(val, itype, builder)
+    i_ptr = bitcast(ptr, tl.pointer_type(itype, 1), builder)
+    pos = greater_equal(val, zero, builder)
+    neg = less_than(val, zero, builder)
     pos_ret = tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.MIN,
                                                   i_ptr.handle,
                                                   i_val.handle,
@@ -1191,7 +1210,8 @@ def atomic_min(ptr: tl.tensor,
                                                   and_(mask, neg, builder).handle,
                                                   sem),
                         i_val.type)
-    return where(pos, pos_ret, neg_ret, builder)
+    ret = where(pos, pos_ret, neg_ret, builder)
+    return bitcast(ret, sca_ty, builder)
 
 
 def atomic_add(ptr: tl.tensor,
@@ -1311,6 +1331,8 @@ def dot(lhs: tl.tensor,
         assert lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
+    elif out_dtype.is_bf16():
+        raise ValueError("out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`")
     elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
         _0 = builder.get_fp32(0)
         ret_scalar_ty = tl.float32
@@ -1568,6 +1590,8 @@ def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: 
 
 
 def _convert_elem_to_ir_value(builder, elem, require_i64):
+    if isinstance(elem, int):
+        elem = tl.constexpr(elem)
     if isinstance(elem, tl.constexpr):
         return builder.get_int64(elem.value) if require_i64 else builder.get_int32(elem.value)
     elif isinstance(elem, tl.tensor):

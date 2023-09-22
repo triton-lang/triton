@@ -746,7 +746,7 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
 
-    with pytest.raises(triton.CompilationError, match=r"program_id must be in \[0,3\]"):
+    with pytest.raises(triton.CompilationError, match=r"program_id axis must be 0, 1, or 2 but got 20"):
         _kernel[(1,)](dst)
 
 
@@ -1119,8 +1119,11 @@ def test_noinline(mode, device):
     [
         ('add', 'float16', mode, sem),
         ('add', 'uint32', mode, sem), ('add', 'int32', mode, sem), ('add', 'float32', mode, sem),
+        ('add', 'uint64', mode, sem), ('add', 'int64', mode, sem), ('add', 'float64', mode, sem),
         ('max', 'uint32', mode, sem), ('max', 'int32', mode, sem), ('max', 'float32', mode, sem),
+        ('max', 'uint64', mode, sem), ('max', 'int64', mode, sem), ('max', 'float64', mode, sem),
         ('min', 'uint32', mode, sem), ('min', 'int32', mode, sem), ('min', 'float32', mode, sem),
+        ('min', 'uint64', mode, sem), ('min', 'int64', mode, sem), ('min', 'float64', mode, sem),
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
     for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
@@ -1139,6 +1142,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
         pid = tl.program_id(0)
         x = tl.load(X + pid)
         old = GENERATE_TEST_HERE
+        tl.static_assert(old.dtype == x.dtype)
 
     sem_arg = sem if sem is None else f'"{sem}"'
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem={sem_arg})'})
@@ -1712,8 +1716,14 @@ scan_configs = [
     for type in ['int32', 'float32']
     for axis in [1, 0]
     for shape in scan2d_shapes
-    for op in ['cumsum', 'cumprod']
+    for op in ['cumsum', 'cumprod', 'get_first_element']
 ]
+
+
+@triton.jit
+# trivial associative but not commutative function
+def get_first_element(a, b):
+    return a
 
 
 @pytest.mark.parametrize("op, dtype_str, shape, axis, num_warps", scan_configs)
@@ -1731,15 +1741,26 @@ def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
         z = GENERATE_TEST_HERE
         tl.store(Z + range_m[:, None] * BLOCK_N + range_n[None, :], z)
 
-    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis={axis})'})
+    if op == 'cumsum' or op == 'cumprod':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{op}(x, axis={axis})'})
+    else:
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.associative_scan(x, axis={axis}, combine_fn={op})'})
     # input
     rs = RandomState(17)
     x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
     z = np.empty_like(x)
     x_tri = to_triton(x, device=device)
-    numpy_op = {'cumsum': np.cumsum, 'cumprod': np.cumprod}[op]
-    z_dtype_str = dtype_str
-    z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+    if op == 'cumsum' or op == 'cumprod':
+        numpy_op = {'cumsum': np.cumsum, 'cumprod': np.cumprod}[op]
+        z_dtype_str = dtype_str
+        z_ref = numpy_op(x, axis=axis).astype(getattr(np, z_dtype_str))
+    else:
+        assert op == 'get_first_element'
+        z_ref = x
+        if axis == 0:
+            z_ref[1:] = x[0]
+        else:
+            z_ref[:, 1:] = x[:, 0:1]
     # triton result
     z_tri = to_triton(z, device=device)
     kernel[(1,)](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
@@ -1831,7 +1852,8 @@ layouts = [
     BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 4], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
-    MmaLayout(version=(2, 0), warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8])
+    MmaLayout(version=(2, 0), warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
+    MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 16, 16]),
 ]
 
 
@@ -2234,7 +2256,7 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
                                            [32, 32, 128, 16],
                                            [128, 128, 64, 2],
                                            [64, 128, 128, 2]]
-                          for allow_tf32 in [True]
+                          for allow_tf32 in [True, False]
                           for col_a in [True, False]
                           for col_b in [True, False]
                           for in_dtype, out_dtype in [('int8', 'int8'),
@@ -2260,12 +2282,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
     if capability[0] < 8:
-        if in_dtype == 'int8':
-            pytest.skip("Only test int8 on devices with sm >= 80")
-        elif allow_tf32:
+        if capability[1] == 0 and in_dtype == 'int8':
+            pytest.skip("Only test int8 on devices with sm >= 75")
+        if allow_tf32:
             pytest.skip("Only test tf32 on devices with sm >= 80")
     if capability[0] == 7:
-        if (M, N, K, num_warps) == (128, 256, 32, 8):
+        if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
             pytest.skip("shared memory out of resource")
         if out_dtype == 'float16':
             # TODO: support out_dtype=float16 for tl.dot on V100
@@ -2421,7 +2443,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if epilogue == 'chain-dot':
         z_ref = np.matmul(z_ref, w)
     # compare
-    # print(z_ref[:,0], z_tri[:,0])
     if in_dtype == 'float32':
         # XXX: Somehow there's a larger difference when we use float32
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
@@ -2451,8 +2472,11 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        assert 'wgmma.mma_async.sync.aligned' in ptx or\
-            'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
+        if capability[0] == 7 and capability[1] == 5:  # Turing
+            assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
+        else:
+            assert 'wgmma.mma_async.sync.aligned' in ptx or\
+                'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])

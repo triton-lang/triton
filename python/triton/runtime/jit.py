@@ -14,6 +14,7 @@ from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union,
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, path_to_ptxas
 from ..language.core import dtype
+from .interpreter import InterpretedFunction
 
 TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRITON_VERSION = "2.1.0"
@@ -269,10 +270,6 @@ class JITFunction(KernelInterface[T]):
         for v in list(tys.values()):
             tys[v] = v
         return key if isinstance(key, str) else f"*{tys[dtype_str]}"
-
-    def _make_signature(self, sig_key):
-        signature = ",".join([self._type_of(k) for i, k in enumerate(sig_key)])
-        return signature
 
     def _make_constants(self, constexpr_key):
         constants = dict(zip(self.constexprs, constexpr_key))
@@ -568,7 +565,6 @@ def jit(
     do_not_specialize: Optional[Iterable[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-    interpret: Optional[bool] = None,
 ) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
@@ -590,9 +586,8 @@ def jit(
 
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
-        if interpret:
-            from ..interpreter.interpreter import GridSelector
-            return GridSelector(fn)
+        if os.getenv("TRITON_INTERPRET", "0") == "1":
+            return InterpretedFunction(fn)
         else:
             return JITFunction(
                 fn,

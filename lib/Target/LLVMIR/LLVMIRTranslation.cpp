@@ -122,12 +122,14 @@ makeOptimizingPipeline(unsigned optLevel, unsigned sizeLevel,
     pb.crossRegisterProxies(lam, fam, cgam, mam);
 
     ModulePassManager mpm;
-    llvm::FunctionPassManager fpm;
-    // Triton generates large structure of scalars which may pessimise
-    // optimizations, we run a pass to break up phi of struct to make sure all
-    // the struct are removed for the following passes.
-    fpm.addPass(BreakStructPhiNodesPass());
-    mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
+    pb.registerVectorizerStartEPCallback(
+        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+          // Triton generates large structure of scalars which may pessimise
+          // optimizations, we run a pass to break up phi of struct to make sure
+          // all the struct are removed for the following passes.
+          fpm.addPass(BreakStructPhiNodesPass());
+          fpm.addPass(InstCombinePass());
+        });
     mpm.addPass(pb.buildPerModuleDefaultPipeline(*ol));
     mpm.run(*m, mam);
     return Error::success();

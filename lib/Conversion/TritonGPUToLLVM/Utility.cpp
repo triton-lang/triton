@@ -240,7 +240,7 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred) {
   MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
 
   PTXBuilder builder;
@@ -257,7 +257,7 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   auto ptrTy = ptr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
   auto elemTy = ptrTy.getElementType();
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
 
   const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
 
@@ -270,7 +270,7 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 }
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, int i, const std::string &shuffleType,
+                            Value val, Value i, const std::string &shuffleType,
                             const std::string &clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
@@ -291,7 +291,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   auto &shfl = builder.create("shfl.sync")->o(shuffleType).o("b32");
   auto *dOpr = builder.newOperand("=r");
   auto *aOpr = builder.newOperand(val, "r");
-  auto *bOpr = builder.newConstantOperand(i);
+  auto *bOpr = builder.newOperand(i, "r");
   auto *cOpr = builder.newConstantOperand(clamp);
   auto *maskOpr = builder.newConstantOperand("0xffffffff");
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
@@ -300,13 +300,24 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
-  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
+  return commonShflSync(loc, rewriter, val, i32_val(i), "bfly", "0x1f");
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return commonShflSync(loc, rewriter, val, i, "up", "0x0");
+  return commonShflSync(loc, rewriter, val, i32_val(i), "up", "0x0");
 }
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i) {
+  return commonShflSync(loc, rewriter, val, i32_val(i), "idx", "0x1f");
+}
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  Value i) {
+  return commonShflSync(loc, rewriter, val, i, "idx", "0x1f");
+}
+
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   PTXBuilder builder;
   auto &mov = builder.create("mov")->o("u32");
