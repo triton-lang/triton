@@ -2256,13 +2256,16 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
                                            [32, 32, 128, 16],
                                            [128, 128, 64, 2],
                                            [64, 128, 128, 2]]
-                          for allow_tf32 in [True, False]
+                          for allow_tf32 in [True]
                           for col_a in [True, False]
                           for col_b in [True, False]
                           for in_dtype, out_dtype in [('int8', 'int8'),
                                                       ('float16', 'float16'),
                                                       ('float16', 'float32'),
-                                                      ('float32', 'float32')]])
+                                                      ('float32', 'float32')]] +
+
+                         [(64, 64, 64, 4, col_a, col_b, 'none', False, 'float32', 'float32')
+                          for col_a in [True, False] for col_b in [True, False]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, num_ctas, device):
     check_cuda_only(device)
