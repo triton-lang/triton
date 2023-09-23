@@ -295,7 +295,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   auto *cOpr = builder.newConstantOperand(clamp);
   auto *maskOpr = builder.newConstantOperand("0xffffffff");
   shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
-  return builder.launch(rewriter, loc, val.getType(), false);
+  return builder.launch(rewriter, loc, val.getType());
 }
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
