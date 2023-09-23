@@ -231,6 +231,28 @@ public:
   }
 };
 
+struct MMAV3UseRegOperand : public OpRewritePattern<triton::DotOp> {
+  using OpRewritePattern<triton::DotOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::DotOp dotOp,
+                                PatternRewriter &rewriter) const override {
+    auto convertLhs =
+        dotOp.getOperand(0).getDefiningOp<triton::gpu::ConvertLayoutOp>();
+    if (!convertLhs)
+      return failure();
+    auto getEncoding = [](Value v) {
+      return v.getType().cast<RankedTensorType>().getEncoding();
+    };
+    auto srcEncoding =
+        getEncoding(convertLhs.getSrc()).dyn_cast<MmaEncodingAttr>();
+    if (!srcEncoding || srcEncoding.getVersionMajor() != 3 ||
+        srcEncoding != getEncoding(dotOp.getResult()))
+      return failure();
+    rewriter.updateRootInPlace(
+        dotOp, [&]() { dotOp.setOperand(0, convertLhs.getSrc()); });
+    return success();
+  }
+};
 } // namespace
 
 #define GEN_PASS_CLASSES
@@ -255,6 +277,7 @@ public:
     if (triton::gpu::TritonGPUDialect::getComputeCapability(m) >= 80)
       patterns.add<MoveOpAfterLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
+    patterns.add<MMAV3UseRegOperand>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }

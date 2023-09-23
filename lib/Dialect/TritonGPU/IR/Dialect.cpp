@@ -1473,7 +1473,8 @@ struct TritonGPUInferLayoutInterface
     auto mmaRetEncoding = retEncoding.dyn_cast<MmaEncodingAttr>();
     if (mmaRetEncoding && mmaRetEncoding.isHopper()) {
       // TODO: support gmma when A/B does not reside in shared memory
-      if (!operandEncoding.isa<SharedEncodingAttr>())
+      if (!operandEncoding.isa<SharedEncodingAttr>() &&
+          !(opIdx == 0 && operandEncoding == mmaRetEncoding))
         return emitOptionalError(
             location, "unexpected operand layout for MmaEncodingAttr v3");
     } else if (auto dotOpEnc =
