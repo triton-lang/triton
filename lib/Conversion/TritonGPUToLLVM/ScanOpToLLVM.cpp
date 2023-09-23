@@ -77,8 +77,7 @@ static void warpScan(SmallVector<Value> &srcValues,
     Value acc = srcValues[srcIndex];
     for (unsigned i = 1; i <= (scanDim) / 2; i = i << 1) {
       Value shfl = shflUpSync(loc, rewriter, acc, i * threadStride);
-      Value tempAcc = acc;
-      tempAcc = accumulate(rewriter, helper.getCombineOp(), shfl, tempAcc);
+      Value tempAcc = accumulate(rewriter, helper.getCombineOp(), shfl, acc);
       Value mask = icmp_slt(laneIdAxis, i32_val(i));
       acc = select(mask, acc, tempAcc);
     }
@@ -399,7 +398,6 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto input = adaptor.getOperands()[0];
   auto type = op.getOperand(0).getType().cast<RankedTensorType>();
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
-  auto axisNumThreads = helper.getAxisNumThreadsPerWarpWithUniqueData();
   warpIdAxis = urem(warpIdAxis, i32_val(axisNumWarps));
   SmallVector<Value> srcValues =
       getTypeConverter()->unpackLLElements(loc, input, rewriter, type);
