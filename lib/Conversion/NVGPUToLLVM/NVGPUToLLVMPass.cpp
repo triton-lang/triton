@@ -128,7 +128,8 @@ public:
         assert(val.getType().getIntOrFloatBitWidth() <=
                    ty.getIntOrFloatBitWidth() &&
                "Cannot convert to a smaller type");
-        return zext(ty, val);
+        if (val.getType().getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
+          return zext(ty, val);
       }
     }
     return val;
@@ -731,7 +732,7 @@ public:
       operandsAndConstraints.push_back({opC, "0"});
 
     if (structTypeA) {
-      operandsAndConstraints.push_back({opA, "f"});
+      operandsAndConstraints.push_back({opA, "r"});
     } else {
       operandsAndConstraints.push_back({opA, "l"});
     }
@@ -820,8 +821,7 @@ public:
 
     // Operand A
     if (structTypeA) {
-      uint32_t numARegs = m * k / 128;
-      assert(numARegs == structTypeA.getBody().size());
+      uint32_t numARegs = structTypeA.getBody().size();
       args += "{";
       for (uint32_t i = 0; i < numARegs; ++i) {
         args +=
@@ -844,8 +844,11 @@ public:
       args += ", 1, 1";
 
     // Push `trans-a` and `trans-b` args if needed (determined as constant)
-    if (needTransArgs)
-      args += ", " + std::to_string(transA) + ", " + std::to_string(transB);
+    if (needTransArgs) {
+      if (!structTypeA)
+        args += ", " + std::to_string(transA);
+      args += ", " + std::to_string(transB);
+    }
 
     auto ptxAsm = "wgmma.mma_async.sync.aligned"
                   ".m" +

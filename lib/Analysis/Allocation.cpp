@@ -96,6 +96,8 @@ SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
   auto repShape = getRepShapeForCvtLayout(op);
+  if (repShape.empty())
+    return repShape;
 
   auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
