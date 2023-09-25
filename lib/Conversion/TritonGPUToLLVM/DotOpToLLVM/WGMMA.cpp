@@ -470,9 +470,10 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
   auto ATensorTy = A.getType().cast<RankedTensorType>();
   auto BTensorTy = B.getType().cast<RankedTensorType>();
 
-  assert(ATensorTy.getEncoding().isa<SharedEncodingAttr>() &&
-         BTensorTy.getEncoding().isa<SharedEncodingAttr>() &&
-         "Both $a and %b should be Shared layout.");
+  assert(ATensorTy.getEncoding().isa<SharedEncodingAttr>() ||
+         ATensorTy.getEncoding().isa<DotOperandEncodingAttr>());
+  assert(BTensorTy.getEncoding().isa<SharedEncodingAttr>() &&
+         "Operand B should use Shared layout.");
 
   Value llA, llB, llC;
   llA = adaptor.getA();
