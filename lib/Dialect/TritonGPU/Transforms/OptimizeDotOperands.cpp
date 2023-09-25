@@ -243,13 +243,27 @@ struct MMAV3UseRegOperand : public OpRewritePattern<triton::DotOp> {
     auto getEncoding = [](Value v) {
       return v.getType().cast<RankedTensorType>().getEncoding();
     };
+    if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
+      return failure();
     auto srcEncoding =
         getEncoding(convertLhs.getSrc()).dyn_cast<MmaEncodingAttr>();
     if (!srcEncoding || srcEncoding.getVersionMajor() != 3 ||
         srcEncoding != getEncoding(dotOp.getResult()))
       return failure();
-    rewriter.updateRootInPlace(
-        dotOp, [&]() { dotOp.setOperand(0, convertLhs.getSrc()); });
+    // We currently only support convert from f16 mma to f16 dot operand as the
+    // other types require shuffling data across threads.
+    // TODO: extend it to more types.
+    auto srcType = convertLhs.getSrc().getType().cast<RankedTensorType>();
+    if (!srcType.getElementType().isF16())
+      return failure();
+    auto dotOperandEncoding =
+        DotOperandEncodingAttr::get(dotOp.getContext(), 0, srcEncoding, 0);
+    auto newType = RankedTensorType::get(
+        srcType.getShape(), srcType.getElementType(), dotOperandEncoding);
+    Value newOperand = rewriter.create<ConvertLayoutOp>(dotOp.getLoc(), newType,
+                                                        convertLhs.getSrc());
+    rewriter.updateRootInPlace(dotOp,
+                               [&]() { dotOp.setOperand(0, newOperand); });
     return success();
   }
 };

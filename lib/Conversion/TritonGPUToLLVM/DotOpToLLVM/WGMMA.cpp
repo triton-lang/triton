@@ -444,8 +444,7 @@ LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto BTensorTy = B.getType().cast<RankedTensorType>();
 
   assert(ATensorTy.getEncoding().isa<SharedEncodingAttr>() ||
-         ATensorTy.getEncoding() ==
-             op.getType().cast<RankedTensorType>().getEncoding());
+         ATensorTy.getEncoding().isa<DotOperandEncodingAttr>());
   assert(BTensorTy.getEncoding().isa<SharedEncodingAttr>() &&
          "Operand B should use Shared layout.");
 
