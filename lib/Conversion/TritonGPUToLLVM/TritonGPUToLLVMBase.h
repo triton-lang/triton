@@ -1190,16 +1190,18 @@ private:
 
     auto tensorShape = type.getShape();
     SmallVector<SmallVector<unsigned>> offsets;
-    auto shapePerCta = getShapePerCTA(mfmaLayout, tensorShape);
+    auto shapePerCTA = getShapePerCTA(mfmaLayout, tensorShape);
+    auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
-    SmallVector<unsigned> numCTAPerDim(2);
+    SmallVector<unsigned> numWarpsPerDim(2);
     for (unsigned d = 0; d < 2; ++d) {
-      unsigned inPerCTA = std::min<unsigned>(tensorShape[d], shapePerCta[d]);
-      numCTAPerDim[d] = ceil<unsigned>(tensorShape[d], inPerCTA);
+      unsigned inPerCTA = std::min<unsigned>(tensorShape[d], shapePerCTA[d]);
+      unsigned inPerWarp = ceil<unsigned>(inPerCTA, warpsPerCTA[d]);
+      numWarpsPerDim[d] = ceil<unsigned>(inPerWarp, mfmaLayout.getNonKDim());
     }
 
-    for (unsigned i = 0; i < numCTAPerDim[0]; ++i) {
-      for (unsigned j = 0; j < numCTAPerDim[1]; ++j) {
+    for (unsigned i = 0; i < numWarpsPerDim[0]; ++i) {
+      for (unsigned j = 0; j < numWarpsPerDim[1]; ++j) {
         emitMfmaOffsetForCTA(mfmaLayout, offsets, i, j);
       }
     }
