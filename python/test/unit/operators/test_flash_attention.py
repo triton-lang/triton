@@ -18,13 +18,6 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     if enable_tma in ["on", "true", "1"]:
         if dtype == torch.bfloat16:
             pytest.skip('bfloat16 tma not support currently')
-        if '-'.join(map(str, [seq_par, causal, Z, H, N_CTX, D_HEAD])) in [
-            "True-True-2-4-512-16",
-            "True-True-2-4-512-32",
-            "True-False-2-4-512-16",
-            "True-False-2-4-512-32",
-        ]:
-            pytest.skip('backward ref check failed')
 
     capability = torch.cuda.get_device_capability()
     interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]
