@@ -3,44 +3,24 @@
 using namespace mlir;
 using namespace mlir::triton;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using namespace std;
 
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 
-const std::string Fp16_to_Fp8E5M2(bool has_minx2) {
-  if (has_minx2) {
-    return
-      "{ \n"
-      "cvt.rn.satfinite.e5m2x2.f16x2 $0, $1; \n"
-      "}";
-  } else {
-    return
-      "{                            \n"
-      ".reg .b32 a<2>;              \n"
-      "and.b32 a0, $1, 0xfffefffe;  \n"   // a0 &= 0xfffefffe
-      "and.b32 a1, $2, 0xfffefffe;  \n"   // (strip lowest bit)
-      "add.u32 a0, a0, 0x00800080;  \n"   // a0 += 0x00800080
-      "add.u32 a1, a1, 0x00800080;  \n"   // (round to nearest)
-      "prmt.b32 $0, a0, a1, 0x7531; \n\t" // output = a1a0
-      "}";
-  }
-}
+const std::string Fp16_to_Fp8E5M2 =
+    "{                            \n"
+    ".reg .b32 a<2>;              \n"
+    "and.b32 a0, $1, 0xfffefffe;  \n"   // a0 &= 0xfffefffe
+    "and.b32 a1, $2, 0xfffefffe;  \n"   // (strip lowest bit)
+    "add.u32 a0, a0, 0x00800080;  \n"   // a0 += 0x00800080
+    "add.u32 a1, a1, 0x00800080;  \n"   // (round to nearest)
+    "prmt.b32 $0, a0, a1, 0x7531; \n\t" // output = a1a0
+    "}";
 
-const std::string Fp8E5M2_to_Fp16(bool has_minx2) {
-  if (has_minx2) {
-    return
-      "{ \n"
-      "cvt.rn.f16x2.e5m2x2 $0, $1; \n"
-      "}";
-  } else {
-    return
-      "{                           \n"
-      "prmt.b32 $0, 0, $2, 0x5140; \n\t"
-      "prmt.b32 $1, 0, $2, 0x7362; \n\t"
-      "}";
-  }
-}
+const std::string Fp8E5M2_to_Fp16 = "{                           \n"
+                                    "prmt.b32 $0, 0, $2, 0x5140; \n\t"
+                                    "prmt.b32 $1, 0, $2, 0x7362; \n\t"
+                                    "}";
 
 const std::string Fp8E5M2_to_Bf16 =
     "{                                      \n"
@@ -365,7 +345,8 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
   ConverterT converter =
       [ptxAsm, inType, outType, inVecWidthBits,
        outVecWidthBits](Location loc, ConversionPatternRewriter &rewriter,
-                        const SmallVector<Value> &v, size_t numElements) -> SmallVector<Value> {
+                        const SmallVector<Value> &v,
+                        size_t numElements) -> SmallVector<Value> {
     assert(numElements == 4 || numElements == 2 && "invalid vector size");
 
     auto ctx = rewriter.getContext();
@@ -380,8 +361,9 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
         inPacked[i / inVecWidth] = insert_element(
             inVecTy, inPacked[i / inVecWidth], v[i], i32_val(i % inVecWidth));
       } else {
-        inPacked[i / inVecWidth] = insert_element(
-            inVecTy, inPacked[i / inVecWidth], undef(inType), i32_val(i % inVecWidth));
+        inPacked[i / inVecWidth] =
+            insert_element(inVecTy, inPacked[i / inVecWidth], undef(inType),
+                           i32_val(i % inVecWidth));
       }
     }
     for (size_t i = 0; i < inPacked.size(); i++)
@@ -599,12 +581,12 @@ struct FpToFpOpConversion
         {{F8E4M3B15TyID, F16TyID}, Fp8E4M3B15_to_Fp16},
         {{F8E4M3FNTyID, F16TyID}, Fp8E4M3B15x4_to_Fp16},
         {{F8E4M3TyID, F16TyID}, Fp8E4M3Nv_to_Fp16},
-        {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16(computeCapability >= 90)},
+        {{F8E5M2TyID, F16TyID}, Fp8E5M2_to_Fp16},
         // F16 -> F8
         {{F16TyID, F8E4M3B15TyID}, Fp16_to_Fp8E4M3B15(computeCapability >= 80)},
         {{F16TyID, F8E4M3FNTyID}, Fp16_to_Fp8E4M3B15x4},
         {{F16TyID, F8E4M3TyID}, Fp16_to_Fp8E4M3Nv},
-        {{F16TyID, F8E5M2TyID}, Fp16_to_Fp8E5M2(computeCapability >= 90)},
+        {{F16TyID, F8E5M2TyID}, Fp16_to_Fp8E5M2},
         // F8 -> BF16
         {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16},
         // BF16 -> F8
@@ -612,11 +594,11 @@ struct FpToFpOpConversion
     };
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
-    if (srcTy.isFloat8E4M3FNUZ() || (srcTy.isFloat8E5M2() && dstTy.isF16())) {
+    if (srcTy.isFloat8E4M3FNUZ()) {
       inVecWidthBits = 16;
       outVecWidthBits = 32;
     }
-    if (dstTy.isFloat8E4M3FNUZ() || (dstTy.isFloat8E5M2() && srcTy.isF16())) {
+    if (dstTy.isFloat8E4M3FNUZ()) {
       inVecWidthBits = 32;
       outVecWidthBits = 16;
     }
@@ -649,10 +631,7 @@ struct FpToFpOpConversion
 
     size_t numElements = 4;
     if (srcElementType.isFloat8E4M3FNUZ() ||
-        dstElementType.isFloat8E4M3FNUZ() ||
-        (computeCapability >= 90 &&
-         (srcElementType.isFloat8E5M2() && !dstElementType.isBF16() ||
-          dstElementType.isFloat8E5M2() && !srcElementType.isBF16()))) {
+        dstElementType.isFloat8E4M3FNUZ()) {
       numElements = 2;
     }
     bool isSrcFP32 = srcElementType.isF32();
