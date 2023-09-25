@@ -202,8 +202,8 @@ def _bwd_kernel_one_col_block(
             dq += tl.dot(ds, k, allow_tf32=True)
             tl.store(dq_ptrs, dq)
         elif SEQUENCE_PARALLEL:
-            # dq = tl.dot(ds, k, allow_tf32=True)
-            dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds), allow_tf32=True))
+            dq = tl.dot(ds, k, allow_tf32=True)
+            # dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds), allow_tf32=True))
             tl.store(dq_ptrs, dq)
 
         # increment pointers
