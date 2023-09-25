@@ -694,7 +694,7 @@ def cast(input: tl.tensor,
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
 
-    if _is_cuda(builder.arch) and builder.arch < 89 and \
+    if _is_cuda(builder.arch) and builder.arch.capability < 89 and \
        (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
         assert False, "fp8e4nv data type is not supported on CUDA arch < 89"
 
@@ -1276,7 +1276,7 @@ def dot(lhs: tl.tensor,
             assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
             return
         # Checks for cuda arch
-        if arch < 90:
+        if arch.capability < 90:
             assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(), "Dot op does not support fp8e4nv on CUDA arch < 90"
             if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
                 return
@@ -1353,7 +1353,7 @@ def dot(lhs: tl.tensor,
         assert acc.type == ret_ty
 
     # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
-    if not (_is_cuda(builder.arch) and builder.arch == 90 and lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and ret_scalar_ty.is_fp32()):
+    if not (_is_cuda(builder.arch) and builder.arch.capability == 90 and lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and ret_scalar_ty.is_fp32()):
         max_num_imprecise_acc = 0
     if max_num_imprecise_acc is None:
         max_num_imprecise_acc = 2**30
