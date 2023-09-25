@@ -718,7 +718,8 @@ The data will be distributed between threads as follows:
     ins
     "unsigned":$nonKDim,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "bool":$isTransposed
+    "bool":$isTransposed,
+    "CTALayoutAttr":$CTALayout
   );
 
   let hasCustomAssemblyFormat = 1;
