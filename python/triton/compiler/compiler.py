@@ -415,8 +415,6 @@ def compile(fn, **kwargs):
         stages["llir"] = (lambda path: Path(path).read_text(),
                           lambda src: ttgir_to_llir(src, extern_libs, target, tma_infos))
         add_cuda_stages(target, extern_libs, stages)
-    elif device_type == "hip":
-        _device_backend.add_stages(target, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
     else:
         # pass the user's configuration to the backend device.
         target["num_warps"] = num_warps

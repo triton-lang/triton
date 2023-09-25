@@ -1130,6 +1130,8 @@ def test_noinline(mode, device):
     for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     check_cuda_only(device)
+    if is_hip():
+        pytest.skip("test_atomic_rmw is skipped on HIP")
 
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
@@ -3908,6 +3910,9 @@ def matmul_kernel(
 @pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
+    if is_hip():
+        pytest.skip('test_fp8_dot_acc not supported on HIP.')
+
     check_type_supported(in_type_str, device)
     M, N, K = 128, 256, 256
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
