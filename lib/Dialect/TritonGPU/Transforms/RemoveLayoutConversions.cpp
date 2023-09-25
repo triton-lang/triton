@@ -761,16 +761,16 @@ static scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter,
 
   // Create a new loop before the existing one, with the extra operands.
   rewriter.setInsertionPoint(loop);
-  auto operands = llvm::to_vector<4>(loop.getIterOperands());
+  auto operands = llvm::to_vector<4>(loop.getInitArgs());
   operands.append(newIterOperands.begin(), newIterOperands.end());
   scf::ForOp newLoop = rewriter.create<scf::ForOp>(
       loop.getLoc(), loop.getLowerBound(), loop.getUpperBound(), loop.getStep(),
       operands);
   newLoop.getBody()->erase();
 
-  newLoop.getLoopBody().getBlocks().splice(
-      newLoop.getLoopBody().getBlocks().begin(),
-      loop.getLoopBody().getBlocks());
+  newLoop.getRegion().getBlocks().splice(
+      newLoop.getRegion().getBlocks().begin(),
+      loop.getRegion().getBlocks());
   for (Value operand : newIterOperands)
     newLoop.getBody()->addArgument(operand.getType(), operand.getLoc());
 
@@ -806,8 +806,8 @@ static void rewriteSlice(SetVector<Value> &slice,
         if (slice.count(arg)) {
           OpOperand &initVal = forOp.getOpOperandForRegionIterArg(arg);
           argMapping.push_back(
-              std::make_pair(*forOp.getIterArgNumberForOpOperand(initVal),
-                             forOp.getNumIterOperands() + newOperands.size()));
+              std::make_pair(forOp.getResultForOpOperand(initVal).getResultNumber(),
+                             forOp.getInitArgs().size() + newOperands.size()));
           newOperands.push_back(mapping.lookup(initVal.get()));
         }
       }

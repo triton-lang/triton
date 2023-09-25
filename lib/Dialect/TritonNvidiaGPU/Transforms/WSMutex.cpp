@@ -153,7 +153,7 @@ void mutexSync(ModuleOp &mod, scf::IfOp &ifOp, scf::ForOp &persistentForOp,
 
   Value newIdx =
       builder.createWithAgentIds<arith::AddIOp>(loc, pipelineIdx, curRoleId);
-  persistentForOp.setIterArg(persistentForOp.getNumIterOperands() - 1, newIdx);
+  persistentForOp.getInitArgsMutable().slice(persistentForOp.getInitArgs().size()-1, 1).assign(newIdx);
   auto yield =
       llvm::cast<scf::YieldOp>(persistentForOp.getBody()->getTerminator());
   auto idxPlusOneOp =

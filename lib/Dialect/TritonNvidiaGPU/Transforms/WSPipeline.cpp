@@ -162,7 +162,7 @@ scf::ForOp appendPipelineIdxToLoopArgs(scf::ForOp forOp, int numStages,
 
   // Copy iter operands of forOp
   SmallVector<Value> newLoopArgs;
-  for (auto operand : forOp.getIterOperands())
+  for (auto operand : llvm::to_vector(forOp.getInitArgs()))
     newLoopArgs.push_back(operand);
 
   // Append initial value of pipelineIdx to newLoopArgs
@@ -302,7 +302,7 @@ DenseMap<AgentId, scf::ForOp> createForOpsForEachAgentId(scf::ForOp forOp) {
     // Prepare newLoopArgs
     SmallVector<Value> newLoopArgs;
     for (unsigned argNumber : usedArgs)
-      newLoopArgs.push_back(forOp.getIterOperands()[argNumber]);
+      newLoopArgs.push_back(forOp.getInitArgs()[argNumber]);
 
     // Create newForOp
     builder.setAgentIdsFromArray({agentId});
