@@ -334,7 +334,7 @@ inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
 }
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
-                                         const SmallVector<Value> &, size_t)>
+                                         const SmallVector<Value> &)>
     ConverterT;
 
 static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
@@ -345,8 +345,8 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
   ConverterT converter =
       [ptxAsm, inType, outType, inVecWidthBits,
        outVecWidthBits](Location loc, ConversionPatternRewriter &rewriter,
-                        const SmallVector<Value> &v,
-                        size_t numElements) -> SmallVector<Value> {
+                        const SmallVector<Value> &v) -> SmallVector<Value> {
+    int numElements = v.size();
     assert(numElements == 4 || numElements == 2 && "invalid vector size");
 
     auto ctx = rewriter.getContext();
@@ -356,16 +356,9 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
     int inVecWidth = inVecWidthBits / inBitwidth;
     auto inVecTy = vec_ty(inType, inVecWidth);
     SmallVector<Value> inPacked(numElements / inVecWidth, undef(inVecTy));
-    for (size_t i = 0; i < numElements; i++) {
-      if (i < v.size()) {
-        inPacked[i / inVecWidth] = insert_element(
-            inVecTy, inPacked[i / inVecWidth], v[i], i32_val(i % inVecWidth));
-      } else {
-        inPacked[i / inVecWidth] =
-            insert_element(inVecTy, inPacked[i / inVecWidth], undef(inType),
-                           i32_val(i % inVecWidth));
-      }
-    }
+    for (size_t i = 0; i < numElements; i++)
+      inPacked[i / inVecWidth] = insert_element(
+          inVecTy, inPacked[i / inVecWidth], v[i], i32_val(i % inVecWidth));
     for (size_t i = 0; i < inPacked.size(); i++)
       inPacked[i] = bitcast(inPacked[i], int_ty(inVecWidthBits));
 
@@ -398,7 +391,7 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
     }
     // unpack the output
     SmallVector<Value> ret;
-    for (size_t i = 0; i < std::min(numElements, v.size()); i++)
+    for (size_t i = 0; i < numElements; i++)
       ret.push_back(extract_element(outType, outPacked[i / outVecWidth],
                                     i32_val(i % outVecWidth)));
     return ret;
@@ -645,8 +638,11 @@ struct FpToFpOpConversion
     if (isSrcFP32)
       for (Value &v : inVals)
         v = convertFp32ToFp16(loc, rewriter, v);
-    SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals, numElements);
+    inVals.resize(numElements,
+                  undef(typeConverter->convertType(srcElementType)));
+    SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
+    outVals.resize(std::min(numElements, operands.size()));
     if (isDstFP32)
       for (Value &v : outVals)
         v = convertFp16ToFp32(loc, rewriter, v);
@@ -1026,7 +1022,7 @@ struct SIToFPOpConversion
           getTypeConverter()->convertType(outElemTy));
       SmallVector<Value> inVals = {operands[0][0], operands[1][0],
                                    operands[2][0], operands[3][0]};
-      auto outVals = cvtFunc(loc, rewriter, inVals, inVals.size());
+      auto outVals = cvtFunc(loc, rewriter, inVals);
       assert(outVals.size() == 4);
       return outVals;
     } else if (outElemTy.isBF16()) {
