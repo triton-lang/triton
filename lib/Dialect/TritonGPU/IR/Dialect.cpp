@@ -1265,7 +1265,6 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> CTASplitNum;
   SmallVector<unsigned> CTAOrder;
 
-
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "nonKDim") {
       if (parseUInt(parser, attr, nonKDim, "nonKDim").failed())
@@ -1295,8 +1294,8 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   auto CTALayout = CTALayoutAttr::get(parser.getContext(), CTAsPerCGA,
                                       CTASplitNum, CTAOrder);
 
-  return parser.getChecked<MfmaEncodingAttr>(parser.getContext(), nonKDim,
-                                             warpsPerCTA, isTransposed, CTALayout);
+  return parser.getChecked<MfmaEncodingAttr>(
+      parser.getContext(), nonKDim, warpsPerCTA, isTransposed, CTALayout);
 }
 
 void MfmaEncodingAttr::print(AsmPrinter &printer) const {

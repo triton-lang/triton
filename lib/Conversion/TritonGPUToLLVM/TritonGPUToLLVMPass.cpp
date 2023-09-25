@@ -891,6 +891,17 @@ private:
         if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
           return;
         promoteType = builder.getF16Type();
+#ifdef USE_ROCM
+      } else if (MfmaEncodingAttr mfmaLayout =
+                     D.getType()
+                         .cast<RankedTensorType>()
+                         .getEncoding()
+                         .dyn_cast<MfmaEncodingAttr>()) {
+        if (AElType.isBF16() || AElType.isF16() || AElType.isF32() ||
+            AElType.isInteger(8))
+          return;
+        promoteType = builder.getF16Type();
+#endif
       } else {
         // FMA case.
         Type AElType =

@@ -217,8 +217,8 @@ public:
     auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
 
     bool isTransposed = isChainDot(dotOp);
-    mfmaEnc = ttg::MfmaEncodingAttr::get(
-        oldRetType.getContext(), nonKDim, warpsPerTile, isTransposed, CTALayout);
+    mfmaEnc = ttg::MfmaEncodingAttr::get(oldRetType.getContext(), nonKDim,
+                                         warpsPerTile, isTransposed, CTALayout);
 
     auto newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), mfmaEnc);
