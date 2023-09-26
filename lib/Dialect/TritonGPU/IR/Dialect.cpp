@@ -1095,7 +1095,7 @@ void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>();
   printer << "<{"
           << "opIdx = " << getOpIdx() << ", parent = " << getParent();
-  if (mmaParent && mmaParent.isAmpere())
+  if ((mmaParent && mmaParent.isAmpere()) || getParent().isa<MfmaEncodingAttr>())
     printer << ", kWidth = " << getKWidth();
   printer << "}>";
 }
@@ -1220,6 +1220,9 @@ public:
   AliasResult getAlias(Attribute attr, raw_ostream &os) const override {
     if (auto mmaAttr = attr.dyn_cast<MmaEncodingAttr>()) {
       os << "mma";
+      return AliasResult::FinalAlias;
+    } else if (attr.isa<MfmaEncodingAttr>()) {
+      os << "mfma";
       return AliasResult::FinalAlias;
     } else if (auto sharedAttr = attr.dyn_cast<SharedEncodingAttr>()) {
       os << "shared";
