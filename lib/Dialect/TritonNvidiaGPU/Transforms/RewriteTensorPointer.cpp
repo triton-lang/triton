@@ -523,9 +523,9 @@ public:
                           std::stack<Operation *> &eraser,
                           DenseSet<Value> &valueToRemove) {
     // Generate new iteration operands and set rewrited information
-    SmallVector<Value> oldIterOperands = op.getIterOperands();
-    SmallVector<Value> newIterOperands = op.getIterOperands();
-    for (unsigned i = 0, oldI = 0, size = op.getNumIterOperands(); i < size;
+    SmallVector<Value> oldIterOperands = llvm::to_vector(op.getInitArgs());
+    SmallVector<Value> newIterOperands = llvm::to_vector(op.getInitArgs());
+    for (unsigned i = 0, oldI = 0, size = op.getInitArgs().size(); i < size;
          ++i, ++oldI) {
       if (!tt::isTensorPointerType(newIterOperands[i].getType()))
         continue;
@@ -550,7 +550,7 @@ public:
     // mapping. It may refer to a value in the old loop, but we will rewrite it
     // later
     IRMapping mapping;
-    for (unsigned i = 0, oldI = 0; oldI < op.getNumIterOperands();
+    for (unsigned i = 0, oldI = 0; oldI < op.getInitArgs().size();
          ++i, ++oldI) {
       auto oldRegionIterArg = op.getRegionIterArg(oldI);
       if (tt::isTensorPointerType(oldRegionIterArg.getType()) &&
@@ -586,7 +586,7 @@ public:
         valueToRemove.insert(v);
 
     // Replace later usages
-    assert(op.getNumResults() == op.getNumIterOperands());
+    assert(op.getNumResults() == op.getInitArgs().size());
     for (unsigned i = 0, oldI = 0; oldI < op.getNumResults(); ++i, ++oldI) {
       auto oldResult = op.getResult(oldI);
       if (tt::isTensorPointerType(oldResult.getType()) &&
@@ -787,8 +787,8 @@ public:
         }
       }
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        SmallVector<Value> iterOperands = forOp.getIterOperands();
-        for (unsigned i = 0, size = forOp.getNumIterOperands(); i < size; ++i) {
+        SmallVector<Value> iterOperands = llvm::to_vector(forOp.getInitArgs());
+        for (unsigned i = 0, size = forOp.getInitArgs().size(); i < size; ++i) {
           if (tt::isTensorPointerType(iterOperands[i].getType())) {
             auto makeTensorPtrOp = getMakeTensorPtrOp(iterOperands[i]);
             if (shouldRemove(makeTensorPtrOp, computeCapability))
