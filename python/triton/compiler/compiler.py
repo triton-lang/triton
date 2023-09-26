@@ -63,7 +63,7 @@ def ttir_compute_capability_rewrite(mod, target):
     # with block (tensor) pointers into tensors of pointers
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    if target.identifier:
+    if _is_cuda(target):
         pm.add_rewrite_tensor_pointer_pass(target.capability)
     pm.run(mod)
     return mod
