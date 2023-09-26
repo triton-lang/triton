@@ -769,8 +769,7 @@ static scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter,
   newLoop.getBody()->erase();
 
   newLoop.getRegion().getBlocks().splice(
-      newLoop.getRegion().getBlocks().begin(),
-      loop.getRegion().getBlocks());
+      newLoop.getRegion().getBlocks().begin(), loop.getRegion().getBlocks());
   for (Value operand : newIterOperands)
     newLoop.getBody()->addArgument(operand.getType(), operand.getLoc());
 
@@ -805,9 +804,9 @@ static void rewriteSlice(SetVector<Value> &slice,
       for (auto arg : forOp.getRegionIterArgs()) {
         if (slice.count(arg)) {
           OpOperand &initVal = forOp.getOpOperandForRegionIterArg(arg);
-          argMapping.push_back(
-              std::make_pair(forOp.getResultForOpOperand(initVal).getResultNumber(),
-                             forOp.getInitArgs().size() + newOperands.size()));
+          argMapping.push_back(std::make_pair(
+              forOp.getResultForOpOperand(initVal).getResultNumber(),
+              forOp.getInitArgs().size() + newOperands.size()));
           newOperands.push_back(mapping.lookup(initVal.get()));
         }
       }
