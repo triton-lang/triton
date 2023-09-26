@@ -3601,6 +3601,22 @@ def test_while(device):
 # test extra
 # -----------------------
 
+def test_num_threads(device):
+    if is_hip():
+        pytest.skip("test_num_threads is not supported in HIP")
+    check_cuda_only(device)
+
+    @triton.jit
+    def kernel(Out):
+        num_threads: tl.constexpr = tl.extra.cuda.num_threads()
+        offs = tl.arange(0, num_threads)
+        tl.store(Out + offs, 1)
+
+    num_threads = 256
+    out = to_triton(np.zeros((num_threads,), dtype=np.int32), device=device)
+    kernel[(1,)](out, num_warps=num_threads // 32)
+    assert torch.sum(out) == 256
+
 
 def test_globaltimer(device):
     if is_hip():

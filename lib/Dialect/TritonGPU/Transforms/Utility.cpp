@@ -524,7 +524,8 @@ void getForwardSliceSCFAware(Value root, SetVector<Operation *> *slices) {
     for (Operation *sliceOp : temp) {
       if (auto yieldOp = dyn_cast<scf::YieldOp>(sliceOp)) {
         auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        queue.append(forOp->getResults().begin(), forOp->getResults().end());
+        if (forOp)
+          queue.append(forOp->getResults().begin(), forOp->getResults().end());
       }
     }
     slices->insert(temp.begin(), temp.end());
@@ -612,7 +613,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         Value yieldOperand =
             forOwner.getBody()->getTerminator()->getOperand(iterIdx);
         markLive(yieldOperand);
-        markLive(forOwner.getIterOperands()[iterIdx]);
+        markLive(forOwner.getInitArgs()[iterIdx]);
       }
     }
     SmallVector<unsigned> deadArg;
