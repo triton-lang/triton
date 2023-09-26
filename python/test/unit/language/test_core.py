@@ -1296,7 +1296,7 @@ def test_atomic_cas(sem, num_ctas, device):
     (f'uint{x}', f'int{x}', True, 1024) for x in [8, 16, 32, 64]
 ] + [
     (f'int{x}', f'uint{x}', True, 1024) for x in [8, 16, 32, 64]
-] + [
+] + (([
     (dtype_x, dtype_z, False, size)
     for dtype_x in torch_float8_dtypes
     for dtype_z in ["float16", "float32"]
@@ -1306,7 +1306,7 @@ def test_atomic_cas(sem, num_ctas, device):
     for dtype_z in torch_float8_dtypes
     for dtype_x in ["float16", "float32"]
     for size in [1024, 32]
-])
+]) if torch.__version__ >= "2.1" else []))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # bfloat16 on cc < 80 will not be tested
