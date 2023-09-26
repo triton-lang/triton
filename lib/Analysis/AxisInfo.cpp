@@ -301,10 +301,19 @@ private:
 
   int64_t getDivisibility(arith::MulIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
-    // lhs = k * d_lhs
-    // rhs = p * d_rhs
-    // lhs * rhs = k * d_lhs * p * d_rhs = k * p * d_lhs * d_rhs
-    return lhs.getDivisibility(dim) * rhs.getDivisibility(dim);
+    auto lhsDivisibility = lhs.getDivisibility(dim);
+    if (lhs.getContiguity(dim) > 1 &&
+        !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
+      // Ignore the 'fake' divisibility
+      lhsDivisibility = 1;
+    }
+    auto rhsDivisibility = rhs.getDivisibility(dim);
+    if (rhs.getContiguity(dim) > 1 &&
+        !(lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1)) {
+      // Ignore the 'fake' divisibility
+      rhsDivisibility = 1;
+    }
+    return lhsDivisibility * rhsDivisibility;
   }
 
   std::optional<int64_t> getConstantValue(arith::MulIOp op, const AxisInfo &lhs,
