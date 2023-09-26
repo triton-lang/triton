@@ -529,10 +529,11 @@ public:
       newDivisibility =
           opInfo.getContiguity(0) > 1 ? 1 : opInfo.getDivisibility(0);
       for (int d = 1; d < opInfo.getRank(); ++d) {
-        newDivisibility = gcd(newDivisibility,
-            // MakeRangeOpAxisInfoVisitor sets a 'fake' divisibility,
-            // which should be ignored. 1 is used instead.
-            opInfo.getContiguity(d) > 1 ? 1 : opInfo.getDivisibility(d));
+        newDivisibility =
+            gcd(newDivisibility,
+                // MakeRangeOpAxisInfoVisitor sets a 'fake' divisibility,
+                // which should be ignored. 1 is used instead.
+                opInfo.getContiguity(d) > 1 ? 1 : opInfo.getDivisibility(d));
       }
     }
     contiguity.insert(contiguity.begin() + op.getAxis(), 1);
