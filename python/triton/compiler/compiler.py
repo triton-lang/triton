@@ -36,7 +36,10 @@ from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
 class CudaTargetDescriptor:
     capability: int
     num_warps: int
-    is_cuda: bool = True
+
+
+def _is_cuda(target):
+    return isinstance(target, CudaTargetDescriptor)
 
 
 class LazyDict(dict):
@@ -60,7 +63,7 @@ def ttir_compute_capability_rewrite(mod, target):
     # with block (tensor) pointers into tensors of pointers
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    if target.is_cuda:
+    if target.identifier:
         pm.add_rewrite_tensor_pointer_pass(target.capability)
     pm.run(mod)
     return mod
@@ -92,7 +95,7 @@ def ttir_to_ttgir(mod, num_warps, num_ctas, target):
 
 def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target,
                    cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue):
-    is_cuda = target.is_cuda
+    is_cuda = _is_cuda(target)
     if is_cuda:
         capability = target.capability
     pm = ir.pass_manager(mod.context)
@@ -158,7 +161,7 @@ def ttgir_to_llir(mod, extern_libs, target, tma_infos):
     if extern_libs:
         _add_external_libs(mod, extern_libs)
     # TODO: separate tritongpu_to_llvmir for different backends
-    if target.is_cuda:
+    if _is_cuda(target):
         return translate_triton_gpu_to_llvmir(mod, target.capability, tma_infos, runtime.TARGET.NVVM)
     else:
         return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.ROCDL)

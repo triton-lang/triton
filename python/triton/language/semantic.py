@@ -9,6 +9,13 @@ from . import core as tl
 
 T = TypeVar('T')
 
+# TODO: redundant code -- remove after 3P backend refactor
+
+
+def _is_cuda(target):
+    from ..compiler.compiler import CudaTargetDescriptor
+    return isinstance(target, CudaTargetDescriptor)
+
 # Create custom exception that prints message "hello"
 
 
@@ -695,7 +702,7 @@ def cast(input: tl.tensor,
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
 
-    if builder.target.is_cuda and builder.target.capability < 89 and \
+    if _is_cuda(builder.target) and builder.target.capability < 89 and \
        (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
         assert False, "fp8e4nv data type is not supported on CUDA arch < 89"
 
@@ -1287,7 +1294,7 @@ def dot(lhs: tl.tensor,
         builder: ir.builder) -> tl.tensor:
     def assert_dtypes_valid(lhs_dtype, rhs_dtype, target):
         # Checks for non-cuda archs
-        if not target.is_cuda:
+        if not _is_cuda(target):
             assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
             return
         # Checks for cuda arch
@@ -1370,7 +1377,7 @@ def dot(lhs: tl.tensor,
         assert acc.type == ret_ty
 
     # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
-    if not (builder.target.is_cuda and builder.target.capability == 90 and lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and ret_scalar_ty.is_fp32()):
+    if not (_is_cuda(builder.target) and builder.target.capability == 90 and lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and ret_scalar_ty.is_fp32()):
         max_num_imprecise_acc = 0
     if max_num_imprecise_acc is None:
         max_num_imprecise_acc = 2**30
