@@ -59,8 +59,8 @@ class Package(NamedTuple):
 
 
 def get_pybind11_package_info():
-    name = "pybind11-2.10.0"
-    url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.10.0.tar.gz"
+    name = "pybind11-2.11.1"
+    url = "https://github.com/pybind/pybind11/archive/refs/tags/v2.11.1.tar.gz"
     return Package("pybind11", name, url, "PYBIND11_INCLUDE_DIR", "", "PYBIND11_SYSPATH")
 
 # llvm
@@ -127,13 +127,10 @@ def get_thirdparty_packages(triton_cache_path):
 
 def download_and_copy(src_path, version, url_func):
     base_dir = os.path.dirname(__file__)
-    # src_path = "bin/ptxas"
-    # version = "12.1.105"
     arch = platform.machine()
     if arch == "x86_64":
         arch = "64"
     url = url_func(arch, version)
-    # url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2"
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
@@ -219,6 +216,7 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
+        ninja_dir = shutil.which('ninja')
         user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
             os.getenv("HOMEPATH") or None
         if not user_home:
@@ -233,6 +231,8 @@ class CMakeBuild(build_ext):
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
+            "-G", "Ninja",  # Ninja is much faster than make
+            "-DCMAKE_MAKE_PROGRAM=" + ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
@@ -296,7 +296,6 @@ setup(
         "triton/_C",
         "triton/common",
         "triton/compiler",
-        "triton/interpreter",
         "triton/language",
         "triton/language/extra",
         "triton/ops",

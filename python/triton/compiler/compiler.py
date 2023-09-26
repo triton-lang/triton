@@ -406,13 +406,7 @@ def compile(fn, **kwargs):
                           lambda src: ttgir_to_llir(src, extern_libs, target, tma_infos))
         add_cuda_stages(target, extern_libs, stages)
     elif device_type == "hip":
-        _device_backend.add_stages(target, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
-    elif device_type == "xpu":
-        stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, target), num_stages, num_warps, num_ctas, target, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
-        stages["llir"] = (lambda path: Path(path).read_text(),
-                          lambda src: ttgir_to_llir(src, extern_libs, target, tma_infos))
-        _device_backend.add_stages(target, extern_libs, stages)
+        _device_backend.add_stages(arch, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
     else:
         # pass the user's configuration to the backend device.
         target["num_warps"] = num_warps

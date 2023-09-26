@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 import triton
@@ -153,3 +154,42 @@ def test_avg_pool_bw():
     out_ref[:, :, 0::7, 1:7] = 2 / 3
     out_ref[:, :, 0::7, 0::7] = 4 / 9
     torch.testing.assert_close(out, out_ref)
+
+
+@pytest.mark.parametrize("RBLOCK", [1, 16, 32, 64, 128])
+@pytest.mark.parametrize("num_warps", [1, 4])
+def test_scan2d_broadcast(RBLOCK, num_warps):
+    @triton.jit(debug=True)
+    def fn(in_ptr, out_ptr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
+        rindex = tl.arange(0, RBLOCK)[None, :]
+        xindex = tl.arange(0, XBLOCK)[:, None]
+        data = tl.load(in_ptr + rindex)
+        scan = tl.cumsum(data, 1)
+        expected_max = tl.sum(data, 1)
+        tl.device_assert(scan <= expected_max)
+        tl.store(out_ptr + xindex * RBLOCK + rindex, scan)
+
+    XBLOCK = 4
+    input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device='cuda')
+    output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device='cuda')
+    fn[(1,)](input, output, XBLOCK, RBLOCK, num_warps=num_warps)
+    ref = input.cumsum(1).broadcast_to((XBLOCK, RBLOCK))
+    torch.testing.assert_close(output, ref)
+
+
+def test_scan2d_for():
+    @triton.jit
+    def fn(out_ptr0, rnumel, RBLOCK: tl.constexpr):
+        rbase = tl.arange(0, RBLOCK)[None, :]
+        for roffset in range(0, rnumel, RBLOCK):
+            rindex = roffset + rbase
+            rmask = rindex < rnumel
+            tmp3 = tl.where(rmask, 1, 0)
+            tmp6 = tl.cumsum(tmp3, 1)
+            tl.store(out_ptr0 + rindex, tmp6, rmask)
+
+    RBLOCK = 8
+    out0 = torch.empty(RBLOCK, device="cuda", dtype=torch.int64)
+    fn[(1,)](out0, RBLOCK, RBLOCK)
+    ref = torch.arange(RBLOCK, device="cuda", dtype=torch.int64) + 1
+    torch.testing.assert_close(out0, ref)

@@ -1,7 +1,7 @@
 #include "Utility.h"
 #include "TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
-
 namespace mlir {
 
 namespace LLVM {
@@ -240,7 +240,7 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred) {
   MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
+  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
 
   PTXBuilder builder;
@@ -257,7 +257,7 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   auto ptrTy = ptr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
   auto elemTy = ptrTy.getElementType();
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
 
   const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
 
@@ -270,8 +270,8 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 }
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, int i, const std::string &shuffleType,
-                            const std::string &clamp) {
+                            Value val, Value i, NVVM::ShflKind mode,
+                            Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -279,34 +279,51 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, shuffleType, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, shuffleType, clamp);
+    val0 = commonShflSync(loc, rewriter, val0, i, mode, clamp);
+    val1 = commonShflSync(loc, rewriter, val1, i, mode, clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
     return bitcast(vec, val.getType());
   }
-
-  PTXBuilder builder;
-  auto &shfl = builder.create("shfl.sync")->o(shuffleType).o("b32");
-  auto *dOpr = builder.newOperand("=r");
-  auto *aOpr = builder.newOperand(val, "r");
-  auto *bOpr = builder.newConstantOperand(i);
-  auto *cOpr = builder.newConstantOperand(clamp);
-  auto *maskOpr = builder.newConstantOperand("0xffffffff");
-  shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
-  return builder.launch(rewriter, loc, val.getType(), false);
+  Type type = val.getType();
+  if (type != i32_ty) {
+    val = bitcast(val, int_ty(bits));
+    val = zext(i32_ty, val);
+  }
+  Value mask = i32_val(0xFFFFFFFF);
+  Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i, clamp,
+                                               mode, UnitAttr());
+  if (type != i32_ty) {
+    result = trunc(int_ty(bits), result);
+    result = bitcast(result, type);
+  }
+  return result;
 }
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
-  return commonShflSync(loc, rewriter, val, i, "bfly", "0x1f");
+  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
+                        i32_val(0x1f));
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return commonShflSync(loc, rewriter, val, i, "up", "0x0");
+  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
+                        i32_val(0x0));
 }
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i) {
+  return shflIdxSync(loc, rewriter, val, i32_val(i));
+}
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  Value i) {
+  return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
+                        i32_val(0x1f));
+}
+
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   PTXBuilder builder;
   auto &mov = builder.create("mov")->o("u32");

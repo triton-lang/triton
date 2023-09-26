@@ -853,6 +853,11 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingAttr>()) {
     int warpsPerCTAM = mmaParent.getWarpsPerCTA()[0];
     int warpsPerCTAN = mmaParent.getWarpsPerCTA()[1];
+    // H100
+    if (mmaParent.isHopper()) {
+      if (eltTy.isF16())
+        return mmaParent.getTotalElemsPerThread(shape, eltTy);
+    }
     // A100
     if (mmaParent.isAmpere()) {
       auto rep = getMMAv2Rep(shapePerCTA, eltTy.getIntOrFloatBitWidth());
@@ -1472,10 +1477,13 @@ struct TritonGPUInferLayoutInterface
                      std::optional<Location> location) const override {
     auto mmaRetEncoding = retEncoding.dyn_cast<MmaEncodingAttr>();
     if (mmaRetEncoding && mmaRetEncoding.isHopper()) {
-      // TODO: support gmma when A/B does not reside in shared memory
-      if (!operandEncoding.isa<SharedEncodingAttr>())
+      auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>();
+      if (!operandEncoding.isa<SharedEncodingAttr>() &&
+          !(opIdx == 0 && dotOpEnc && dotOpEnc.getOpIdx() == 0 &&
+            dotOpEnc.getParent() == mmaRetEncoding)) {
         return emitOptionalError(
             location, "unexpected operand layout for MmaEncodingAttr v3");
+      }
     } else if (auto dotOpEnc =
                    operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
       if (opIdx != dotOpEnc.getOpIdx())
@@ -1497,6 +1505,10 @@ struct TritonGPUInferLayoutInterface
         operandEncodingB.dyn_cast<triton::gpu::DotOperandEncodingAttr>();
     if (!aEncoding && !bEncoding)
       return mlir::success();
+    auto mmaAEncoding =
+        aEncoding.getParent().dyn_cast_or_null<MmaEncodingAttr>();
+    if (mmaAEncoding && mmaAEncoding.isHopper())
+      return success();
     // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");

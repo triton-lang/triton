@@ -347,7 +347,7 @@ LogicalResult LoopPipeliner::collectOps(SetVector<Operation *> &ops) {
 void LoopPipeliner::collectValueDep(Value v, int stage,
                                     SetVector<Value> &deps) {
   // Loop-invariant value, skip
-  if (v.getParentRegion() != &forOp.getLoopBody())
+  if (v.getParentRegion() != &forOp.getRegion())
     return;
 
   // Since we only need to peel the loop numStages-1 times, don't worry
@@ -671,7 +671,7 @@ void LoopPipeliner::createBufferTypes() {
 }
 
 void LoopPipeliner::createOrderedDeps() {
-  for (Operation &op : forOp.getLoopBody().front()) {
+  for (Operation &op : *forOp.getBody()) {
     if (depOps.contains(&op))
       orderedDeps.push_back(&op);
     else if (op.getNumResults() > 0 && validLoads.contains(op.getResult(0)))
@@ -1007,7 +1007,7 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   // We need this to update operands for yield
   // original block arg => new arg's idx
   SmallVector<Value> newLoopArgs;
-  for (auto v : forOp.getIterOperands())
+  for (auto v : forOp.getInitArgs())
     newLoopArgs.push_back(v);
 
   bufferIdx = newLoopArgs.size();
