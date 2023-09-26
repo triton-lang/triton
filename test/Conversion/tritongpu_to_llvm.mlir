@@ -1435,3 +1435,22 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
     tt.return
   }
 }
+
+// -----
+
+//  CHECK: st.shared.b8
+//  CHECK: ld.shared.b8
+//  CHECK-NOT: st.shared.b1
+//  CHECK-NOT: ld.shared.b1
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @copyitem() attributes {noinline = false} {
+    %cst = arith.constant dense<true> : tensor<4x1xi1, #blocked>
+    %0 = "tt.reduce"(%cst) <{axis = 1 : i32}> ({
+    ^bb0(%arg0: i1, %arg1: i1):
+      %1 = arith.ori %arg0, %arg1 : i1
+      tt.reduce.return %1 : i1
+    }) : (tensor<4x1xi1, #blocked>) -> tensor<4xi1, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+    tt.return
+  }
+}
