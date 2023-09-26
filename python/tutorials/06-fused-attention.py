@@ -455,14 +455,15 @@ class _attention(torch.autograd.Function):
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
-        BLOCK_M = 128
         if torch.version.hip is None:
+            BLOCK_M = 128
             BLOCK_N = 64 if Lk <= 64 else 32
             num_stages = 4 if Lk <= 64 else 3
             num_warps = 4 if Lk <= 64 else 8
         else:
-            BLOCK_N = 64
-            num_warps = 4
+            BLOCK_M = 128 if Lk <= 64 else 256
+            BLOCK_N = 64 if Lk <= 64 else 32
+            num_warps = 4 if Lk <= 64 else 8
             num_stages = 1
 
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)

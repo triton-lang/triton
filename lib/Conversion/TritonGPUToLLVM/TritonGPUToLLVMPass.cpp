@@ -40,6 +40,10 @@ using namespace mlir::triton;
 
 namespace {
 
+#ifdef USE_ROCM
+constexpr int LDSSize = 65536;
+constexpr int kPtrBitWidth = 64;
+#endif
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, bool isROCM)
@@ -320,6 +324,7 @@ public:
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
 #ifdef USE_ROCM
     decomposeMfmaToDotOperand(mod, numWarps, threadsPerWarp);
+    reduceCvtOpLDSUsage(mod);
 #endif
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
@@ -532,6 +537,112 @@ private:
       }
     });
   }
+
+  int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp &cvtOp) const {
+    unsigned inVec = 0;
+    unsigned outVec = 0;
+    auto smemShape = getScratchConfigForCvtLayout(cvtOp, inVec, outVec);
+    unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
+                                     std::multiplies{});
+    auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+    auto bytes =
+        srcType.getElementType().isa<triton::PointerType>()
+            ? elems * kPtrBitWidth / 8
+            : elems * std::max<int>(8, srcType.getElementTypeBitWidth()) / 8;
+
+    return bytes;
+  }
+
+  bool isPowerOfTwo(unsigned x) const { return x && (x & (x - 1)) == 0; }
+
+  // Try to reduce LDS usage of cvt(mfma->blocked) op by decreasing the number
+  // of warpsPerCTA attribute in layouts. The implicit LDS usage of
+  // cvt(mfma->blocked) op is proportional to the number of warps per CTA used.
+  //
+  // clang-format off
+  //
+  // LDS usage of this op is roughly calculated as:
+  // LDS_USAGE = getShapePerCTA(mfma_layout)[0] * getShapePerCTA(blocked_layoput)[1] * sizeof(data_type)
+  // LDS_USAGE = warpsPerCTA(mfma_layout)[0] * warpsPerCta(blocked_layout)[1] * C,
+  // where C = 32 * sizePerWarp(blocked_layout)[1] * threadsPerWarp(blocked_layout)[1] * sizeof(data_type)
+  //
+  // clang-format on
+  //
+  // When LDS_USAGE exceeds the size of LDS, try to lower LDS usage by
+  // decomposing cvt(mfma->blocked) op into 2 conversions: cvt(mfma->mfma_tmp)
+  // and cvt(mfma_tmp->blocked), where mfma_tmp uses less warps (decreased
+  // warpsPerCTA attribute) than mfma layout.
+  void reduceCvtOpLDSUsage(ModuleOp mod) const {
+    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      OpBuilder builder(cvtOp);
+
+      auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
+      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+
+      auto srcMfma =
+          srcType.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
+      auto dstBlocked =
+          dstType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+
+      if (!srcMfma || !dstBlocked) {
+        return;
+      }
+
+      if (getCvtOpLDSUsage(cvtOp) <= LDSSize) {
+        return;
+      }
+
+      unsigned warpsPerCtaX = srcMfma.getWarpsPerCTA()[0];
+      unsigned warpsPerCtaY = srcMfma.getWarpsPerCTA()[1];
+      assert(isPowerOfTwo(warpsPerCtaX));
+      assert(isPowerOfTwo(warpsPerCtaY));
+
+      triton::gpu::MfmaEncodingAttr newMfmaEnc;
+      RankedTensorType newSrcType;
+      RankedTensorType newDstType;
+      triton::gpu::ConvertLayoutOp tmpCvt;
+      triton::gpu::ConvertLayoutOp newCvt;
+      int iter = 0;
+      do {
+        if (iter > 0) {
+          newCvt.erase();
+          tmpCvt.erase();
+        }
+
+        if (warpsPerCtaX >= warpsPerCtaY) {
+          warpsPerCtaX /= 2;
+        } else {
+          warpsPerCtaY /= 2;
+        }
+        newMfmaEnc = triton::gpu::MfmaEncodingAttr::get(
+            mod.getContext(), srcMfma.getNonKDim(),
+            {warpsPerCtaX, warpsPerCtaY}, srcMfma.getIsTransposed());
+
+        newDstType =
+            RankedTensorType::get(dstType.getShape(), dstType.getElementType(),
+                                  dstType.getEncoding());
+        newSrcType = RankedTensorType::get(
+            srcType.getShape(), srcType.getElementType(), newMfmaEnc);
+
+        tmpCvt = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), newSrcType, cvtOp.getOperand());
+        newCvt = builder.create<triton::gpu::ConvertLayoutOp>(
+            cvtOp.getLoc(), newDstType, tmpCvt);
+        iter++;
+      } while (warpsPerCtaX * warpsPerCtaY > 1 &&
+               getCvtOpLDSUsage(newCvt) > LDSSize);
+
+      if (getCvtOpLDSUsage(newCvt) > LDSSize) {
+        newCvt.erase();
+        tmpCvt.erase();
+        return;
+      }
+
+      cvtOp.replaceAllUsesWith(newCvt.getResult());
+      cvtOp.erase();
+    });
+  }
+
 #endif
 
   void decomposeBlockedToDotOperand(ModuleOp mod) const {
