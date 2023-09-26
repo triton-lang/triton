@@ -64,7 +64,45 @@ pip install ninja cmake; # build-time dependencies
 pip install -e .
 ```
 
+# Building with a custom LLVM
 
+Triton uses LLVM to generate code for GPUs and CPUs.  Normally, the Triton build
+downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
+
+LLVM does not have a stable API, so the Triton build will not work at an
+arbitrary LLVM version.
+
+1. Find the version of LLVM that Triton builds against.  Check `python/setup.py`
+   for a line like
+
+       version = "llvm-17.0.0-c5dede880d17"
+
+   This means that the version of Triton you have builds against
+   [LLVM](https://github.com/llvm/llvm-project) c5dede880d17.
+
+2. `git checkout` LLVM at this revision.  Optionally, make additional
+   modifications to LLVM.
+
+3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
+
+       $ cd $HOME/llvm-project  # your clone of LLVM.
+       $ mkdir build
+       $ cd build
+       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON  ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm"
+       $ ninja
+
+4. Grab a snack, this will take a while.
+
+5. Build Triton as above, but set the following environment variables.
+
+       # Modify as appropriate to point to your LLVM build.
+       $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
+
+       $ cd <triton install>/python
+       $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
+         LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
+         LLVM_SYSPATH=$LLVM_BUILD_DIR \
+         pip install -e .
 
 # Changelog
 
