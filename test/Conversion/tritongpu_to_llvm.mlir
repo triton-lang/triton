@@ -1438,6 +1438,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 
 // -----
 
+//  CHECK-LABEL: copyitem
 //  CHECK: st.shared.b8
 //  CHECK: ld.shared.b8
 //  CHECK-NOT: st.shared.b1
