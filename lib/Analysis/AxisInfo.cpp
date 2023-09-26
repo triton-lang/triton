@@ -780,12 +780,17 @@ private:
     auto shift = rhs.getConstantValue().has_value()
                      ? rhs.getConstantValue().value()
                      : rhs.getDivisibility(dim);
-    auto numBits = log2Int(lhs.getDivisibility(dim));
+    auto lhsDivisibility = lhs.getDivisibility(dim);
+    if (lhs.getContiguity(dim) > 1 && shift) {
+      // Ignore the 'fake' divisibility
+      lhsDivisibility = 1;
+    }
+    auto numBits = log2Int(lhsDivisibility);
     auto maxBits = log2Int(highestPowOf2Divisor<int64_t>(0));
     // Make sure the return value doesn't exceed highestPowOf2Divisor<int64>(0)
     if (shift + numBits > maxBits)
       return highestPowOf2Divisor<int64_t>(0);
-    return lhs.getDivisibility(dim) << shift;
+    return lhsDivisibility << shift;
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
@@ -819,12 +824,15 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    if (rhs.getConstantValue().has_value())
-      return std::max<int64_t>(1, lhs.getDivisibility(dim) /
-                                      (1 << rhs.getConstantValue().value()));
-    else
-      return std::max<int64_t>(1, lhs.getDivisibility(dim) /
-                                      (1 << rhs.getDivisibility(dim)));
+    auto shift = rhs.getConstantValue().has_value()
+                     ? rhs.getConstantValue().value()
+                     : rhs.getDivisibility(dim);
+    auto lhsDivisibility = lhs.getDivisibility(dim);
+    if (lhs.getContiguity(dim) > 1 && shift) {
+      // Ignore the 'fake' divisibility
+      lhsDivisibility = 1;
+    }
+    return std::max<int64_t>(1, lhsDivisibility / (1 << shift));
   }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,

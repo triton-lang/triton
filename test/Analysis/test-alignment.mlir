@@ -305,9 +305,9 @@ tt.func @shift() {
   %1 = arith.constant dense<8> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [4], constancy = [128], constant_value = 4
   %2 = arith.constant dense<4> : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [274877906944], constancy = [1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1], divisibility = [256], constancy = [1], constant_value = <none>
   %3 = arith.shli %0, %1 : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [67108864], constancy = [1], constant_value = <none>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %4 = arith.shrsi %0, %2 : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [128], constancy = [128], constant_value = 128
   %5 = arith.shli %1, %2 : tensor<128xi32>
