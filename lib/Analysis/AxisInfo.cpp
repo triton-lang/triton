@@ -511,8 +511,23 @@ public:
     AxisInfo::DimVectorT contiguity = opInfo.getContiguity();
     AxisInfo::DimVectorT divisibility = opInfo.getDivisibility();
     AxisInfo::DimVectorT constancy = opInfo.getConstancy();
+    int64_t newDivisibility = 1;
+    if (opInfo.getConstantValue().has_value()) {
+      // The tensor is constant, same as ConstantOpAxisInfoVisitor
+      newDivisibility = highestPowOf2Divisor(opInfo.getConstantValue().value());
+    } else if (opInfo.getRank()) {
+      // Otherwise, calculate the GCD as the new divisibility
+      newDivisibility =
+          opInfo.getContiguity(0) > 1 ? 1 : opInfo.getDivisibility(0);
+      for (int d = 1; d < opInfo.getRank(); ++d) {
+        newDivisibility = gcd(newDivisibility,
+            // MakeRangeOpAxisInfoVisitor sets a 'fake' divisibility,
+            // which should be ignored. 1 is used instead.
+            opInfo.getContiguity(d) > 1 ? 1 : opInfo.getDivisibility(d));
+      }
+    }
     contiguity.insert(contiguity.begin() + op.getAxis(), 1);
-    divisibility.insert(divisibility.begin() + op.getAxis(), 1);
+    divisibility.insert(divisibility.begin() + op.getAxis(), newDivisibility);
     constancy.insert(constancy.begin() + op.getAxis(), 1);
     return AxisInfo(contiguity, divisibility, constancy,
                     operands[0]->getValue().getConstantValue());
