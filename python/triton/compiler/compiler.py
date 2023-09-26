@@ -9,6 +9,8 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any
 
+from dataclasses import dataclass
+
 from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs,
                                    compile_ptx_to_cubin, get_env_vars, get_num_warps,
                                    get_shared_memory_size, ir, runtime,
@@ -30,6 +32,16 @@ from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
                     get_ids_of_tensormaps, parse_tma_info)
 
 
+@dataclass
+class CudaTargetDescriptor:
+    capability: int
+    num_warps: int
+
+
+def _is_cuda(target):
+    return isinstance(target, CudaTargetDescriptor)
+
+
 class LazyDict(dict):
     def __getitem__(self, key):
         val = dict.__getitem__(self, key)
@@ -46,20 +58,20 @@ def inline_triton_ir(mod):
     return mod
 
 
-def ttir_compute_capability_rewrite(mod, arch):
+def ttir_compute_capability_rewrite(mod, target):
     # For hardware without support, we must rewrite all load/store
     # with block (tensor) pointers into tensors of pointers
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    if _is_cuda(arch):
-        pm.add_rewrite_tensor_pointer_pass(arch)
+    if _is_cuda(target):
+        pm.add_rewrite_tensor_pointer_pass(target.capability)
     pm.run(mod)
     return mod
 
 
-def optimize_ttir(mod, arch):
+def optimize_ttir(mod, target):
     mod = inline_triton_ir(mod)
-    mod = ttir_compute_capability_rewrite(mod, arch)
+    mod = ttir_compute_capability_rewrite(mod, target)
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_inliner_pass()
@@ -73,27 +85,30 @@ def optimize_ttir(mod, arch):
     return mod
 
 
-def ttir_to_ttgir(mod, num_warps, num_ctas, arch):
+def ttir_to_ttgir(mod, num_warps, num_ctas, target):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_convert_triton_to_tritongpu_pass(num_warps, 32, num_ctas, arch)
+    pm.add_convert_triton_to_tritongpu_pass(num_warps, 32, num_ctas, target.capability)
     pm.run(mod)
     return mod
 
 
-def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
+def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target,
                    cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue):
+    is_cuda = _is_cuda(target)
+    if is_cuda:
+        capability = target.capability
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
     # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
     pm.add_plan_cta_pass(cluster_info)
-    if _is_cuda(arch):
-        pm.add_tritongpu_rewrite_tensor_pointer_pass(arch)
+    if is_cuda:
+        pm.add_tritongpu_rewrite_tensor_pointer_pass(capability)
         pm.add_plan_cta_pass(cluster_info)
     pm.add_tritongpu_remove_layout_conversions_pass()
-    if isinstance(arch, int):
-        pm.add_tritongpu_accelerate_matmul_pass(arch)
+    if is_cuda:
+        pm.add_tritongpu_accelerate_matmul_pass(capability)
     pm.add_tritongpu_remove_layout_conversions_pass()
     if optimize_epilogue:
         pm.add_tritongpu_optimize_epilogue_pass()
@@ -104,24 +119,22 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     # it's the responsibility of the compiler to figure out the exact
     # `num_warps` to use.
     # TODO: support the case where `num_warps` from user is not 4.
-    if arch // 10 >= 9 and enable_warp_specialization and num_warps == 4:
-        pm.add_tritongpu_ws_feasibility_checking_pass(arch)
+    if capability // 10 >= 9 and enable_warp_specialization and num_warps == 4:
+        pm.add_tritongpu_ws_feasibility_checking_pass(capability)
         pm.run(mod)
         ws_enabled = ir.is_ws_supported(mod)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
     if ws_enabled:
-        pm.add_tritongpu_wsdecomposing_pass(arch)
-        pm.add_tritongpu_wspipeline_pass(
-            num_stages, num_warps, arch)
-        pm.add_tritongpu_wsmutex_pass(arch)
-        pm.add_tritongpu_wsmaterialization_pass(arch)
+        pm.add_tritongpu_wsdecomposing_pass(capability)
+        pm.add_tritongpu_wspipeline_pass(num_stages, num_warps, capability)
+        pm.add_tritongpu_wsmutex_pass(capability)
+        pm.add_tritongpu_wsmaterialization_pass(capability)
         pm.add_cse_pass()
     else:
-        pm.add_tritongpu_pipeline_pass(
-            num_stages, num_warps, num_ctas, arch)
-    pm.add_tritongpu_materialize_load_store_pass(num_warps, arch)
-    if arch // 10 <= 8:
+        pm.add_tritongpu_pipeline_pass(num_stages, num_warps, num_ctas, capability)
+    pm.add_tritongpu_materialize_load_store_pass(num_warps, capability)
+    if capability // 10 <= 8:
         pm.add_tritongpu_prefetch_pass()
     pm.add_tritongpu_optimize_dot_operands_pass()
     pm.add_tritongpu_remove_layout_conversions_pass()
@@ -130,7 +143,7 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     pm.add_tritongpu_reorder_instructions_pass()
     pm.add_cse_pass()
     pm.add_symbol_dce_pass()
-    if arch // 10 >= 9:
+    if capability // 10 >= 9:
         pm.add_tritongpu_fence_insertion_pass()
     pm.add_tritongpu_ws_fixup_missing_attrs_pass()
     pm.run(mod)
@@ -144,12 +157,12 @@ def _add_external_libs(mod, libs):
     add_external_libs(mod, list(libs.keys()), list(libs.values()))
 
 
-def ttgir_to_llir(mod, extern_libs, arch, tma_infos):
+def ttgir_to_llir(mod, extern_libs, target, tma_infos):
     if extern_libs:
         _add_external_libs(mod, extern_libs)
     # TODO: separate tritongpu_to_llvmir for different backends
-    if _is_cuda(arch):
-        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, runtime.TARGET.NVVM)
+    if _is_cuda(target):
+        return translate_triton_gpu_to_llvmir(mod, target.capability, tma_infos, runtime.TARGET.NVVM)
     else:
         return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.ROCDL)
 
@@ -172,7 +185,7 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher")
 
 
-def llir_to_ptx(mod: Any, arch: int, ptx_version: int = None) -> str:
+def llir_to_ptx(mod: Any, target: CudaTargetDescriptor, ptx_version: int = None) -> str:
     '''
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
@@ -181,10 +194,10 @@ def llir_to_ptx(mod: Any, arch: int, ptx_version: int = None) -> str:
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
-    return translate_llvmir_to_ptx(mod, arch, ptx_version)
+    return translate_llvmir_to_ptx(mod, target.capability, ptx_version)
 
 
-def ptx_to_cubin(ptx: str, arch: int):
+def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
     '''
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
@@ -192,7 +205,7 @@ def ptx_to_cubin(ptx: str, arch: int):
     :return: str
     '''
     ptxas, _ = path_to_ptxas()
-    return compile_ptx_to_cubin(ptx, ptxas, arch)
+    return compile_ptx_to_cubin(ptx, ptxas, target.capability)
 
 
 # ------------------------------------------------------------------------------
@@ -220,7 +233,7 @@ def convert_type_repr(x):
     return x
 
 
-def make_hash(fn, arch, env_vars, **kwargs):
+def make_hash(fn, target, env_vars, **kwargs):
     if isinstance(fn, JITFunction):
         configs = kwargs["configs"]
         signature = kwargs["signature"]
@@ -235,7 +248,7 @@ def make_hash(fn, arch, env_vars, **kwargs):
         get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1), sorted(conf.ids_of_folded_args), sorted(conf.divisible_by_8))
         configs_key = [get_conf_key(conf) for conf in configs]
         env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{arch}-{env_vars_list}"
+        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{target}-{env_vars_list}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     ignore_version = kwargs.get('ignore_version', False)
@@ -301,12 +314,7 @@ def parse_mlir_module(path, context):
 instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"], defaults=[set(), set(), set(), set()])
 
 
-# TODO: architecture descriptor class
-def _is_cuda(arch):
-    return isinstance(arch, int)
-
-
-def get_architecture_descriptor(capability):
+def get_cuda_capability(capability):
     if capability is None:
         device = get_current_device()
         capability = get_device_capability(device)
@@ -322,15 +330,12 @@ def get_arch_default_num_warps(device_type):
         assert _device_backend
         arch = _device_backend.get_architecture_descriptor()
         num_warps = arch["num_warps"]
-
     return num_warps
 
 
 def get_arch_default_num_stages(device_type, capability=None):
-    if device_type in ["cuda", "hip"]:
-        arch = get_architecture_descriptor(capability)
-        is_cuda = device_type == "cuda" and _is_cuda(arch)
-        num_stages = 3 if is_cuda and arch >= 75 else 2
+    if device_type == "cuda":
+        num_stages = 3 if get_cuda_capability(capability) >= 75 else 2
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
@@ -340,12 +345,12 @@ def get_arch_default_num_stages(device_type, capability=None):
     return num_stages
 
 
-def add_cuda_stages(arch, extern_libs, stages):
+def add_cuda_stages(target, extern_libs, stages):
 
     stages["ptx"] = (lambda path: Path(path).read_text(),
-                     lambda src: llir_to_ptx(src, arch))
+                     lambda src: llir_to_ptx(src, target))
     stages["cubin"] = (lambda path: Path(path).read_bytes(),
-                       lambda src: ptx_to_cubin(src, arch))
+                       lambda src: ptx_to_cubin(src, target))
 
 
 def compile(fn, **kwargs):
@@ -355,18 +360,10 @@ def compile(fn, **kwargs):
 
     if is_hip():
         device_type = "hip"
-
-    if device_type == "cuda":
-        _device_backend = get_backend(device_type)
-        arch = get_architecture_descriptor(capability)
-    else:
-        _device_backend = get_backend(device_type)
-        assert _device_backend
-        arch = _device_backend.get_architecture_descriptor(**kwargs)
-
-    is_cuda = device_type == "cuda" and _is_cuda(arch)
+    is_cuda = device_type == "cuda"
     if is_hip():
         is_cuda = False
+
     context = ir.context()
     constants = kwargs.get("constants", dict())
     num_warps = kwargs.get("num_warps", get_arch_default_num_warps(device_type))
@@ -392,25 +389,33 @@ def compile(fn, **kwargs):
         cluster_info.clusterDimY = kwargs["clusterDims"][1]
         cluster_info.clusterDimZ = kwargs["clusterDims"][2]
     tma_infos = TMAInfos()
+    # build architecture descriptor
+    if device_type == "cuda":
+        _device_backend = get_backend(device_type)
+        target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps)
+    else:
+        _device_backend = get_backend(device_type)
+        assert _device_backend
+        target = _device_backend.get_architecture_descriptor(**kwargs)
     # build compilation stages
     stages = dict()
     stages["ast"] = (lambda path: fn, None)
     stages["ttir"] = (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, arch=arch), arch))
+                      lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, target=target), target))
     if is_cuda:
         stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
+                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, target), num_stages, num_warps, num_ctas, target, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
         stages["llir"] = (lambda path: Path(path).read_text(),
-                          lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
-        add_cuda_stages(arch, extern_libs, stages)
+                          lambda src: ttgir_to_llir(src, extern_libs, target, tma_infos))
+        add_cuda_stages(target, extern_libs, stages)
     elif device_type == "hip":
-        _device_backend.add_stages(arch, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
+        _device_backend.add_stages(target, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
     else:
         # pass the user's configuration to the backend device.
-        arch["num_warps"] = num_warps
-        arch["num_stages"] = num_stages
-        arch["num_ctas"] = num_ctas
-        _device_backend.add_stages(arch, extern_libs, stages)
+        target["num_warps"] = num_warps
+        target["num_stages"] = num_stages
+        target["num_ctas"] = num_ctas
+        _device_backend.add_stages(target, extern_libs, stages)
 
     # find out the signature of the function
     if isinstance(fn, JITFunction):
@@ -444,11 +449,11 @@ def compile(fn, **kwargs):
         first_stage = list(stages.keys()).index(ir_name)
 
     # create cache manager
-    fn_cache_manager = get_cache_manager(make_hash(fn, arch, get_env_vars(), **kwargs))
+    fn_cache_manager = get_cache_manager(make_hash(fn, target, get_env_vars(), **kwargs))
     # managers used to dump and override IR for debugging
     enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
-    fn_override_manager = get_override_manager(make_hash(fn, arch, get_env_vars(), **kwargs, ignore_version=True))
-    fn_dump_manager = get_dump_manager(make_hash(fn, arch, get_env_vars(), **kwargs, ignore_version=True))
+    fn_override_manager = get_override_manager(make_hash(fn, target, get_env_vars(), **kwargs, ignore_version=True))
+    fn_dump_manager = get_dump_manager(make_hash(fn, target, get_env_vars(), **kwargs, ignore_version=True))
 
     # determine name and extension type of provided function
     if isinstance(fn, JITFunction):
@@ -481,7 +486,7 @@ def compile(fn, **kwargs):
                     "enable_persistent": enable_persistent,
                     "constants": _get_jsonable_constants(constants),
                     "debug": debug,
-                    "arch": arch, }
+                    "target": target, }
         metadata.update(get_env_vars())
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
