@@ -300,6 +300,9 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
 } // namespace LLVM
+
+bool isF8(Type eType);
+
 } // namespace mlir
 
 #endif

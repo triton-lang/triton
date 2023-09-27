@@ -26,6 +26,10 @@ public:
                                       Type type);
 
   Type convertTritonTensorType(RankedTensorType type);
+
+  SmallVector<Value> packMfmaOperand(
+    const SmallVector<Value> &inValues, Type srcTy,
+    ConversionPatternRewriter &rewriter, Location loc);
 };
 
 #endif

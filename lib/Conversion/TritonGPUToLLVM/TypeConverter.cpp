@@ -79,6 +79,37 @@ Value TritonGPUToLLVMTypeConverter::packLLElements(
   return llvmStruct;
 }
 
+SmallVector<Value> TritonGPUToLLVMTypeConverter::packMfmaOperand(
+    const SmallVector<Value> &inValues, Type srcTy,
+    ConversionPatternRewriter &rewriter, Location loc) {
+  auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
+  if (!tensorTy)
+    return inValues;
+  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+  if (!(encoding && encoding.getParent().isa<MfmaEncodingAttr>())) {
+    return inValues;
+  }
+
+  auto structType = this->convertType(srcTy).dyn_cast<LLVM::LLVMStructType>();
+  auto elementTypes = structType.getBody();
+  assert(elementTypes.size() > 0);
+  mlir::VectorType vecTy = elementTypes[0].dyn_cast<mlir::VectorType>();
+  if (!vecTy) return inValues;
+
+  unsigned size = vecTy.getNumElements();
+
+  SmallVector<Value> result;
+  for (int i = 0; i < inValues.size(); i += size) {
+    Value valVec = undef(vecTy);
+    for (unsigned j = 0; j < size; ++j) {
+      valVec = insert_element(vecTy, valVec, inValues[i + j], i32_val(j));
+    }
+    result.push_back(valVec);
+  }
+
+  return result;
+}
+
 SmallVector<Value> TritonGPUToLLVMTypeConverter::unpackLLElements(
     Location loc, Value llvmStruct, ConversionPatternRewriter &rewriter,
     Type type) {
