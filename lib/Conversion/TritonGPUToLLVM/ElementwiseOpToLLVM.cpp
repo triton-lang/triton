@@ -621,26 +621,28 @@ struct FpToFpOpConversion
                                    Location loc) const {
     auto srcElementType = getElementType(op.getFrom());
     auto dstElementType = getElementType(op.getResult());
-    int numElements = 4;
+
+    size_t numElements = 4;
     if (srcElementType.isFloat8E4M3FNUZ() ||
         dstElementType.isFloat8E4M3FNUZ()) {
       numElements = 2;
     }
-    assert(operands.size() % numElements == 0 &&
-           "FP8 casting only support tensors with aligned sizes");
     bool isSrcFP32 = srcElementType.isF32();
     bool isDstFP32 = dstElementType.isF32();
     auto cvtFunc = getConversionFunc(isSrcFP32 ? f16_ty : srcElementType,
                                      isDstFP32 ? f16_ty : dstElementType);
     SmallVector<Value> inVals;
-    for (unsigned i = 0; i < numElements; i++) {
+    for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
     }
     if (isSrcFP32)
       for (Value &v : inVals)
         v = convertFp32ToFp16(loc, rewriter, v);
+    inVals.resize(numElements,
+                  undef(typeConverter->convertType(srcElementType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
+    outVals.resize(std::min(numElements, operands.size()));
     if (isDstFP32)
       for (Value &v : outVals)
         v = convertFp16ToFp32(loc, rewriter, v);
