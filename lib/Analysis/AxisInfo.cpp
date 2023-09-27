@@ -853,7 +853,8 @@ public:
 //===----------------------------------------------------------------------===//
 
 AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
-    : dataflow::SparseDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(solver) {
+    : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
+          solver) {
   // UnrealizedConversionCast:
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast

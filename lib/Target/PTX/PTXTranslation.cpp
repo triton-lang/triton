@@ -90,7 +90,7 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   opt.NoNaNsFPMath = true;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      std::nullopt, llvm::CodeGenOpt::Aggressive)};
+      std::nullopt, llvm::CodeGenOptLevel::Aggressive)};
   // set data layout
   if (layout.empty())
     module.setDataLayout(machine->createDataLayout());
@@ -106,7 +106,7 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
     llvm::legacy::PassManager pass;
     // emit
     machine->addPassesToEmitFile(pass, pstream, nullptr,
-                                 llvm::CodeGenFileType::CGFT_AssemblyFile);
+                                 llvm::CodeGenFileType::AssemblyFile);
     pass.run(module);
   }
   // post-process
