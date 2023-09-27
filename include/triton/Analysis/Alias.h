@@ -63,11 +63,12 @@ private:
 // Shared Memory Alias Analysis
 //===----------------------------------------------------------------------===//
 class SharedMemoryAliasAnalysis
-    : public dataflow::SparseDataFlowAnalysis<dataflow::Lattice<AliasInfo>> {
+    : public dataflow::SparseForwardDataFlowAnalysis<
+          dataflow::Lattice<AliasInfo>> {
 public:
-  using dataflow::SparseDataFlowAnalysis<
-      dataflow::Lattice<AliasInfo>>::SparseDataFlowAnalysis;
-  using dataflow::SparseDataFlowAnalysis<
+  using dataflow::SparseForwardDataFlowAnalysis<
+      dataflow::Lattice<AliasInfo>>::SparseForwardDataFlowAnalysis;
+  using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AliasInfo>>::getLatticeElement;
 
   /// XXX(Keren): Compatible interface with MLIR AliasAnalysis for future use.

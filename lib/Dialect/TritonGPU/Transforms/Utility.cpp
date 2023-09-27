@@ -501,7 +501,7 @@ void getBackwardSliceSCFAware(Operation *op, SetVector<Operation *> *slices) {
     auto filter = [slices](Operation *sliceOp) {
       return slices->count(sliceOp) == 0;
     };
-    mlir::getBackwardSlice(currentOp, &temp, filter);
+    mlir::getBackwardSlice(currentOp, &temp, {filter});
     for (Operation *sliceOp : temp) {
       if (auto forOp = dyn_cast<scf::ForOp>(sliceOp)) {
         queue.push_back(forOp.getBody()->getTerminator());
@@ -520,7 +520,7 @@ void getForwardSliceSCFAware(Value root, SetVector<Operation *> *slices) {
     auto filter = [slices](Operation *sliceOp) {
       return slices->count(sliceOp) == 0;
     };
-    mlir::getForwardSlice(currentValue, &temp, filter);
+    mlir::getForwardSlice(currentValue, &temp, {filter});
     for (Operation *sliceOp : temp) {
       if (auto yieldOp = dyn_cast<scf::YieldOp>(sliceOp)) {
         auto forOp = yieldOp->getParentOfType<scf::ForOp>();

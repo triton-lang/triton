@@ -129,8 +129,8 @@ void populateArithPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
       // Floating point
       GenericOpPattern<arith::AddFOp>, GenericOpPattern<arith::SubFOp>,
       // MaxMin
-      GenericOpPattern<arith::MaxFOp>, GenericOpPattern<arith::MaxSIOp>,
-      GenericOpPattern<arith::MaxUIOp>, GenericOpPattern<arith::MinFOp>,
+      GenericOpPattern<arith::MaximumFOp>, GenericOpPattern<arith::MaxSIOp>,
+      GenericOpPattern<arith::MaxUIOp>, GenericOpPattern<arith::MinimumFOp>,
       GenericOpPattern<arith::MinSIOp>, GenericOpPattern<arith::MinUIOp>,
       // Floating point
       GenericOpPattern<arith::MulFOp>, GenericOpPattern<arith::DivFOp>,

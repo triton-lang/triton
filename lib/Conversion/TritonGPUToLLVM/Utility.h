@@ -89,7 +89,7 @@
     ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
   } while (0)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
-#define null(...) rewriter.create<LLVM::NullOp>(loc, __VA_ARGS__)
+#define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
 
 // Types

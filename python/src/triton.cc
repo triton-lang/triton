@@ -1127,7 +1127,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_minf",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             return mlir::Value(self.create<mlir::arith::MinFOp>(lhs, rhs));
+             return mlir::Value(self.create<mlir::arith::MinimumFOp>(lhs, rhs));
            })
       .def("create_maxsi",
            [](TritonOpBuilder &self, mlir::Value &lhs,
@@ -1142,7 +1142,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_maxf",
            [](TritonOpBuilder &self, mlir::Value &lhs,
               mlir::Value &rhs) -> mlir::Value {
-             return mlir::Value(self.create<mlir::arith::MaxFOp>(lhs, rhs));
+             return mlir::Value(self.create<mlir::arith::MaximumFOp>(lhs, rhs));
            })
       // AddPtr (similar to GEP)
       .def("create_addptr",
