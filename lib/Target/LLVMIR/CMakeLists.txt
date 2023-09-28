@@ -14,7 +14,6 @@ add_mlir_translation_library(TritonLLVMIR
         PUBLIC
         MLIRArithToLLVM
         MLIRBuiltinToLLVMIRTranslation
-        MLIRExecutionEngineUtils
         MLIRIndexToLLVM
         MLIRIR
         MLIRLLVMDialect
