@@ -130,7 +130,8 @@ class LoopPipeliner {
 
   SmallVector<SmallVector<Operation *>> opsByStage;
   SmallVector<unsigned> stageIdx;
-  DenseMap<Value, unsigned> validLoadIdx;
+  DenseMap<Value, unsigned> opIdx;
+  DenseMap<Value, unsigned> validLoadToFirstAsync;
 
   /// Loads to be pipelined
   SetVector<Value> validLoads;
@@ -726,11 +727,12 @@ void LoopPipeliner::defineStagesAndSchedule() {
 
   for (int i = 0; i < opsByStage.size(); i++) {
     for (auto op : opsByStage[i]) {
-      if (validLoads.contains(op->getResult(0))) {
-        validLoadIdx[op->getResult(0)] = stageIdx[i];
-      }
+      opIdx[op->getResult(0)] = stageIdx[i];
     }
   }
+
+  validLoadToFirstAsync[validLoads[0]] = 1;
+  validLoadToFirstAsync[validLoads[1]] = 1;
 }
 
 int LoopPipeliner::getValueDefStage(Value v, int stage) {
@@ -785,7 +787,7 @@ LogicalResult LoopPipeliner::initialize() {
     }
   }
 
-  for (auto opIdx : validLoadIdx) {
+  for (auto opIdx : opIdx) {
     opIdx.first.dump();
     std::cout << "Valid load index: " << opIdx.second << std::endl;
   }
@@ -905,13 +907,14 @@ void LoopPipeliner::emitPrologue() {
       auto newStage = stage - startIndex;
       for (Operation *op : ops) {
         Operation *newOp = nullptr;
-        if (stage != 0 && validLoads.contains(op->getResult(0))) {
+        if (validLoads.contains(op->getResult(0)) &&
+            validLoadToFirstAsync[op->getResult(0)] <= stage) {
           auto load = cast<tt::LoadOp>(op);
           // Allocate empty buffer
-          // if (newStage == 0) {
-          loadsBuffer[load] = allocateEmptyBuffer(load, builder);
-          loadStageBuffer[load] = {loadsBuffer[load]};
-          // }
+          if (validLoadToFirstAsync[op->getResult(0)] == stage) {
+            loadsBuffer[load] = allocateEmptyBuffer(load, builder);
+            loadStageBuffer[load] = {loadsBuffer[load]};
+          }
           // load => copy async
           if (auto loadOp = llvm::dyn_cast<tt::LoadOp>(op)) {
             Value newMask =
@@ -988,7 +991,7 @@ void LoopPipeliner::emitPrologue() {
               newOp = builder.create<ttg::InsertSliceAsyncOp>(
                   op->getLoc(), loadsBuffer[loadOp].getType(),
                   lookupOrDefault(loadOp.getPtr(), newStage),
-                  loadStageBuffer[loadOp][0], pipelineIterIdx, newMask,
+                  loadStageBuffer[loadOp].back(), pipelineIterIdx, newMask,
                   lookupOrDefault(loadOp.getOther(), newStage),
                   loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
                   /*axis*/ 0);
@@ -1028,7 +1031,8 @@ void LoopPipeliner::emitPrologue() {
 
         for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
           Value originResult = op->getResult(dstIdx);
-          if (stage != 0 && validLoads.contains(originResult))
+          if (validLoads.contains(originResult) &&
+              validLoadToFirstAsync[originResult] <= stage)
             break;
           setValueMapping(originResult, newOp->getResult(dstIdx), newStage);
           // Update mapping for loop-carried values (args)
@@ -1053,7 +1057,7 @@ void LoopPipeliner::emitPrologue() {
                                      validLoads.size() * (numStages - 2));
 
   for (Value loadOp : validLoads) {
-    auto lastStage = 1;
+    auto lastStage = loadStageBuffer[loadOp].size() - 1;
     auto bufferType =
         loadStageBuffer[loadOp][lastStage].getType().cast<RankedTensorType>();
     auto bufferShape = bufferType.getShape();
@@ -1117,30 +1121,18 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   loadIdx = newLoopArgs.size();
   for (auto loadOp : validLoads)
     newLoopArgs.push_back(loadsExtract[loadOp]);
-  // std::cout << "depArgs" << std::endl;
-  // for (auto depArg : depArgs) {
-  //   depArg.dump();
-  // }
+
   depArgsBeginIdx = newLoopArgs.size();
-  SmallVector<unsigned> index;
-  index.push_back(numStages - 2);
-  index.push_back(1);
-  // index.push_back(numStages - 1);
-  int i = 0;
   for (auto depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
     if (immediateArgStages[depArg].contains(numStages - 2)) {
       // Peel off post load ops in numStage-1
       newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
     } else {
-      // newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
-      // if (index[i] == 0) {
-      //   newLoopArgs.push_back(loadsExtract[validLoads.back()]);
-      // } else {
-      newLoopArgs.push_back(valueMapping[depArg][index[i]]);
-      // }
+      auto operand = yieldOp->getOperand(depArg.getArgNumber() - 1);
+      auto lastStage = numStages - 1 - opIdx[operand];
+      newLoopArgs.push_back(valueMapping[depArg][lastStage]);
     }
-    i++;
   }
 
   ivIdx = newLoopArgs.size();
@@ -1187,9 +1179,7 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
 
   // Clone the loop body, replace original args with args of the new ForOp.
   SmallVector<Value> loadsFromTensorPtr;
-  int i = -1;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    i++;
     if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
       auto result = op.getResult(0);
       auto cvtDstTy = result.getType().cast<RankedTensorType>();
@@ -1256,48 +1246,6 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
         continue;
       }
     }
-    // if (i == 0) {
-    //   auto loadArgIdx = 1;
-    //   std::cout << "Op here: " << std::endl;
-    //   op.dump();
-    //   newForOp.getRegionIterArgs()[loadIdx + loadArgIdx].dump();
-
-    //   auto result = op.getOperand(0);
-    //   auto cvtDstTy = result.getType().cast<RankedTensorType>();
-    //   cvtDstTy.dump();
-    //   // auto it =
-    //   //     std::find(validLoads.begin(), validLoads.end(),
-    //   op.getOperand(0);
-    //   // if (it != validLoads.end()) {
-    //   std::cout << "Adding cvt for op" << std::endl;
-
-    //   auto cvt = builder.create<ttg::ConvertLayoutOp>(
-    //       op.getLoc(), cvtDstTy,
-    //       newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
-    //   mapping.map(op.getOperand(0), cvt.getResult());
-    //   // }
-    // }
-    // if (i == 2) {
-    //   std::cout << "Special casing op: " << std::endl;
-    //   op.dump();
-    //   auto loadArgIdx = 0;
-    //   // std::cout << "Op here: " << std::endl;
-    //   // op.dump();
-    //   // newForOp.getRegionIterArgs()[loadIdx + loadArgIdx].dump();
-
-    //   // auto result = op.getOperand(0);
-    //   // auto cvtDstTy = result.getType().cast<RankedTensorType>();
-    //   // cvtDstTy.dump();
-    //   // op.getOperand(0);
-    //   // std::cout << "Adding cvt for op" << std::endl;
-
-    //   // auto cvt = builder.create<ttg::ConvertLayoutOp>(
-    //   //     op.getLoc(), cvtDstTy,
-    //   //     newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
-    //   mapping.map(op.getOperand(0),
-    //               newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
-    // }
-
     cloneWithInferType(builder, &op, mapping);
   }
 
@@ -1354,20 +1302,13 @@ Value LoopPipeliner::getBoundedIterationValue(OpBuilder &builder, Value curIdx,
 void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
                                           OpBuilder &builder) {
   // Map the dep args of the next iteration to the dep args of the current
-  std::cout << "Dep args: " << std::endl;
   size_t argIdx = 0;
   for (auto depArg : depArgs) {
     BlockArgument nextArg =
         newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
-    // if (argIdx == 1) {
-    //   nextArg = newForOp.getRegionIterArgs()[depArgsBeginIdx - 1];
-    // }
     nextMapping.map(depArg, nextArg);
-    depArg.dump();
-    nextArg.dump();
     ++argIdx;
   }
-  std::cout << "------------------" << std::endl;
 
   // Update loop iteration args
   Value curIV = newForOp.getRegionIterArgs()[ivIdx];
@@ -1417,9 +1358,7 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
   //
   // We reroder instructions so %a and yield are actually before load. load
   // %arg0 should use the updated %arg0.
-  std::cout << "HERE -----------------------" << std::endl;
   IRMapping curMapping = nextMapping;
-  int i = 0;
   for (Operation *op : orderedDeps) {
     if (!validLoads.contains(op->getResult(0))) {
       if (immediateOpStages[op].contains(numStages - 2))
@@ -1442,8 +1381,10 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
         curMapping.map(loadOp.getResult(), nextOp->getResult(0));
         nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
       } else {
-        if (i == 2) {
-          auto loadArgIdx = 0;
+        auto it =
+            std::find(validLoads.begin(), validLoads.end(), op->getOperand(0));
+        if (it != validLoads.end()) {
+          auto loadArgIdx = std::distance(validLoads.begin(), it);
           auto result = nextMapping.lookupOrDefault(op->getOperand(0));
           auto cvtDstTy = op->getOperand(0).getType().cast<RankedTensorType>();
           auto cvt = builder.create<ttg::ConvertLayoutOp>(
@@ -1460,7 +1401,6 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
         setValueMappingYield(newForOp, op->getResult(dstIdx),
                              nextOp->getResult(dstIdx));
     }
-    i++;
   }
 
   // loads -> async loads
@@ -1573,25 +1513,6 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
       }
       nextOp = builder.create<ttg::ExtractSliceOp>(
           op->getLoc(), sliceType, insertedVal, offset, size, increment);
-
-      // if (sliceType.getShape().size() == 2) {
-      //   nextOp = builder.create<ttg::ExtractSliceOp>(
-      //       op->getLoc(), sliceType, insertedVal,
-      //       SmallVector<OpFoldResult>{extractSliceIndex, int_attr(0),
-      //                                 int_attr(0)},
-      //       SmallVector<OpFoldResult>{int_attr(1),
-      //                                 int_attr(sliceType.getShape()[0]),
-      //                                 int_attr(sliceType.getShape()[1])},
-      //       SmallVector<OpFoldResult>{int_attr(1), int_attr(1),
-      //       int_attr(1)});
-      // } else {
-      //   nextOp = builder.create<ttg::ExtractSliceOp>(
-      //       op->getLoc(), sliceType, insertedVal,
-      //       SmallVector<OpFoldResult>{extractSliceIndex, int_attr(0)},
-      //       SmallVector<OpFoldResult>{int_attr(1),
-      //                                 int_attr(sliceType.getShape()[0])},
-      //       SmallVector<OpFoldResult>{int_attr(1), int_attr(1)});
-      // }
       extractSlices.push_back(nextOp->getResult(0));
 
       // Update mapping of results
