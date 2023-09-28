@@ -492,46 +492,6 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
   return linear;
 }
 
-void getBackwardSliceSCFAware(Operation *op, SetVector<Operation *> *slices) {
-  SmallVector<Operation *> queue = {op};
-  while (!queue.empty()) {
-    Operation *currentOp = queue.back();
-    queue.pop_back();
-    SetVector<Operation *> temp;
-    auto filter = [slices](Operation *sliceOp) {
-      return slices->count(sliceOp) == 0;
-    };
-    mlir::getBackwardSlice(currentOp, &temp, filter);
-    for (Operation *sliceOp : temp) {
-      if (auto forOp = dyn_cast<scf::ForOp>(sliceOp)) {
-        queue.push_back(forOp.getBody()->getTerminator());
-      }
-    }
-    slices->insert(temp.begin(), temp.end());
-  }
-}
-
-void getForwardSliceSCFAware(Value root, SetVector<Operation *> *slices) {
-  SmallVector<Value> queue = {root};
-  while (!queue.empty()) {
-    Value currentValue = queue.back();
-    queue.pop_back();
-    SetVector<Operation *> temp;
-    auto filter = [slices](Operation *sliceOp) {
-      return slices->count(sliceOp) == 0;
-    };
-    mlir::getForwardSlice(currentValue, &temp, filter);
-    for (Operation *sliceOp : temp) {
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(sliceOp)) {
-        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        if (forOp)
-          queue.append(forOp->getResults().begin(), forOp->getResults().end());
-      }
-    }
-    slices->insert(temp.begin(), temp.end());
-  }
-}
-
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and
