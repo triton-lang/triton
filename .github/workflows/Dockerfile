@@ -14,11 +14,6 @@ RUN yum install --assumeyes --nogpgcheck llvm-toolset-13.0
 RUN yum install --assumeyes rh-python38-python-devel rh-python38-python-pip
 SHELL [ "/usr/bin/scl", "enable", "llvm-toolset-13.0", "rh-python38" ]
 
-RUN rm /usr/bin/python
-RUN ln -s /opt/rh/rh-python38/root/usr/bin/python3.8 /usr/bin/python3
-RUN ln -s /opt/rh/rh-python38/root/usr/bin/pip3.8 /usr/bin/pip3
-RUN ln -s /opt/rh/rh-python38/root/usr/bin/python3.8 /usr/bin/python
-RUN ln -s /opt/rh/rh-python38/root/usr/bin/pip3.8 /usr/bin/pip
 RUN python3 -m pip install --upgrade pip
 RUN python3 -m pip install --upgrade cmake ninja sccache
 
