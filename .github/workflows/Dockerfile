@@ -10,7 +10,7 @@ ENV SCCACHE_CACHE_SIZE="2G"
 RUN echo -e "[llvmtoolset-build]\nname=LLVM Toolset 13.0 - Build\nbaseurl=https://buildlogs.centos.org/c7-llvm-toolset-13.0.x86_64/\ngpgcheck=0\nenabled=1" > /etc/yum.repos.d/llvmtoolset-build.repo
 # Install build dependencies
 RUN yum install --assumeyes centos-release-scl
-RUN yum install --assumeyes --nogpgcheck lvm-toolset-13.0
+RUN yum install --assumeyes --nogpgcheck llvm-toolset-13.0
 RUN yum install --assumeyes rh-python38-python-devel rh-python38-python-pip
 SHELL [ "/usr/bin/scl", "enable", "llvm-toolset-13.0", "rh-python38" ]
 
