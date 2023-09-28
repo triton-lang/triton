@@ -1480,7 +1480,7 @@ struct TritonGPUInferLayoutInterface
       auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>();
       if (!operandEncoding.isa<SharedEncodingAttr>() &&
           !(opIdx == 0 && dotOpEnc && dotOpEnc.getOpIdx() == 0 &&
-            dotOpEnc.getParent() == mmaRetEncoding)) {
+            dotOpEnc.getParent().isa<MmaEncodingAttr>())) {
         return emitOptionalError(
             location, "unexpected operand layout for MmaEncodingAttr v3");
       }
