@@ -27,9 +27,10 @@ tt.func @lut_bmm_vectorx2(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, 
   %c1_i32 = arith.constant 1 : i32
   %c1_i32_splat = tt.splat %c1_i32 : (i32) -> tensor<16xi32, #BLs1>
   %1 = tt.load %48 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16x16xf16, #AL>
-  %2 = tt.load %75 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16xi64, #BLs1>
-  %79:4 = scf.for %arg18 = %c0 to %76 step %c1 iter_args(%arg19 = %cst, %arg20 = %49, %arg21 = %75, %arg22 = %2) -> (tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #BL>, tensor<16x!tt.ptr<i64>, #BLs1>, tensor<16xi64, #BLs1>) {
-    %84 = tt.expand_dims %arg22 {axis=1: i32}: (tensor<16xi64, #BLs1>) -> tensor<16x1xi64, #BL>
+  %79:3 = scf.for %arg18 = %c0 to %76 step %c1 iter_args(%arg19 = %cst, %arg20 = %49, %arg21 = %75) -> (tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #BL>, tensor<16x!tt.ptr<i64>, #BLs1>) {
+    %2 = tt.load %arg21 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16xi64, #BLs1>
+    %92 = tt.addptr %arg21, %c1_i32_splat : tensor<16x!tt.ptr<i64>, #BLs1>, tensor<16xi32, #BLs1>
+    %84 = tt.expand_dims %2 {axis=1: i32}: (tensor<16xi64, #BLs1>) -> tensor<16x1xi64, #BL>
     %850 = tt.broadcast %84 : (tensor<16x1xi64, #BL>) -> tensor<16x16xi64, #BL>
     %85 = arith.muli %77, %850 : tensor<16x16xi64, #BL>
     %86 = tt.addptr %arg20, %85 : tensor<16x16x!tt.ptr<f16>, #BL>, tensor<16x16xi64, #BL>
@@ -37,9 +38,7 @@ tt.func @lut_bmm_vectorx2(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i32, 
     %88 = triton_gpu.convert_layout %1 : (tensor<16x16xf16, #AL>) -> tensor<16x16xf16, #A>
     %89 = triton_gpu.convert_layout %87 : (tensor<16x16xf16, #BL>) -> tensor<16x16xf16, #B>
     %90 = tt.dot %88, %89, %arg19 {allowTF32 = true} : tensor<16x16xf16, #A> * tensor<16x16xf16, #B> -> tensor<16x16xf32, #C>
-    %92 = tt.addptr %arg21, %c1_i32_splat : tensor<16x!tt.ptr<i64>, #BLs1>, tensor<16xi32, #BLs1>
-    %83 = tt.load %92 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<16xi64, #BLs1>
-    scf.yield %90, %86, %92, %83 : tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #BL>, tensor<16x!tt.ptr<i64>, #BLs1>, tensor<16xi64, #BLs1>
+    scf.yield %90, %86, %92 : tensor<16x16xf32, #C>, tensor<16x16x!tt.ptr<f16>, #BL>, tensor<16x!tt.ptr<i64>, #BLs1>
   }
   tt.return %79#0 : tensor<16x16xf32, #C>
 }

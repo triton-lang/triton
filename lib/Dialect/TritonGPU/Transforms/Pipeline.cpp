@@ -591,30 +591,31 @@ void LoopPipeliner::checkOpDeps(SetVector<Operation *> &ops) {
 
   // We could remove the following constraints if we can rematerialize in the
   // loop. Check if immediateDepArgs and nonImmediateDepArgs are disjoint.
-  for (auto &[arg, stages] : immediateArgStages) {
-    assert(stages.size() == 1 &&
-           "Triton doesn't support an argument provides values for "
-           "immediate operands of loads from multiple stages. Consider "
-           "removing post load instructions dependency on this argument.");
-    assert(!(nonImmediateDepArgs.contains(arg) &&
-             stages.contains(numStages - 2)) &&
-           "Loop-carried arguments provide values for both immediate and "
-           "non-immediate operands of loads. Please consider removing "
-           "pre/post load instructions dependency on this argument.");
-  }
+  // for (auto &[arg, stages] : immediateArgStages) {
+  //   assert(stages.size() == 1 &&
+  //          "Triton doesn't support an argument provides values for "
+  //          "immediate operands of loads from multiple stages. Consider "
+  //          "removing post load instructions dependency on this argument.");
+  //   assert(!(nonImmediateDepArgs.contains(arg) &&
+  //            stages.contains(numStages - 2)) &&
+  //          "Loop-carried arguments provide values for both immediate and "
+  //          "non-immediate operands of loads. Please consider removing "
+  //          "pre/post load instructions dependency on this argument.");
+  // }
 
-  // Check if immediateOps and nonImmediateOps are disjoint.
-  for (auto &[op, stages] : immediateOpStages) {
-    assert(stages.size() == 1 &&
-           "Triton doesn't support an operation provides values for "
-           "immediate operands of loads from multiple stages. Consider "
-           "removing post load instructions dependency on this argument.");
-    assert(!(nonImmediateOps.contains(op) && stages.contains(numStages - 2)) &&
-           "Operations provide values for both immediate and "
-           "non-immediate operands of loads.  Please consider "
-           "removing pre/post load instructions dependency on this "
-           "operation.");
-  }
+  // // Check if immediateOps and nonImmediateOps are disjoint.
+  // for (auto &[op, stages] : immediateOpStages) {
+  //   assert(stages.size() == 1 &&
+  //          "Triton doesn't support an operation provides values for "
+  //          "immediate operands of loads from multiple stages. Consider "
+  //          "removing post load instructions dependency on this argument.");
+  //   assert(!(nonImmediateOps.contains(op) && stages.contains(numStages - 2))
+  //   &&
+  //          "Operations provide values for both immediate and "
+  //          "non-immediate operands of loads.  Please consider "
+  //          "removing pre/post load instructions dependency on this "
+  //          "operation.");
+  // }
 }
 
 // helpers
@@ -708,20 +709,20 @@ void LoopPipeliner::defineStagesAndSchedule() {
   for (Operation &op : forOp.getLoopBody().front()) {
     if (isa<scf::YieldOp>(op))
       continue;
-    if (i < 5) {
+    if (i <= 1) {
       opsByStage[0].push_back(&op);
     }
-    if (i >= 5 && i < 8) {
+    if (i >= 2 && i <= 6) {
       opsByStage[1].push_back(&op);
     }
-    if (i >= 8) {
+    if (i >= 7) {
       opsByStage[2].push_back(&op);
     }
     i++;
   }
+  stageIdx.push_back(0);
   stageIdx.push_back(1);
   stageIdx.push_back(numStages);
-  stageIdx.push_back(0);
 
   for (int i = 0; i < opsByStage.size(); i++) {
     for (auto op : opsByStage[i]) {
@@ -904,13 +905,13 @@ void LoopPipeliner::emitPrologue() {
       auto newStage = stage - startIndex;
       for (Operation *op : ops) {
         Operation *newOp = nullptr;
-        if (validLoads.contains(op->getResult(0))) {
+        if (stage != 0 && validLoads.contains(op->getResult(0))) {
           auto load = cast<tt::LoadOp>(op);
           // Allocate empty buffer
-          if (newStage == 0) {
-            loadsBuffer[load] = allocateEmptyBuffer(load, builder);
-            loadStageBuffer[load] = {loadsBuffer[load]};
-          }
+          // if (newStage == 0) {
+          loadsBuffer[load] = allocateEmptyBuffer(load, builder);
+          loadStageBuffer[load] = {loadsBuffer[load]};
+          // }
           // load => copy async
           if (auto loadOp = llvm::dyn_cast<tt::LoadOp>(op)) {
             Value newMask =
@@ -987,7 +988,7 @@ void LoopPipeliner::emitPrologue() {
               newOp = builder.create<ttg::InsertSliceAsyncOp>(
                   op->getLoc(), loadsBuffer[loadOp].getType(),
                   lookupOrDefault(loadOp.getPtr(), newStage),
-                  loadStageBuffer[loadOp][newStage], pipelineIterIdx, newMask,
+                  loadStageBuffer[loadOp][0], pipelineIterIdx, newMask,
                   lookupOrDefault(loadOp.getOther(), newStage),
                   loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
                   /*axis*/ 0);
@@ -1027,7 +1028,7 @@ void LoopPipeliner::emitPrologue() {
 
         for (unsigned dstIdx : llvm::seq(unsigned(0), op->getNumResults())) {
           Value originResult = op->getResult(dstIdx);
-          if (validLoads.contains(originResult))
+          if (stage != 0 && validLoads.contains(originResult))
             break;
           setValueMapping(originResult, newOp->getResult(dstIdx), newStage);
           // Update mapping for loop-carried values (args)
@@ -1050,9 +1051,9 @@ void LoopPipeliner::emitPrologue() {
   if (numLoadsRequireAsyncWait > 0)
     builder.create<ttg::AsyncWaitOp>(validLoads.front().getLoc(),
                                      validLoads.size() * (numStages - 2));
-  // unsigned lastStage = 1;
+
   for (Value loadOp : validLoads) {
-    auto lastStage = numStages - 1 - validLoadIdx[loadOp];
+    auto lastStage = 1;
     auto bufferType =
         loadStageBuffer[loadOp][lastStage].getType().cast<RankedTensorType>();
     auto bufferShape = bufferType.getShape();
@@ -1070,26 +1071,7 @@ void LoopPipeliner::emitPrologue() {
     Value extractSlice = builder.create<ttg::ExtractSliceOp>(
         loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][lastStage], offset,
         size, increment);
-    // if (sliceType.getShape().size() == 2) {
-    //   extractSlice = builder.create<ttg::ExtractSliceOp>(
-    //       loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][lastStage],
-    //       SmallVector<OpFoldResult>{int_attr(0), int_attr(0), int_attr(0)},
-    //       SmallVector<OpFoldResult>{int_attr(1),
-    //                                 int_attr(sliceType.getShape()[0]),
-    //                                 int_attr(sliceType.getShape()[1])},
-    //       SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
-    // } else {
-    //   extractSlice = builder.create<ttg::ExtractSliceOp>(
-    //       loadOp.getLoc(), sliceType, loadStageBuffer[loadOp][lastStage],
-    //       SmallVector<OpFoldResult>{int_attr(0), int_attr(0)},
-    //       SmallVector<OpFoldResult>{int_attr(1),
-    //                                 int_attr(sliceType.getShape()[0])},
-    //       SmallVector<OpFoldResult>{int_attr(1), int_attr(1)});
-    //   setValueMapping(loadOp, extractSlice, 0);
-    // }
-
     loadsExtract[loadOp] = extractSlice;
-    // lastStage++;
   }
   curWaitIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
@@ -1135,15 +1117,15 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   loadIdx = newLoopArgs.size();
   for (auto loadOp : validLoads)
     newLoopArgs.push_back(loadsExtract[loadOp]);
-  std::cout << "depArgs" << std::endl;
-  for (auto depArg : depArgs) {
-    depArg.dump();
-  }
+  // std::cout << "depArgs" << std::endl;
+  // for (auto depArg : depArgs) {
+  //   depArg.dump();
+  // }
   depArgsBeginIdx = newLoopArgs.size();
   SmallVector<unsigned> index;
   index.push_back(numStages - 2);
-  index.push_back(0);
-  index.push_back(numStages - 1);
+  index.push_back(1);
+  // index.push_back(numStages - 1);
   int i = 0;
   for (auto depArg : depArgs) {
     depArgsIdx[depArg] = newLoopArgs.size();
@@ -1151,11 +1133,12 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
       // Peel off post load ops in numStage-1
       newLoopArgs.push_back(valueMapping[depArg][numStages - 2]);
     } else {
-      if (index[i] == 0) {
-        newLoopArgs.push_back(loadsExtract[validLoads.back()]);
-      } else {
-        newLoopArgs.push_back(valueMapping[depArg][index[i]]);
-      }
+      // newLoopArgs.push_back(valueMapping[depArg][numStages - 1]);
+      // if (index[i] == 0) {
+      //   newLoopArgs.push_back(loadsExtract[validLoads.back()]);
+      // } else {
+      newLoopArgs.push_back(valueMapping[depArg][index[i]]);
+      // }
     }
     i++;
   }
@@ -1273,26 +1256,47 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
         continue;
       }
     }
-    if (i == 0) {
-      auto loadArgIdx = 1;
-      std::cout << "Op here: " << std::endl;
-      op.dump();
-      newForOp.getRegionIterArgs()[loadIdx + loadArgIdx].dump();
+    // if (i == 0) {
+    //   auto loadArgIdx = 1;
+    //   std::cout << "Op here: " << std::endl;
+    //   op.dump();
+    //   newForOp.getRegionIterArgs()[loadIdx + loadArgIdx].dump();
 
-      auto result = op.getOperand(0);
-      auto cvtDstTy = result.getType().cast<RankedTensorType>();
-      cvtDstTy.dump();
-      // auto it =
-      //     std::find(validLoads.begin(), validLoads.end(), op.getOperand(0));
-      // if (it != validLoads.end()) {
-      std::cout << "Adding cvt for op" << std::endl;
+    //   auto result = op.getOperand(0);
+    //   auto cvtDstTy = result.getType().cast<RankedTensorType>();
+    //   cvtDstTy.dump();
+    //   // auto it =
+    //   //     std::find(validLoads.begin(), validLoads.end(),
+    //   op.getOperand(0);
+    //   // if (it != validLoads.end()) {
+    //   std::cout << "Adding cvt for op" << std::endl;
 
-      auto cvt = builder.create<ttg::ConvertLayoutOp>(
-          op.getLoc(), cvtDstTy,
-          newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
-      mapping.map(op.getOperand(0), cvt.getResult());
-      // }
-    }
+    //   auto cvt = builder.create<ttg::ConvertLayoutOp>(
+    //       op.getLoc(), cvtDstTy,
+    //       newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
+    //   mapping.map(op.getOperand(0), cvt.getResult());
+    //   // }
+    // }
+    // if (i == 2) {
+    //   std::cout << "Special casing op: " << std::endl;
+    //   op.dump();
+    //   auto loadArgIdx = 0;
+    //   // std::cout << "Op here: " << std::endl;
+    //   // op.dump();
+    //   // newForOp.getRegionIterArgs()[loadIdx + loadArgIdx].dump();
+
+    //   // auto result = op.getOperand(0);
+    //   // auto cvtDstTy = result.getType().cast<RankedTensorType>();
+    //   // cvtDstTy.dump();
+    //   // op.getOperand(0);
+    //   // std::cout << "Adding cvt for op" << std::endl;
+
+    //   // auto cvt = builder.create<ttg::ConvertLayoutOp>(
+    //   //     op.getLoc(), cvtDstTy,
+    //   //     newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
+    //   mapping.map(op.getOperand(0),
+    //               newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
+    // }
 
     cloneWithInferType(builder, &op, mapping);
   }
@@ -1355,9 +1359,9 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
   for (auto depArg : depArgs) {
     BlockArgument nextArg =
         newForOp.getRegionIterArgs()[argIdx + depArgsBeginIdx];
-    if (argIdx == 1) {
-      nextArg = newForOp.getRegionIterArgs()[depArgsBeginIdx - 1];
-    }
+    // if (argIdx == 1) {
+    //   nextArg = newForOp.getRegionIterArgs()[depArgsBeginIdx - 1];
+    // }
     nextMapping.map(depArg, nextArg);
     depArg.dump();
     nextArg.dump();
@@ -1438,13 +1442,13 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
         curMapping.map(loadOp.getResult(), nextOp->getResult(0));
         nextMapping.map(loadOp.getResult(), nextOp->getResult(0));
       } else {
-        if (i == 0) {
+        if (i == 2) {
+          auto loadArgIdx = 0;
           auto result = nextMapping.lookupOrDefault(op->getOperand(0));
-          std::cout << "Operand: " << std::endl;
-          result.dump();
           auto cvtDstTy = op->getOperand(0).getType().cast<RankedTensorType>();
-          auto cvt = builder.create<ttg::ConvertLayoutOp>(op->getLoc(),
-                                                          cvtDstTy, result);
+          auto cvt = builder.create<ttg::ConvertLayoutOp>(
+              op->getLoc(), cvtDstTy,
+              newForOp.getRegionIterArgs()[loadIdx + loadArgIdx]);
           curMapping.map(op->getOperand(0), cvt.getResult());
         }
         nextOp = builder.clone(*op, curMapping);
