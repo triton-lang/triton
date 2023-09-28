@@ -9,22 +9,31 @@ ENV SCCACHE_CACHE_SIZE="2G"
 
 # Install build dependencies
 RUN yum install --assumeyes centos-release-scl
-RUN yum install --assumeyes devtoolset-9-gcc* python3-devel python3-pip
-SHELL [ "/usr/bin/scl", "enable", "devtoolset-9" ]
+RUN yum install --assumeyes llvm-toolset-7-clang rh-python38-python-devel rh-python38-python-pip
+SHELL [ "/usr/bin/scl", "enable", "llvm-toolset-7", "rh-python38" ]
 
+RUN rm /usr/bin/python
+RUN ln -s /opt/rh/rh-python38/root/usr/bin/python3.8 /usr/bin/python3
+RUN ln -s /opt/rh/rh-python38/root/usr/bin/pip3.8 /usr/bin/pip3
+RUN ln -s /opt/rh/rh-python38/root/usr/bin/python3.8 /usr/bin/python
+RUN ln -s /opt/rh/rh-python38/root/usr/bin/pip3.8 /usr/bin/pip
 RUN python3 -m pip install --upgrade pip
 RUN python3 -m pip install --upgrade cmake ninja sccache
 
 # Install MLIR's Python Dependencies
 RUN python3 -m pip install -r /source/llvm-project/mlir/python/requirements.txt
+RUN python3 -m pip install --upgrade numpy
 
 # Configure, Build, Test, and Install LLVM
 RUN cmake -GNinja -Bbuild \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=gcc \
-  -DCMAKE_CXX_COMPILER=g++ \
+  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_ASM_COMPILER=clang \
   -DCMAKE_C_COMPILER_LAUNCHER=sccache \
   -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+  -DCMAKE_CXX_FLAGS="-Wno-everything" \
+  -DCMAKE_LINKER=lld \
   -DCMAKE_INSTALL_PREFIX="/install" \
   -DLLVM_BUILD_UTILS=ON \
   -DLLVM_ENABLE_ASSERTIONS=ON \
