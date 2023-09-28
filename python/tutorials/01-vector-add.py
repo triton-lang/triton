@@ -124,11 +124,10 @@ print(
 def benchmark(size, provider):
     x = torch.rand(size, device='cuda', dtype=torch.float32)
     y = torch.rand(size, device='cuda', dtype=torch.float32)
-    quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y, quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: x + y)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: add(x, y))
     gbps = lambda ms: 12 * size / ms * 1e-6
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
