@@ -7,13 +7,7 @@ ADD "${llvm_dir}" /source/llvm-project
 ENV SCCACHE_DIR="/sccache"
 ENV SCCACHE_CACHE_SIZE="2G"
 
-RUN bash -c 'cat > /etc/yum.repos.d/llvmtoolset-build.repo <<EOF
-[llvmtoolset-build]
-name=LLVM Toolset 14.0 - Build
-baseurl=https://buildlogs.centos.org/c7-llvm-toolset-14.0.x86_64/
-gpgcheck=0
-enabled=1
-EOF'
+RUN echo -e "[llvmtoolset-build]\nname=LLVM Toolset 14.0 - Build\nbaseurl=https://buildlogs.centos.org/c7-llvm-toolset-14.0.x86_64/\ngpgcheck=0\nenabled=1" > /etc/yum.repos.d/llvmtoolset-build.repo
 RUN yum install --nogpgcheck llvm-toolset-14.0-clang-tools-extra llvm-toolset-14.0-clang
 # Install build dependencies
 RUN yum install --assumeyes centos-release-scl
