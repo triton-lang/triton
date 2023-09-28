@@ -710,65 +710,110 @@ void LoopPipeliner::createOrderedDeps() {
 }
 
 void LoopPipeliner::defineStagesAndSchedule() {
-  if (::triton::tools::getBoolEnv("ENABLE_LUT_PIPELINING")) {
-    int i = 0;
-    opsByStage.push_back(SmallVector<Operation *>());
-    opsByStage.push_back(SmallVector<Operation *>());
-    opsByStage.push_back(SmallVector<Operation *>());
-    for (Operation &op : forOp.getLoopBody().front()) {
-      if (isa<scf::YieldOp>(op))
-        continue;
-      if (i <= 1) {
-        opsByStage[0].push_back(&op);
-      }
-      if (i >= 2 && i <= 6) {
-        opsByStage[1].push_back(&op);
-      }
-      if (i >= 7) {
-        opsByStage[2].push_back(&op);
-      }
-      i++;
+  if (!::triton::tools::getBoolEnv("ENABLE_LUT_PIPELINING")) {
+    opsByStage.push_back(orderedDeps);
+    for (auto i = 0; i < opsByStage.size(); i++) {
+      stageIdx.push_back(i);
     }
-    stageIdx.push_back(0);
-    stageIdx.push_back(1);
-    stageIdx.push_back(numStages);
-
     for (int i = 0; i < opsByStage.size(); i++) {
       for (auto op : opsByStage[i]) {
         opIdx[op->getResult(0)] = stageIdx[i];
       }
     }
-
-    validLoadToFirstAsync[validLoads[0]] = 1;
-    validLoadToFirstAsync[validLoads[1]] = 1;
+    for (auto validLoad : validLoads) {
+      validLoadToFirstAsync[validLoad] = 0;
+    }
   } else {
-    int i = 0;
-    opsByStage.push_back(SmallVector<Operation *>());
-    opsByStage.push_back(SmallVector<Operation *>());
-    for (Operation &op : forOp.getLoopBody().front()) {
-      if (isa<scf::YieldOp>(op))
-        continue;
-      if (i <= 1) {
-        opsByStage[0].push_back(&op);
-      }
-      if (i >= 2 && i <= 6) {
-        opsByStage[0].push_back(&op);
-      }
-      if (i >= 7) {
-        opsByStage[1].push_back(&op);
-      }
-      i++;
+    MapVector<Operation *, SetVector<Value>> opDeps;
+    SetVector<Operation *> validLoadsOps;
+    for (auto validLoad : validLoads) {
+      validLoadsOps.insert(validLoad.getDefiningOp());
     }
-    stageIdx.push_back(0);
-    stageIdx.push_back(numStages);
+    collectDeps(validLoadsOps, opDeps);
+    DenseMap<Operation *, SetVector<Operation *>>
+        validLoadsToLoadsThatDependOnThem;
+    DenseMap<Operation *, SetVector<Operation *>> validLoadsToDependentLoads;
+    for (auto opDep : opDeps) {
+      for (auto dep : opDep.second) {
+        if (validLoads.contains(dep)) {
+          validLoadsToLoadsThatDependOnThem[dep.getDefiningOp()].insert(
+              opDep.first);
+          validLoadsToDependentLoads[opDep.first].insert(dep.getDefiningOp());
+        }
+      }
+    }
+    SetVector<Operation *> validLoadsToSchedule;
+    for (auto validLoad : validLoads) {
+      if (validLoadsToDependentLoads[validLoad.getDefiningOp()].size() == 0) {
+        validLoadsToSchedule.insert(validLoad.getDefiningOp());
+      }
+    }
+    assert(validLoadsToSchedule.size() > 0 &&
+           "No valid loads to schedule, please check the loop");
+    SmallVector<SmallVector<Operation *>> stages;
+    while (validLoadsToSchedule.size() != 0) {
+      SmallVector<Operation *> stage;
+      for (auto validLoad : validLoadsToSchedule) {
+        stage.push_back(validLoad);
+      }
+      stages.push_back(stage);
+      SetVector<Operation *> validLoadsToScheduleNext;
+      for (auto validLoad : validLoadsToSchedule) {
+        for (auto dep : validLoadsToLoadsThatDependOnThem[validLoad]) {
+          validLoadsToDependentLoads[dep].remove(validLoad);
+          if (validLoadsToDependentLoads[dep].size() == 0) {
+            validLoadsToScheduleNext.insert(dep);
+          }
+        }
+      }
+      validLoadsToSchedule = validLoadsToScheduleNext;
+    }
+    assert(stages.size() > 0 && stages.size() < numStages &&
+           "Invalid number of stages");
+    SmallVector<SetVector<Operation *>> stagesDependencies;
+    SetVector<Operation *> visited;
+    for (int i = 0; i < stages.size(); i++) {
+      SetVector<Operation *> stageDependencies;
+      for (auto op : stages[i]) {
+        stageDependencies.insert(op);
+        visited.insert(op);
+        for (auto dep : opDeps[op]) {
+          if (visited.contains(dep.getDefiningOp()))
+            continue;
+          visited.insert(dep.getDefiningOp());
+          stageDependencies.insert(dep.getDefiningOp());
+        }
+      }
+      stagesDependencies.push_back(stageDependencies);
+    }
 
+    for (int i = 0; i < stages.size(); i++) {
+      SmallVector<Operation *> orderedOpsForStage;
+      for (auto op : orderedDeps) {
+        if (stagesDependencies[i].contains(op)) {
+          orderedOpsForStage.push_back(op);
+        }
+      }
+      opsByStage.push_back(orderedOpsForStage);
+    }
+
+    for (auto i = 0; i < opsByStage.size(); i++) {
+      stageIdx.push_back(i);
+    }
     for (int i = 0; i < opsByStage.size(); i++) {
       for (auto op : opsByStage[i]) {
         opIdx[op->getResult(0)] = stageIdx[i];
       }
     }
 
-    validLoadToFirstAsync[validLoads[0]] = 0;
+    for (auto validLoad : validLoads) {
+      if (validLoadsToLoadsThatDependOnThem[validLoad.getDefiningOp()].size() ==
+          0) {
+        validLoadToFirstAsync[validLoad] = opIdx[validLoad];
+      } else {
+        validLoadToFirstAsync[validLoad] = numStages - 2;
+      }
+    }
   }
 }
 
@@ -1687,7 +1732,6 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
       pipeliner.emitPrologue();
       scf::ForOp newForOp = pipeliner.createNewForOp();
       pipeliner.emitEpilogue();
-      newForOp.dump();
       newForOps.push_back(newForOp);
 
       // Replace the original loop
@@ -1695,14 +1739,12 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
         forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
       forOp->erase();
     });
-    std::cout << "Done with phase 0" << std::endl;
     // phase 1: pipeline dots in loops
     // A tt.dot suitable for GMMA will be converted to ttg.dot_async. And a
     // ttg.DotWaitOp will synchronize it lagging just one iteration, which is
     // a hueristic rule.
     for (auto forOp : newForOps)
       asyncLaunchDots(forOp);
-    std::cout << "Done with phase 1" << std::endl;
     // phase 2: emit consumer_release (empty barrier arrive) logics in case of
     //          TMA multicast.
     // For each load ops, it is emitted after its last consumer, if the
@@ -1712,18 +1754,15 @@ struct PipelinePass : public TritonGPUPipelineBase<PipelinePass> {
     // OptimizeBarriers pass.
     for (const auto &item : consumerReleaseMap)
       emitConsumerRelease(item.first, item.second, numStages);
-    std::cout << "Done with phase 2" << std::endl;
     // Dead code elimination due to cloneForOp
-    MLIRContext *context = &getContext();
-    ModuleOp m = getOperation();
-    m.dump();
-    std::cout << "Done with phase 3" << std::endl;
-    mlir::RewritePatternSet cleanupPattern(context);
-    populateForOpDeadArgumentElimination(cleanupPattern);
-    if (mlir::applyPatternsAndFoldGreedily(m, std::move(cleanupPattern))
-            .failed()) {
-      signalPassFailure();
-    }
+    // MLIRContext *context = &getContext();
+    // ModuleOp m = getOperation();
+    // mlir::RewritePatternSet cleanupPattern(context);
+    // populateForOpDeadArgumentElimination(cleanupPattern);
+    // if (mlir::applyPatternsAndFoldGreedily(m, std::move(cleanupPattern))
+    //         .failed()) {
+    //   signalPassFailure();
+    // }
   }
 
 private:
