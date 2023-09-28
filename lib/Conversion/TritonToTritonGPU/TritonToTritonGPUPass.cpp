@@ -37,9 +37,8 @@ public:
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands()),
-        adaptor.getAttributes());
+    rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands(),
+                                    op->getAttrs());
     return success();
   }
 };
@@ -507,9 +506,8 @@ struct TritonGenericPattern : public OpConversionPattern<Op> {
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands()),
-        adaptor.getAttributes());
+    rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands(),
+                                    op->getAttrs());
     return success();
   }
 };
