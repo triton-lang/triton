@@ -180,7 +180,6 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 )
 def benchmark(M, N, provider):
     x = torch.randn(M, N, device='cuda', dtype=torch.float32)
-    quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-native':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':
