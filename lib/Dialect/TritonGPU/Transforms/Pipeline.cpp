@@ -330,7 +330,9 @@ LogicalResult LoopPipeliner::collectOps(SetVector<Operation *> &ops) {
               std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
         auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
-        if (!tensorTy)
+        if (!tensorTy ||
+            (!::triton::tools::getBoolEnv("ENABLE_LUT_PIPELINING") &&
+             tensorTy.getRank() < 2))
           continue;
         auto ty =
             tensorTy.getElementType().cast<tt::PointerType>().getPointeeType();
@@ -400,12 +402,15 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
       // to wait on the other load in the prologue, which is against the point
       // of the pipeline pass)
       bool isCandidate = true;
-      // for (Operation *other : ops)
-      //   if (isa<tt::LoadOp>(other))
-      //     if (opDeps[op].contains(other->getResult(0))) {
-      //       isCandidate = false;
-      //       break;
-      //     }
+      if (!::triton::tools::getBoolEnv("ENABLE_LUT_PIPELINING")) {
+        for (Operation *other : ops)
+          if (isa<tt::LoadOp>(other))
+            if (opDeps[op].contains(other->getResult(0))) {
+              isCandidate = false;
+              break;
+            }
+      }
+
       // We only pipeline loads that have one covert_layout (to dot_op) use
       // TODO: lift this constraint in the future
       if (isCandidate && loadOp.getResult().hasOneUse() &&
@@ -459,9 +464,11 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
             loadsMapping[loadOp] = preUse->getResult(0);
           }
         } else {
-          // isCandidate = false;
-          isCandidate = true;
-          loadsMapping[loadOp] = loadOp.getResult();
+          if (::triton::tools::getBoolEnv("ENABLE_LUT_PIPELINING")) {
+            isCandidate = true;
+            loadsMapping[loadOp] = loadOp.getResult();
+          } else
+            isCandidate = false;
         }
       } else if (isCandidate && mode && isLoadFromTensorPtr(loadOp)) {
         loadsMapping[loadOp] = loadOp.getResult();
@@ -703,36 +710,66 @@ void LoopPipeliner::createOrderedDeps() {
 }
 
 void LoopPipeliner::defineStagesAndSchedule() {
-  int i = 0;
-  opsByStage.push_back(SmallVector<Operation *>());
-  opsByStage.push_back(SmallVector<Operation *>());
-  opsByStage.push_back(SmallVector<Operation *>());
-  for (Operation &op : forOp.getLoopBody().front()) {
-    if (isa<scf::YieldOp>(op))
-      continue;
-    if (i <= 1) {
-      opsByStage[0].push_back(&op);
+  if (::triton::tools::getBoolEnv("ENABLE_LUT_PIPELINING")) {
+    int i = 0;
+    opsByStage.push_back(SmallVector<Operation *>());
+    opsByStage.push_back(SmallVector<Operation *>());
+    opsByStage.push_back(SmallVector<Operation *>());
+    for (Operation &op : forOp.getLoopBody().front()) {
+      if (isa<scf::YieldOp>(op))
+        continue;
+      if (i <= 1) {
+        opsByStage[0].push_back(&op);
+      }
+      if (i >= 2 && i <= 6) {
+        opsByStage[1].push_back(&op);
+      }
+      if (i >= 7) {
+        opsByStage[2].push_back(&op);
+      }
+      i++;
     }
-    if (i >= 2 && i <= 6) {
-      opsByStage[1].push_back(&op);
-    }
-    if (i >= 7) {
-      opsByStage[2].push_back(&op);
-    }
-    i++;
-  }
-  stageIdx.push_back(0);
-  stageIdx.push_back(1);
-  stageIdx.push_back(numStages);
+    stageIdx.push_back(0);
+    stageIdx.push_back(1);
+    stageIdx.push_back(numStages);
 
-  for (int i = 0; i < opsByStage.size(); i++) {
-    for (auto op : opsByStage[i]) {
-      opIdx[op->getResult(0)] = stageIdx[i];
+    for (int i = 0; i < opsByStage.size(); i++) {
+      for (auto op : opsByStage[i]) {
+        opIdx[op->getResult(0)] = stageIdx[i];
+      }
     }
-  }
 
-  validLoadToFirstAsync[validLoads[0]] = 1;
-  validLoadToFirstAsync[validLoads[1]] = 1;
+    validLoadToFirstAsync[validLoads[0]] = 1;
+    validLoadToFirstAsync[validLoads[1]] = 1;
+  } else {
+    int i = 0;
+    opsByStage.push_back(SmallVector<Operation *>());
+    opsByStage.push_back(SmallVector<Operation *>());
+    for (Operation &op : forOp.getLoopBody().front()) {
+      if (isa<scf::YieldOp>(op))
+        continue;
+      if (i <= 1) {
+        opsByStage[0].push_back(&op);
+      }
+      if (i >= 2 && i <= 6) {
+        opsByStage[0].push_back(&op);
+      }
+      if (i >= 7) {
+        opsByStage[1].push_back(&op);
+      }
+      i++;
+    }
+    stageIdx.push_back(0);
+    stageIdx.push_back(numStages);
+
+    for (int i = 0; i < opsByStage.size(); i++) {
+      for (auto op : opsByStage[i]) {
+        opIdx[op->getResult(0)] = stageIdx[i];
+      }
+    }
+
+    validLoadToFirstAsync[validLoads[0]] = 0;
+  }
 }
 
 int LoopPipeliner::getValueDefStage(Value v, int stage) {
