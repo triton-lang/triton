@@ -29,17 +29,19 @@ static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
       op->setAttr(attr.getName(), attr.getValue());
 }
 
-template <class Op> class GenericOpPattern : public OpConversionPattern<Op> {
-public:
+template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
   using OpConversionPattern<Op>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands()),
-        adaptor.getAttributes());
+    SmallVector<Type> retTypes;
+    if (failed(this->getTypeConverter()->convertTypes(op->getResultTypes(),
+                                                      retTypes)))
+      return failure();
+    rewriter.replaceOpWithNewOp<Op>(op, retTypes, adaptor.getOperands(),
+                                    op->getAttrs());
+
     return success();
   }
 };
@@ -84,22 +86,6 @@ public:
     addNamedAttrs(rewriter.replaceOpWithNewOp<arith::ConstantOp>(
                       op, retShapedType, value),
                   adaptor.getAttributes());
-    return success();
-  }
-};
-
-class ConvertArithOp : public ConversionPattern {
-public:
-  ConvertArithOp(TritonGPUTypeConverter &typeConverter, MLIRContext *context)
-      : ConversionPattern(typeConverter, MatchAnyOpTypeTag(), /*benefit=*/1,
-                          context) {}
-
-  LogicalResult
-  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                  ConversionPatternRewriter &rewriter) const override {
-    Dialect *dialect = op->getDialect();
-    if (dialect->getTypeID() != mlir::TypeID::get<arith::ArithDialect>())
-      return failure();
     return success();
   }
 };
@@ -199,22 +185,6 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
 //
 // Triton patterns
 //
-// TODO: Do we need to put them in anonymous namespace?
-struct TritonMakeRangePattern
-    : public OpConversionPattern<triton::MakeRangeOp> {
-  using OpConversionPattern<triton::MakeRangeOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type retType = getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::MakeRangeOp>(
-                      op, retType, adaptor.getStart(), adaptor.getEnd()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
 struct TritonExpandDimsPattern
     : public OpConversionPattern<triton::ExpandDimsOp> {
   using OpConversionPattern<triton::ExpandDimsOp>::OpConversionPattern;
@@ -435,85 +405,6 @@ struct TritonTransPattern : public OpConversionPattern<triton::TransOp> {
   }
 };
 
-struct TritonLoadPattern : public OpConversionPattern<triton::LoadOp> {
-  using OpConversionPattern<triton::LoadOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::LoadOp>(
-                      op, typeConverter->convertType(op.getType()),
-                      adaptor.getPtr(), adaptor.getMask(), adaptor.getOther(),
-                      adaptor.getBoundaryCheckAttr(), adaptor.getPaddingAttr(),
-                      adaptor.getCache(), adaptor.getEvict(),
-                      adaptor.getIsVolatile()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
-struct TritonStorePattern : public OpConversionPattern<triton::StoreOp> {
-  using OpConversionPattern<triton::StoreOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::StoreOp>(
-                      op, adaptor.getPtr(), adaptor.getValue(),
-                      adaptor.getMask(), adaptor.getCache(),
-                      adaptor.getEvict()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
-struct TritonAtomicCASPattern
-    : public OpConversionPattern<triton::AtomicCASOp> {
-  using OpConversionPattern<triton::AtomicCASOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::AtomicCASOp>(
-                      op, typeConverter->convertType(op.getType()),
-                      adaptor.getPtr(), adaptor.getCmp(), adaptor.getVal(),
-                      op.getSem()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
-struct TritonAtomicRMWPattern
-    : public OpConversionPattern<triton::AtomicRMWOp> {
-  using OpConversionPattern<triton::AtomicRMWOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::AtomicRMWOp>(
-                      op, typeConverter->convertType(op.getType()),
-                      adaptor.getAtomicRmwOp(), adaptor.getPtr(),
-                      adaptor.getVal(), adaptor.getMask(), op.getSem()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
-template <class Op>
-struct TritonGenericPattern : public OpConversionPattern<Op> {
-  using OpConversionPattern<Op>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(Op op, typename Op::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<Op>(op, retType, adaptor.getOperands()),
-        adaptor.getAttributes());
-    return success();
-  }
-};
-
 struct TritonBroadcastPattern
     : public OpConversionPattern<triton::BroadcastOp> {
   using OpConversionPattern<triton::BroadcastOp>::OpConversionPattern;
@@ -555,20 +446,6 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   }
 };
 
-struct TritonReduceReturnPattern
-    : public OpConversionPattern<triton::ReduceReturnOp> {
-  using OpConversionPattern<triton::ReduceReturnOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::ReduceReturnOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ReduceReturnOp>(
-                      op, adaptor.getResult()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
 struct TritonScanPattern : public OpConversionPattern<triton::ScanOp> {
   using OpConversionPattern<triton::ScanOp>::OpConversionPattern;
 
@@ -583,66 +460,6 @@ struct TritonScanPattern : public OpConversionPattern<triton::ScanOp> {
     rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp,
                                newCombineOp.end());
     rewriter.replaceOp(op, newScan.getResult());
-    return success();
-  }
-};
-
-struct TritonScanReturnPattern
-    : public OpConversionPattern<triton::ScanReturnOp> {
-  using OpConversionPattern<triton::ScanReturnOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::ScanReturnOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ScanReturnOp>(
-                      op, adaptor.getResult()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
-struct TritonExternElementwisePattern
-    : public OpConversionPattern<triton::ExternElementwiseOp> {
-  using OpConversionPattern<triton::ExternElementwiseOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::ExternElementwiseOp op,
-                  typename triton::ExternElementwiseOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Type retType = this->getTypeConverter()->convertType(op.getType());
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExternElementwiseOp>(
-                      op, retType, adaptor.getOperands(), op.getLibnameAttr(),
-                      op.getLibpathAttr(), op.getSymbolAttr(),
-                      op.getPureAttr()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
-struct TritonPrintPattern : public OpConversionPattern<triton::PrintOp> {
-  using OpConversionPattern<triton::PrintOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::PrintOp op, typename triton::PrintOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::PrintOp>(
-                      op, op.getPrefixAttr(), adaptor.getOperands()),
-                  adaptor.getAttributes());
-    return success();
-  }
-};
-
-struct TritonAssertPattern : public OpConversionPattern<triton::AssertOp> {
-  using OpConversionPattern<triton::AssertOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::AssertOp op,
-                  typename triton::AssertOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::AssertOp>(
-                      op, adaptor.getCondition(), op.getMessageAttr(),
-                      op.getFileAttr(), op.getFuncAttr(), op.getLineAttr()),
-                  adaptor.getAttributes());
     return success();
   }
 };
@@ -698,22 +515,23 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
-      TritonGenericPattern<triton::AdvanceOp>,
-      TritonGenericPattern<triton::MakeTensorPtrOp>,
-      TritonGenericPattern<triton::ViewOp>,
-      TritonGenericPattern<triton::BitcastOp>,
-      TritonGenericPattern<triton::FpToFpOp>,
-      TritonGenericPattern<triton::IntToPtrOp>,
-      TritonGenericPattern<triton::PtrToIntOp>,
-      TritonGenericPattern<triton::SplatOp>, TritonBroadcastPattern,
-      TritonGenericPattern<triton::AddPtrOp>, TritonCatPattern,
-      TritonGenericPattern<triton::ElementwiseInlineAsmOp>, TritonReducePattern,
-      TritonReduceReturnPattern, TritonScanPattern, TritonScanReturnPattern,
-      TritonTransPattern, TritonExpandDimsPattern, TritonMakeRangePattern,
-      TritonDotPattern, TritonLoadPattern, TritonStorePattern,
-      TritonExternElementwisePattern, TritonPrintPattern, TritonAssertPattern,
-      TritonAtomicRMWPattern, TritonFuncOpPattern, TritonReturnOpPattern,
-      TritonCallOpPattern>(typeConverter, context);
+      GenericOpPattern<triton::AdvanceOp>,
+      GenericOpPattern<triton::MakeTensorPtrOp>,
+      GenericOpPattern<triton::ViewOp>, GenericOpPattern<triton::BitcastOp>,
+      GenericOpPattern<triton::FpToFpOp>, GenericOpPattern<triton::IntToPtrOp>,
+      GenericOpPattern<triton::PtrToIntOp>, GenericOpPattern<triton::SplatOp>,
+      TritonBroadcastPattern, GenericOpPattern<triton::AddPtrOp>,
+      TritonCatPattern, GenericOpPattern<triton::ElementwiseInlineAsmOp>,
+      TritonReducePattern, GenericOpPattern<triton::ReduceReturnOp>,
+      TritonScanPattern, GenericOpPattern<triton::ScanReturnOp>,
+      GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
+      TritonTransPattern, TritonDotPattern, GenericOpPattern<triton::LoadOp>,
+      GenericOpPattern<triton::StoreOp>,
+      GenericOpPattern<triton::ExternElementwiseOp>,
+      GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
+      GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
+      GenericOpPattern<triton::CallOp>, TritonFuncOpPattern>(typeConverter,
+                                                             context);
 }
 
 //
@@ -759,22 +577,6 @@ struct SCFForPattern : public OpConversionPattern<scf::ForOp> {
 
     rewriter.replaceOp(op, newOp.getResults());
 
-    return success();
-  }
-};
-
-struct SCFYieldPattern : public OpConversionPattern<scf::YieldOp> {
-  using OpConversionPattern<scf::YieldOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(scf::YieldOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // rewriter.setInsertionPointToEnd(rewriter.getInsertionBlock());
-    // rewriter.create<scf::YieldOp>(op.getLoc(), adaptor.getOperands());
-    // op.erase();
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<scf::YieldOp>(op, adaptor.getOperands()),
-        adaptor.getAttributes());
     return success();
   }
 };
@@ -866,8 +668,8 @@ public:
 void populateSCFPatterns(TritonGPUTypeConverter &typeConverter,
                          RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<SCFYieldPattern, SCFForPattern, SCFIfPattern, SCFWhilePattern,
-               SCFConditionPattern>(typeConverter, context);
+  patterns.add<GenericOpPattern<scf::YieldOp>, SCFForPattern, SCFIfPattern,
+               SCFWhilePattern, SCFConditionPattern>(typeConverter, context);
 }
 
 // CF
