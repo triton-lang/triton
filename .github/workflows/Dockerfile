@@ -7,7 +7,7 @@ ADD "${llvm_dir}" /source/llvm-project
 ENV SCCACHE_DIR="/sccache"
 ENV SCCACHE_CACHE_SIZE="2G"
 
-RUN bash -c 'cat << EOF > /etc/yum.repos.d/llvmtoolset-build.repo
+RUN bash -c 'cat > /etc/yum.repos.d/llvmtoolset-build.repo <<EOF
 [llvmtoolset-build]
 name=LLVM Toolset 14.0 - Build
 baseurl=https://buildlogs.centos.org/c7-llvm-toolset-14.0.x86_64/
