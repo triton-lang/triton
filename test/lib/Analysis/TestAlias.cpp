@@ -4,8 +4,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include <set>
-
 using namespace mlir;
 
 namespace {
@@ -22,7 +20,7 @@ struct TestAliasPass
     return opName;
   }
 
-  static void print(StringRef name, std::set<std::string> &vals,
+  static void print(StringRef name, SmallVector<std::string> &vals,
                     raw_ostream &os) {
     if (vals.empty())
       return;
@@ -59,15 +57,17 @@ struct TestAliasPass
     auto getAllocOpNames = [&](Value value) {
       dataflow::Lattice<AliasInfo> *latticeElement =
           analysis->getLatticeElement(value);
-      std::set<std::string> opNames;
+      SmallVector<std::string> opNames;
       if (latticeElement) {
         auto &info = latticeElement->getValue();
         for (auto &alias : info.getAllocs()) {
           auto opName =
               getValueOperandName(alias.getDefiningOp()->getResult(0), state);
-          opNames.insert(std::move(opName));
+          opNames.push_back(std::move(opName));
         }
       }
+      // Ensure deterministic output
+      std::sort(opNames.begin(), opNames.end());
       return opNames;
     };
 
