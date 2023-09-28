@@ -507,14 +507,16 @@ private:
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
     auto getValueLivenessRange = [&](Value value) {
+      LivenessR ranges;
       // Shared memory allocated by mbarrier cannot be reused
       if (value.getDefiningOp() &&
-          isa<triton::nvidia_gpu::AllocMBarrierOp>(value.getDefiningOp()))
-        return Interval(std::numeric_limits<size_t>::min(),
-                        std::numeric_limits<size_t>::max());
+          isa<triton::nvidia_gpu::AllocMBarrierOp>(value.getDefiningOp())) {
+        ranges.push_back(Interval(std::numeric_limits<size_t>::min(),
+                        std::numeric_limits<size_t>::max()));
+        return ranges;
+      }
 
       auto liveOperations = liveness.resolveLiveness(value);
-      LivenessR ranges;
       std::for_each(liveOperations.begin(), liveOperations.end(),
                     [&](Operation *liveOp) {
                       ranges.add(operationId[liveOp]);
