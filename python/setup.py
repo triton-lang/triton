@@ -84,8 +84,8 @@ def get_llvm_package_info():
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    name = f'llvm+mlir-18.0.0-{arch}-{system_suffix}-{release_suffix}'
-    version = "llvmorg-18-init-7000-g76ce4736721a"
+    name = f'llvm+mlir+clang-18.0.0-{arch}-{system_suffix}-{release_suffix}'
+    version = "llvm-18.0.0-76ce4736721a"
     url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
     # FIXME: remove the following once github.com/ptillet/triton-llvm-releases has arm64 llvm releases
     if arch == 'arm64' and 'linux' in system_suffix:
