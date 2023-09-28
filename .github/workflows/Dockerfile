@@ -7,10 +7,18 @@ ADD "${llvm_dir}" /source/llvm-project
 ENV SCCACHE_DIR="/sccache"
 ENV SCCACHE_CACHE_SIZE="2G"
 
+RUN bash -c 'cat << EOF > /etc/yum.repos.d/llvmtoolset-build.repo
+[llvmtoolset-build]
+name=LLVM Toolset 14.0 - Build
+baseurl=https://buildlogs.centos.org/c7-llvm-toolset-14.0.x86_64/
+gpgcheck=0
+enabled=1
+EOF'
+RUN yum install --nogpgcheck llvm-toolset-14.0-clang-tools-extra llvm-toolset-14.0-clang
 # Install build dependencies
 RUN yum install --assumeyes centos-release-scl
-RUN yum install --assumeyes llvm-toolset-7-clang rh-python38-python-devel rh-python38-python-pip
-SHELL [ "/usr/bin/scl", "enable", "llvm-toolset-7", "rh-python38" ]
+RUN yum install --assumeyes rh-python38-python-devel rh-python38-python-pip
+SHELL [ "/usr/bin/scl", "enable", "llvm-toolset-14.0", "rh-python38" ]
 
 RUN rm /usr/bin/python
 RUN ln -s /opt/rh/rh-python38/root/usr/bin/python3.8 /usr/bin/python3
