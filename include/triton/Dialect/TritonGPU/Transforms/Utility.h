@@ -141,16 +141,6 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
 Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
 
-// Implement backward and forward slice that will go through scf blocks when
-// yield or scf results are in the slice.
-// Note that like exisiting forward and backard slice this may add operations to
-// the slice that are not actually dependent on the root because when a region
-// is added to the slice in the forward slice all the operations of the region
-// are added. We could implement a more accurate slice method by tracking value
-// usage across scf regions.
-void getBackwardSliceSCFAware(Operation *, SetVector<Operation *> *slices);
-void getForwardSliceSCFAware(Value root, SetVector<Operation *> *slices);
-
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
