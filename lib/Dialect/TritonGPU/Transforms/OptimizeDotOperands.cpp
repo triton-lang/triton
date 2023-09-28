@@ -247,8 +247,10 @@ struct MMAV3UseRegOperand : public OpRewritePattern<triton::DotOp> {
       return failure();
     auto srcEncoding =
         getEncoding(convertLhs.getSrc()).dyn_cast<MmaEncodingAttr>();
-    if (!srcEncoding || srcEncoding.getVersionMajor() != 3 ||
-        srcEncoding != getEncoding(dotOp.getResult()))
+    auto dstEncoding =
+        getEncoding(dotOp.getResult()).dyn_cast<MmaEncodingAttr>();
+    if (!srcEncoding || srcEncoding.getVersionMajor() != 3 || !dstEncoding ||
+        dstEncoding.getVersionMajor() != 3)
       return failure();
     // We currently only support convert from f16 mma to f16 dot operand as the
     // other types require shuffling data across threads.

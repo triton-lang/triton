@@ -220,7 +220,10 @@ DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
 llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Location loc,
                                  const SmallVector<Value> &elements,
-                                 int startIndex, int numElements) {
+                                 int startIndex, int numElements,
+                                 Operation *insertBefore) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(insertBefore);
   if (!elements[0].getType().isF16()) {
     llvm::SmallVector<Value> mmaOut(numElements);
     for (int i = 0; i < numElements; ++i)
@@ -351,9 +354,12 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
   int numTMADescs =
       func->getAttr(kAttrNumTMALoadDescsName).cast<IntegerAttr>().getInt();
+  Operation *startSequence = nullptr;
   if (numTMADescs == 0)
-    rewriter.create<triton::nvgpu::FenceAsyncSharedOp>(loc, 0);
-  rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
+    startSequence = rewriter.create<triton::nvgpu::FenceAsyncSharedOp>(loc, 0);
+  Operation *fenceOp = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
+  if (startSequence == nullptr)
+    startSequence = fenceOp;
   // WGMMA fp8 -> fp32 accumulates in lower precision than fp32.
   bool needsPartialAccumulator = isFP8(eltTypeA) &&
                                  eltTypeC == triton::nvgpu::WGMMAEltType::f32 &&
@@ -362,7 +368,8 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
       llvm::SmallVector<Value> mmaOut =
-          loadReg(rewriter, loc, fc, (m * numRepN + n) * accSize, accSize);
+          loadReg(rewriter, loc, fc, (m * numRepN + n) * accSize, accSize,
+                  startSequence);
       llvm::SmallVector<Type> elemTypes;
       for (Value accEl : mmaOut)
         elemTypes.push_back(accEl.getType());
@@ -379,8 +386,9 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           a = aLoader.smemLoad(m, k, rewriter, loc);
         } else {
           unsigned regASize = (instrShape[0] * instrShape[2]) / 32;
-          llvm::SmallVector<Value> regA = loadReg(
-              rewriter, loc, structA, (m * numRepK + k) * regASize, regASize);
+          llvm::SmallVector<Value> regA =
+              loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
+                      regASize, startSequence);
           auto regATy = LLVM::LLVMStructType::getLiteral(
               rewriter.getContext(),
               SmallVector<Type>(regA.size(), regA[0].getType()));

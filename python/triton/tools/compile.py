@@ -20,7 +20,7 @@ data along with utilities to load, unload and launch the kernel.
 signature is provided as a list of (optionally divisibility-hinted) types
 or constexpr values, e.g.
 
-`compile.py --kernel-name kernel --signature "*f32:16, i32:16, 1024, i32" --out-name kernel /path/to/kernel.py`
+`compile.py --kernel-name kernel --signature "*fp32:16, i32:16, 1024, i32" --out-name kernel /path/to/kernel.py`
 
 will compile triton.JITFunction of name `kernel` inside the file `/path/to/kernel.py`.
 Said kernel will be specialized such that argument 0, 1 are assumed to be multiple of 16,
@@ -51,7 +51,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     out_name = args.out_name if args.out_name else args.kernel_name
-    out_path = args.out_path if args.out_path else out_name
+    out_path = args.out_path if args.out_path else Path(out_name)
 
     # execute python sources and extract functions wrapped in JITFunction
     arg_path = Path(args.path)
