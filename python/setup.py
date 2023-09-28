@@ -273,6 +273,11 @@ class CMakeBuild(build_ext):
                            "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld",
                            "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld"]
 
+        if check_env_flag("TRITON_BUILD_WITH_CCACHE"):
+            cmake_args += [
+                "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+            ]
+
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
