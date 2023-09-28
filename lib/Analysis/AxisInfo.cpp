@@ -304,13 +304,13 @@ private:
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 &&
         !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
-      // Ignore the 'fake' divisibility
+      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
     auto rhsDivisibility = rhs.getDivisibility(dim);
     if (rhs.getContiguity(dim) > 1 &&
         !(lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1)) {
-      // Ignore the 'fake' divisibility
+      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       rhsDivisibility = 1;
     }
     return lhsDivisibility * rhsDivisibility;
@@ -526,13 +526,12 @@ public:
       newDivisibility = highestPowOf2Divisor(opInfo.getConstantValue().value());
     } else if (opInfo.getRank()) {
       // Otherwise, calculate the GCD as the new divisibility
+      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       newDivisibility =
           opInfo.getContiguity(0) > 1 ? 1 : opInfo.getDivisibility(0);
       for (int d = 1; d < opInfo.getRank(); ++d) {
         newDivisibility =
             gcd(newDivisibility,
-                // MakeRangeOpAxisInfoVisitor sets a 'fake' divisibility,
-                // which should be ignored. 1 is used instead.
                 opInfo.getContiguity(d) > 1 ? 1 : opInfo.getDivisibility(d));
       }
     }
@@ -783,7 +782,7 @@ private:
                      : rhs.getDivisibility(dim);
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
-      // Ignore the 'fake' divisibility
+      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
     auto numBits = log2Int(lhsDivisibility);
@@ -830,7 +829,7 @@ private:
                      : rhs.getDivisibility(dim);
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
-      // Ignore the 'fake' divisibility
+      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
     return std::max<int64_t>(1, lhsDivisibility / (1 << shift));
