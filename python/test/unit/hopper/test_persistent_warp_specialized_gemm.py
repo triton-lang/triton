@@ -818,7 +818,6 @@ def test_full_static_persistent_matmul_kernel(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WAR
     ]:
         pytest.skip('shapePerCTA[1] < 16 not supported')
 
-    # with ENABLE_TMA=0 and ENABLE_MMA_V3=0
     if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_B])) in [
         '16-32-64-4-1-256-256-256-False',
         '16-32-64-4-2-256-256-256-False',
