@@ -178,9 +178,11 @@ private:
       Value _16 = i32_val(16);
       if (mmaLayout.isAmpere() || mmaLayout.isHopper()) {
         multiDimWarpId[0] =
-            urem(multiDimWarpId[0], i32_val(shapePerCTA[0] / instrShape[0]));
+            urem(multiDimWarpId[0],
+                 i32_val(ceil<unsigned>(shapePerCTA[0], instrShape[0])));
         multiDimWarpId[1] =
-            urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / instrShape[1]));
+            urem(multiDimWarpId[1],
+                 i32_val(ceil<unsigned>(shapePerCTA[1], instrShape[1])));
 
         Value mmaGrpId = udiv(laneId, _4);
         Value mmaGrpIdP8 = add(mmaGrpId, _8);
