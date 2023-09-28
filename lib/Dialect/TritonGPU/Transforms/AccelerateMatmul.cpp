@@ -145,35 +145,6 @@ public:
     }
   }
 
-  unsigned getMmaV3InstrN(tt::DotOp dotOp, unsigned currN) const {
-    auto type = dotOp.getResult().getType().cast<RankedTensorType>();
-    if (type.getEncoding().isa<MmaEncodingAttr>())
-      return currN;
-    auto it = dotOpInstNs.find(dotOp.getOperation());
-    if (it != dotOpInstNs.end())
-      return it->second;
-
-    SetVector<Operation *> slices;
-    mlir::getForwardSliceSCFAware(dotOp.getResult(), &slices);
-    mlir::getBackwardSliceSCFAware(dotOp.getOperation(), &slices);
-    unsigned N = currN;
-    SmallVector<Operation *> dotOps;
-    for (Operation *iter : slices) {
-      if (auto nextDotOp = dyn_cast<tt::DotOp>(iter)) {
-        auto type = nextDotOp.getResult().getType().cast<RankedTensorType>();
-        auto AType = nextDotOp.getOperand(0).getType().cast<RankedTensorType>();
-        auto shapePerCTA = ttg::getShapePerCTA(type);
-        auto instrShape = mmaVersionToInstrShape(3, shapePerCTA, AType);
-        dotOps.push_back(iter);
-        if (instrShape[1] < N)
-          N = instrShape[1];
-      }
-    }
-    for (Operation *dotOp : dotOps)
-      dotOpInstNs[dotOp] = N;
-    return N;
-  }
-
   static Value getMMAv3Operand(Value v, mlir::PatternRewriter &rewriter,
                                int opIdx) {
     Value arg = v;
@@ -232,9 +203,6 @@ public:
 
     auto instrShape =
         mmaVersionToInstrShape(versionMajor, retShapePerCTA, AType);
-    if (versionMajor == 3)
-      instrShape[1] = getMmaV3InstrN(dotOp, instrShape[1]);
-
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();

@@ -37,3 +37,10 @@ docs/dialects/
 docs/getting-started/tutorials
 !python/tutorials/*.py
 !python/tutorials/*.rst
+
+# clangd index. (".clangd" is a config file now, thus trailing slash)
+.clangd/
+.cache
+/compile_commands.json
+.vscode
+.vs

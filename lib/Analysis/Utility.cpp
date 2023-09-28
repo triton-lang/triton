@@ -424,6 +424,23 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
+static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
+  auto src = srcEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>();
+  auto dst = dstEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>();
+  if (!src || !dst)
+    return false;
+  auto srcInstrShape = src.getInstrShape();
+  auto dstInstrShape = dst.getInstrShape();
+  // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
+  return src && dst && src.getVersionMajor() == 3 &&
+         src.getWarpsPerCTA()[1] == 1 && dst.getVersionMajor() == 3 &&
+         dst.getWarpsPerCTA()[1] == 1 && srcInstrShape[2] == dstInstrShape[2];
+}
+
+bool isMmaToMmaShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+  return isMmaToMmaShortcut(srcTy.getEncoding(), dstTy.getEncoding());
+}
+
 // For MMAV3 dotOperand layout matches mma operand for f16 case.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
@@ -432,7 +449,7 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   auto mmaLayout = srcLayout.cast<triton::gpu::MmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
   return mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getParent() == mmaLayout &&
+         isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
          srcTy.getElementType().isF16();
 }
 
@@ -450,17 +467,6 @@ bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getParent() == mmaLayout &&
          !srcTy.getElementType().isF32();
-}
-
-bool isMmaToMmaShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
-  auto src = srcTy.getEncoding().cast<triton::gpu::MmaEncodingAttr>();
-  auto dst = dstTy.getEncoding().cast<triton::gpu::MmaEncodingAttr>();
-  auto srcElemsPerThread = triton::gpu::getTotalElemsPerThread(srcTy);
-  auto dstElemsPerThread = triton::gpu::getTotalElemsPerThread(dstTy);
-  // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
-  return src.getVersionMajor() == 3 && src.getWarpsPerCTA()[1] == 1 &&
-         dst.getVersionMajor() == 3 && dst.getWarpsPerCTA()[1] == 1 &&
-         srcElemsPerThread == dstElemsPerThread;
 }
 
 bool isSingleValue(Value value) {
