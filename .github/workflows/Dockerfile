@@ -2,6 +2,7 @@ FROM centos:7
 ARG llvm_dir=llvm-project
 
 RUN mkdir /install
+RUN mkdir /sccache
 
 # # Add the cache artifacts and the LLVM source tree to the container
 # ADD sccache /sccache
