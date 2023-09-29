@@ -80,21 +80,6 @@ const std::string Bf16_to_Fp8E5M2 =
     "or.b32 $0, nosign, sign;                    \n" // restore sign
     "}";
 
-const std::string Fp8E4M3Nv_to_Bf16 = "{                                      \n"
-    ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-    "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
-    "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
-    "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-    "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-    "shr.b32  b0, b0, 4;                    \n" // b0 >>= 4 to fill mantissa
-    "shr.b32  b1, b1, 4;                    \n" // shift into bf16 position
-    "add.u32  b0, b0, 0x3a003a00;           \n" // b0.exp += 127-11
-                                                // exponent compensate = 116
-    "add.u32  b1, b1, 0x3a003a00;           \n" // b1 += 116<<7 | 116<<7<<16
-    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-    "}";
-
 /* ----- FP8E4M3B15 ------ */
 // This data-type is a variant of the standard FP8E4M3 format.
 // It was designed for fast software conversion to FP16 on
@@ -196,6 +181,28 @@ const std::string Fp8E4M3Nv_to_Fp16 = "{ \n"
 const std::string Fp16_to_Fp8E4M3Nv = "{ \n"
                                       "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
                                       "}";
+
+// Fp8E4M3 (x2) -> Fp16 (x2) (packed)
+const std::string Fp8E4M3Nv_to_Bf16 =
+    "{                                       \n"
+    ".reg .f16 a<2>;                         \n"
+    ".reg .bf16 b<2>;                        \n"
+    "cvt.rn.f16x2.e4m3x2 {a0, a1}, $1;       \n"
+    "cvt.bf16.f16 b0, a0;                    \n"
+    "cvt.bf16.f16 b1, a1;                    \n"
+    "mov.b32 $0, {b0, b1};                   \n"
+    "}";
+
+// Bf16 (x2) -> Fp8E4M3 (x2) (packed)
+const std::string Bf16_to_Fp8E4M3Nv =
+    "{                                       \n"
+    ".reg .bf16 a<2>;                        \n"
+    ".reg .f32 b<2>;                         \n"
+    "mov.b32 {a0, a1}, $1;                   \n"
+    "cvt.f32.bf16 b0, a0;                    \n"
+    "cvt.f32.bf16 b1, a1;                    \n"
+    "cvt.rn.satfinite.e4m3x2.f32 $0, b0, b1; \n"
+    "}";
 
 /* ----- Packed integer to BF16 ------ */
 const std::string S8_to_Bf16 =
@@ -600,6 +607,7 @@ struct FpToFpOpConversion
         {{F8E4M3TyID, BF16TyID}, Fp8E4M3Nv_to_Bf16},
         // BF16 -> F8
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2},
+        {{BF16TyID, F8E4M3TyID}, Bf16_to_Fp8E4M3Nv},
     };
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
