@@ -1377,6 +1377,11 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
 @builtin
 def _promote_reduction_input(t, _builder=None):
     scalar_ty = t.type.scalar
+    # input is extended to 32-bits if necessary
+    # this increases numerical accuracy and can be done pretty much for free
+    # on GPUs
+    if scalar_ty.is_int() and scalar_ty.int_bitwidth < 32:
+        return t.to(int32, _builder=_builder)
 
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
     if scalar_ty is bfloat16:
