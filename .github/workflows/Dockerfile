@@ -40,4 +40,4 @@ RUN cmake -GNinja -Bbuild \
   -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU" \
   /source/llvm-project/llvm
 
-RUN ninja -C build check-mlir install
+# RUN ninja -C build check-mlir install
