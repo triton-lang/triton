@@ -157,6 +157,23 @@ To install the dependencies for the tutorials:
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="Group GEMM">
+
+.. only:: html
+
+  .. image:: /getting-started/tutorials/images/thumb/sphx_glr_11-grouped-gemm_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_getting-started_tutorials_11-grouped-gemm.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Group GEMM</div>
+    </div>
+
+
+.. raw:: html
+
     </div>
 
 
@@ -171,6 +188,7 @@ To install the dependencies for the tutorials:
    /getting-started/tutorials/06-fused-attention
    /getting-started/tutorials/07-math-functions
    /getting-started/tutorials/08-experimental-block-pointer
+   /getting-started/tutorials/11-grouped-gemm
 
 
 .. only:: html

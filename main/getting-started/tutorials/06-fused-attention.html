@@ -57,6 +57,7 @@
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Fused Attention</a></li>
 <li class="toctree-l2"><a class="reference internal" href="07-math-functions.html">Libdevice (<cite>tl.math</cite>) function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="08-experimental-block-pointer.html">Block Pointer (Experimental)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="11-grouped-gemm.html">Group GEMM</a></li>
 </ul>
 </li>
 </ul>
@@ -119,18 +120,18 @@ Credits: OpenAI kernel team</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd:
      N_CTX      Triton
-0   1024.0  119.807122
-1   2048.0  144.856952
-2   4096.0  157.500944
-3   8192.0  167.646433
-4  16384.0  173.198127
+0   1024.0  118.617546
+1   2048.0  143.773092
+2   4096.0  157.217112
+3   8192.0  166.392511
+4  16384.0  171.979851
 fused-attention-batch4-head48-d64-bwd:
      N_CTX      Triton
-0   1024.0   72.658929
-1   2048.0   93.913346
-2   4096.0  109.027912
-3   8192.0  119.202225
-4  16384.0  124.633422
+0   1024.0   68.093679
+1   2048.0   89.875031
+2   4096.0  104.985548
+3   8192.0  114.647410
+4  16384.0  119.209285
 </pre></div>
 </div>
 <div class="line-block">
@@ -448,106 +449,102 @@ fused-attention-batch4-head48-d64-bwd:
     <span class="c1"># load scales</span>
     <span class="n">offs_k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">)</span>
 
-    <span class="k">if</span> <span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">):</span>
+    <span class="c1"># THIS BLOCK DOES DK/DV/DR:</span>
 
-        <span class="c1"># THIS BLOCK DOES DK/DV/DR:</span>
+    <span class="n">start_n</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_N1</span>
+    <span class="n">start_m</span> <span class="o">=</span> <span class="n">start_n</span>
 
-        <span class="n">start_n</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_N1</span>
-        <span class="n">start_m</span> <span class="o">=</span> <span class="n">start_n</span>
+    <span class="n">MASK_BLOCK_M1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">BLOCK_M1</span> <span class="o">//</span> <span class="n">BLK_SLICE_FACTOR</span>
+    <span class="n">offs_n</span> <span class="o">=</span> <span class="n">start_n</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">)</span>
 
-        <span class="n">MASK_BLOCK_M1</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">BLOCK_M1</span> <span class="o">//</span> <span class="n">BLK_SLICE_FACTOR</span>
-        <span class="n">offs_n</span> <span class="o">=</span> <span class="n">start_n</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">)</span>
+    <span class="n">dv</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">dk</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 
-        <span class="n">dv</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-        <span class="n">dk</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="c1"># load K and V: they stay in SRAM throughout the inner loop.</span>
+    <span class="n">k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">K</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span><span class="p">)</span>
+    <span class="n">v</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">V</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span><span class="p">)</span>
 
-        <span class="c1"># load K and V: they stay in SRAM throughout the inner loop.</span>
-        <span class="n">k</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">K</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span><span class="p">)</span>
-        <span class="n">v</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">V</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span><span class="p">)</span>
+    <span class="n">num_steps</span> <span class="o">=</span> <span class="n">BLOCK_N1</span> <span class="o">//</span> <span class="n">MASK_BLOCK_M1</span>
 
-        <span class="n">num_steps</span> <span class="o">=</span> <span class="n">BLOCK_N1</span> <span class="o">//</span> <span class="n">MASK_BLOCK_M1</span>
+    <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span> <span class="o">=</span> <span class="n">_attn_bwd_dkdv</span><span class="p">(</span><span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
+                            <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>
+                            <span class="n">DO</span><span class="p">,</span>
+                            <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
+                            <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
+                            <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
+                            <span class="n">MASK_BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
+                            <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
+                            <span class="n">MASK</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                            <span class="p">)</span>
 
-        <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span> <span class="o">=</span> <span class="n">_attn_bwd_dkdv</span><span class="p">(</span><span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
-                                <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>
-                                <span class="n">DO</span><span class="p">,</span>
-                                <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-                                <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-                                <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-                                <span class="n">MASK_BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-                                <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-                                <span class="n">MASK</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-                                <span class="p">)</span>
+    <span class="n">start_m</span> <span class="o">+=</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_M1</span>
+    <span class="n">num_steps</span> <span class="o">=</span> <span class="p">(</span><span class="n">N_CTX</span> <span class="o">-</span> <span class="n">start_m</span><span class="p">)</span> <span class="o">//</span> <span class="n">BLOCK_M1</span>
 
-        <span class="n">start_m</span> <span class="o">+=</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_M1</span>
-        <span class="n">num_steps</span> <span class="o">=</span> <span class="p">(</span><span class="n">N_CTX</span> <span class="o">-</span> <span class="n">start_m</span><span class="p">)</span> <span class="o">//</span> <span class="n">BLOCK_M1</span>
+    <span class="c1"># Compute dK and dV for non-masked blocks.</span>
+    <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span> <span class="o">=</span> <span class="n">_attn_bwd_dkdv</span><span class="p">(</span><span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
+                            <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>
+                            <span class="n">DO</span><span class="p">,</span>
+                            <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
+                            <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
+                            <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
+                            <span class="n">BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
+                            <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
+                            <span class="n">MASK</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                            <span class="p">)</span>
 
-        <span class="c1"># Compute dK and dV for non-masked blocks.</span>
-        <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span> <span class="o">=</span> <span class="n">_attn_bwd_dkdv</span><span class="p">(</span><span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
-                                <span class="n">Q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">sm_scale</span><span class="p">,</span>
-                                <span class="n">DO</span><span class="p">,</span>
-                                <span class="n">M</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-                                <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-                                <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-                                <span class="n">BLOCK_M1</span><span class="p">,</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-                                <span class="n">start_n</span><span class="p">,</span> <span class="n">start_m</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-                                <span class="n">MASK</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                                <span class="p">)</span>
+    <span class="n">dv_ptrs</span> <span class="o">=</span> <span class="n">DV</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">dv_ptrs</span><span class="p">,</span> <span class="n">dv</span><span class="p">)</span>
 
-        <span class="n">dv_ptrs</span> <span class="o">=</span> <span class="n">DV</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span>
-        <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">dv_ptrs</span><span class="p">,</span> <span class="n">dv</span><span class="p">)</span>
+    <span class="c1"># Write back dK.</span>
+    <span class="n">dk</span> <span class="o">*=</span> <span class="n">sm_scale</span>
+    <span class="n">dk_ptrs</span> <span class="o">=</span> <span class="n">DK</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">dk_ptrs</span><span class="p">,</span> <span class="n">dk</span><span class="p">)</span>
 
-        <span class="c1"># Write back dK.</span>
-        <span class="n">dk</span> <span class="o">*=</span> <span class="n">sm_scale</span>
-        <span class="n">dk_ptrs</span> <span class="o">=</span> <span class="n">DK</span> <span class="o">+</span> <span class="n">offs_n</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span>
-        <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">dk_ptrs</span><span class="p">,</span> <span class="n">dk</span><span class="p">)</span>
+    <span class="c1"># THIS BLOCK DOES DQ:</span>
+    <span class="n">start_m</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_M2</span>
+    <span class="n">end_n</span> <span class="o">=</span> <span class="n">start_m</span> <span class="o">+</span> <span class="n">BLOCK_M2</span>
 
-    <span class="k">else</span><span class="p">:</span>
+    <span class="n">MASK_BLOCK_N2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">BLOCK_N2</span> <span class="o">//</span> <span class="n">BLK_SLICE_FACTOR</span>
+    <span class="n">offs_m</span> <span class="o">=</span> <span class="n">start_m</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_M2</span><span class="p">)</span>
 
-        <span class="c1"># THIS BLOCK DOES DQ:</span>
-        <span class="n">start_m</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_M2</span>
-        <span class="n">end_n</span> <span class="o">=</span> <span class="n">start_m</span> <span class="o">+</span> <span class="n">BLOCK_M2</span>
+    <span class="n">q</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Q</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span><span class="p">)</span>
+    <span class="n">dq</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">do</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DO</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span><span class="p">)</span>
 
-        <span class="n">MASK_BLOCK_N2</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">BLOCK_N2</span> <span class="o">//</span> <span class="n">BLK_SLICE_FACTOR</span>
-        <span class="n">offs_m</span> <span class="o">=</span> <span class="n">start_m</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_M2</span><span class="p">)</span>
+    <span class="n">m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">M</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">)</span>
+    <span class="n">m</span> <span class="o">=</span> <span class="n">m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
 
-        <span class="n">q</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Q</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span><span class="p">)</span>
-        <span class="n">dq</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-        <span class="n">do</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">DO</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span><span class="p">)</span>
-
-        <span class="n">m</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">M</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">)</span>
-        <span class="n">m</span> <span class="o">=</span> <span class="n">m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
-
-        <span class="c1"># Compute dQ for masked (diagonal) blocks.</span>
-        <span class="c1"># NOTE: This code scans each row of QK^T backward (from right to left,</span>
-        <span class="c1"># but inside each call to _attn_bwd_dq, from left to right), but that&#39;s</span>
-        <span class="c1"># not due to anything important.  I just wanted to reuse the loop</span>
-        <span class="c1"># structure for dK &amp; dV above as much as possible.</span>
-        <span class="n">num_steps</span> <span class="o">=</span> <span class="n">BLOCK_M2</span> <span class="o">//</span> <span class="n">MASK_BLOCK_N2</span>
-        <span class="n">dq</span> <span class="o">=</span> <span class="n">_attn_bwd_dq</span><span class="p">(</span>
-            <span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>
-            <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-            <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-            <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-            <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">MASK_BLOCK_N2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-            <span class="n">start_m</span><span class="p">,</span> <span class="n">end_n</span> <span class="o">-</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_N2</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-            <span class="n">MASK</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="n">end_n</span> <span class="o">-=</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_N2</span>
-        <span class="c1"># stage 2</span>
-        <span class="n">num_steps</span> <span class="o">=</span> <span class="n">end_n</span> <span class="o">//</span> <span class="n">BLOCK_N2</span>
-        <span class="n">dq</span> <span class="o">=</span> <span class="n">_attn_bwd_dq</span><span class="p">(</span>
-            <span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>
-            <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
-            <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
-            <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
-            <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_N2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
-            <span class="n">start_m</span><span class="p">,</span> <span class="n">end_n</span> <span class="o">-</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">BLOCK_N2</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
-            <span class="n">MASK</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="c1"># Write back dQ.</span>
-        <span class="n">dq_ptrs</span> <span class="o">=</span> <span class="n">DQ</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span>
-        <span class="n">dq</span> <span class="o">*=</span> <span class="n">LN2</span>
-        <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">dq_ptrs</span><span class="p">,</span> <span class="n">dq</span><span class="p">)</span>
+    <span class="c1"># Compute dQ for masked (diagonal) blocks.</span>
+    <span class="c1"># NOTE: This code scans each row of QK^T backward (from right to left,</span>
+    <span class="c1"># but inside each call to _attn_bwd_dq, from left to right), but that&#39;s</span>
+    <span class="c1"># not due to anything important.  I just wanted to reuse the loop</span>
+    <span class="c1"># structure for dK &amp; dV above as much as possible.</span>
+    <span class="n">num_steps</span> <span class="o">=</span> <span class="n">BLOCK_M2</span> <span class="o">//</span> <span class="n">MASK_BLOCK_N2</span>
+    <span class="n">dq</span> <span class="o">=</span> <span class="n">_attn_bwd_dq</span><span class="p">(</span>
+        <span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>
+        <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
+        <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
+        <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
+        <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">MASK_BLOCK_N2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
+        <span class="n">start_m</span><span class="p">,</span> <span class="n">end_n</span> <span class="o">-</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_N2</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
+        <span class="n">MASK</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">end_n</span> <span class="o">-=</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">MASK_BLOCK_N2</span>
+    <span class="c1"># stage 2</span>
+    <span class="n">num_steps</span> <span class="o">=</span> <span class="n">end_n</span> <span class="o">//</span> <span class="n">BLOCK_N2</span>
+    <span class="n">dq</span> <span class="o">=</span> <span class="n">_attn_bwd_dq</span><span class="p">(</span>
+        <span class="n">dq</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span>
+        <span class="n">do</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span>
+        <span class="n">stride_tok</span><span class="p">,</span> <span class="n">stride_d</span><span class="p">,</span>
+        <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
+        <span class="n">BLOCK_M2</span><span class="p">,</span> <span class="n">BLOCK_N2</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span>
+        <span class="n">start_m</span><span class="p">,</span> <span class="n">end_n</span> <span class="o">-</span> <span class="n">num_steps</span> <span class="o">*</span> <span class="n">BLOCK_N2</span><span class="p">,</span> <span class="n">num_steps</span><span class="p">,</span>
+        <span class="n">MASK</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="c1"># Write back dQ.</span>
+    <span class="n">dq_ptrs</span> <span class="o">=</span> <span class="n">DQ</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="n">stride_tok</span> <span class="o">+</span> <span class="n">offs_k</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">*</span> <span class="n">stride_d</span>
+    <span class="n">dq</span> <span class="o">*=</span> <span class="n">LN2</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">dq_ptrs</span><span class="p">,</span> <span class="n">dq</span><span class="p">)</span>
 
 
 <span class="n">empty</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
@@ -616,7 +613,7 @@ fused-attention-batch4-head48-d64-bwd:
             <span class="n">BATCH</span><span class="p">,</span> <span class="n">N_HEAD</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
             <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">PRE_BLOCK</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">BLOCK_DMODEL</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">N_CTX</span> <span class="o">//</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">BATCH</span> <span class="o">*</span> <span class="n">N_HEAD</span><span class="p">)</span>
+        <span class="n">grid</span> <span class="o">=</span> <span class="p">(</span><span class="n">N_CTX</span> <span class="o">//</span> <span class="n">BLOCK_N1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">BATCH</span> <span class="o">*</span> <span class="n">N_HEAD</span><span class="p">)</span>
         <span class="n">_attn_bwd</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
             <span class="n">q</span><span class="p">,</span> <span class="n">arg_k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">sm_scale</span><span class="p">,</span> <span class="n">do</span><span class="p">,</span> <span class="n">dq</span><span class="p">,</span> <span class="n">dk</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span>
             <span class="n">M</span><span class="p">,</span> <span class="n">delta</span><span class="p">,</span>
@@ -756,7 +753,7 @@ fused-attention-batch4-head48-d64-bwd:
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  9.325 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  9.417 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/54a35f6ec55f9746935b9566fb6bb1df/06-fused-attention.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">06-fused-attention.py</span></code></a></p>
