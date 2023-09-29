@@ -1134,9 +1134,13 @@ void LoopPipeliner::emitPrologue() {
   } // for (int stage = 0; stage < numStages - 1; ++stage)
   std::cout << "Done stages loop" << std::endl;
   // async.wait & extract_slice
-  if (numLoadsRequireAsyncWait > 0)
-    builder.create<ttg::AsyncWaitOp>(validLoads.front().getLoc(),
-                                     validLoads.size() * (numStages - 2));
+  if (numLoadsRequireAsyncWait > 0) {
+    int wait = 0;
+    for (auto validLoad : validLoads) {
+      wait += numStages - 2 - validLoadToFirstAsync[validLoad];
+    }
+    builder.create<ttg::AsyncWaitOp>(validLoads.front().getLoc(), wait);
+  }
 
   for (Value loadOp : validLoads) {
     auto lastStage = loadStageBuffer[loadOp].size() - 1;
@@ -1612,8 +1616,12 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
 
   // async.wait & extract_slice
   if (numLoadsRequireAsyncWait > 0) {
-    Operation *asyncWait = builder.create<ttg::AsyncWaitOp>(
-        validLoads[0].getLoc(), validLoads.size() * (numStages - 2));
+    int wait = 0;
+    for (auto validLoad : validLoads) {
+      wait += numStages - 2 - validLoadToFirstAsync[validLoad];
+    }
+    Operation *asyncWait =
+        builder.create<ttg::AsyncWaitOp>(validLoads[0].getLoc(), wait);
     for (auto it = extractSlices.rbegin(); it != extractSlices.rend(); ++it) {
       // move extract_slice after asyncWait
       it->getDefiningOp()->moveAfter(asyncWait);
