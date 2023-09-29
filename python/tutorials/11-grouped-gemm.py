@@ -1,3 +1,11 @@
+
+"""
+Group GEMM
+============================
+This group gemm kernel launches a fixed number of CTA to compute a group
+of gemms. The scheduling is static and we do it on device.
+"""
+
 # Copyright (c) 2023 NVIDIA Corporation & Affiliates. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining
@@ -23,9 +31,6 @@ import torch
 
 import triton
 import triton.language as tl
-
-# This group gemm kernel launches a fixed number of CTA to compute a group
-# of gemms. The scheduling is static and we do it on device
 
 
 @triton.autotune(
