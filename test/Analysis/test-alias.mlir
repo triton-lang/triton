@@ -85,7 +85,7 @@ tt.func @insert_slice_async_v2(%A : !tt.ptr<f16>, %i1 : i1) {
   %tensor = arith.constant dense<0.000000e+00> : tensor<1x16x16xf16, #A_SHARED>
   %index = arith.constant 0 : i32
   // CHECK: %3 -> %cst_0
-  %a = triton_nvidia_gpu.insert_slice_async_v2 %a_ptr, %tensor, %index, %mbar, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1, 1, 1, 1>} : tensor<16x16x!tt.ptr<f16>, #AL>, tensor<1x16x16xf16, #A_SHARED>, i32, !tt.ptr<i64, 3>, tensor<16x16xi1, #AL>, tensor<16x16xf16, #AL> -> tensor<1x16x16xf16, #A_SHARED>
+  %a = triton_nvidia_gpu.insert_slice_async_v2 %a_ptr, %tensor, %index, %mbar, %mask, %other {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operand_segment_sizes = array<i32: 1, 1, 1, 1, 1, 1>} : tensor<16x16x!tt.ptr<f16>, #AL>, tensor<1x16x16xf16, #A_SHARED>, i32, !tt.ptr<i64, 3>, tensor<16x16xi1, #AL>, tensor<16x16xf16, #AL> -> tensor<1x16x16xf16, #A_SHARED>
   tt.return
 }
 
@@ -129,7 +129,7 @@ tt.func @if_cat(%i1 : i1) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
   // CHECK: %cst_0 -> %cst_0
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #A_SHARED>
-  // CHECK: %0 -> %1
+  // CHECK: %0 -> %1,%1
   %cst2 = scf.if %i1 -> tensor<32x16xf16, #A_SHARED> {
     // CHECK: %1 -> %1
     %a = tt.cat %cst0, %cst1 {axis = 0} : (tensor<16x16xf16, #A_SHARED>, tensor<16x16xf16, #A_SHARED>) -> tensor<32x16xf16, #A_SHARED>
@@ -216,12 +216,12 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   // CHECK-NEXT: %arg9 -> %cst_1
   // CHECK-NEXT: %0#0 -> %cst
   // CHECK-NEXT: %0#1 -> %cst_0
-  // CHECK-NEXT: %0#2 -> %cst_1,%cst_2
+  // CHECK-NEXT: %0#2 -> %cst_1,%cst_2,%cst_2
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
-    // CHECK-NEXT: %arg11 -> %cst_1,%cst_2
-    // CHECK-NEXT: %1 -> %cst_1,%cst_2
+    // CHECK-NEXT: %arg11 -> %cst_1,%cst_2,%cst_2
+    // CHECK-NEXT: %1 -> %cst_1,%cst_2,%cst_2
     %c_shared_next = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (tensor<128x32xf16, #A_SHARED>) {
-      // CHECK-NEXT: %2 -> %cst_2
+      // CHECK-NEXT: %2 -> %cst_2,%cst_2
       %c_shared_next_next = scf.if %i1 -> tensor<128x32xf16, #A_SHARED> {
         // CHECK-NEXT: %cst_2 -> %cst_2
         %cst0 = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A_SHARED>
