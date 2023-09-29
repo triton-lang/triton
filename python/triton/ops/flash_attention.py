@@ -335,11 +335,8 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do):
-        import os
-        enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
-        MMA_V3 = False
-        if enable_mmav3 in ["on", "true", "1"]:
-            MMA_V3 = True
+        capability = torch.cuda.get_device_capability()
+        MMA_V3 = capability[0] >= 9
         BLOCK = 128
         q, k, v, o, L = ctx.saved_tensors
         sequence_parallel = ctx.sequence_parallel

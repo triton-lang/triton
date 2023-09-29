@@ -2433,11 +2433,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             red_code = ptx[start:end]
             assert len(red_code) > 0
             import os
-            enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
-            enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
+
             # skip this check on hopper because there are some functions whose name contain "shared" in ptx.
             # TODO: we should eliminate these unused functions in ptx code.
-            if not (enable_mmav3 in ["on", "true", "1"] and enable_tma in ["on", "true", "1"]):
+            if not (capability[0] >= 9):
                 assert "shared" not in red_code
             assert "bar.sync" not in red_code
     # torch result
@@ -2540,13 +2539,12 @@ def test_dot_mulbroadcastred(in_dtype, device):
     if is_hip():
         return
     assert "tt.dot" in h.asm['ttir']
-    # with option ENABLE_MMA_V3 on, we will not pipeline the load op for Y
+    # when using MMAv3, we will not pipeline the load op for Y
     # as the loaded value is in rowmajor. But MMAv3 requires it's second
     # operand is in colmajor because transpose is not supported for MMAv3
     # with float32 input.
     import os
-    enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
-    if enable_mmav3 in ["on", "true", "1"]:
+    if capability[0] >= 9:
         assert "triton_gpu.async_wait {num = 1 : i32}" in h.asm['ttgir']
     else:
         assert "triton_gpu.async_wait {num = 2 : i32}" in h.asm['ttgir']
