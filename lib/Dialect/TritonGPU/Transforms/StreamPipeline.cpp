@@ -555,7 +555,7 @@ void LoopPipeliner::emitEpilogue(DenseMap<Value, Value> &newResults) {
   OpBuilder builder(pplForOp);
   builder.setInsertionPointAfter(pplForOp);
 
-  IRMapping epilogueMap = curMapping;
+  IRMapping epilogueMap;
   // Map 'for' iteration args to pipelined-for results
   auto args = forOp.getRegionIterArgs();
   for (uint32_t i = 0; i < args.size(); ++i)
