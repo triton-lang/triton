@@ -53,6 +53,7 @@
 #include <fstream>
 #include <optional>
 #include <pybind11/buffer_info.h>
+#include <pybind11/embed.h>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
