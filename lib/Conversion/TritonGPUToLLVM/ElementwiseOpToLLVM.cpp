@@ -185,9 +185,11 @@ const std::string Fp16_to_Fp8E4M3Nv = "{ \n"
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
 const std::string Fp8E4M3Nv_to_Bf16 =
     "{                                       \n"
+    ".reg .b32 a;                            \n"
     ".reg .f16 a<2>;                         \n"
-    ".reg .bf16 b<2>;                        \n"
-    "cvt.rn.f16x2.e4m3x2 {a0, a1}, $1;       \n"
+    ".reg .b16 b<2>;                         \n"
+    "cvt.rn.f16x2.e4m3x2 a, $1;              \n"
+    "mov.b32 {a0, a1}, a;                    \n"
     "cvt.bf16.f16 b0, a0;                    \n"
     "cvt.bf16.f16 b1, a1;                    \n"
     "mov.b32 $0, {b0, b1};                   \n"
@@ -196,7 +198,7 @@ const std::string Fp8E4M3Nv_to_Bf16 =
 // Bf16 (x2) -> Fp8E4M3 (x2) (packed)
 const std::string Bf16_to_Fp8E4M3Nv =
     "{                                       \n"
-    ".reg .bf16 a<2>;                        \n"
+    ".reg .b16 a<2>;                         \n"
     ".reg .f32 b<2>;                         \n"
     "mov.b32 {a0, a1}, $1;                   \n"
     "cvt.f32.bf16 b0, a0;                    \n"
