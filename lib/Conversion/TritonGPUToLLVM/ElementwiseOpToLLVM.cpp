@@ -109,8 +109,8 @@ const std::string Fp16_to_Fp8E4M3B15(bool has_minx2) {
          ".reg .b16 c<4>;                        \n"
          ".reg .b16 max_val_f16;                 \n"
          ".reg .b32 max_val_f16x2;               \n"
-         "mov.b16 max_val_f16,   0x3F80;         \n"
-         "mov.b32 max_val_f16x2, 0x3F803F80;     \n"
+         "mov.b16 max_val_f16,   0x3F00;         \n"
+         "mov.b32 max_val_f16x2, 0x3F003F00;     \n"
          "and.b32 a0, $1, 0x7fff7fff;            \n"
          "and.b32 a1, $2, 0x7fff7fff;            \n";
   if (has_minx2)
