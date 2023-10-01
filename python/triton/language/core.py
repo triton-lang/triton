@@ -1095,7 +1095,7 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
 
 
 @builtin
-def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _builder=None):
+def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order=None, _builder=None):
     """
     Returns a pointer to a block in a parent tensor
 
@@ -1106,6 +1106,9 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _b
     :param block_shape: The shape of the block
     :param order: The order of the original data format
     """
+    if order is None:
+        rank = len(strides)
+        order = [rank - i[0] - 1 for i in sorted(enumerate(strides), key=lambda x:x[1], reverse=True)]
     return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
 
 
