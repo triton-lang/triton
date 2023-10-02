@@ -25,17 +25,18 @@ const std::string Fp8E5M2_to_Fp16 = "{                           \n"
 const std::string Fp8E5M2_to_Bf16 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+    ".reg .b32 e112;                        \n"
+    "mov.u32 e112, 0x77807780;              \n" // 2**112 represented as bf16x2
     "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
     "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
     "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
     "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
     "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
     "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
-    "add.u32  b0, b0, 0x38003800;           \n" // b0.exp += 2**7-2**4
-                                                // exponent compensate = 112
-    "add.u32  b1, b1, 0x38003800;           \n" // b1 += 112<<7 | 112<<7<<16
-    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-    "lop3.b32 $1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+    "lop3.b32 b0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+    "lop3.b32 b1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+    "mul.rn.bf16x2 $0, b0, e112;            \n" // b0.exp += 2**7-2**4
+    "mul.rn.bf16x2 $1, b1, e112;            \n" // exponent compensate = 112
     "}";
 
 const std::string Bf16_to_Fp8E5M2 =
