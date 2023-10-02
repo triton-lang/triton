@@ -462,11 +462,12 @@ public:
     unsigned inVec = srcSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
+    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
     assert(outElems == dstIndices.size());
 
-    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
-        loc, outVec, dstTy, srcSharedLayout, srcElemTy, smemObj, rewriter,
-        smemObj.offsets, smemObj.strides);
+    DenseMap<unsigned, Value> sharedPtrs =
+        getSwizzledSharedPtrs(loc, outVec, dstTy, srcSharedLayout, srcElemTy,
+                              smemObj, rewriter, offsetVals, smemObj.strides);
     assert(outElems % minVec == 0 && "Unexpected number of elements");
     unsigned numVecs = outElems / minVec;
     auto wordTy = vec_ty(elemTy, minVec);
