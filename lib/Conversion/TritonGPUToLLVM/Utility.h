@@ -232,21 +232,24 @@ SmallVector<Value>
 getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
                             Location loc, ConversionPatternRewriter &rewriter);
 struct SharedMemoryObject {
-  Value base; // i32 ptr. The start address of the shared memory object.
-  // We need to store strides as Values but not integers because the
+  Value base; // i32 ptr. The start address of the shared memory object after
+              // the initial allocation or the last slicing operation.
+  // We need to store strides as Values, not integers, because the
   // extract_slice instruction can take a slice at arbitrary offsets.
-  // Take $a[16:32, 16:32] as an example, though we know the stride of $a[0] is
-  // 32, we need to let the instruction that uses $a to be aware of that.
+  // Take $a[16:32, 16:32] as an example; though we know the stride of $a[0] is
+  // 32, we need to let the instruction that uses $a be aware of that.
   // Otherwise, when we use $a, we only know that the shape of $a is 16x16. If
   // we store strides into an attribute array of integers, the information
   // cannot pass through block argument assignment because attributes are
-  // associated with operations but not Values.
+  // associated with operations, not Values.
   // TODO(Keren): We may need to figure out a way to store strides as integers
   // if we want to support more optimizations.
   SmallVector<Value>
       strides; // i32 int. The strides of the shared memory object.
-  SmallVector<Value> offsets; // i32 int. The offsets of the shared memory
-  // objects from the originally allocated object.
+  SmallVector<Value> offsets; // i32 int.
+  // Offsets are applied at the last slicing operation.
+  // We can use offsets to recover the previous base.
+  // The offsets are zero at the initial allocation.
 
   SharedMemoryObject(Value base, ArrayRef<Value> strides,
                      ArrayRef<Value> offsets)
