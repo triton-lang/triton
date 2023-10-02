@@ -491,10 +491,10 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
       }
     }
   }
-  std::cout << "Valid loads: " << validLoads.size() << std::endl;
-  for (auto load : validLoads) {
-    load.dump();
-  }
+  // std::cout << "Valid loads: " << validLoads.size() << std::endl;
+  // for (auto load : validLoads) {
+  //   load.dump();
+  // }
 
   for (Operation *op : invalidOps)
     ops.remove(op);
@@ -679,8 +679,8 @@ void LoopPipeliner::createBufferTypes() {
                                      ty.getShape().end());
     assert(validLoadToFirstAsync.count(loadOp) != 0);
     auto firstAsync = validLoadToFirstAsync[loadOp];
-    loadOp.dump();
-    std::cout << "firstAsync: " << firstAsync << std::endl;
+    // loadOp.dump();
+    // std::cout << "firstAsync: " << firstAsync << std::endl;
     auto bufferSize = numStages - firstAsync;
     bufferShape.insert(bufferShape.begin(), bufferSize);
     auto CTALayout = ttg::getCTALayout(ty.getEncoding());
@@ -808,19 +808,19 @@ void LoopPipeliner::defineStagesAndSchedule() {
     }
 
     unsigned stageIncrement = ceil<unsigned>((numStages - 2), stages.size());
-    std::cout << "stageIncrement: " << stageIncrement << "\n";
+    // std::cout << "stageIncrement: " << stageIncrement << "\n";
     unsigned stage = 0;
     for (auto i = 0; i < opsByStage.size(); i++) {
       stageIdx.push_back(stage);
       stage += stageIncrement;
     }
-    for (auto i = 0; i < stageIdx.size(); i++) {
-      std::cout << "stageIdx: " << stageIdx[i] << "\n";
-    }
+    // for (auto i = 0; i < stageIdx.size(); i++) {
+    //   std::cout << "stageIdx: " << stageIdx[i] << "\n";
+    // }
     for (int i = 0; i < opsByStage.size(); i++) {
       for (auto op : opsByStage[i]) {
-        op->dump();
-        std::cout << "stageIdx[i]: " << stageIdx[i] << std::endl;
+        // op->dump();
+        // std::cout << "stageIdx[i]: " << stageIdx[i] << std::endl;
         opIdx[op->getResult(0)] = stageIdx[i];
       }
     }
@@ -830,19 +830,14 @@ void LoopPipeliner::defineStagesAndSchedule() {
         maxStage = opAndIdx.second;
       }
     }
-    std::cout << "Max stage = " << maxStage << "\n";
+    // std::cout << "Max stage = " << maxStage << "\n";
     for (auto validLoad : validLoads) {
-      validLoad.dump();
       if (validLoadsToLoadsThatDependOnThem[validLoad.getDefiningOp()].size() ==
           0) {
-        std::cout << "first" << std::endl;
         validLoadToFirstAsync[validLoad] = opIdx[validLoad];
       } else {
-        std::cout << "second" << std::endl;
         validLoadToFirstAsync[validLoad] = numStages - 1 - maxStage;
       }
-      std::cout << "validLoadToFirstAsync: " << validLoadToFirstAsync[validLoad]
-                << "\n";
     }
   }
 }
@@ -893,17 +888,17 @@ LogicalResult LoopPipeliner::initialize() {
 
   createBufferTypes();
 
-  for (int i = 0; i < opsByStage.size(); i++) {
-    std::cout << "Stage " << i << std::endl;
-    for (auto op : opsByStage[i]) {
-      op->dump();
-    }
-  }
+  // for (int i = 0; i < opsByStage.size(); i++) {
+  //   std::cout << "Stage " << i << std::endl;
+  //   for (auto op : opsByStage[i]) {
+  //     op->dump();
+  //   }
+  // }
 
-  for (auto opIdx : opIdx) {
-    opIdx.first.dump();
-    std::cout << "Valid load index: " << opIdx.second << std::endl;
-  }
+  // for (auto opIdx : opIdx) {
+  //   opIdx.first.dump();
+  //   std::cout << "Valid load index: " << opIdx.second << std::endl;
+  // }
 
   return success();
 }
@@ -994,13 +989,13 @@ void LoopPipeliner::emitPrologue() {
     }
     indexToActiveStages.push_back(activeStages);
   }
-  for (int i = 0; i < indexToActiveStages.size(); i++) {
-    std::cout << "Stage " << i << std::endl;
-    for (auto stage : indexToActiveStages[i]) {
-      std::cout << stage << " ";
-    }
-    std::cout << std::endl;
-  }
+  // for (int i = 0; i < indexToActiveStages.size(); i++) {
+  //   std::cout << "Stage " << i << std::endl;
+  //   for (auto stage : indexToActiveStages[i]) {
+  //     std::cout << stage << " ";
+  //   }
+  //   std::cout << std::endl;
+  // }
   // prologue from [0, numStage-1)
   Value iv = forOp.getLowerBound();
   for (auto validLoad : validLoads) {
@@ -1172,7 +1167,7 @@ void LoopPipeliner::emitPrologue() {
     for (BlockArgument arg : forOp.getRegionIterArgs())
       setValueMappingYield(arg, valueMapping[arg][stage], stage + 1);
   } // for (int stage = 0; stage < numStages - 1; ++stage)
-  std::cout << "Done stages loop" << std::endl;
+  // std::cout << "Done stages loop" << std::endl;
   // async.wait & extract_slice
   if (numLoadsRequireAsyncWait > 0) {
     int wait = 0;
@@ -1293,10 +1288,10 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
 
 scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
                                      OpBuilder &builder) {
-  std::cout << "newLoopArgs: \n";
-  for (auto arg : newLoopArgs) {
-    arg.dump();
-  }
+  // std::cout << "newLoopArgs: \n";
+  // for (auto arg : newLoopArgs) {
+  //   arg.dump();
+  // }
   // Clone the original ForOp
   auto newForOp = builder.create<scf::ForOp>(
       forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
