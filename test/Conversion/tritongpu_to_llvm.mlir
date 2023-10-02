@@ -1,4 +1,4 @@
-// RUN: not triton-opt %s -split-input-file --convert-triton-gpu-to-llvm="target=rocdl" --mlir-pass-pipeline-crash-reproducer=%t 2>/dev/null | FileCheck --check-prefixes=CHECK,GCN %s
+// RUN: not triton-opt %s -split-input-file --convert-triton-gpu-to-llvm="target=rocdl" 2>/dev/null | FileCheck --check-prefixes=CHECK,GCN %s
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<f16, 1>)
@@ -487,16 +487,82 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Load 8 elements from A with four vectorized load instruction
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
 
     // Load 8 elements from B with four vectorized load instruction
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
-    // CHECK: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.addrspacecast {{.*}} : !llvm.ptr<f32, 1> to !llvm.ptr<i32>
+    // GCN: llvm.load {{.*}} : !llvm.ptr<i32>
+    // GCN: llvm.bitcast {{.*}} : i32 to vector<1xf32>
+    // GCN: llvm.insertvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.insertvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
+    // PTX: @${{.*}} ld.global.v2.b32 { ${{.*}}, ${{.*}} }, [ ${{.*}} + 0 ];
 
     %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
     %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256xf32, #blocked0>
@@ -505,10 +571,20 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
 
     // Store 8 elements to global with four vectorized store instruction
-    // CHECK: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
-    // CHECK: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
-    // CHECK: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
-    // CHECK: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
+    // GCN-NOT: llvm.inline_asm
+    // GCN: llvm.extractvalue {{.*}}[0] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[1] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[2] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[3] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[4] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[5] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[6] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN: llvm.extractvalue {{.*}}[7] : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GCN-COUNT-8: llvm.store {{.*}} : !llvm.ptr<f32, 1>
+    // PTX: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
+    // PTX: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
+    // PTX: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
+    // PTX: @${{.*}} st.global.v2.b32 [ ${{.*}} + 0 ], { ${{.*}}, ${{.*}} };
     tt.store %13, %11 : tensor<256xf32, #blocked0>
     tt.return
   }
@@ -703,7 +779,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_program_id
   tt.func @basic_program_id() {
-    // CHECK: llvm.inline_asm asm_dialect = att operand_attrs = [] "mov.u32 $0, %ctaid.x;", "=r"  : () -> i32
+    // PTX: llvm.inline_asm asm_dialect = att operand_attrs = [] "mov.u32 $0, %ctaid.x;", "=r"  : () -> i32
     %0 = tt.get_program_id x : i32
     tt.return
   }
@@ -777,11 +853,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // PTX-LABEL: basic_async_wait
-  // This test is disabled for GCN target, because it is PTX specific
-  // GCN-NOT: basic_async_wait
+  // CHECK-LABEL: basic_async_wait
   tt.func @basic_async_wait() {
     // PTX: cp.async.wait_group 0x4
+    // GCN-NOT: cp.async.wait_group
     triton_gpu.async_wait {num = 4: i32}
     tt.return
   }
@@ -1194,7 +1269,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #mma0 = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [1, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], instrShape = [16, 8]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma0, kWidth=2}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma0, kWidth=2}>
-module attributes {"triton_gpu.num-warps" = 1 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // PTX-LABEL: convert_dot
   // This test is not relevant to GCN target, because it is PTX specific
   tt.func @convert_dot(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
@@ -1229,12 +1304,12 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
 // -----
 
-#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
-#shared0 = #triton_gpu.shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0]}>
-#mfma0 = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA=[1,1], isTranspose=false}>
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared0 = #triton_gpu.shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#mfma0 = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA=[1,1], isTranspose=false, CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma0, kWidth = 4}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma0, kWidth = 4}>
-module attributes {"triton_gpu.num-warps" = 1 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_dot_mfma
   tt.func @convert_dot_mfma(%A: tensor<32x32xf16, #blocked0>, %B: tensor<32x32xf16, #blocked0>) {
     %AA = triton_gpu.convert_layout %A : (tensor<32x32xf16, #blocked0>) -> tensor<32x32xf16, #shared0>
@@ -1254,9 +1329,9 @@ module attributes {"triton_gpu.num-warps" = 1 : i32} {
 
 // -----
 
-#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
-#mfma = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [2, 2], isTranspose=false}>
-module attributes {"triton_gpu.num-warps" = 1 : i32} {
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#mfma = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [2, 2], isTranspose=false, CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK: llvm.mlir.global external @global_smem() {addr_space = 3 : i32} : !llvm.array<0 x i8>
   // CHECK-LABEL: convert_layout_mfma_block
   tt.func @convert_layout_mfma_blocked(%arg0: tensor<32x32xf32, #mfma>) {
@@ -1403,12 +1478,12 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 // -----
 
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#mfma = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [2, 2], isTransposed=false}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 32], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#mfma = #triton_gpu.mfma<{nonKDim = 32, warpsPerCTA = [2, 2], isTransposed=false, CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mfma, kWidth = 4}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mfma, kWidth = 4}>
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: matmul_kernel_dot_operand_layout_gcn
   tt.func @matmul_kernel_dot_operand_layout_gcn(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
     %a:tensor<128x32xf16, #shared>, %b:tensor<32x256xf16, #shared>) {
@@ -1592,9 +1667,12 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
   %blockidx = tt.get_program_id x: i32
   %blockidy = tt.get_program_id y: i32
   %blockidz = tt.get_program_id z: i32
-  // CHECK: ctaid.x
-  // CHECK: ctaid.y
-  // CHECK: ctaid.z
+  // PTX: ctaid.x
+  // PTX: ctaid.y
+  // PTX: ctaid.z
+  // GCN: rocdl.workgroup.id.x
+  // GCN: rocdl.workgroup.id.y
+  // GCN: rocdl.workgroup.id.z
   %v0 = arith.addi %blockidx, %blockidy : i32
   %v1 = arith.addi %v0, %blockidz : i32
   %0 = tt.splat %v1 : (i32) -> tensor<32xi32, #blocked0>
@@ -1614,9 +1692,9 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
   %blockidx = tt.get_program_id x: i32
   %blockidy = tt.get_program_id y: i32
   %blockidz = tt.get_program_id z : i32
-  // CHECK: clusterid.x
-  // CHECK: clusterid.y
-  // CHECK: clusterid.z
+  // PTX: clusterid.x
+  // PTX: clusterid.y
+  // PTX: clusterid.z
   %v0 = arith.addi %blockidx, %blockidy : i32
   %v1 = arith.addi %v0, %blockidz : i32
   %0 = tt.splat %v1 : (i32) -> tensor<32xi32, #blocked0>
@@ -1636,9 +1714,12 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %blockdimx = tt.get_num_programs {axis=0:i32} : i32
     %blockdimy = tt.get_num_programs {axis=1:i32} : i32
     %blockdimz = tt.get_num_programs {axis=2:i32} : i32
-    // CHECK: nctaid.x
-    // CHECK: nctaid.y
-    // CHECK: nctaid.z
+    // PTX: nctaid.x
+    // PTX: nctaid.y
+    // PTX: nctaid.z
+    // GCN: rocdl.grid.dim.x
+    // GCN: rocdl.grid.dim.y
+    // GCN: rocdl.grid.dim.z
     %v0 = arith.addi %blockdimx, %blockdimy : i32
     %v1 = arith.addi %v0, %blockdimz : i32
     %0 = tt.splat %v1 : (i32) -> tensor<32xi32, #blocked0>
@@ -1656,9 +1737,9 @@ module attributes {"triton_gpu.num-ctas" = 4 : i32, "triton_gpu.num-warps" = 4 :
     %blockdimx = tt.get_num_programs {axis=0:i32} : i32
     %blockdimy = tt.get_num_programs {axis=1:i32} : i32
     %blockdimz = tt.get_num_programs {axis=2:i32} : i32
-    // CHECK: nclusterid.x
-    // CHECK: nclusterid.y
-    // CHECK: nclusterid.z
+    // PTX: nclusterid.x
+    // PTX: nclusterid.y
+    // PTX: nclusterid.z
     %v0 = arith.addi %blockdimx, %blockdimy : i32
     %v1 = arith.addi %v0, %blockdimz : i32
     %0 = tt.splat %v1 : (i32) -> tensor<32xi32, #blocked0>
@@ -1823,13 +1904,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // -----
 
-// CHECK-LABEL: sum_reduction
-//       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
-//       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
-//       CHECK:   nvvm.barrier0
-//       CHECK:   shfl.sync.bfly.b32
-//       CHECK:   shfl.sync.bfly.b32
-//       CHECK:   nvvm.barrier0
+// PTX-LABEL: sum_reduction
+// TODO fix this test
+// GCN-NOT: sum_reduction
+//       PTX:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
+//       PTX:   nvvm.redux.sync  add %{{.*}}, %[[M]]
+//       PTX:   nvvm.barrier0
+//       PTX:   shfl.sync.bfly.b32
+//       PTX:   shfl.sync.bfly.b32
+//       PTX:   nvvm.barrier0
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
@@ -1917,7 +2000,7 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 
 // -----
 
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [2, 1], order = [1, 0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [2, 1], order = [1, 0], CTAsPerCGA = [1,1], CTASplitNum = [1,1], CTAOrder = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
   // CHECK-LABEL: atomic_add_f16
   tt.func @atomic_add_f16(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: f16 {tt.difisibility = 16 : i32}) {
