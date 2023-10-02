@@ -331,7 +331,6 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
     ]:
         pytest.skip('shapePerCTA[1] < 16 not supported')
 
-    # with ENABLE_TMA=0 and ENABLE_MMA_V3=0
     if '-'.join(map(str, [BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_B])) in [
         '16-32-64-4-1-256-256-256-False',
         '16-32-64-4-2-256-256-256-False',
@@ -444,7 +443,7 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
                  atol=1e-3,
                  check_dtype=False)
 
-    enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
-    if enable_mmav3 in ["on", "true", "1"] and BLOCK_M >= 64 and NUM_CTAS == 1 and BLOCK_N <= 256:
+    disable_mmav3 = os.environ.get('DISABLE_MMA_V3', 'not found').lower()
+    if disable_mmav3 not in ["on", "true", "1"] and BLOCK_M >= 64 and NUM_CTAS == 1 and BLOCK_N <= 256:
         ptx = pgm.asm['ptx']
         assert re.search(r'wgmma.mma_async.sync.aligned.m\d+n{}k16(?:.row.col)?.f32.f16.f16'.format(BLOCK_N), ptx)

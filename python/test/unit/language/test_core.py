@@ -1299,12 +1299,12 @@ def test_atomic_cas(sem, num_ctas, device):
 ] + (([
     (dtype_x, dtype_z, False, size)
     for dtype_x in torch_float8_dtypes
-    for dtype_z in ["float16", "float32"]
+    for dtype_z in ["float16", "float32", "bfloat16"]
     for size in [1024, 32]
 ] + [
     (dtype_x, dtype_z, False, size)
     for dtype_z in torch_float8_dtypes
-    for dtype_x in ["float16", "float32"]
+    for dtype_x in ["float16", "float32", "bfloat16"]
     for size in [1024, 32]
 ]) if torch.__version__ >= "2.1" else []))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -1526,22 +1526,26 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
 
     # initialize array containing all possible f8 values except NaN
     ref_fp8 = np.array(range(-128, 128), dtype=np.int8)
-    is_nan = (ref_fp8 & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
     exp_mask = 0b01111111 ^ ((1 << in_dtype.fp_mantissa_width) - 1)
+    is_nan = (ref_fp8 & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
     is_subnormal = np.logical_or((ref_fp8 & exp_mask) == 0, (ref_fp8 & exp_mask) == exp_mask)
-    ref_fp8[is_nan] = 0
-    ref_fp8[is_subnormal] = 0
     tri_fp8 = torch.from_numpy(serialize_fp8(ref_fp8, in_dtype)).cuda()
+    # check that non-subnormal fp8 are correctly converted to fp16
     tri_fp16 = torch.empty(256, dtype=out_dtype, device="cuda")
     copy_kernel[(1,)](triton.reinterpret(tri_fp8, in_dtype), tri_fp16, tri_fp16.shape[0], BLOCK_SIZE=1024)
-
     ref_fp8 = torch.from_numpy(ref_fp8).cuda()
     ref_fp16 = convert_float_to_float32(ref_fp8, in_dtype)
     assert torch.all(tri_fp16[~is_subnormal] == ref_fp16[~is_subnormal])
-
+    # check that values are properly converted back to float8
     ref_fp8 = torch.empty_like(tri_fp16, dtype=torch.int8)
     copy_kernel[(1,)](tri_fp16, triton.reinterpret(ref_fp8, in_dtype), tri_fp16.shape[0], BLOCK_SIZE=1024)
-    assert torch.all(tri_fp8 == ref_fp8)
+    if in_dtype == tl.float8e4b15:
+        assert torch.all(tri_fp8[:127] == ref_fp8[:127])
+        assert torch.all(tri_fp8[128:255] == ref_fp8[128:255])
+        assert ref_fp8[126] == ref_fp8[127]  # -1.875 saturates to -1.75
+        assert ref_fp8[254] == ref_fp8[255]  # 1.875 saturates to  1.75
+    else:
+        assert torch.all(tri_fp8[~is_subnormal] == ref_fp8[~is_subnormal])
 
 # ---------------
 # test reduce
@@ -2433,11 +2437,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             red_code = ptx[start:end]
             assert len(red_code) > 0
             import os
-            enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
-            enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
+
             # skip this check on hopper because there are some functions whose name contain "shared" in ptx.
             # TODO: we should eliminate these unused functions in ptx code.
-            if not (enable_mmav3 in ["on", "true", "1"] and enable_tma in ["on", "true", "1"]):
+            if not (capability[0] >= 9):
                 assert "shared" not in red_code
             assert "bar.sync" not in red_code
     # torch result
@@ -2540,13 +2543,12 @@ def test_dot_mulbroadcastred(in_dtype, device):
     if is_hip():
         return
     assert "tt.dot" in h.asm['ttir']
-    # with option ENABLE_MMA_V3 on, we will not pipeline the load op for Y
+    # when using MMAv3, we will not pipeline the load op for Y
     # as the loaded value is in rowmajor. But MMAv3 requires it's second
     # operand is in colmajor because transpose is not supported for MMAv3
     # with float32 input.
     import os
-    enable_mmav3 = os.environ.get('ENABLE_MMA_V3', 'not found').lower()
-    if enable_mmav3 in ["on", "true", "1"]:
+    if capability[0] >= 9:
         assert "triton_gpu.async_wait {num = 1 : i32}" in h.asm['ttgir']
     else:
         assert "triton_gpu.async_wait {num = 2 : i32}" in h.asm['ttgir']
