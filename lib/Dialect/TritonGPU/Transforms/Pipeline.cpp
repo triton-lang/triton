@@ -173,7 +173,8 @@ class LoopPipeliner {
   DenseMap<unsigned, Value> loopConditions;
   DenseMap<Value, Value> pipelineIterIdxMapping;
   // Value pipelineIterIdx;
-  Value curWaitIdx;
+  // Value curWaitIdx;
+  DenseMap<Value, Value> curWaitIdxMapping;
 
   // Only needed when numLoadsRequireMBarrier > 0
   Value loopIterIdx;
@@ -676,7 +677,12 @@ void LoopPipeliner::createBufferTypes() {
     auto ty = loadOp.getType().cast<RankedTensorType>();
     SmallVector<int64_t> bufferShape(ty.getShape().begin(),
                                      ty.getShape().end());
-    bufferShape.insert(bufferShape.begin(), numStages);
+    assert(validLoadToFirstAsync.count(loadOp) != 0);
+    auto firstAsync = validLoadToFirstAsync[loadOp];
+    loadOp.dump();
+    std::cout << "firstAsync: " << firstAsync << std::endl;
+    auto bufferSize = numStages - firstAsync;
+    bufferShape.insert(bufferShape.begin(), bufferSize);
     auto CTALayout = ttg::getCTALayout(ty.getEncoding());
     Attribute sharedEnc;
     if (auto dotOpEnc = cvt.getType()
@@ -801,11 +807,20 @@ void LoopPipeliner::defineStagesAndSchedule() {
       opsByStage.push_back(orderedOpsForStage);
     }
 
+    unsigned stageIncrement = ceil<unsigned>((numStages - 2), stages.size());
+    std::cout << "stageIncrement: " << stageIncrement << "\n";
+    unsigned stage = 0;
     for (auto i = 0; i < opsByStage.size(); i++) {
-      stageIdx.push_back(i);
+      stageIdx.push_back(stage);
+      stage += stageIncrement;
+    }
+    for (auto i = 0; i < stageIdx.size(); i++) {
+      std::cout << "stageIdx: " << stageIdx[i] << "\n";
     }
     for (int i = 0; i < opsByStage.size(); i++) {
       for (auto op : opsByStage[i]) {
+        op->dump();
+        std::cout << "stageIdx[i]: " << stageIdx[i] << std::endl;
         opIdx[op->getResult(0)] = stageIdx[i];
       }
     }
@@ -815,13 +830,19 @@ void LoopPipeliner::defineStagesAndSchedule() {
         maxStage = opAndIdx.second;
       }
     }
+    std::cout << "Max stage = " << maxStage << "\n";
     for (auto validLoad : validLoads) {
+      validLoad.dump();
       if (validLoadsToLoadsThatDependOnThem[validLoad.getDefiningOp()].size() ==
           0) {
+        std::cout << "first" << std::endl;
         validLoadToFirstAsync[validLoad] = opIdx[validLoad];
       } else {
+        std::cout << "second" << std::endl;
         validLoadToFirstAsync[validLoad] = numStages - 1 - maxStage;
       }
+      std::cout << "validLoadToFirstAsync: " << validLoadToFirstAsync[validLoad]
+                << "\n";
     }
   }
 }
@@ -866,11 +887,12 @@ LogicalResult LoopPipeliner::initialize() {
 
   checkOpDeps(ops);
 
-  createBufferTypes();
-
   createOrderedDeps();
 
   defineStagesAndSchedule();
+
+  createBufferTypes();
+
   for (int i = 0; i < opsByStage.size(); i++) {
     std::cout << "Stage " << i << std::endl;
     for (auto op : opsByStage[i]) {
@@ -1181,7 +1203,11 @@ void LoopPipeliner::emitPrologue() {
         size, increment);
     loadsExtract[loadOp] = extractSlice;
   }
-  curWaitIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
+  for (auto loadOp : validLoads) {
+    curWaitIdxMapping[loadOp] =
+        builder.create<arith::ConstantIntOp>(loadOp.getLoc(), 0, 32);
+  }
+  // curWaitIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   loopIterIdx = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 32);
   curPhase = builder.create<arith::ConstantIntOp>(iv.getLoc(), 0, 1);
   curEmptyPhase = builder.create<arith::ConstantIntOp>(iv.getLoc(), 1, 1);
@@ -1251,7 +1277,11 @@ SmallVector<Value> LoopPipeliner::collectNewLoopArgs() {
   for (auto validLoad : validLoads) {
     newLoopArgs.push_back(pipelineIterIdxMapping[validLoad]);
   }
-  newLoopArgs.push_back(curWaitIdx);
+
+  for (auto validLoad : validLoads) {
+    newLoopArgs.push_back(curWaitIdxMapping[validLoad]);
+  }
+  // newLoopArgs.push_back(curWaitIdx);
   if (numLoadsRequireMBarrier > 0) {
     newLoopArgs.push_back(loopIterIdx);
     newLoopArgs.push_back(curPhase);
@@ -1284,7 +1314,7 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
   Value curIV = newForOp.getRegionIterArgs()[ivIdx];
   // HACK, fix for any number of pipline stages
   Value pipelineIterIdx = newForOp.getRegionIterArgs()[ivIdx + 1];
-  curWaitIdx = newForOp.getRegionIterArgs()[ivIdx + 2 * validLoads.size()];
+  // curWaitIdx = newForOp.getRegionIterArgs()[ivIdx + 2 * validLoads.size()];
   if (numLoadsRequireMBarrier > 0) {
     loopIterIdx = newForOp.getRegionIterArgs()[ivIdx + 3];
     curPhase = newForOp.getRegionIterArgs()[ivIdx + 4];
@@ -1346,15 +1376,17 @@ scf::ForOp LoopPipeliner::cloneForOp(ArrayRef<Value> newLoopArgs,
 
         // If current load can reuse barriers shared by previous load, then we
         // do nothing.
-        if (!loadsCanShareBarriers[loadOp]) {
-          // emit mbarrier wait before the first consumer of the loaD
-          OpBuilder mBarBuilder(firstConsumer);
-          auto mBarTy = tt::PointerType::get(builder.getIntegerType(64), 3);
-          Value fullBarrier = mBarBuilder.create<ttng::ExtractMBarrierOp>(
-              loadOp.getLoc(), mBarTy, loadsFullBarriers[loadOp], curWaitIdx);
-          mBarBuilder.create<ttng::MBarrierWaitOp>(loadOp.getLoc(), fullBarrier,
-                                                   curPhase);
-        }
+        // if (!loadsCanShareBarriers[loadOp]) {
+        //   // emit mbarrier wait before the first consumer of the loaD
+        //   OpBuilder mBarBuilder(firstConsumer);
+        //   auto mBarTy = tt::PointerType::get(builder.getIntegerType(64), 3);
+        //   Value fullBarrier = mBarBuilder.create<ttng::ExtractMBarrierOp>(
+        //       loadOp.getLoc(), mBarTy, loadsFullBarriers[loadOp],
+        //       curWaitIdx);
+        //   mBarBuilder.create<ttng::MBarrierWaitOp>(loadOp.getLoc(),
+        //   fullBarrier,
+        //                                            curPhase);
+        // }
 
         loadsFromTensorPtr.push_back(loadOp);
         continue;
@@ -1427,7 +1459,7 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
   // Update loop iteration args
   // Value curIV = newForOp.getRegionIterArgs()[ivIdx];
   // pipelineIterIdx = newForOp.getRegionIterArgs()[ivIdx + 1];
-  curWaitIdx = newForOp.getRegionIterArgs()[ivIdx + 2 * validLoads.size()];
+  // curWaitIdx = newForOp.getRegionIterArgs()[ivIdx + 2 * validLoads.size()];
   if (numLoadsRequireMBarrier > 0) {
     loopIterIdx = newForOp.getRegionIterArgs()[ivIdx + 3];
     curPhase = newForOp.getRegionIterArgs()[ivIdx + 4];
@@ -1446,21 +1478,34 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
     nextIVs[indexToCurIVIndexInForLoopArgs.first] = nextIV;
     loopConditions[indexToCurIVIndexInForLoopArgs.first] = nextLoopCond;
   }
-  auto idxLoc = curWaitIdx.getLoc();
-  // Constants
-  Value _0 = builder.create<arith::ConstantIntOp>(idxLoc, 0, 32);
-  Value _1 = builder.create<arith::ConstantIntOp>(idxLoc, 1, 32);
-  Value numStagesVal =
-      builder.create<arith::ConstantIntOp>(idxLoc, numStages, 32);
+  DenseMap<Value, Value> extractSliceIndexMapping;
+  for (auto validLoad : validLoads) {
+    auto it = std::find(validLoads.begin(), validLoads.end(), validLoad);
+    assert(it != validLoads.end() && "validLoad not found");
+    auto loadArgIdx = std::distance(validLoads.begin(), it);
+    auto curWaitIdx =
+        newForOp
+            .getRegionIterArgs()[ivIdx + 2 * validLoads.size() + loadArgIdx];
+    auto idxLoc = curWaitIdx.getLoc();
+    // Constants
+    auto stages = numStages - validLoadToFirstAsync[validLoad];
+    Value _0 = builder.create<arith::ConstantIntOp>(idxLoc, 0, 32);
+    Value _1 = builder.create<arith::ConstantIntOp>(idxLoc, 1, 32);
+    Value numStagesVal =
+        builder.create<arith::ConstantIntOp>(idxLoc, stages, 32);
 
-  // nextWaitIdx
-  Value waitIdxPlusOne = builder.create<arith::AddIOp>(idxLoc, curWaitIdx, _1);
-  Value nextWaitIdx = getBoundedIterationValue(
-      builder, waitIdxPlusOne, numStagesVal, waitIdxPlusOne, _0);
+    // nextWaitIdx
+    Value waitIdxPlusOne =
+        builder.create<arith::AddIOp>(idxLoc, curWaitIdx, _1);
+    Value nextWaitIdx = getBoundedIterationValue(
+        builder, waitIdxPlusOne, numStagesVal, waitIdxPlusOne, _0);
 
-  // Indices of InsertSliceAsyncOp and ExtractSliceOp
-  // Value insertSliceIndex = pipelineIterIdx;
-  Value extractSliceIndex = nextWaitIdx;
+    // Indices of InsertSliceAsyncOp and ExtractSliceOp
+    // Value insertSliceIndex = pipelineIterIdx;
+    Value extractSliceIndex = nextWaitIdx;
+    extractSliceIndexMapping[validLoad] = extractSliceIndex;
+    curWaitIdxMapping[validLoad] = nextWaitIdx;
+  }
 
   // Prefetch load deps
   // If a load-dependent instruction that uses a block argument, we
@@ -1640,6 +1685,7 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
       sliceType = RankedTensorType::get(sliceShape, sliceType.getElementType(),
                                         loadsBufferType[loadOp].getEncoding());
       SmallVector<OpFoldResult> offset(sliceShape.size(), int_attr(0));
+      Value extractSliceIndex = extractSliceIndexMapping[op->getResult(0)];
       offset.insert(offset.begin(), extractSliceIndex);
       SmallVector<OpFoldResult> increment(sliceShape.size() + 1, int_attr(1));
       SmallVector<OpFoldResult> size;
@@ -1680,9 +1726,20 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
 
   // Bump pipelineIterIdx
   for (auto validLoad : validLoads) {
-    Value pipelineIterIdx = pipelineIterIdxMapping[validLoad];
-    Value pipelineIterIdxPlusOne =
-        builder.create<arith::AddIOp>(idxLoc, pipelineIterIdx, _1);
+    auto it = std::find(validLoads.begin(), validLoads.end(), validLoad);
+    assert(it != validLoads.end());
+    auto loadArgIdx = std::distance(validLoads.begin(), it);
+    Value pipelineIterIdx =
+        newForOp.getRegionIterArgs()[ivIdx + validLoads.size() + loadArgIdx];
+    Value _0 =
+        builder.create<arith::ConstantIntOp>(pipelineIterIdx.getLoc(), 0, 32);
+    Value _1 =
+        builder.create<arith::ConstantIntOp>(pipelineIterIdx.getLoc(), 1, 32);
+    Value pipelineIterIdxPlusOne = builder.create<arith::AddIOp>(
+        pipelineIterIdx.getLoc(), pipelineIterIdx, _1);
+    auto stages = numStages - validLoadToFirstAsync[validLoad];
+    Value numStagesVal = builder.create<arith::ConstantIntOp>(
+        pipelineIterIdx.getLoc(), stages, 32);
     pipelineIterIdx =
         getBoundedIterationValue(builder, pipelineIterIdxPlusOne, numStagesVal,
                                  pipelineIterIdxPlusOne, _0);
@@ -1690,7 +1747,7 @@ void LoopPipeliner::prefetchNextIteration(scf::ForOp newForOp,
   }
 
   // Bump curWaitIdx
-  curWaitIdx = nextWaitIdx;
+  // curWaitIdx = nextWaitIdx;
 
   // if (numLoadsRequireMBarrier > 0) {
   //   // Bump loopIterIdx
@@ -1738,7 +1795,10 @@ void LoopPipeliner::finalizeYield(scf::ForOp newForOp, OpBuilder &builder) {
     yieldValues.push_back(pipelineIterIdxMapping[validLoad]);
   }
   // yieldValues.push_back(pipelineIterIdx);
-  yieldValues.push_back(curWaitIdx);
+  // yieldValues.push_back(curWaitIdx);
+  for (auto validLoad : validLoads) {
+    yieldValues.push_back(curWaitIdxMapping[validLoad]);
+  }
   if (numLoadsRequireMBarrier > 0) {
     yieldValues.push_back(loopIterIdx);
     yieldValues.push_back(curPhase);
