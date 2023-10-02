@@ -68,12 +68,12 @@ def get_pybind11_package_info():
 def get_llvm_package_info():
     # added statement for Apple Silicon
     system = platform.system()
-    arch = 'x86_64'
+    arch = platform.machine()
+    if arch == 'aarch64':
+        arch = 'arm64'
     if system == "Darwin":
         system_suffix = "apple-darwin"
-        cpu_type = os.popen('sysctl machdep.cpu.brand_string').read()
-        if "apple" in cpu_type.lower():
-            arch = 'arm64'
+        arch = platform.machine()
     elif system == "Linux":
         vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
         vglibc = vglibc[0] * 100 + vglibc[1]
@@ -86,6 +86,9 @@ def get_llvm_package_info():
     name = f'llvm+mlir-17.0.0-{arch}-{system_suffix}-{release_suffix}'
     version = "llvm-17.0.0-c5dede880d17"
     url = f"https://github.com/ptillet/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
+    # FIXME: remove the following once github.com/ptillet/triton-llvm-releases has arm64 llvm releases
+    if arch == 'arm64' and 'linux' in system_suffix:
+        url = f"https://github.com/acollins3/triton-llvm-releases/releases/download/{version}/{name}.tar.xz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -126,7 +129,10 @@ def download_and_copy_ptxas():
     base_dir = os.path.dirname(__file__)
     src_path = "bin/ptxas"
     version = "12.1.105"
-    url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-64/cuda-nvcc-{version}-0.tar.bz2"
+    arch = platform.machine()
+    if arch == "x86_64":
+        arch = "64"
+    url = f"https://conda.anaconda.org/nvidia/label/cuda-12.1.1/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2"
     dst_prefix = os.path.join(base_dir, "triton")
     dst_suffix = os.path.join("third_party", "cuda", src_path)
     dst_path = os.path.join(dst_prefix, dst_suffix)
@@ -167,11 +173,15 @@ class CMakeExtension(Extension):
 
 class CMakeBuild(build_ext):
 
-    user_options = build_ext.user_options + [('base-dir=', None, 'base directory of Triton')]
+    user_options = build_ext.user_options + \
+        [('base-dir=', None, 'base directory of Triton')]
 
     def initialize_options(self):
         build_ext.initialize_options(self)
-        self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        self.base_dir = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                os.pardir))
 
     def finalize_options(self):
         build_ext.finalize_options(self)
@@ -180,9 +190,7 @@ class CMakeBuild(build_ext):
         try:
             out = subprocess.check_output(["cmake", "--version"])
         except OSError:
-            raise RuntimeError(
-                "CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions)
-            )
+            raise RuntimeError("CMake must be installed to build the following extensions: " + ", ".join(e.name for e in self.extensions))
 
         match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
         cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
@@ -291,7 +299,7 @@ setup(
         "triton/tools",
     ],
     install_requires=[
-        "filelock",
+        "filelock"
     ],
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
@@ -314,7 +322,7 @@ setup(
     test_suite="tests",
     extras_require={
         "build": [
-            "cmake>=3.18",
+            "cmake>=3.20",
             "lit",
         ],
         "tests": [
@@ -324,11 +332,13 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
+            "torch",
         ],
         "tutorials": [
             "matplotlib",
             "pandas",
             "tabulate",
+            "torch",
         ],
     },
 )

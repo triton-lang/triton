@@ -14,6 +14,7 @@
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
@@ -39,6 +40,7 @@ OwningOpRef<ModuleOp> loadMLIRModule(llvm::StringRef inputFilename,
   mlir::DialectRegistry registry;
   registry
       .insert<TritonDialect, triton::gpu::TritonGPUDialect,
+              triton::nvidia_gpu::TritonNvidiaGPUDialect,
               mlir::math::MathDialect, arith::ArithDialect, scf::SCFDialect>();
 
   context.appendDialectRegistry(registry);
@@ -122,6 +124,7 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   }
 
   llvm::LLVMContext llvmContext;
+<<<<<<< HEAD
 #ifdef USE_ROCM
   auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module,
                                            SMArch.getValue(), true /*isRocm*/);
@@ -129,6 +132,12 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module,
                                            SMArch.getValue(), false /*isRocm*/);
 #endif
+=======
+  mlir::triton::gpu::TMAMetadataTy tmaInfos;
+  auto llvmir = translateTritonGPUToLLVMIR(
+      &llvmContext, *module, SMArch.getValue(), tmaInfos, Target::Default);
+
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
   if (!llvmir) {
     llvm::errs() << "Translate to LLVM IR failed";
   }

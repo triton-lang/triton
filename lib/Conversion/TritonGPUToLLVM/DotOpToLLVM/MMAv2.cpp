@@ -141,7 +141,15 @@ TensorCoreType getMmaType(triton::DotOp op) {
   return TensorCoreType::NOT_APPLICABLE;
 }
 
-inline static const std::map<TensorCoreType, std::string> mmaInstrPtx = {
+inline static const std::map<TensorCoreType, std::string> mmaInstrPtxTuring = {
+    {TensorCoreType::FP32_FP16_FP16_FP32,
+     "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32"},
+
+    {TensorCoreType::FP16_FP16_FP16_FP16,
+     "mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16"},
+};
+
+inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
     {TensorCoreType::FP32_FP16_FP16_FP32,
      "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"},
     {TensorCoreType::FP32_BF16_BF16_FP32,
@@ -164,22 +172,23 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Value a, Value b, Value c, Value d, Value loadedA,
                          Value loadedB, Value loadedC, DotOp op,
-                         DotOpAdaptor adaptor) {
+                         DotOpAdaptor adaptor, bool isTuring) {
   MLIRContext *ctx = c.getContext();
   auto aTensorTy = a.getType().cast<RankedTensorType>();
   auto bTensorTy = b.getType().cast<RankedTensorType>();
   auto dTensorTy = d.getType().cast<RankedTensorType>();
 
-  SmallVector<int64_t> aShape(aTensorTy.getShape().begin(),
-                              aTensorTy.getShape().end());
-  auto dShape = dTensorTy.getShape();
+  auto aShapePerCTA = triton::gpu::getShapePerCTA(aTensorTy);
+  auto bShapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
+  auto dShapePerCTA = triton::gpu::getShapePerCTA(dTensorTy);
+
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto repA =
       aTensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
-          aTensorTy.getShape(), bitwidth);
+          aShapePerCTA, bitwidth);
   auto repB =
       bTensorTy.getEncoding().cast<DotOperandEncodingAttr>().getMMAv2Rep(
-          bTensorTy.getShape(), bitwidth);
+          bShapePerCTA, bitwidth);
 
   assert(repA[1] == repB[0]);
   int repM = repA[0], repN = repB[1], repK = repA[1];
@@ -196,23 +205,18 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
 
   auto mmaType = getMmaType(op);
 
+  const auto &mmaInstructions =
+      isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
+
   auto callMma = [&](unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = repN * 2;
     PTXBuilder builder;
-    auto &mma = *builder.create(mmaInstrPtx.at(mmaType));
+    auto &mma = *builder.create(mmaInstructions.at(mmaType));
     // using =r for float32 works but leads to less readable ptx.
     bool isIntMMA = dTensorTy.getElementType().isInteger(32);
     bool isAccF16 = dTensorTy.getElementType().isF16();
     auto retArgs =
         builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
-    auto aArgs = builder.newListOperand({
-        {ha[{m, k}], "r"},
-        {ha[{m + 1, k}], "r"},
-        {ha[{m, k + 1}], "r"},
-        {ha[{m + 1, k + 1}], "r"},
-    });
-    auto bArgs =
-        builder.newListOperand({{hb[{n, k}], "r"}, {hb[{n, k + 1}], "r"}});
     auto cArgs = builder.newListOperand();
     for (int i = 0; i < numMmaRets; ++i) {
       cArgs->listAppend(builder.newOperand(
@@ -221,7 +225,32 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
       // reuse the output registers
     }
 
-    mma(retArgs, aArgs, bArgs, cArgs);
+    if (isTuring) {
+      auto aArgs1 = builder.newListOperand({
+          {ha[{m, k}], "r"},
+          {ha[{m + 1, k}], "r"},
+      });
+      auto bArgs1 = builder.newListOperand({
+          {hb[{n, k}], "r"},
+      });
+      auto aArgs2 = builder.newListOperand({
+          {ha[{m, k + 1}], "r"},
+          {ha[{m + 1, k + 1}], "r"},
+      });
+      auto bArgs2 = builder.newListOperand({{hb[{n, k + 1}], "r"}});
+      mma(retArgs, aArgs1, bArgs1, cArgs);
+      mma(retArgs, aArgs2, bArgs2, cArgs);
+    } else {
+      auto aArgs = builder.newListOperand({
+          {ha[{m, k}], "r"},
+          {ha[{m + 1, k}], "r"},
+          {ha[{m, k + 1}], "r"},
+          {ha[{m + 1, k + 1}], "r"},
+      });
+      auto bArgs =
+          builder.newListOperand({{hb[{n, k}], "r"}, {hb[{n, k + 1}], "r"}});
+      mma(retArgs, aArgs, bArgs, cArgs);
+    }
     Value mmaOut =
         builder.launch(rewriter, loc, getMmaRetType(mmaType, op.getContext()));
 
@@ -258,10 +287,9 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   return success();
 }
 
-// Convert to mma.m16n8k16
-LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                              TritonGPUToLLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter) {
+LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                         TritonGPUToLLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter, bool isTuring) {
   auto loc = op.getLoc();
   auto mmaLayout = op.getResult()
                        .getType()
@@ -287,5 +315,19 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
       loadC(op.getC(), adaptor.getC(), typeConverter, op.getLoc(), rewriter);
 
   return convertDot(typeConverter, rewriter, op.getLoc(), A, B, C, op.getD(),
-                    loadedA, loadedB, loadedC, op, adaptor);
+                    loadedA, loadedB, loadedC, op, adaptor, isTuring);
+}
+
+// Convert to mma.m16n8k8
+LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                             TritonGPUToLLVMTypeConverter *typeConverter,
+                             ConversionPatternRewriter &rewriter) {
+  return convertMMA(op, adaptor, typeConverter, rewriter, true /*isTuring*/);
+}
+
+// Convert to mma.m16n8k16
+LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                              TritonGPUToLLVMTypeConverter *typeConverter,
+                              ConversionPatternRewriter &rewriter) {
+  return convertMMA(op, adaptor, typeConverter, rewriter, false /*isTuring*/);
 }

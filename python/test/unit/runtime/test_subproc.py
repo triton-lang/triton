@@ -14,10 +14,10 @@ tmpdir = ".tmp"
 def reset_tmp_dir():
     os.environ["TRITON_CACHE_DIR"] = tmpdir
     if os.path.exists(tmpdir):
-        shutil.rmtree(tmpdir)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1"])
+instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"])
 
 
 def get_device_type():
@@ -53,8 +53,14 @@ def compile_fn(config, device_type, cc):
 
 
 def test_compile_in_subproc() -> None:
+<<<<<<< HEAD
     cc, device_type = get_device_type()
     config = instance_descriptor(tuple(range(4)), ())
+=======
+    major, minor = torch.cuda.get_device_capability(0)
+    cc = major * 10 + minor
+    config = instance_descriptor(tuple(range(4)), (), (), ())
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 
     multiprocessing.set_start_method('fork')
     proc = multiprocessing.Process(
@@ -86,8 +92,14 @@ def compile_fn_dot(config, device_type, cc):
 
 def test_compile_in_forked_subproc() -> None:
     reset_tmp_dir()
+<<<<<<< HEAD
     cc, device_type = get_device_type()
     config = instance_descriptor(tuple(range(1)), ())
+=======
+    major, minor = torch.cuda.get_device_capability(0)
+    cc = major * 10 + minor
+    config = instance_descriptor(tuple(range(1)), (), (), ())
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 
     assert multiprocessing.get_start_method() == 'fork'
     proc = multiprocessing.Process(

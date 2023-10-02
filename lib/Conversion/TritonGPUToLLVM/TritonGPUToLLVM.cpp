@@ -6,6 +6,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::getSRegValue;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
@@ -445,18 +446,23 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // It is not easy to get the compute capability here, so we use numCTAs to
+    // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
+    // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
+    // "%clusterid".
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+
     Location loc = op->getLoc();
     assert(op.getAxisAsInt() < 3);
+    std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
+    sreg.append(1, 'x' + op.getAxisAsInt()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
-    Value blockId =
-        rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxisAsInt()]);
-    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
+    Value programId = getSRegValue(rewriter, loc, sreg);
+    rewriter.replaceOp(op, programId);
     return success();
   }
-
-  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                  mlir::gpu::Dimension::y,
-                                                  mlir::gpu::Dimension::z};
 };
 
 struct GetNumProgramsOpConversion
@@ -467,9 +473,20 @@ struct GetNumProgramsOpConversion
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // It is not easy to get the compute capability here, so we use numCTAs to
+    // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
+    // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted to
+    // "%nclusterid".
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+
     Location loc = op->getLoc();
     assert(op.getAxis() < 3);
+    std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
+    sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
+<<<<<<< HEAD
 #ifdef USE_ROCM
     // Seem like GridDimOp returns the number of threads (not the number of 
     // workgroups) in a kernel (a bug in llvm https://reviews.llvm.org/D156009), 
@@ -489,13 +506,43 @@ struct GetNumProgramsOpConversion
         rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
     rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
 #endif // USE_ROCM
-
+=======
+    Value numPrograms = getSRegValue(rewriter, loc, sreg);
+    rewriter.replaceOp(op, numPrograms);
     return success();
   }
+};
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 
-  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                  mlir::gpu::Dimension::y,
-                                                  mlir::gpu::Dimension::z};
+// TODO[goostavz]: GetThreadIdOp/GetClusterCTAIdOp is a temporary solution
+// before async dialect is done. These concepts should appear in ttgpu
+// level, and they are planned to be deprecated along with ttgpu.mbarrier_xxx
+// ops.
+struct GetThreadIdOpConversion : public ConvertTritonGPUOpToLLVMPattern<
+                                     triton::nvidia_gpu::GetThreadIdOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::GetThreadIdOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::GetThreadIdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, getThreadId(rewriter, op->getLoc()));
+    return success();
+  }
+};
+
+struct GetClusterCTAIdOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::nvidia_gpu::GetClusterCTAIdOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::GetClusterCTAIdOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::GetClusterCTAIdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, getClusterCTAId(rewriter, op->getLoc()));
+    return success();
+  }
 };
 
 struct AddPtrOpConversion
@@ -551,7 +598,8 @@ struct AllocTensorOpConversion
         getTypeConverter()->convertType(resultTy.getElementType());
     auto elemPtrTy = ptr_ty(llvmElemTy, 3);
     smemBase = bitcast(smemBase, elemPtrTy);
-    auto order = resultTy.getEncoding().cast<SharedEncodingAttr>().getOrder();
+    auto sharedLayout = resultTy.getEncoding().cast<SharedEncodingAttr>();
+    auto order = sharedLayout.getOrder();
     // Workaround for 3D tensors
     // TODO: we need to modify the pipeline pass to give a proper shared
     // encoding to 3D tensors
@@ -561,8 +609,9 @@ struct AllocTensorOpConversion
     else
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
 
-    auto smemObj = SharedMemoryObject(smemBase, resultTy.getShape(), newOrder,
-                                      loc, rewriter);
+    auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
+    auto smemObj =
+        SharedMemoryObject(smemBase, shapePerCTA, newOrder, loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -605,7 +654,7 @@ struct ExtractSliceOpConversion
     // newShape = rank_reduce(shape)
     // Triton only supports static tensor sizes
     SmallVector<Value, 4> strideVals;
-    for (auto i = 0; i < op.static_sizes().size(); ++i) {
+    for (auto i = 0; i < op.getStaticSizes().size(); ++i) {
       if (op.getStaticSize(i) == 1) {
         offsetVals.erase(offsetVals.begin() + i);
       } else {
@@ -665,6 +714,49 @@ struct AsyncCommitGroupOpConversion
   }
 };
 
+struct AsyncBulkWaitOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncBulkWaitOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncBulkWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncBulkWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    PTXBuilder ptxBuilder;
+    auto &asyncBulkWaitOp = *ptxBuilder.create<>("cp.async.bulk.wait_group");
+    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
+    asyncBulkWaitOp(ptxBuilder.newConstantOperand(num));
+
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto voidTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, voidTy);
+
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct AsyncBulkCommitGroupOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::AsyncBulkCommitGroupOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncBulkCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncBulkCommitGroupOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    PTXBuilder ptxBuilder;
+    ptxBuilder.create<>("cp.async.bulk.commit_group")->operator()();
+    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 namespace mlir {
 namespace LLVM {
 
@@ -690,6 +782,7 @@ void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
 
 void populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &moduleAllocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
@@ -698,12 +791,15 @@ void populateTritonGPUToLLVMPatterns(
                                         benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncBulkWaitOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
-
   patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
+  patterns.add<GetThreadIdOpConversion>(typeConverter, benefit);
+  patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintOpConversion>(typeConverter, benefit);

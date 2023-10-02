@@ -27,7 +27,7 @@ jobs:
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
             echo '::set-output name=matrix-required::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
-            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
+            echo '::set-output name=matrix-optional::[]'
           else
             echo '::set-output name=matrix-required::["ubuntu-latest"]'
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
@@ -50,6 +50,9 @@ jobs:
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
+          echo "ENABLE_TMA=0" >> "${GITHUB_ENV}"
+          echo "ENABLE_MMA_V3=0" >> "${GITHUB_ENV}"
+          echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
 
       - name: Clear cache
         run: |
@@ -58,6 +61,11 @@ jobs:
       - name: Update PATH
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files --verbose
 
       - name: Install Triton
         if: ${{ env.BACKEND == 'CUDA'}}
@@ -80,19 +88,53 @@ jobs:
           fi
           lit -v "${LIT_TEST_DIR}"
 
-      - name: Run python tests on CUDA
-        if: ${{ env.BACKEND == 'CUDA'}}
+      - name: Enable MMAV3 and TMA
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'H100')}}
+        run: |
+          echo "ENABLE_TMA=1" >> "${GITHUB_ENV}"
+          echo "ENABLE_MMA_V3=1" >> "${GITHUB_ENV}"
+
+      - name: Run python tests on CUDA with ENABLE_TMA=1 and ENABLE_MMA_V3=1
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1' && env.ENABLE_MMA_V3 == '1'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --ignore=runtime
+          python3 -m pytest -n 8 --ignore=runtime --ignore=operators --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
+          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+
+      - name: Run python tests on CUDA with ENABLE_TMA=0 and ENABLE_MMA_V3=0
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 --ignore=runtime --ignore=hopper --ignore=operators --ignore=language/test_line_info.py
+          # run runtime tests serially to avoid race condition with cache handling.
+          python3 -m pytest runtime/
+          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest language/test_line_info.py
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Run partial tests on CUDA with ENABLE_TMA=1 and ENABLE_MMA_V3=1
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '1' && env.ENABLE_MMA_V3 == '1'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 operators
+
+      - name: Run partial tests on CUDA with ENABLE_TMA=0 and ENABLE_MMA_V3=0
+        if: ${{ env.BACKEND == 'CUDA' && env.ENABLE_TMA == '0' && env.ENABLE_MMA_V3 == '0'}}
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n 8 operators
 
       - name: Create artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
         run: |
           cd ~/.triton
-          tar -czvf artifacts.tar.gz cache
+          tar -czf artifacts.tar.gz cache
 
       - name: Upload artifacts archive
         if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'V100' || matrix.runner[1] == 'A100' || matrix.runner[1] == 'H100')}}
@@ -120,6 +162,7 @@ jobs:
 
   Integration-Tests-Third-Party:
     needs: Runner-Preparation
+    if: false
 
     runs-on: ${{ matrix.runner }}
 
@@ -219,10 +262,22 @@ jobs:
           sudo apt update
           sudo apt install gh
 
+      - name: Save PR number to a file
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          echo $PR_NUMBER > pr_number
+      - name: Upload PR number to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: pr_number
+          path: pr_number
+
       - name: Download latest main artifacts
         env:
           ARTIFACT_NAME: artifacts A100
           ARTIFACT_JOB_NAME: Integration-Tests-Nvidia
+          MAX_NUM_ACTIONS_PAGES: 30
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OWNER_REPO="${{ github.repository }}"
@@ -239,18 +294,27 @@ jobs:
             USER_ID=$(gh api repos/$OWNER_REPO/pulls/$PR_NUMBER --jq '.user.id')
             echo "USER_ID: $USER_ID"
 
+            run_id_found=false
             page=1
             while true; do
+              if [ "$page" -gt $MAX_NUM_ACTIONS_PAGES ]; then
+                break
+              fi
+
               run_id=$(gh api --method GET "repos/$OWNER_REPO/actions/runs?page=$page&per_page=100" | jq --arg branch_name "$BRANCH_NAME" --arg run_name "Integration Tests" --arg user_id "$USER_ID" '.workflow_runs[] | select(.head_branch == $branch_name and .name == $run_name and .actor.id == ($user_id | tonumber))' | jq '.id' | head -1)
               if [ "$run_id" != "" ]; then
                 echo "First run ID on branch $BRANCH_NAME is: $run_id"
                 WORKFLOW_RUN_ID=$run_id
+                run_id_found=true
                 break
               fi
 
               ((page++))
             done
-
+            if ! $run_id_found; then
+              echo "No run_id found for PR ${PR_NUMBER}, moving to the next PR."
+              continue
+            fi
             echo "WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
             ARTIFACT_URL=$(gh api repos/$OWNER_REPO/actions/runs/$WORKFLOW_RUN_ID/artifacts | jq --arg artifact_name "$ARTIFACT_NAME" '.artifacts[] | select(.name == $artifact_name).archive_download_url' --raw-output)
             echo "ARTIFACT_URL: $ARTIFACT_URL"
@@ -290,7 +354,7 @@ jobs:
       - name: Compare artifacts
         run: |
           set +e
-          python3 python/test/tools/compare_files.py --path1 reference --path2 current --kernels python/test/kernel_comparison/kernels.yml
+          python3 python/test/tools/compare_files.py --path1 reference --path2 current
           exit_code=$?
           set -e
           echo $exit_code
@@ -304,34 +368,20 @@ jobs:
             echo "Error while comparing artifacts"
             echo "COMPARISON_RESULT=error" >> $GITHUB_ENV
           fi
-          echo "COMPARISON_RESULT=env.COMPARISON_RESULT"
-      - name: Check exit code and handle failure
-        if: ${{ env.COMPARISON_RESULT == 'error' }}
+      - name: Check comparison result and write to file
         run: |
-          echo "Error while comparing artifacts"
-          exit 1
-      - name: Fetch Run ID
-        id: get_run_id
-        run: echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
-
+          if [ "${{ env.COMPARISON_RESULT }}" = "true" ]; then
+            echo "SUCCESS" > comparison_result
+          else
+            echo "FAILED" > comparison_result
+          fi
+      - name: Upload comparison result to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: comparison_result
+          path: comparison_result
       - name: Upload results as artifact
         uses: actions/upload-artifact@v2
         with:
           name: kernels-reference-check
           path: kernels_reference_check.txt
-
-      - name: Check output and comment on PR
-        if: ${{ env.COMPARISON_RESULT == 'false' }}
-        uses: actions/github-script@v5
-        with:
-          github-token: ${{ secrets.CI_ACCESS_TOKEN }}
-          script: |
-            const run_id = ${{ env.RUN_ID }};
-            const issue_number = context.payload.pull_request.number;
-            const message = `:warning: **This PR does not produce bitwise identical kernels as the branch it's merged against.** Please check artifacts for details. [Download the output file here](https://github.com/${{ github.repository }}/actions/runs/${run_id}).`;
-            await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue_number,
-                body: message
-            });

@@ -14,45 +14,102 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+<<<<<<< HEAD
+=======
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetPlatform.hpp"
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 
+#include "BarrierOpToLLVM.h"
+#include "ClusterOpsToLLVM.h"
 #include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"
 #include "ElementwiseOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
 #include "ReduceOpToLLVM.h"
+#include "RegReallocOpToLLVM.h"
 #include "ScanOpToLLVM.h"
+#include "TensorPtrOpsToLLVM.h"
 #include "TritonGPUToLLVM.h"
+#include "TritonGPUToLLVMBase.h"
 #include "TypeConverter.h"
 #include "ViewOpToLLVM.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
+namespace mlir {
+namespace triton {
+#define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+} // namespace triton
+} // namespace mlir
+
 using namespace mlir;
 using namespace mlir::triton;
-
-#define GEN_PASS_CLASSES
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
+// pass ws related named attrs.
+static void addWSNamedAttrs(Operation *op,
+                            ArrayRef<mlir::NamedAttribute> attrs) {
+  for (const NamedAttribute attr : attrs)
+    if (attr.getName() == "async_agent" || attr.getName() == "agent.mutex_role")
+      op->setAttr(attr.getName(), attr.getValue());
+}
+
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, bool isROCM)
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
+<<<<<<< HEAD
     if (isROCM) {
       addLegalDialect<ROCDL::ROCDLDialect>();
       addLegalDialect<mlir::scf::SCFDialect>();
     } else {
+=======
+    switch (target) {
+    case Target::NVVM:
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
       addLegalDialect<NVVM::NVVMDialect>();
+      break;
+    case Target::ROCDL:
+      addLegalDialect<ROCDL::ROCDLDialect>();
+      break;
     }
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
+
+class FoldSplatMaskInInsertAsync : public mlir::RewritePattern {
+
+public:
+  FoldSplatMaskInInsertAsync(mlir::MLIRContext *context)
+      : mlir::RewritePattern(
+            triton::nvidia_gpu::InsertSliceAsyncV2Op::getOperationName(), 1,
+            context) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto insertOp = cast<triton::nvidia_gpu::InsertSliceAsyncV2Op>(op);
+    if (!insertOp.getMask())
+      return failure();
+    auto splatOp = insertOp.getMask().getDefiningOp<triton::SplatOp>();
+    if (!splatOp)
+      return failure();
+    rewriter.updateRootInPlace(insertOp, [&]() {
+      insertOp.getMaskMutable().assign(splatOp->getOperand(0));
+    });
+    return mlir::success();
   }
 };
 
@@ -146,6 +203,18 @@ struct FuncOpConversion : public FuncOpConversionBase {
     if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
+    // Collect TMA informations.
+    unsigned numTMALoad = 0;
+    funcOp.walk(
+        [&numTMALoad](triton::nvidia_gpu::InsertSliceAsyncV2Op insertSliceOp) {
+          numTMALoad++;
+        });
+    unsigned numTMAStore = 0;
+    funcOp.walk([&numTMAStore](triton::nvidia_gpu::StoreAsyncOp storeAsyncOp) {
+      numTMAStore++;
+    });
+    unsigned numTMA = numTMALoad + numTMAStore;
+
     auto newFuncOp = convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
       return failure();
@@ -172,6 +241,30 @@ struct FuncOpConversion : public FuncOpConversionBase {
 #endif
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
+
+    // Append arguments to receive TMADesc in global memory in the runtime
+    auto i8PtrTy = LLVM::LLVMPointerType::get(
+        this->getTypeConverter()->convertType(rewriter.getI8Type()), 1);
+    auto numArgs = newFuncOp.getBody().front().getNumArguments();
+    auto funcTy = newFuncOp.getFunctionType().cast<LLVM::LLVMFunctionType>();
+    SmallVector<Type> newInputsTy(funcTy.getParams().begin(),
+                                  funcTy.getParams().end());
+    for (unsigned i = 0; i < numTMA; ++i) {
+      newFuncOp.getBody().front().addArgument(i8PtrTy, funcOp.getLoc());
+      newInputsTy.push_back(i8PtrTy);
+    }
+    newFuncOp.setType(
+        LLVM::LLVMFunctionType::get(funcTy.getReturnType(), newInputsTy));
+    // required by AxisInfoAnalysis
+    for (unsigned i = 0; i < numTMA; ++i) {
+      newFuncOp.setArgAttr(numArgs + i, "tt.divisibility",
+                           rewriter.getIntegerAttr(i32_ty, 1));
+    }
+
+    newFuncOp->setAttr(kAttrNumTMALoadDescsName,
+                       rewriter.getIntegerAttr(i32_ty, numTMALoad));
+    newFuncOp->setAttr(kAttrNumTMAStoreDescsName,
+                       rewriter.getIntegerAttr(i32_ty, numTMAStore));
 
     rewriter.eraseOp(funcOp);
     return success();
@@ -249,7 +342,6 @@ private:
                 this->getTypeConverter()->packFunctionResults(resultTypes)))
         return nullptr;
     }
-
     auto newCallOp = rewriter.create<LLVM::CallOp>(
         callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
         promotedOperands, callOp->getAttrs());
@@ -282,28 +374,37 @@ private:
 
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx, bool isROCM)
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
+<<<<<<< HEAD
     if (isROCM) {
       addLegalDialect<ROCDL::ROCDLDialect>();
       addLegalDialect<mlir::scf::SCFDialect>();
     } else {
+=======
+    switch (target) {
+    case Target::NVVM:
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
       addLegalDialect<NVVM::NVVMDialect>();
+      break;
+    case Target::ROCDL:
+      addLegalDialect<ROCDL::ROCDLDialect>();
+      break;
     }
+    addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
 
-class ConvertTritonGPUToLLVM
-    : public ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
-
-public:
-  explicit ConvertTritonGPUToLLVM(int computeCapability, bool isROCM)
-      : computeCapability(computeCapability), isROCM(isROCM) {}
+struct ConvertTritonGPUToLLVM
+    : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
+  using ConvertTritonGPUToLLVMBase<
+      ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -311,29 +412,68 @@ public:
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget target(*context, isROCM);
+    TritonLLVMConversionTarget convTarget(*context, target);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Preprocess
     decomposeFp8e4b15Convert(mod);
+<<<<<<< HEAD
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
 #ifdef USE_ROCM
     decomposeMfmaToDotOperand(mod, numWarps, threadsPerWarp);
 #endif
+=======
+    decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
+    decomposeMixedModeDotOp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
 
+    /* Get tensorPtrMap before conversion */
+    TensorPtrMapT tensorPtrMap;
+    mod.walk([&tensorPtrMap](
+                 mlir::triton::nvidia_gpu::InsertSliceAsyncV2Op insertOp) {
+      auto src = insertOp.getSrc();
+      auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
+      if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
+        auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
+        tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
+      }
+    });
+
+    mod.walk([&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncOp storeOp) {
+      auto dst = storeOp.getDst();
+      auto ptrTy = dst.getType().dyn_cast<triton::PointerType>();
+      if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
+        auto makeTensorPtrOp = getMakeTensorPtrOp(storeOp.getDst());
+        tensorPtrMap[storeOp.getOperation()] = makeTensorPtrOp;
+      }
+    });
+
+    // Hack: cleanup
+    {
+      RewritePatternSet patterns(context);
+      patterns.add<FoldSplatMaskInInsertAsync>(context);
+      SmallVector<Operation *> insertSlices;
+      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceAsyncV2Op op) {
+        insertSlices.push_back(op);
+      });
+      if (applyOpPatternsAndFold(insertSlices, std::move(patterns)).failed())
+        signalPassFailure();
+    }
+
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
@@ -353,7 +493,7 @@ public:
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, isROCM);
+      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<CallOpConversion>(typeConverter, numWarps, allocation,
                                          /*benefit=*/1);
@@ -364,9 +504,14 @@ public:
     }
 
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-    // Rewrite ops
-    RewritePatternSet patterns(context);
-    // TritonGPU lowering patterns
+
+    // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
+    // cache the values. The reason to do it here is that cluster_ctaid is
+    // currently implemented via inline asm, and thus cannot be CSEed.
+    // clusterCTAId will be emitted only when numCTAs is larger than 1, and
+    // other values will be DCEed if not used hereafter.
+    bool isWarpSpecialization =
+        ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod);
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
         &baseIndexCache, &indexCache, &indexInsertPoint};
@@ -374,46 +519,89 @@ public:
     if (axisInfoAnalysis.getNumFunctions() > 1) {
       indexCacheInfo = {nullptr, nullptr, nullptr};
     }
-    populateTritonGPUToLLVMPatterns(typeConverter, patterns, allocation,
-                                    indexCacheInfo, /*benefit=*/1);
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, allocation,
-                                          indexCacheInfo, /*benefit=*/1);
-    populateDotOpToLLVMPatterns(typeConverter, patterns, allocation,
-                                /*benefit=*/1);
-    populateElementwiseOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
-    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
-                                      allocation, indexCacheInfo,
-                                      /*benefit=*/1);
-    populateReduceOpToLLVMPatterns(typeConverter, patterns, allocation,
-                                   indexCacheInfo, /*benefit=*/1);
-    populateScanOpToLLVMPatterns(typeConverter, patterns, allocation,
-                                 indexCacheInfo, /*benefit=*/1);
-    populateViewOpToLLVMPatterns(typeConverter, patterns, /*benefit=*/1);
+
+    // tmaMetadata is absent in a triton-opt unit test, in this case, create a
+    // local one and dump it after this pass is done.
+    mlir::triton::gpu::TMAMetadataTy tmaMetaDataDebug;
+    if (tmaMetadata == nullptr)
+      tmaMetadata = &tmaMetaDataDebug;
+
+    RewritePatternSet patterns(context);
+
+    auto populatePatterns1 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
+                   allocation, indexCacheInfo,
+                   /*benefit*/ 10);
+    };
+
+    auto populatePatterns2 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
+                   allocation, /*benefit*/ 10);
+    };
+
+    auto populatePatterns3 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
+                   allocation, indexCacheInfo, tmaMetadata, &tensorPtrMap,
+                   /*benefit*/ 10);
+    };
+
+    auto populatePatterns4 = [&](auto populateFunc) {
+      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
+                   allocation, indexCacheInfo, computeCapability,
+                   /*benefit*/ 10);
+    };
+
+    populatePatterns1(populateTritonGPUToLLVMPatterns);
+    populatePatterns1(populateConvertLayoutOpToLLVMPatterns);
+    populatePatterns2(populateDotOpToLLVMPatterns);
+    populatePatterns4(populateElementwiseOpToLLVMPatterns);
+    populatePatterns3(populateLoadStoreOpToLLVMPatterns);
+    populatePatterns4(populateReduceOpToLLVMPatterns);
+    populatePatterns1(populateScanOpToLLVMPatterns);
+    populatePatterns2(populateViewOpToLLVMPatterns);
+    populatePatterns2(populateBarrierOpToLLVMPatterns);
+    populatePatterns2(populateTensorPtrOpsToLLVMPatterns);
+    populatePatterns2(populateClusterOpsToLLVMPatterns);
+    populatePatterns2(populateRegReallocOpToLLVMPatterns);
+
+    // TODO(thomas): this should probably be done in a separate step to not
+    // interfere with our own lowering of arith ops. Add arith/math's patterns
+    // to help convert scalar expression to LLVM.
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     // Native lowering patterns
-    if (isROCM) {
+    switch (target) {
+    case Target::NVVM:
+      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+      break;
+    case Target::ROCDL:
       mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
                                                  mlir::gpu::amd::HIP);
-    } else {
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
+      break;
     }
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
+
+    // Fold CTAId when there is only 1 CTA.
+    if (numCTAs == 1) {
+      mod.walk([](triton::nvgpu::ClusterCTAIdOp id) {
+        OpBuilder b(id);
+        Value zero = LLVM::createConstantI32(id->getLoc(), b, 0);
+        id.replaceAllUsesWith(zero);
+      });
+    }
   }
 
 private:
-  using IndexCacheKeyT = std::pair<Attribute, RankedTensorType>;
   DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
       baseIndexCache;
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
            CacheKeyDenseMapInfo>
       indexCache;
-
-  int computeCapability{};
-  bool isROCM{};
 
   void initSharedMemory(ModuleAllocation &allocation,
                         TritonGPUToLLVMTypeConverter &typeConverter) {
@@ -452,7 +640,8 @@ private:
   void decomposeFp8e4b15Convert(ModuleOp mod) const {
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      if (!getElementTypeOrSelf(cvtOp).isa<mlir::Float8E4M3B11FNUZType>())
+      if (!getElementTypeOrSelf(cvtOp)
+               .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>())
         return;
       auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
       auto argEncoding =
@@ -467,17 +656,20 @@ private:
       auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
       auto newArg = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), newArgType, cvtOp.getOperand());
+      addWSNamedAttrs(newArg, cvtOp->getAttrs());
       auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), newCvtType, newArg);
+      addWSNamedAttrs(newCvt, cvtOp->getAttrs());
       auto newRet = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
+      addWSNamedAttrs(newRet, cvtOp->getAttrs());
       cvtOp.replaceAllUsesWith(newRet.getResult());
       cvtOp.erase();
     });
   }
 
-  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps,
-                                int threadsPerWarp) const {
+  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps, int threadsPerWarp,
+                                int numCTAs) const {
     // Replace `mma -> dot_op` with `mma -> blocked -> dot_op`
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -493,11 +685,13 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
-                getOrder(srcMma), numWarps, threadsPerWarp));
+                getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+        addWSNamedAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
+        addWSNamedAttrs(newConvert, cvtOp->getAttrs());
         cvtOp.replaceAllUsesWith(newConvert.getResult());
         cvtOp.erase();
       }
@@ -550,11 +744,14 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(
                 mod.getContext(), dstDotOp, srcType.getShape(),
-                getOrder(srcBlocked), srcType.getElementType()));
+                srcBlocked.getOrder(), srcBlocked.getCTALayout(),
+                srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
+        addWSNamedAttrs(tmp, cvtOp->getAttrs());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
+        addWSNamedAttrs(newConvert, cvtOp->getAttrs());
         cvtOp.replaceAllUsesWith(newConvert.getResult());
         cvtOp.erase();
       }
@@ -631,6 +828,7 @@ private:
           /*boundaryCheck=*/nullptr, /*padding=*/nullptr,
           insertSliceAsyncOp.getCache(), insertSliceAsyncOp.getEvict(),
           insertSliceAsyncOp.getIsVolatile());
+      addWSNamedAttrs(loadOp, insertSliceAsyncOp->getAttrs());
 
       // insert_slice
       auto axis = insertSliceAsyncOp.getAxis();
@@ -646,6 +844,7 @@ private:
       auto insertSliceOp = builder.create<tensor::InsertSliceOp>(
           insertSliceAsyncOp.getLoc(), loadOp, insertSliceAsyncOp.getDst(),
           offsets, sizes, strides);
+      addWSNamedAttrs(insertSliceOp, insertSliceAsyncOp->getAttrs());
 
       // Replace
       insertSliceAsyncOp.replaceAllUsesWith(insertSliceOp.getResult());
@@ -670,10 +869,58 @@ private:
       } else if (decomposed) {
         // Wait for all previous async ops
         OpBuilder builder(asyncWaitOp);
-        builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
+        auto newWaitOp =
+            builder.create<triton::gpu::AsyncWaitOp>(asyncWaitOp.getLoc(), 0);
+        addWSNamedAttrs(newWaitOp, asyncWaitOp->getAttrs());
         asyncWaitOp.erase();
       }
 #endif
+    });
+  }
+
+  static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
+                              Type promotedType) {
+    Type tensorPromotedType =
+        operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
+                                                             promotedType);
+    return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
+  }
+
+  // promote operands of dot op if the existing combination is not natively
+  // supported.
+  void decomposeMixedModeDotOp(ModuleOp mod) const {
+    mod.walk([](triton::DotOp dotOp) -> void {
+      Value D = dotOp.getResult();
+      OpBuilder builder(dotOp);
+      Type AElType =
+          dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+      Type promoteType;
+      MmaEncodingAttr mmaLayout = D.getType()
+                                      .cast<RankedTensorType>()
+                                      .getEncoding()
+                                      .dyn_cast<MmaEncodingAttr>();
+      if (mmaLayout) {
+        bool isNativeHopperFP8 =
+            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
+        bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
+                     AElType.isFloat8E4M3FN();
+        if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
+          return;
+        promoteType = builder.getF16Type();
+      } else {
+        // FMA case.
+        Type AElType =
+            dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+        Type DElType = D.getType().cast<RankedTensorType>().getElementType();
+        if (AElType == DElType)
+          return;
+        promoteType = DElType;
+      }
+      Location loc = dotOp.getLoc();
+      Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
+      Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
+      dotOp.setOperand(0, promotedA);
+      dotOp.setOperand(1, promotedB);
     });
   }
 };
@@ -683,9 +930,12 @@ private:
 namespace mlir {
 namespace triton {
 
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
+  return std::make_unique<ConvertTritonGPUToLLVM>();
+}
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int computeCapability, bool isROCM) {
-  return std::make_unique<::ConvertTritonGPUToLLVM>(computeCapability, isROCM);
+createConvertTritonGPUToLLVMPass(const ConvertTritonGPUToLLVMOptions &options) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(options);
 }
 
 } // namespace triton

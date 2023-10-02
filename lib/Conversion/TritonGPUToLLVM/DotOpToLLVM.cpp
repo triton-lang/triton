@@ -4,7 +4,9 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
@@ -15,15 +17,31 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
 
+LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                             TritonGPUToLLVMTypeConverter *typeConverter,
+                             ConversionPatternRewriter &rewriter);
+
 LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               TritonGPUToLLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter);
 
+<<<<<<< HEAD
 #ifdef USE_ROCM
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 #endif
+=======
+LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                           TritonGPUToLLVMTypeConverter *typeConverter,
+                           ConversionPatternRewriter &rewriter, Value thread);
+
+LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
+                                triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
+                                TritonGPUToLLVMTypeConverter *typeConverter,
+                                ConversionPatternRewriter &rewriter,
+                                Value thread);
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
 
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -32,14 +50,15 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
     // D = A * B + C
     Value A = op.getA();
     Value D = op.getResult();
 
     // Here we assume the DotOp's operands always comes from shared memory.
-    auto AShape = A.getType().cast<RankedTensorType>().getShape();
+    auto AShapePerCTA = getShapePerCTA(A.getType());
     size_t reduceAxis = 1;
-    unsigned K = AShape[reduceAxis];
+    unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
     MmaEncodingAttr mmaLayout = D.getType()
@@ -49,8 +68,17 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
       if (mmaLayout.isVolta())
         return convertMMA884(op, adaptor, getTypeConverter(), rewriter);
+      if (mmaLayout.isTuring())
+        return convertMMA1688(op, adaptor, getTypeConverter(), rewriter);
       if (mmaLayout.isAmpere())
         return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
+<<<<<<< HEAD
+=======
+      if (mmaLayout.isHopper())
+        return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
+                            getThreadId(rewriter, loc));
+
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
@@ -76,9 +104,68 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   }
 };
 
+struct DotAsyncOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::DotAsyncOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::DotAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::DotAsyncOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    // D = A * B + C
+    Value A = op.getA();
+    Value D = op.getResult();
+
+    // Here we assume the DotOp's operands always comes from shared memory.
+    auto AShapePerCTA = getShapePerCTA(A.getType());
+    size_t reduceAxis = 1;
+    unsigned K = AShapePerCTA[reduceAxis];
+    bool isOuter = K == 1;
+
+    MmaEncodingAttr mmaLayout = D.getType()
+                                    .cast<RankedTensorType>()
+                                    .getEncoding()
+                                    .dyn_cast<MmaEncodingAttr>();
+    if (!isOuter && mmaLayout &&
+        supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
+      if (mmaLayout.isHopper()) {
+        return convertAsyncWGMMA(op, adaptor, getTypeConverter(), rewriter,
+                                 getThreadId(rewriter, loc));
+      }
+
+      llvm::report_fatal_error(
+          "Unsupported MMA kind found when converting DotAsyncOp to LLVM.");
+    }
+
+    llvm::report_fatal_error(
+        "Unsupported DotAsyncOp found when converting TritonGPU to LLVM.");
+  }
+};
+
+struct DotWaitOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::DotWaitOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::DotWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::DotWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto pendings = op.getPendings();
+    rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(op.getLoc(), pendings);
+
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns,
+                                 RewritePatternSet &patterns, int numWarps,
+                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  ModuleAllocation &allocation,
                                  PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, allocation, benefit);
+  patterns.add<DotAsyncOpConversion>(typeConverter, allocation, benefit);
+  patterns.add<DotWaitOpConversion>(typeConverter, allocation, benefit);
 }

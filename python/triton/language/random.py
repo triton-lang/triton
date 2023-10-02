@@ -1,5 +1,6 @@
 from ..runtime.jit import jit
 from . import core as tl
+from . import standard
 
 PHILOX_KEY_A: tl.constexpr = 0x9E3779B9
 PHILOX_KEY_B: tl.constexpr = 0xBB67AE85
@@ -55,7 +56,7 @@ def randint(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     using `randint4x` is likely to be faster than calling `randint` 4 times.
 
     :param seed: The seed for generating random numbers.
-    :param offsets: The offsets to generate random numbers for.
+    :param offset: The offsets to generate random numbers for.
     """
     ret, _, _, _ = randint4x(seed, offset, n_rounds)
     return ret
@@ -120,7 +121,7 @@ def rand(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offsets` block,
-    returns a 4 blocks of random :code:`float32` in :math:`U(0, 1)`.
+    returns 4 blocks of random :code:`float32` in :math:`U(0, 1)`.
 
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.
@@ -141,7 +142,7 @@ def rand4x(seed, offsets, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 @jit
 def pair_uniform_to_normal(u1, u2):
     """Box-Muller transform"""
-    u1 = tl.maximum(1.0e-7, u1)
+    u1 = standard.maximum(1.0e-7, u1)
     th = 6.283185307179586 * u2
     r = tl.sqrt(-2.0 * tl.log(u1))
     return r * tl.cos(th), r * tl.sin(th)
@@ -167,7 +168,7 @@ def randn(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
 def randn4x(seed, offset, n_rounds: tl.constexpr = N_ROUNDS_DEFAULT):
     """
     Given a :code:`seed` scalar and an :code:`offset` block,
-    returns a 4 blocks of random :code:`float32` in :math:`\\mathcal{N}(0, 1)`.
+    returns 4 blocks of random :code:`float32` in :math:`\\mathcal{N}(0, 1)`.
 
     :param seed: The seed for generating random numbers.
     :param offsets: The offsets to generate random numbers for.

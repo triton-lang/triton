@@ -2,8 +2,10 @@
 #include "../Utility.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
+using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
+using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
@@ -14,31 +16,32 @@ using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 SmallVector<Value>
-getThreadIds(Value threadId, ArrayRef<unsigned int> shapePerCTA,
+getThreadIds(Value threadId, ArrayRef<unsigned int> shapePerCTATile,
              ArrayRef<unsigned int> sizePerThread, ArrayRef<unsigned int> order,
              ConversionPatternRewriter &rewriter, Location loc) {
   int dim = order.size();
   SmallVector<Value> threadIds(dim);
   for (unsigned k = 0; k < dim - 1; k++) {
-    Value dimK = i32_val(shapePerCTA[order[k]] / sizePerThread[order[k]]);
+    Value dimK = i32_val(shapePerCTATile[order[k]] / sizePerThread[order[k]]);
     Value rem = urem(threadId, dimK);
     threadId = udiv(threadId, dimK);
     threadIds[order[k]] = rem;
   }
-  Value dimK = i32_val(shapePerCTA[order[dim - 1]]);
+  Value dimK = i32_val(shapePerCTATile[order[dim - 1]]);
   threadIds[order[dim - 1]] = urem(threadId, dimK);
   return threadIds;
 }
 
-int getShapePerCTAForMN(BlockedEncodingAttr layout, bool isM) {
+// Get shapePerCTATile for M or N axis.
+int getShapePerCTATileForMN(BlockedEncodingAttr layout, bool isM) {
   auto order = layout.getOrder();
-  auto shapePerCTA = getShapePerCTA(layout);
+  auto shapePerCTATile = getShapePerCTATile(layout);
 
-  int mShapePerCTA =
-      order[0] == 1 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  int nShapePerCTA =
-      order[0] == 0 ? shapePerCTA[order[1]] : shapePerCTA[order[0]];
-  return isM ? mShapePerCTA : nShapePerCTA;
+  int mShapePerCTATile =
+      order[0] == 1 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
+  int nShapePerCTATile =
+      order[0] == 0 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
+  return isM ? mShapePerCTATile : nShapePerCTATile;
 }
 
 // Get sizePerThread for M or N axis.
@@ -91,7 +94,7 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
                ConversionPatternRewriter &rewriter) {
   auto aTensorTy = A.getType().cast<RankedTensorType>();
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto aShape = aTensorTy.getShape();
+  auto aShapePerCTA = getShapePerCTA(aTensorTy);
 
   auto aOrder = aLayout.getOrder();
   auto order = dLayout.getOrder();
@@ -104,10 +107,10 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
   Value strideA0 = isARow ? strideAK : strideAM;
   Value strideA1 = isARow ? strideAM : strideAK;
   int aNumPtr = 8;
-  int K = aShape[1];
-  int M = aShape[0];
+  int K = aShapePerCTA[1];
+  int M = aShapePerCTA[0];
 
-  auto shapePerCTA = getShapePerCTA(dLayout);
+  auto shapePerCTATile = getShapePerCTATile(dLayout);
   auto sizePerThread = getSizePerThread(dLayout);
 
   Value _0 = i32_val(0);
@@ -115,8 +118,8 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
   Value mContig = i32_val(sizePerThread[order[1]]);
 
   // threadId in blocked layout
-  auto threadIds =
-      getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+  auto threadIds = getThreadIds(thread, shapePerCTATile, sizePerThread, order,
+                                rewriter, loc);
   Value threadIdM = threadIds[0];
 
   Value offA0 = isARow ? _0 : mul(threadIdM, mContig);
@@ -135,11 +138,11 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
 
   SmallVector<Value> vas;
 
-  int mShapePerCTA = getShapePerCTAForMN(dLayout, true /*isM*/);
+  int mShapePerCTATile = getShapePerCTATileForMN(dLayout, true /*isM*/);
   int mSizePerThread = getSizePerThreadForMN(dLayout, true /*isM*/);
 
   for (unsigned k = 0; k < K; ++k)
-    for (unsigned m = 0; m < M; m += mShapePerCTA)
+    for (unsigned m = 0; m < M; m += mShapePerCTATile)
       for (unsigned mm = 0; mm < mSizePerThread; ++mm) {
         Value offset =
             add(mul(i32_val(m + mm), strideAM), mul(i32_val(k), strideAK));
@@ -156,7 +159,7 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
                ConversionPatternRewriter &rewriter) {
   auto bTensorTy = B.getType().cast<RankedTensorType>();
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto bShape = bTensorTy.getShape();
+  auto bShapePerCTA = getShapePerCTA(bTensorTy);
 
   auto bOrder = bLayout.getOrder();
   auto order = dLayout.getOrder();
@@ -169,10 +172,10 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
   Value strideB0 = isBRow ? strideBN : strideBK;
   Value strideB1 = isBRow ? strideBK : strideBN;
   int bNumPtr = 8;
-  int K = bShape[0];
-  int N = bShape[1];
+  int K = bShapePerCTA[0];
+  int N = bShapePerCTA[1];
 
-  auto shapePerCTA = getShapePerCTA(dLayout);
+  auto shapePerCTATile = getShapePerCTATile(dLayout);
   auto sizePerThread = getSizePerThread(dLayout);
 
   Value _0 = i32_val(0);
@@ -180,8 +183,8 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
   Value nContig = i32_val(sizePerThread[order[0]]);
 
   // threadId in blocked layout
-  auto threadIds =
-      getThreadIds(thread, shapePerCTA, sizePerThread, order, rewriter, loc);
+  auto threadIds = getThreadIds(thread, shapePerCTATile, sizePerThread, order,
+                                rewriter, loc);
   Value threadIdN = threadIds[1];
 
   Value offB0 = isBRow ? mul(threadIdN, nContig) : _0;
@@ -200,11 +203,11 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
 
   SmallVector<Value> vbs;
 
-  int nShapePerCTA = getShapePerCTAForMN(dLayout, false /*isM*/);
+  int nShapePerCTATile = getShapePerCTATileForMN(dLayout, false /*isM*/);
   int nSizePerThread = getSizePerThreadForMN(dLayout, false /*isM*/);
 
   for (unsigned k = 0; k < K; ++k)
-    for (unsigned n = 0; n < N; n += nShapePerCTA)
+    for (unsigned n = 0; n < N; n += nShapePerCTATile)
       for (unsigned nn = 0; nn < nSizePerThread; ++nn) {
         Value offset =
             add(mul(i32_val(n + nn), strideBN), mul(i32_val(k), strideBK));

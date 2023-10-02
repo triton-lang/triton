@@ -5,6 +5,7 @@ import tempfile
 from ..common import _build
 from ..runtime.cache import get_cache_manager
 from ..runtime.jit import version_key
+from .utils import generate_cu_signature
 
 
 def is_hip():
@@ -15,24 +16,26 @@ def is_hip():
 # ----- stub --------
 
 
-def make_so_cache_key(version_hash, signature, constants):
+def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
     # Get unique key for the compiled code
     signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
-    key = f"{version_hash}-{''.join(signature.values())}{constants}"
+    key = f"{version_hash}-{''.join(signature.values())}-{constants}-{ids}"
+    for kw in kwargs:
+        key = f"{key}-{kwargs.get(kw)}"
     key = hashlib.md5(key.encode("utf-8")).hexdigest()
     return key
 
 
-def make_stub(name, signature, constants):
+def make_stub(name, signature, constants, ids, **kwargs):
     # name of files that are cached
-    so_cache_key = make_so_cache_key(version_key(), signature, constants)
+    so_cache_key = make_so_cache_key(version_key(), signature, constants, ids, **kwargs)
     so_cache_manager = get_cache_manager(so_cache_key)
     so_name = f"{name}.so"
     # retrieve stub from cache if it exists
     cache_path = so_cache_manager.get_file(so_name)
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            src = generate_launcher(constants, signature)
+            src = generate_launcher(constants, signature, ids)
             src_path = os.path.join(tmpdir, "main.c")
             with open(src_path, "w") as f:
                 f.write(src)
@@ -64,7 +67,9 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def generate_launcher(constants, signature):
+def generate_launcher(constants, signature, ids):
+    start_desc = len(signature)
+    signature = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -95,7 +100,7 @@ def generate_launcher(constants, signature):
             "int64_t": "L",
         }[ty]
 
-    format = "iiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiiiiiiiKKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
     if is_hip():
@@ -188,6 +193,7 @@ def generate_launcher(constants, signature):
       }}
 
       PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+      ptr_info.valid = false;
       return ptr_info;
     }}
 
@@ -203,21 +209,21 @@ def generate_launcher(constants, signature):
       PyObject *compiled_kernel = NULL;
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if (!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+      if (!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel{', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
         return NULL;
       }}
 
-      if (launch_enter_hook != Py_None) {{
-        PyObject_CallObject(launch_enter_hook, args);
+      if (launch_enter_hook != Py_None && !PyObject_CallObject(launch_enter_hook, args)) {{
+        return NULL;
       }}
 
       // raise exception asap
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-      _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items())});
-      if (launch_exit_hook != Py_None) {{
-        PyObject_CallObject(launch_exit_hook, args);
-      }}
-      if (PyErr_Occurred()) {{
+      Py_BEGIN_ALLOW_THREADS;
+      _launch(gridX, gridY, gridZ, num_warps, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+      Py_END_ALLOW_THREADS;
+
+      if (launch_exit_hook != Py_None && !PyObject_CallObject(launch_exit_hook, args)) {{
         return NULL;
       }}
 
@@ -249,10 +255,13 @@ def generate_launcher(constants, signature):
     }}
     """
     else:
+        folded_without_constexprs = [c for c in ids['ids_of_folded_args'] if c not in ids['ids_of_const_exprs']]
+        params = [i for i in signature.keys() if i >= start_desc or (i not in constants and i not in folded_without_constexprs)]
         src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
 #include <Python.h>
+#include <dlfcn.h>
 
 static inline void gpuAssert(CUresult code, const char *file, int line)
 {{
@@ -270,10 +279,64 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
+<<<<<<< HEAD
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int shared_memory, CUstream stream, CUfunction function, {arg_decls}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   if(gridX*gridY*gridZ > 0){{
     CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, num_warps * 32, 1, 1, shared_memory, stream, params, 0));
+=======
+typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra);
+
+static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
+  // Open the shared library
+  void* handle = dlopen("libcuda.so", RTLD_LAZY);
+  if (!handle) {{
+    PyErr_SetString(PyExc_RuntimeError, "Failed to open libcuda.so");
+    return NULL;
+  }}
+  // Clear any existing error
+  dlerror();
+  cuLaunchKernelEx_t cuLaunchKernelExHandle = (cuLaunchKernelEx_t)dlsym(handle, "cuLaunchKernelEx");
+  // Check for errors
+  const char *dlsym_error = dlerror();
+  if (dlsym_error) {{
+    PyErr_SetString(PyExc_RuntimeError, "Failed to retrieve cuLaunchKernelEx from libcuda.so");
+    return NULL;
+  }}
+  return cuLaunchKernelExHandle;
+}}
+
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+  void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
+  if (gridX*gridY*gridZ > 0) {{
+    if (num_ctas == 1) {{
+      CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
+    }} else {{
+      CUlaunchAttribute launchAttr[2];
+      launchAttr[0].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
+      launchAttr[0].value.clusterDim.x = clusterDimX;
+      launchAttr[0].value.clusterDim.y = clusterDimY;
+      launchAttr[0].value.clusterDim.z = clusterDimZ;
+      launchAttr[1].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_SCHEDULING_POLICY_PREFERENCE;
+      launchAttr[1].value.clusterSchedulingPolicyPreference = CU_CLUSTER_SCHEDULING_POLICY_SPREAD;
+      CUlaunchConfig config;
+      config.gridDimX = gridX * clusterDimX;
+      config.gridDimY = gridY * clusterDimY;
+      config.gridDimZ = gridZ * clusterDimZ;
+      config.blockDimX = 32 * num_warps;
+      config.blockDimY = 1;
+      config.blockDimZ = 1;
+      config.sharedMemBytes = shared_memory;
+      config.hStream = stream;
+      config.attrs = launchAttr;
+      config.numAttrs = 2;
+      static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
+      if (cuLaunchKernelExHandle == NULL) {{
+        cuLaunchKernelExHandle = getLaunchKernelExHandle();
+      }}
+      CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
+    }}
+>>>>>>> 36fc54b6f28168d3644808bfe299f1ba06a36272
   }}
 }}
 
@@ -320,6 +383,7 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
     return ptr_info;
   }}
   PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  ptr_info.valid = false;
   return ptr_info;
 }}
 
@@ -328,31 +392,34 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   uint64_t _stream;
   uint64_t _function;
   int num_warps;
+  int num_ctas;
+  int clusterDimX;
+  int clusterDimY;
+  int clusterDimZ;
   int shared_memory;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *compiled_kernel = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel, {', '.join(f"&_arg{i}" for i, ty in signature.items())})) {{
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas, &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_stream, &_function, &launch_enter_hook, &launch_exit_hook, &compiled_kernel{', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
     return NULL;
   }}
 
-  if (launch_enter_hook != Py_None) {{
-    PyObject_CallObject(launch_enter_hook, args);
+  if (launch_enter_hook != Py_None && !PyObject_CallObject(launch_enter_hook, args)) {{
+    return NULL;
   }}
 
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-  _launch(gridX, gridY, gridZ, num_warps, shared_memory, (CUstream)_stream, (CUfunction)_function, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items())});
+  Py_BEGIN_ALLOW_THREADS;
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
+  Py_END_ALLOW_THREADS;
 
-  if (launch_exit_hook != Py_None) {{
-    PyObject_CallObject(launch_exit_hook, args);
-  }}
-
-  if(PyErr_Occurred()) {{
+  if (launch_exit_hook != Py_None && !PyObject_CallObject(launch_exit_hook, args)) {{
     return NULL;
   }}
+
   // return None
   Py_INCREF(Py_None);
   return Py_None;
