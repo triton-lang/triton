@@ -155,29 +155,33 @@ import torch
 import triton
 import triton.language as tl
 
-
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 32
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
 #   - A list of `triton.Config` objects that define different configurations of
 #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
 #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
+
+
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': BLOCK_SIZE_M, 'BLOCK_SIZE_N': BLOCK_SIZE_N, 'BLOCK_SIZE_K': BLOCK_SIZE_K, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
+        # triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5, num_warps=2),
     ],
     key=['M', 'N', 'K'],
 )
 @triton.jit
 def matmul_kernel(
     # Pointers to matrices
-    a_ptr, b_ptr, c_ptr,
+    a_ptr, b_ptr, c_ptr, offsetsA_ptr, offsetsB_ptr,
     # Matrix dimensions
     M, N, K,
     # The stride variables represent how much to increase the ptr by when moving by 1
@@ -220,7 +224,10 @@ def matmul_kernel(
     offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-
+    initialA = tl.arange(0, BLOCK_SIZE_M)
+    initialB = tl.arange(0, BLOCK_SIZE_N)
+    offsetsA = initialA * (tl.cdiv(K, BLOCK_SIZE_K)) + offsetsA_ptr
+    offsetsB = initialB + offsetsB_ptr
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
@@ -228,6 +235,12 @@ def matmul_kernel(
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        oA = tl.load(offsetsA)
+        offsetsA += 1
+        oB = tl.load(offsetsB)
+        offsetsB += BLOCK_SIZE_N
+        a_ptrs += oA[:, None]
+        b_ptrs += oB[None, :]
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
@@ -235,8 +248,8 @@ def matmul_kernel(
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
+        # a_ptrs += BLOCK_SIZE_K * stride_ak
+        # b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
     if ACTIVATION == "leaky_relu":
@@ -273,12 +286,16 @@ def matmul(a, b, activation=""):
     K, N = b.shape
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    offsetsA = torch.full((BLOCK_SIZE_M, a.shape[1] // BLOCK_SIZE_K), BLOCK_SIZE_K * a.stride(1), device=a.device, dtype=torch.int64)
+    offsetsA[:, 0] = 0
+    offsetsB = torch.full((a.shape[1] // BLOCK_SIZE_K, BLOCK_SIZE_N), BLOCK_SIZE_K * b.stride(0), device=a.device, dtype=torch.int64)
+    offsetsB[0, :] = 0
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
     )
     matmul_kernel[grid](
-        a, b, c,
+        a, b, c, offsetsA, offsetsB,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
@@ -295,8 +312,11 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+a = torch.randn((512, 512), device='cuda', dtype=torch.float32)
+# a = torch.repeat_interleave(torch.arange(512).view(1, 512), 512, dim=0)
+# a = torch.tensor(a, device='cuda', dtype=torch.float16)
+b = torch.randn((512, 512), device='cuda', dtype=torch.float32)
+# b = torch.eye(512, device='cuda', dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
@@ -317,34 +337,34 @@ else:
 # but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
 
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
-        x_vals=[
-            128 * i for i in range(2, 33)
-        ],  # Different possible values for `x_name`
-        line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
-        # Possible values for `line_arg`
-        line_vals=['cublas', 'triton'],
-        # Label name for the lines
-        line_names=["cuBLAS", "Triton"],
-        # Line styles
-        styles=[('green', '-'), ('blue', '-')],
-        ylabel="TFLOPS",  # Label name for the y-axis
-        plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
-        args={},
-    )
-)
-def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((K, N), device='cuda', dtype=torch.float16)
-    quantiles = [0.5, 0.2, 0.8]
-    if provider == 'cublas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
-    if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
-    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
-    return perf(ms), perf(max_ms), perf(min_ms)
+# @triton.testing.perf_report(
+#     triton.testing.Benchmark(
+#         x_names=['M', 'N', 'K'],  # Argument names to use as an x-axis for the plot
+#         x_vals=[
+#             128 * i for i in range(2, 33)
+#         ],  # Different possible values for `x_name`
+#         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
+#         # Possible values for `line_arg`
+#         line_vals=['cublas', 'triton'],
+#         # Label name for the lines
+#         line_names=["cuBLAS", "Triton"],
+#         # Line styles
+#         styles=[('green', '-'), ('blue', '-')],
+#         ylabel="TFLOPS",  # Label name for the y-axis
+#         plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
+#         args={},
+#     )
+# )
+# def benchmark(M, N, K, provider):
+#     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+#     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+#     quantiles = [0.5, 0.2, 0.8]
+#     if provider == 'cublas':
+#         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
+#     if provider == 'triton':
+#         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+#     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
+#     return perf(ms), perf(max_ms), perf(min_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+# benchmark.run(show_plots=True, print_data=True)
