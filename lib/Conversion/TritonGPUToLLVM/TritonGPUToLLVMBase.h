@@ -330,7 +330,6 @@ public:
 
     auto srcEncoding = srcTy.getEncoding();
     auto srcShape = srcTy.getShape();
-    auto srcShapePerCTA = triton::gpu::getShapePerCTA(srcTy);
     unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
     // swizzling params as described in TritonGPUAttrDefs.td
     unsigned outVec = resSharedLayout.getVec();
@@ -344,31 +343,12 @@ public:
                "Swizzling would generate out of bounds memory accesses");
     // Tensor indices held by the current thread, as LLVM values
     auto srcIndices = emitIndices(loc, rewriter, srcEncoding, srcTy, false);
-    // Swizzling with leading offsets (e.g. Hopper GMMA)
-    unsigned swizzlingByteWidth = 0;
-    if (resSharedLayout.getHasLeadingOffset()) {
-      if (perPhase == 4 && maxPhase == 2)
-        swizzlingByteWidth = 32;
-      else if (perPhase == 2 && maxPhase == 4)
-        swizzlingByteWidth = 64;
-      else if (perPhase == 1 && maxPhase == 8)
-        swizzlingByteWidth = 128;
-      else
-        llvm::report_fatal_error("Unsupported shared layout.");
-    }
-    unsigned numElemsPerSwizzlingRow =
-        swizzlingByteWidth * 8 / resElemTy.getIntOrFloatBitWidth();
-    Value numElemsPerSwizzlingRowVal = i32_val(numElemsPerSwizzlingRow);
-    unsigned leadingDimOffset =
-        numElemsPerSwizzlingRow * srcShapePerCTA[outOrder[1]];
-    Value leadingDimOffsetVal = i32_val(leadingDimOffset);
     // Return values
     DenseMap<unsigned, Value> ret;
     // cache for non-immediate offsets
     DenseMap<unsigned, Value> cacheCol, cacheRow;
     unsigned minVec = std::min(outVec, inVec);
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
-      Value offset = i32_val(0);
       // Extract multi dimensional index for current element
       auto idx = srcIndices[elemIdx];
       Value idxCol = idx[outOrder[0]]; // contiguous dimension
@@ -380,36 +360,26 @@ public:
       // extract dynamic/static offset for immediate offsetting
       unsigned immedateOffCol = 0;
       unsigned immedateOffRow = 0;
-      if (leadingDimOffset) {
-        // hopper
-        offset =
-            mul(udiv(idxCol, numElemsPerSwizzlingRowVal), leadingDimOffsetVal);
-        // Shrink by swizzling blocks
-        idxCol = urem(idxCol, numElemsPerSwizzlingRowVal);
-        strideRow = numElemsPerSwizzlingRowVal;
-      } else {
-        if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
-          if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-                  add.getRhs().getDefiningOp())) {
-            unsigned cst =
-                _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-            unsigned key = cst % (outVec * maxPhase);
-            cacheCol.insert({key, idxCol});
-            idxCol = cacheCol[key];
-            immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
-          }
-        if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp()))
-          if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-                  add.getRhs().getDefiningOp())) {
-            unsigned cst =
-                _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-            unsigned key = cst % (perPhase * maxPhase);
-            cacheRow.insert({key, idxRow});
-            idxRow = cacheRow[key];
-            immedateOffRow =
-                cst / (perPhase * maxPhase) * (perPhase * maxPhase);
-          }
-      }
+      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp()))
+        if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
+                add.getRhs().getDefiningOp())) {
+          unsigned cst =
+              _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+          unsigned key = cst % (outVec * maxPhase);
+          cacheCol.insert({key, idxCol});
+          idxCol = cacheCol[key];
+          immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
+        }
+      if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp()))
+        if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
+                add.getRhs().getDefiningOp())) {
+          unsigned cst =
+              _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+          unsigned key = cst % (perPhase * maxPhase);
+          cacheRow.insert({key, idxRow});
+          idxRow = cacheRow[key];
+          immedateOffRow = cst / (perPhase * maxPhase) * (perPhase * maxPhase);
+        }
       // row offset is simply row index
       Value rowOff = mul(idxRow, strideRow);
       // because swizzling happens at a granularity of outVec, we need to
@@ -423,7 +393,7 @@ public:
       colOffOrdered = mul(colOffOrdered, i32_val(minVec));
       Value colOff = add(colOffSwizzled, colOffOrdered);
       // compute non-immediate offset
-      offset = add(offset, add(rowOff, mul(colOff, strideCol)));
+      Value offset = add(rowOff, mul(colOff, strideCol));
       Value currPtr = gep(dstPtrTy, dstPtrBase, offset);
       // compute immediate offset
       Value immedateOff =

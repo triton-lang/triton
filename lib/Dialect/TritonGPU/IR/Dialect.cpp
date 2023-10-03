@@ -1149,7 +1149,6 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> CTAsPerCGA;
   SmallVector<unsigned> CTASplitNum;
   SmallVector<unsigned> CTAOrder;
-  bool hasLeadingOffset = false;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "vec") {
@@ -1173,10 +1172,6 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
     } else if (attr.getName() == "CTAOrder") {
       if (parseIntArrayAttr(parser, attr, CTAOrder, "CTAOrder").failed())
         return {};
-    } else if (attr.getName() == "hasLeadingOffset") {
-      if (parseBool(parser, attr, hasLeadingOffset, "hasLeadingOffset")
-              .failed())
-        return {};
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -1187,9 +1182,8 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
   auto CTALayout = CTALayoutAttr::get(parser.getContext(), CTAsPerCGA,
                                       CTASplitNum, CTAOrder);
 
-  return parser.getChecked<SharedEncodingAttr>(parser.getContext(), vec,
-                                               perPhase, maxPhase, order,
-                                               CTALayout, hasLeadingOffset);
+  return parser.getChecked<SharedEncodingAttr>(
+      parser.getContext(), vec, perPhase, maxPhase, order, CTALayout);
 }
 
 void SharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1200,8 +1194,7 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << "order = [" << getOrder() << "], "
           << "CTAsPerCGA = [" << getCTALayout().getCTAsPerCGA() << "], "
           << "CTASplitNum = [" << getCTALayout().getCTASplitNum() << "], "
-          << "CTAOrder = [" << getCTALayout().getCTAOrder() << "], "
-          << "hasLeadingOffset = " << getHasLeadingOffset() << "}>";
+          << "CTAOrder = [" << getCTALayout().getCTAOrder() << "]}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -1452,7 +1445,7 @@ struct TritonGPUInferLayoutInterface
     resultEncoding = SharedEncodingAttr::get(
         getDialect()->getContext(), sharedEncoding.getVec(),
         sharedEncoding.getPerPhase(), sharedEncoding.getMaxPhase(), retOrder,
-        sharedEncoding.getCTALayout(), sharedEncoding.getHasLeadingOffset());
+        sharedEncoding.getCTALayout());
     return mlir::success();
   }
 

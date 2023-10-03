@@ -67,7 +67,7 @@ public:
     // the YType, hence it would causing incorrect swizzling code.
     auto newXEncoding = triton::gpu::SharedEncodingAttr::get(
         getContext(), ZEncoding, XType.getShape(), newXOrder,
-        XEncoding.getCTALayout(), XType.getElementType(), true);
+        XEncoding.getCTALayout(), XType.getElementType());
     auto newXType = RankedTensorType::get(XType.getShape(),
                                           XType.getElementType(), newXEncoding);
     if (XEncoding == newXEncoding)

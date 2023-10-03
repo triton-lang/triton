@@ -77,13 +77,6 @@ are stored contiguously
 _ _ _ _ /\_ _ _ _
 A_{2, 2}  A_{2, 3}  A_{2, 0}  A_{2, 1} ...   [phase 1] \ per phase = 2
 A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
-
-For MMAv3 eg Hopper GMMA, hasLeadingOffset should be true. In this case,
-when the matrix is stored in shared memory, there will be an offset not
-only in the stride dimension, but also in the leading dimension. For example,
-a matrix of size 16x128 and data type I8 is stored in the shared memory with
-64B-swizzle mode. The offset of the element with index (0, 64) will be 16*64,
-compared to 1*64 when the hasLeadingOffset is false.
   }];
 
   // swizzle info: vec, perPhase, maxPhase
@@ -94,20 +87,9 @@ compared to 1*64 when the hasLeadingOffset is false.
     "unsigned":$perPhase,
     "unsigned":$maxPhase,
     ArrayRefParameter<"unsigned">:$order,
-    "CTALayoutAttr":$CTALayout,
-    "bool":$hasLeadingOffset
-  );
+    "CTALayoutAttr":$CTALayout);
 
   let builders = [
-    AttrBuilder<(ins "unsigned":$vec,
-                     "unsigned":$perPhase,
-                     "unsigned":$maxPhase,
-                     "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout), [{
-        bool hasLeadingOffset = false; // default value
-        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset);
-    }]>,
-
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
@@ -190,7 +172,7 @@ compared to 1*64 when the hasLeadingOffset is false.
         if (mmaEnc.isHopper()) {
           llvm_unreachable("SharedEncodingAttr builder when the MMAEncodingAttr"
                            " is Hopper has not been implemented yet");
-          return $_get(context, 1, 1, 1, order, CTALayout, true);
+          return $_get(context, 1, 1, 1, order, CTALayout);
         }
 
         // ---- not implemented ----
@@ -241,7 +223,7 @@ compared to 1*64 when the hasLeadingOffset is false.
           llvm_unreachable("unsupported shared memory layout for MMAv3");
         }
 
-        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, true);
+        return $_get(context, vec, perPhase, maxPhase, order, CTALayout);
     }]>
   ];
 

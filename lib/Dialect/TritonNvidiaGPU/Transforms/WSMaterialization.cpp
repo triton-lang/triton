@@ -368,7 +368,7 @@ void materializeTokenOperations(Operation *parentOp, int numCTAs) {
     // mBarriersTy
     auto CTALayout = ttg::CTALayoutAttr::get(context, {1}, {1}, {0});
     auto sharedLayout =
-        ttg::SharedEncodingAttr::get(context, 1, 1, 1, {0}, CTALayout, false);
+        ttg::SharedEncodingAttr::get(context, 1, 1, 1, {0}, CTALayout);
     auto mBarriersTy =
         RankedTensorType::get({createTokenOp.getNum()}, i64Ty, sharedLayout);
 

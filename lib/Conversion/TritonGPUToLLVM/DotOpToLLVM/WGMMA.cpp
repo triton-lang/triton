@@ -105,14 +105,11 @@ public:
     auto tensorTy = tensor.getType().cast<RankedTensorType>();
     auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
     ord = sharedLayout.getOrder();
-    const int perPhase = sharedLayout.getPerPhase();
-    const int maxPhase = sharedLayout.getMaxPhase();
     elemBytes = tensorTy.getElementTypeBitWidth() / 8;
-    elemsPerSwizzlingRow = 128 / perPhase / elemBytes;
-    elemsPerSwizzlingRowVal = i32_val(elemsPerSwizzlingRow);
 
-    uint32_t widthInByte = shape[ord[0]] * elemBytes;
-    mode = getModeFromLayout(sharedLayout, widthInByte);
+    widthInByte = shape[ord[trans ? 1 : 0]] * elemBytes;
+    mlir::triton::nvgpu::WGMMADescMode mode =
+        getModeFromLayout(sharedLayout, shape[ord[0]] * elemBytes);
 
     baseDesc = rewriter.create<triton::nvgpu::WGMMADescCreateOp>(
         loc, base, i32_val(shape[ord[1]]), mode);
@@ -126,14 +123,8 @@ public:
     if (trans) {
       std::swap(k, m);
     }
-    Value leading_offset = mul(udiv(k, elemsPerSwizzlingRowVal),
-                               i32_val(shape[ord[1]] * elemsPerSwizzlingRow));
-    Value stride_offset = mul(m, elemsPerSwizzlingRowVal);
-    Value offset = add(add(leading_offset, stride_offset),
-                       urem(k, elemsPerSwizzlingRowVal));
-    Value off1 = mul(i32_val(elemBytes), offset);
+    Value off1 = add(mul(k, i32_val(elemBytes)), mul(m, i32_val(widthInByte)));
     Value off_ = zext(i64_ty, udiv(off1, i32_val(16)));
-
     return add(baseDesc, off_);
   }
 
@@ -143,11 +134,9 @@ private:
   Value warpId;
   int dimWpt;
   bool trans;
-  Value elemsPerSwizzlingRowVal;
-  mlir::triton::nvgpu::WGMMADescMode mode;
+  uint32_t widthInByte;
   SmallVector<unsigned int> instrShape;
   ArrayRef<unsigned> ord;
-  int elemsPerSwizzlingRow;
   int elemBytes;
   Value baseDesc;
 };

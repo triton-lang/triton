@@ -769,8 +769,8 @@ void LoopPipeliner::emitPrologue() {
           /*CTAsPerCGA*/ {static_cast<unsigned>(numCTAs)},
           /*CTASplitNum*/ {1},
           /*CTAOrder*/ {0});
-      auto sharedEncoding = ttg::SharedEncodingAttr::get(
-          load.getContext(), 1, 1, 1, {0}, CTALayout, false);
+      auto sharedEncoding = ttg::SharedEncodingAttr::get(load.getContext(), 1,
+                                                         1, 1, {0}, CTALayout);
       auto mBarriersTy = RankedTensorType::get(
           {numStages}, builder.getIntegerType(64), sharedEncoding);
 
