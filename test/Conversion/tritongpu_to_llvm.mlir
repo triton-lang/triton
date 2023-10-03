@@ -1,4 +1,4 @@
-// RUN: not triton-opt %s -split-input-file --convert-triton-gpu-to-llvm="target=rocdl" 2>/dev/null | FileCheck --check-prefixes=CHECK,GCN %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm="target=rocdl" 2>/dev/null | FileCheck --check-prefixes=CHECK,GCN %s
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<f16, 1>)
@@ -1904,15 +1904,27 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // -----
 
-// PTX-LABEL: sum_reduction
-// TODO fix this test
-// GCN-NOT: sum_reduction
+// CHECK-LABEL: sum_reduction
 //       PTX:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       PTX:   nvvm.redux.sync  add %{{.*}}, %[[M]]
 //       PTX:   nvvm.barrier0
 //       PTX:   shfl.sync.bfly.b32
 //       PTX:   shfl.sync.bfly.b32
 //       PTX:   nvvm.barrier0
+
+//       GCN-COUNT-4:   ds_swizzle_b32
+//       GCN:   llvm.store
+//       GCN:   rocdl.barrier
+//       GCN:   llvm.load
+//       GCN-COUNT-2:   ds_swizzle_b32
+//       GCN:   llvm.store
+//       GCN:   rocdl.barrier
+//       GCN:   llvm.load
+//       GCN:   rocdl.barrier
+//       GCN:   llvm.store
+//       GCN:   rocdl.barrier
+//       GCN:   llvm.load
+//       GCN:   llvm.store
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {

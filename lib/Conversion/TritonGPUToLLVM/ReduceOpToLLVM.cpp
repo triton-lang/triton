@@ -321,6 +321,9 @@ private:
 
   // Check if the reduction can use a redux op and return the kind.
   std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op) const {
+  #ifdef USE_ROCM
+    return std::nullopt;
+  #endif
     if (computeCapability < 80)
       return std::nullopt;
     if (op.getNumOperands() != 1 || op.getNumResults() != 1)
