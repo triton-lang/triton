@@ -386,11 +386,11 @@ void LoopPipeliner::collectDeps(
     SetVector<Operation *> &ops,
     MapVector<Operation *, SetVector<Value>> &valueDeps) {
   for (auto op : ops) {
+    SetVector<Value> deps;
     for (Value v : op->getOperands()) {
-      SetVector<Value> deps;
       collectValueDep(v, numStages - 1, deps);
-      valueDeps[op] = deps;
     }
+    valueDeps[op] = deps;
   }
 }
 
@@ -445,6 +445,11 @@ LogicalResult LoopPipeliner::checkOpUses(SetVector<Operation *> &ops) {
                                     .dyn_cast<ttg::DotOperandEncodingAttr>()) {
               isCandidate = true;
               loadsMapping[loadOp] = convertLayout;
+            } else {
+              if (::triton::tools::getBoolEnv("ENABLE_LUT_PIPELINING")) {
+                isCandidate = true;
+                loadsMapping[loadOp] = loadOp.getResult();
+              }
             }
         } else if (preUse && isa<tt::DotOp>(use)) {
           isCandidate = false;
