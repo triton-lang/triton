@@ -222,7 +222,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRLLVMDialect
     MLIRSupport
     MLIRTargetLLVMIRExport
-    MLIRExecutionEngine
     MLIRMathToLLVM
     MLIRNVVMToLLVMIRTranslation
     MLIRROCDLToLLVMIRTranslation
