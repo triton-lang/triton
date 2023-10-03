@@ -1124,29 +1124,35 @@ def advance(base: tensor, offsets, _builder=None):
 # -----------------------
 
 
-def _add_atomic_docstr(name: str) -> Callable[[T], T]:
+def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
-        docstr = """
+        docstr = f"""
     Performs an atomic {name} at the memory location specified by :code:`pointer`.
 
     Return the data stored at :code:`pointer` before the atomic operation.
 
-    :param pointer: The memory locations to compare-and-swap.
-    :type pointer: Block of dtype=triton.PointerDType
+    :param pointer: The memory locations to operate on
+    :type pointer: Block of dtype=triton.PointerDType"""
+        if has_cmp:
+            docstr += """
     :param cmp: The values expected to be found in the atomic object
-    :type cmp: Block of dtype=`pointer.dtype.element_ty`
-    :param val: The values to copy in case the expected value matches the contained value.
-    :type val: Block of dtype=`pointer.dtype.element_ty`
+    :type cmp: Block of dtype=pointer.dtype.element_ty"""
+        docstr += """
+    :param val: The values with which to perform the atomic operation
+    :type val: Block of dtype=pointer.dtype.element_ty
+    :param sem: Memory semantics to use ("ACQUIRE_RELEASE" (default),
+        "ACQUIRE", "RELEASE", or "RELAXED")
+    :type sem: str
     """
-        func.__doc__ = docstr.format(name=name)
+        func.__doc__ = docstr
         return func
 
     return _decorator
 
 
 @builtin
-@_add_atomic_docstr("compare-and-swap")
+@_add_atomic_docstr("compare-and-swap", has_cmp=True)
 def atomic_cas(pointer, cmp, val, sem=None, _builder=None):
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
