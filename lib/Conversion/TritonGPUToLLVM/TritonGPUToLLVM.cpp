@@ -563,10 +563,13 @@ struct ExtractSliceOpConversion
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
-    for (auto i = 0; i < mixedOffsets.size(); ++i) {
-      if (op.isDynamicOffset(i))
-        opOffsetVals.emplace_back(adaptor.getOffsets()[i]);
-      else
+    for (auto i = 0, j = 0; i < mixedOffsets.size(); ++i) {
+      if (op.isDynamicOffset(i)) {
+        // adaptor.getOffsets() returns list of variable offsets. the size of
+        // the list may not be the same as mixedOffsets
+        opOffsetVals.emplace_back(adaptor.getOffsets()[j]);
+        ++j;
+      } else
         opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
       offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));
     }
