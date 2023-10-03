@@ -1277,7 +1277,9 @@ struct InsertSliceAsyncOpConversion
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto resTy = dst.getType().cast<RankedTensorType>();
     auto resElemTy = getTypeConverter()->convertType(resTy.getElementType());
-    auto srcBlockedLayout = srcTy.getEncoding().cast<BlockedEncodingAttr>();
+    auto srcLayout = srcTy.getEncoding();
+    assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
+            "Unexpected srcLayout in InsertSliceAsyncOpConversion"));
     auto resSharedLayout = resTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
     assert(srcShape.size() == 2 &&
@@ -1345,9 +1347,8 @@ struct InsertSliceAsyncOpConversion
     unsigned numElems = getTotalElemsPerThread(srcTy);
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
-    auto sizePerThread = srcBlockedLayout.getSizePerThread();
-    auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
-    auto inOrder = srcBlockedLayout.getOrder();
+    auto threadsPerCTA = mlir::triton::gpu::getThreadsPerCTA(srcLayout);
+    auto inOrder = mlir::triton::gpu::getOrder(srcLayout);
     DenseMap<unsigned, Value> sharedPtrs =
         getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
@@ -1361,8 +1362,6 @@ struct InsertSliceAsyncOpConversion
     // On the column dimension, if inVec > outVec, it means we have to divide
     // single vector read into multiple ones
     auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
-
-    auto srcIndices = emitIndices(loc, rewriter, srcBlockedLayout, srcTy);
 
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       // 16 * 8 = 128bits
