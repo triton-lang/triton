@@ -88,6 +88,7 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
+  opt.TrapUnreachable = true;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
       std::nullopt, llvm::CodeGenOpt::Aggressive)};
