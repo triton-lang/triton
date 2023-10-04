@@ -169,7 +169,8 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
                     .cast<RankedTensorType>()
                     .getEncoding()
                     .dyn_cast_or_null<triton::gpu::MmaEncodingAttr>())
-          return mmaLayout.getVersionMajor() > 1;
+          return (mmaLayout.getVersionMajor() > 1) ? true
+                                                   : mmaLayout == encoding;
       }
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
