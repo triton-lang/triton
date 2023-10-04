@@ -1016,14 +1016,19 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
         (1) `pointer` could be a single element pointer, then a scalar will be loaded
+
             - `mask` and `other` must be scalar too
             - `other` is implicitly typecast to `pointer.dtype.element_ty`
             - `boundary_check` and `padding_option` must be empty
+
         (2) `pointer` could be element-wise tensor of pointers, in which case:
+
             - `mask` and `other` are implicitly broadcast to `pointer.shape`
             - `other` is implicitly typecast to `pointer.dtype.element_ty`
             - `boundary_check` and `padding_option` must be empty
+
         (3) `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+
             - `mask` and `other` must be None
             - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access
 
@@ -1062,14 +1067,20 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     """
     Store a tensor of data into memory locations defined by `pointer`:
         (1) `pointer` could be a single element pointer, then a scalar will be stored
+
             - `mask` must be scalar too
             - `boundary_check` and `padding_option` must be empty
+
         (2) `pointer` could be element-wise tensor of pointers, in which case:
+
             - `mask` is implicitly broadcast to `pointer.shape`
             - `boundary_check` must be empty
+
         (3) or `pointer` could be a block pointer defined by `make_block_ptr`, in which case:
+
             - `mask` must be None
             - `boundary_check` can be specified to control the behavior of out-of-bound access
+
     `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
 
     :param pointer: The memory location where the elements of `value` are stored
