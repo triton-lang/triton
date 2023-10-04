@@ -312,11 +312,11 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float32)
-# a = torch.repeat_interleave(torch.arange(512).view(1, 512), 512, dim=0)
-# a = torch.tensor(a, device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float32)
-# b = torch.eye(512, device='cuda', dtype=torch.float16)
+a = torch.randn((512, 512), device='cuda', dtype=torch.float32) * .1
+# a = torch.repeat_interleave(torch.arange(512).view(-1, 1), 512, dim=1)
+# a = torch.tensor(a, device='cuda', dtype=torch.float32)
+b = torch.randn((512, 512), device='cuda', dtype=torch.float32) * .1
+# b = torch.eye(512, device='cuda', dtype=torch.float32)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
