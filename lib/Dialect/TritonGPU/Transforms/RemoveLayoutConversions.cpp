@@ -163,12 +163,13 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-        if (convertOp.getResult()
-                .getType()
-                .cast<RankedTensorType>()
-                .getEncoding()
-                .isa<triton::gpu::MmaEncodingAttr>())
-          return true;
+        if (auto mmaLayout =
+                convertOp.getResult()
+                    .getType()
+                    .cast<RankedTensorType>()
+                    .getEncoding()
+                    .dyn_cast_or_null<triton::gpu::MmaEncodingAttr>())
+          return mmaLayout.getVersionMajor() > 1;
       }
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
