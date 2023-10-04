@@ -419,6 +419,13 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         user->hasTrait<mlir::OpTrait::Elementwise>() ||
         isa<triton::ReduceOp, triton::ExpandDimsOp,
             triton::gpu::ConvertLayoutOp>(user)) {
+#ifdef USE_ROCM
+      if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(user)) {
+        if (triton::gpu::isSharedEncoding(convertOp.getResult()) ||
+            triton::gpu::isSharedEncoding(convertOp.getOperand()))
+          continue;
+      }
+#endif
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
