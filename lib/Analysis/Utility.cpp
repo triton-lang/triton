@@ -434,7 +434,7 @@ static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
   // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
   return src && dst && src.getVersionMajor() == 3 &&
          src.getWarpsPerCTA()[1] == 1 && dst.getVersionMajor() == 3 &&
-         dst.getWarpsPerCTA()[1] == 1 && srcInstrShape[2] == dstInstrShape[2];
+         dst.getWarpsPerCTA()[1] == 1;
 }
 
 bool isMmaToMmaShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
