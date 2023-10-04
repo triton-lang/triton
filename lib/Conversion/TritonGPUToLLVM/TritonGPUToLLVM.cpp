@@ -526,10 +526,13 @@ struct AllocTensorOpConversion
     // TODO: we need to modify the pipeline pass to give a proper shared
     // encoding to 3D tensors
     SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() == 3)
-      newOrder = {1 + order[0], 1 + order[1], 0};
-    else
+    if (resultTy.getShape().size() != order.size()) {
+      for (auto i = 0; i < order.size(); ++i)
+        newOrder.push_back(order[i] + 1);
+      newOrder.push_back(0);
+    } else {
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
+    }
 
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj =
