@@ -21,16 +21,8 @@ def mangle_ty(ty):
         SIGNED = language.dtype.SIGNEDNESS.SIGNED
         prefix = 'i' if ty.int_signedness == SIGNED else 'u'
         return prefix + str(ty.int_bitwidth)
-    if ty.is_fp8():
-        return 'fp8'
-    if ty.is_fp16():
-        return 'fp16'
-    if ty.is_bf16():
-        return 'bf16'
-    if ty.is_fp32():
-        return 'fp32'
-    if ty.is_fp64():
-        return 'fp64'
+    if ty.is_floating():
+        return str(ty)
     if ty.is_block():
         elt = mangle_ty(ty.scalar)
         shape = '_'.join(map(str, ty.shape))
@@ -62,6 +54,10 @@ def _is_constexpr(o: Any) -> bool:
 
 def _is_triton_scalar(o: Any) -> bool:
     return _is_triton_tensor(o) and (not o.type.is_block() or o.type.numel == 1)
+
+
+def _is_list_like(o: Any) -> bool:
+    return isinstance(o, (list, tuple))
 
 
 def _unwrap_if_constexpr(o: Any):
@@ -284,6 +280,9 @@ class CodeGenerator(ast.NodeVisitor):
     # AST visitor
     #
     def visit_compound_statement(self, stmts):
+        # Ensure that stmts is iterable
+        if not _is_list_like(stmts):
+            stmts = [stmts]
         for stmt in stmts:
             ret_type = self.visit(stmt)
             if ret_type is not None and isinstance(stmt, ast.Return):
@@ -350,7 +349,8 @@ class CodeGenerator(ast.NodeVisitor):
                 continue
             else:
                 if i in self.attributes:
-                    fn.set_arg_attr(idx, "tt.divisibility", self.attributes[i][1])
+                    for name, value in self.attributes[i]:
+                        fn.set_arg_attr(idx, name, value)
                 arg_values.append(tensor(fn.args(idx), self.prototype.param_types[idx]))
                 idx += 1
 
@@ -412,9 +412,9 @@ class CodeGenerator(ast.NodeVisitor):
             raise UnsupportedLanguageConstruct(None, node, "simultaneous multiple assignment is not supported.")
         names = _names[0]
         values = self.visit(node.value)
-        if not isinstance(names, tuple):
+        if not _is_list_like(names):
             names = [names]
-        if not isinstance(values, tuple):
+        if not _is_list_like(values):
             values = [values]
         native_nontensor_types = (language.dtype, )
         for name, value in zip(names, values):
@@ -496,7 +496,7 @@ class CodeGenerator(ast.NodeVisitor):
             # check type
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
                 if name in defs:
-                    assert defs[name].type == liveins[name].type,\
+                    assert defs[name].type == liveins[name].type, \
                         f'initial value for `{name}` is of type {liveins[name].type}, '\
                         f'but the {block_name} block redefines it as {defs[name].type}'
             if name in then_defs or name in else_defs:
@@ -516,7 +516,7 @@ class CodeGenerator(ast.NodeVisitor):
                 continue
             then_ty = then_defs[name].type
             else_ty = else_defs[name].type
-            assert then_ty == else_ty,\
+            assert then_ty == else_ty, \
                 f'mismatched type for {name} between then block ({then_ty}) '\
                 f'and else block ({else_ty})'
             names.append(name)
@@ -618,11 +618,19 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_IfExp(self, node):
         cond = self.visit(node.test)
         if _is_triton_tensor(cond):
-            cond = cond.to(language.int1, _builder=self.builder)
-        if _unwrap_if_constexpr(cond):
-            return self.visit(node.body)
+            raise UnsupportedLanguageConstruct(
+                None, node,
+                "Triton does not support `if` expressions (ternary operators) with dynamic conditions, use `if` statements instead")
         else:
-            return self.visit(node.orelse)
+            cond = _unwrap_if_constexpr(cond)
+            if type(cond) not in _condition_types:  # not isinstance - we insist the real thing, no subclasses and no ducks
+                raise UnsupportedLanguageConstruct(
+                    None, node, "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
+                        ', '.join(_.__name__ for _ in _condition_types), type(cond).__name__))
+            if cond:
+                return self.visit(node.body)
+            else:
+                return self.visit(node.orelse)
 
     def visit_Pass(self, node):
         pass
@@ -814,7 +822,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     assert _is_triton_tensor(self.local_defs[name]), f'{name} is not tensor'
                     assert _is_triton_tensor(liveins[name])
-                    assert self.local_defs[name].type == liveins[name].type,\
+                    assert self.local_defs[name].type == liveins[name].type, \
                         f'Loop-carried variable {name} has initial type {liveins[name].type} '\
                         f'but is re-assigned to {self.local_defs[name].type} in loop! '\
                         f'Please make sure that the type stays consistent.'
@@ -1061,9 +1069,10 @@ def str_to_ty(name):
         ty = str_to_ty(name[1:])
         return language.pointer_type(ty)
     tys = {
-        "fp8e4": language.float8e4,
+        "fp8e4nv": language.float8e4nv,
         "fp8e5": language.float8e5,
         "fp8e4b15": language.float8e4b15,
+        "fp8e4b15x4": language.float8e4b15x4,
         "fp16": language.float16,
         "bf16": language.bfloat16,
         "fp32": language.float32,
@@ -1084,7 +1093,7 @@ def str_to_ty(name):
 
 def kernel_suffix(signature, specialization):
     # suffix format:
-    # <argid><'c' if equal to 1><'d' if divisible by 16>
+    # <argid><'c' if equal to 1><'d' if divisible by 16><'e' if divisible by 8>
     suffix = ''
     for i, _ in enumerate(signature):
         suffix += str(i)
@@ -1092,6 +1101,8 @@ def kernel_suffix(signature, specialization):
             suffix += 'c'
         if i in specialization.divisible_by_16:
             suffix += 'd'
+        if i in specialization.divisible_by_8:
+            suffix += 'e'
     return suffix
 
 
@@ -1109,7 +1120,12 @@ def ast_to_ttir(fn, signature, specialization, constants, debug, arch):
     function_name = '_'.join([fn.__name__, kernel_suffix(signature.values(), specialization)])
     tys = list(signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in specialization.equal_to_1}
-    new_attrs = {k: ("multiple_of", 16) for k in specialization.divisible_by_16}
+    new_attrs = {k: [("tt.divisibility", 16)] for k in specialization.divisible_by_16}
+    for k in specialization.divisible_by_8:
+        attr = new_attrs[k] if k in new_attrs else []
+        attr.append(("tt.max_divisibility", 8))
+        new_attrs[k] = attr
+
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in signature.items() if k not in constants]

@@ -1,7 +1,7 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm | FileCheck --check-prefixes=CHECK,GCN %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=target=rocdl | FileCheck --check-prefixes=CHECK,GCN %s
 
 // Check load instruction doesn't generate incorrect bitcast.
-module attributes {"triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: @test_float16_bitcast
   tt.func public @test_float16_bitcast(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %true = arith.constant true

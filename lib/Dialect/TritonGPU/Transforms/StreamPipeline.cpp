@@ -401,12 +401,13 @@ void LoopPipeliner::createBufferTypes() {
                                      ty.getShape().end());
     Type eType = ty.getElementType();
     auto blockedEnc = ty.getEncoding().cast<ttg::BlockedEncodingAttr>();
+    auto CTALayout = ttg::getCTALayout(ty.getEncoding());
     // unsigned bitWidth = dotOpEnc.getMMAv2kWidth()
     //                         ? 32 / dotOpEnc.getMMAv2kWidth()
     //                         : ty.getElementType().getIntOrFloatBitWidth();
     auto sharedEnc =
         ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc, ty.getShape(),
-                                     ttg::getOrder(ty.getEncoding()), eType);
+                                     ttg::getOrder(ty.getEncoding()), CTALayout, eType);
     loadsBufferType[loadOp] = RankedTensorType::get(bufferShape, eType, sharedEnc);
   }
 }

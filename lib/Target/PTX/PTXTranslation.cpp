@@ -10,6 +10,11 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
+#include <filesystem>
+
+#include <mutex>
+#include <optional>
 
 #include <mutex>
 #include <optional>
@@ -60,9 +65,14 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   std::string layout = "";
   std::string features = "";
   // std::string features = "+ptx" + std::to_string(maxPTX);
+  for (llvm::Function &f : module.functions()) {
+    if (!f.hasFnAttribute(llvm::Attribute::NoInline))
+      f.addFnAttr(llvm::Attribute::AlwaysInline);
+  }
   initLLVM();
   // verify and store llvm
   llvm::legacy::PassManager pm;
+  pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
   pm.run(module);
   // module->print(llvm::outs(), nullptr);

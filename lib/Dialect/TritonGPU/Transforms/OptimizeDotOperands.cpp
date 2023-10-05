@@ -56,10 +56,13 @@ public:
     if (!ZEncoding)
       return mlir::failure();
     // new X encoding
+    // TODO(Qingyi): need to check whether the CTALayout of XEncoding should be
+    // used here. For tests where numCTAs = 1, this is not a problem since all
+    // CTALayouts are the same.
     auto newXOrder = triton::gpu::getOrder(argEncoding);
     auto newXEncoding = triton::gpu::SharedEncodingAttr::get(
         getContext(), ZEncoding, XType.getShape(), newXOrder,
-        XType.getElementType());
+        XEncoding.getCTALayout(), XType.getElementType());
     auto newXType = RankedTensorType::get(XType.getShape(),
                                           XType.getElementType(), newXEncoding);
     if (XEncoding == newXEncoding)
@@ -118,6 +121,9 @@ public:
         cvtArgOp->getDialect()->getTypeID() !=
             mlir::TypeID::get<arith::ArithDialect>())
       return mlir::failure();
+    // not handled in elementwise lowering.
+    if (isa<arith::TruncIOp, arith::TruncFOp>(cvtArgOp))
+      return mlir::failure();
     // only considers conversions to dot operand
     if (!cvtTy.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
       return mlir::failure();
@@ -139,6 +145,83 @@ public:
       newRet->setOperand(i, newCvts[i]);
     newRet->getResult(0).setType(newRetTy);
     rewriter.replaceOp(op, newRet->getResults());
+    return mlir::success();
+  }
+};
+
+// convert(trans(convert(arg)))
+// x = convert_layout arg: #distributed -> #shared_x
+// y = trans x: #shared_x -> #shared_y
+// z = convert_layout y: #shared_y -> #shared_z
+class FuseTransHopper : public mlir::RewritePattern {
+
+public:
+  FuseTransHopper(mlir::MLIRContext *context)
+      : mlir::RewritePattern(triton::gpu::ConvertLayoutOp::getOperationName(),
+                             1, context) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::Operation *op,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (!op->hasOneUse())
+      return mlir::failure();
+    auto dstOp = cast<triton::gpu::ConvertLayoutOp>(op);
+    auto tmpOp =
+        dyn_cast_or_null<triton::TransOp>(dstOp.getSrc().getDefiningOp());
+    if (!tmpOp)
+      return mlir::failure();
+    auto srcOp = dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(
+        tmpOp.getSrc().getDefiningOp());
+    if (!srcOp)
+      return mlir::failure();
+    auto arg = srcOp.getSrc();
+    auto X = tmpOp.getSrc();
+    // types
+    auto argType = arg.getType().cast<RankedTensorType>();
+    auto XType = X.getType().cast<RankedTensorType>();
+    auto ZType = dstOp.getResult().getType().cast<RankedTensorType>();
+    // encodings
+    auto argEncoding = argType.getEncoding();
+    auto XEncoding =
+        XType.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto ZEncoding =
+        ZType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+    if (!ZEncoding)
+      return mlir::failure();
+    // new X encoding
+    auto newXOrder = triton::gpu::getOrder(argEncoding);
+
+    auto dotOp = *op->getUsers().begin();
+    if (isa<triton::DotOp, triton::nvidia_gpu::DotAsyncOp>(dotOp)) {
+      auto dotTy = dotOp->getResult(0).getType().cast<RankedTensorType>();
+      auto dotEncoding =
+          dotTy.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
+      auto eltType = XType.getElementType();
+      if (!dotEncoding || dotEncoding.getVersionMajor() != 3)
+        return mlir::failure();
+      // MMAv3 with transpose only supports f16 and bf16 data type
+      // fallback to MMAv3 without transpose for other data types
+      if (!eltType.isF16() && !eltType.isBF16()) {
+        if (dstOp.getResult() == dotOp->getOperand(0)) {
+          newXOrder = {0, 1};
+        } else if (dstOp.getResult() == dotOp->getOperand(1)) {
+          newXOrder = {1, 0};
+        }
+      }
+    }
+
+    // TODO(Qingyi): need to check whether the CTALayout of XEncoding should be
+    // used here. For tests where numCTAs = 1, this is not a problem since all
+    // CTALayouts are the same.
+    auto newXEncoding = triton::gpu::SharedEncodingAttr::get(
+        getContext(), XType.getShape(), newXOrder, XEncoding.getCTALayout(),
+        XType.getElementType());
+    auto newXType = RankedTensorType::get(XType.getShape(),
+                                          XType.getElementType(), newXEncoding);
+
+    auto newX = rewriter.create<triton::gpu::ConvertLayoutOp>(srcOp.getLoc(),
+                                                              newXType, arg);
+    rewriter.replaceOpWithNewOp<triton::TransOp>(dstOp, newX);
     return mlir::success();
   }
 };
@@ -165,9 +248,8 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<ConvertTransConvert>(context);
     patterns.add<MoveOpAfterLayoutConversion>(context);
+    patterns.add<FuseTransHopper>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
-      signalPassFailure();
-    if (fixupLoops(m).failed())
       signalPassFailure();
   }
 };

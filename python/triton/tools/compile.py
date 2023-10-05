@@ -43,9 +43,11 @@ if __name__ == "__main__":
     parser.add_argument("path", help="Path to Python source containing desired kernel in its scope. File will be executed.")
     parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile", required=True)
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
+    parser.add_argument("--num-stages", "-ns", type=int, default=3, help="Number of stages (meta-parameter of the kernel)")
     parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
+    parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
     args = parser.parse_args()
 
     out_name = args.out_name if args.out_name else args.kernel_name
@@ -58,6 +60,8 @@ if __name__ == "__main__":
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     kernel = getattr(mod, args.kernel_name)
+    grid = args.grid.split(",")
+    assert len(grid) == 3
 
     # validate and parse signature
     signature = list(map(lambda s: s.strip(" "), args.signature.split(",")))
@@ -67,7 +71,8 @@ if __name__ == "__main__":
         m.update(" ".join(signature).encode())
         return m.hexdigest()[:8]
 
-    sig_hash = hash_signature(signature)
+    meta_sig = f"warps{args.num_warps}xstages{args.num_stages}"
+    sig_hash = hash_signature(signature + [meta_sig])
 
     def constexpr(s):
         try:
@@ -87,6 +92,9 @@ if __name__ == "__main__":
     constexprs = {i: constexpr(s) for i, s in enumerate(signature)}
     constexprs = {k: v for k, v in constexprs.items() if v is not None}
     signature = {i: s.split(":")[0] for i, s in enumerate(signature) if i not in constexprs}
+    const_sig = 'x'.join([str(v) for v in constexprs.values()])
+    doc_string = [f"{kernel.arg_names[i]}={constexprs[i]}" for i in constexprs.keys()]
+    doc_string += [f"num_warps={args.num_warps}", f"num_stages={args.num_stages}"]
 
     # compile ast into cubin
     for h in hints.values():
@@ -96,7 +104,7 @@ if __name__ == "__main__":
     config = triton.compiler.instance_descriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
     for i in equal_to_1:
         constexprs.update({i: 1})
-    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config], num_warps=args.num_warps)
+    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config], num_warps=args.num_warps, num_stages=args.num_stages)
     arg_names = []
     arg_types = []
     for i in signature.keys():
@@ -118,9 +126,13 @@ if __name__ == "__main__":
         "full_signature": ", ".join([f"{ty_to_cpp(signature[i])} {kernel.arg_names[i]}" for i in signature.keys()]),
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names]),
         "num_args": len(arg_names),
-        "kernel_docstring": "",
+        "kernel_docstring": doc_string,
         "shared": ccinfo.shared,
         "num_warps": args.num_warps,
+        "algo_info": '_'.join([const_sig, meta_sig]),
+        "gridX": grid[0],
+        "gridY": grid[1],
+        "gridZ": grid[2],
         "_placeholder": "",
     }
     for ext in ['h', 'c']:

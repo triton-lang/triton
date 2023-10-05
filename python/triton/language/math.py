@@ -40,26 +40,34 @@ def byte_perm(arg0, arg1, arg2, _builder=None):
 
 @core.extern
 def min(arg0, arg1, _builder=None):
-    return core.extern_elementwise("libdevice", libdevice_path(), [arg0, arg1, ],
-                                   {(core.dtype("int32"), core.dtype("int32"),): ("__nv_min", core.dtype("int32")),
-                                    (core.dtype("uint32"), core.dtype("uint32"),): ("__nv_umin", core.dtype("uint32")),
-                                    (core.dtype("int64"), core.dtype("int64"),): ("__nv_llmin", core.dtype("int64")),
-                                    (core.dtype("uint64"), core.dtype("uint64"),): ("__nv_ullmin", core.dtype("uint64")),
-                                    (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fminf", core.dtype("fp32")),
-                                    (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fmin", core.dtype("fp64")),
-                                    }, is_pure=True, _builder=_builder)
+    arg0 = core._to_tensor(arg0, _builder)
+    arg1 = core._to_tensor(arg1, _builder)
+    arg0, arg1 = core.binary_op_type_legalization(arg0, arg1, _builder)
+    dtype = arg0.dtype
+    if dtype.is_floating():
+        return core.tensor(_builder.create_minf(arg0.handle, arg1.handle), arg0.type)
+    elif dtype.is_int_signed():
+        return core.tensor(_builder.create_minsi(arg0.handle, arg1.handle), arg0.type)
+    elif dtype.is_int_unsigned():
+        return core.tensor(_builder.create_minui(arg0.handle, arg1.handle), arg0.dtype)
+    else:
+        assert False, f"Unexpected dtype {dtype}"
 
 
 @core.extern
 def max(arg0, arg1, _builder=None):
-    return core.extern_elementwise("libdevice", libdevice_path(), [arg0, arg1, ],
-                                   {(core.dtype("int32"), core.dtype("int32"),): ("__nv_max", core.dtype("int32")),
-                                    (core.dtype("uint32"), core.dtype("uint32"),): ("__nv_umax", core.dtype("uint32")),
-                                    (core.dtype("int64"), core.dtype("int64"),): ("__nv_llmax", core.dtype("int64")),
-                                    (core.dtype("uint64"), core.dtype("uint64"),): ("__nv_ullmax", core.dtype("uint64")),
-                                    (core.dtype("fp32"), core.dtype("fp32"),): ("__nv_fmaxf", core.dtype("fp32")),
-                                    (core.dtype("fp64"), core.dtype("fp64"),): ("__nv_fmax", core.dtype("fp64")),
-                                    }, is_pure=True, _builder=_builder)
+    arg0 = core._to_tensor(arg0, _builder)
+    arg1 = core._to_tensor(arg1, _builder)
+    arg0, arg1 = core.binary_op_type_legalization(arg0, arg1, _builder)
+    dtype = arg0.dtype
+    if dtype.is_floating():
+        return core.tensor(_builder.create_maxf(arg0.handle, arg1.handle), arg0.type)
+    elif dtype.is_int_signed():
+        return core.tensor(_builder.create_maxsi(arg0.handle, arg1.handle), arg0.type)
+    elif dtype.is_int_unsigned():
+        return core.tensor(_builder.create_maxui(arg0.handle, arg1.handle), arg0.dtype)
+    else:
+        assert False, f"Unexpected dtype {dtype}"
 
 
 @core.extern

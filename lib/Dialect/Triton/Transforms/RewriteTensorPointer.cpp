@@ -11,6 +11,8 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
+namespace {
+
 /// An additional struct to record the meta information of operations
 /// with tensor pointers
 struct RewritedInfo {
@@ -185,6 +187,8 @@ public:
     return builder.create<triton::SplatOp>(loc, otherTensorType, constant);
   }
 };
+
+} // namespace
 
 class RewriteTensorPointerPass
     : public TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {

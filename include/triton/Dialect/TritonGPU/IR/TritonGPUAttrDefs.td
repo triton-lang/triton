@@ -42,6 +42,19 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
 }
 
 //===----------------------------------------------------------------------===//
+// CTA Layout
+//===----------------------------------------------------------------------===//
+
+def CTALayoutAttr : TritonGPU_Attr<"CTALayout"> {
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$CTAsPerCGA,
+    ArrayRefParameter<"unsigned">:$CTASplitNum,
+    ArrayRefParameter<"unsigned">:$CTAOrder
+  );
+}
+
+//===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
@@ -64,19 +77,41 @@ are stored contiguously
 _ _ _ _ /\_ _ _ _
 A_{2, 2}  A_{2, 3}  A_{2, 0}  A_{2, 1} ...   [phase 1] \ per phase = 2
 A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
+
+For MMAv3 eg Hopper GMMA, hasLeadingOffset should be true. In this case,
+when the matrix is stored in shared memory, there will be an offset not
+only in the stride dimension, but also in the leading dimension. For example,
+a matrix of size 16x128 and data type I8 is stored in the shared memory with
+64B-swizzle mode. The offset of the element with index (0, 64) will be 16*64,
+compared to 1*64 when the hasLeadingOffset is false.
   }];
 
+  // swizzle info: vec, perPhase, maxPhase
+  // order: the fastest-changing axis first
   let parameters = (
     ins
-    // swizzle info
-    "unsigned":$vec, "unsigned":$perPhase, "unsigned":$maxPhase,
-    ArrayRefParameter<"unsigned", "order of axes by the rate of changing">:$order
+    "unsigned":$vec,
+    "unsigned":$perPhase,
+    "unsigned":$maxPhase,
+    ArrayRefParameter<"unsigned">:$order,
+    "CTALayoutAttr":$CTALayout,
+    "bool":$hasLeadingOffset
   );
 
   let builders = [
+    AttrBuilder<(ins "unsigned":$vec,
+                     "unsigned":$perPhase,
+                     "unsigned":$maxPhase,
+                     "ArrayRef<unsigned>":$order,
+                     "CTALayoutAttr":$CTALayout), [{
+        bool hasLeadingOffset = false; // default value
+        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset);
+    }]>,
+
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
+                     "CTALayoutAttr":$CTALayout,
                      "unsigned":$typeWidthInBit), [{
 
 #ifdef USE_ROCM
@@ -112,20 +147,21 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
             int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
             int maxPhase = SIMDWidth / perPhase;
 
-            return $_get(context, vecSize, perPhase, maxPhase, order);
+            return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
           } else {
             // Do not swizzle in case k dimension is not innermost.
             // In this case accesses will go in different banks even without swizzling.
-            return $_get(context, 1, 1, 1, order);
+            return get(context, 1, 1, 1, order, CTALayout);
           }
         }
 #endif
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
 
         if(!mmaEnc)
-          return $_get(context, 1, 1, 1, order);
+          return get(context, 1, 1, 1, order, CTALayout);
 
         int opIdx = dotOpEnc.getOpIdx();
+        auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
 
         // number of rows per phase
 
@@ -134,34 +170,34 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
 
         // ---- begin Volta ----
         if (mmaEnc.isVolta()) {
-          int perPhase = 128 / (shape[order[0]] * (typeWidthInBit / 8));
+          int perPhase = 128 / (shapePerCTA[order[0]] * (typeWidthInBit / 8));
           perPhase = std::max<int>(perPhase, 1);
           bool is_row = order[0] != 0;
-          bool is_vec4 = opIdx == 0 ? !is_row && (shape[order[0]] <= 16) :
-              is_row && (shape[order[0]] <= 16);
+          bool is_vec4 = opIdx == 0 ? !is_row && (shapePerCTA[order[0]] <= 16) :
+              is_row && (shapePerCTA[order[0]] <= 16);
           int pack_size = opIdx == 0 ? ((is_row || is_vec4) ? 1 : 2) :
                                        ((is_row && !is_vec4) ? 2 : 1);
           int rep = 2 * pack_size;
           int maxPhase = (order[inner] == 1 ? 8 : 4) / perPhase;
           int vec = 2 * rep;
-          return $_get(context, vec, perPhase, maxPhase, order);
+          return get(context, vec, perPhase, maxPhase, order, CTALayout);
         }
 
         // ---- begin Ampere ----
         if (mmaEnc.isAmpere()) {
-          int perPhase = 128 / (shape[order[0]] * 4 / dotOpEnc.getKWidth());
+          int perPhase = 128 / (shapePerCTA[order[0]] * 4 / dotOpEnc.getKWidth());
           perPhase = std::max<int>(perPhase, 1);
           std::vector<size_t> matShape = {8, 8, 4 * dotOpEnc.getKWidth()};
           // for now, disable swizzle when using transposed int8 tensor cores
           if ((32 / typeWidthInBit != dotOpEnc.getKWidth()) && order[0] == inner)
-            return $_get(context, 1, 1, 1, order);
+            return get(context, 1, 1, 1, order, CTALayout);
 
           // --- handle A operand ---
           if (opIdx == 0) { // compute swizzling for A operand
               int vec = (order[0] == 1) ? matShape[2] : matShape[0]; // k : m
               int mmaStride = (order[0] == 1) ? matShape[0] : matShape[2];
               int maxPhase = mmaStride / perPhase;
-              return $_get(context, vec, perPhase, maxPhase, order);
+              return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
 
           // --- handle B operand ---
@@ -169,10 +205,17 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
               int vec = (order[0] == 1) ? matShape[1] : matShape[2]; // n : k
               int mmaStride = (order[0] == 1) ? matShape[2] : matShape[1];
               int maxPhase = mmaStride / perPhase;
-              return $_get(context, vec, perPhase, maxPhase, order);
+              return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
 
           llvm_unreachable("invalid operand index");
+        }
+
+        // ---- begin version 3 ----
+        if (mmaEnc.isHopper()) {
+          llvm_unreachable("SharedEncodingAttr builder when the MMAEncodingAttr"
+                           " is Hopper has not been implemented yet");
+          return $_get(context, 1, 1, 1, order, CTALayout, true);
         }
 
         // ---- not implemented ----
@@ -182,9 +225,38 @@ A_{3, 2}  A_{3, 3}  A_{3, 0}  A_{3, 1} ...   [phase 1] /
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
+                     "CTALayoutAttr":$CTALayout,
                      "Type":$eltTy), [{
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      return get(context, dotOpEnc, shape, order, bitwidth);
+      return get(context, dotOpEnc, shape, order, CTALayout, bitwidth);
+    }]>,
+
+    AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
+                     "CTALayoutAttr":$CTALayout,
+                     "Type":$eltTy), [{
+        auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
+
+        int32_t eleBitWidth = eltTy.getIntOrFloatBitWidth();
+        int32_t vec = 128 / eleBitWidth, perPhase = 1, maxPhase = 1;
+
+        // get proper shared memory swizzling mode from the contiguous dimension
+        // size of the origin blocked layout.
+        auto contigDimSizeInByte = shapePerCTA[order[0]] * eleBitWidth / 8;
+        if (contigDimSizeInByte >= 128 && contigDimSizeInByte % 128 == 0) {
+          perPhase = 1;
+          maxPhase = 8;
+        } else if (contigDimSizeInByte >= 64 && contigDimSizeInByte % 64 == 0) {
+          perPhase = 2;
+          maxPhase = 4;
+        } else if (contigDimSizeInByte >= 32 && contigDimSizeInByte % 32 == 0) {
+          perPhase = 4;
+          maxPhase = 2;
+        } else {
+          llvm_unreachable("unsupported shared memory layout for MMAv3");
+        }
+
+        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, true);
     }]>
   ];
 
@@ -236,7 +308,7 @@ used to promote memory coalescing in LoadInst and StoreInst.
 It is characterized by three tuples -- thread tile size, warp tile size, and block tile size -- which
 specify the amount of elements owned by each CUDA thread, warp and CTA respectively.
 
-For example, a row-major coalesced layout may partition a 16x16 tensor over 2 warps (i.e. 64 threads) as follows.
+Example 1, a row-major coalesced layout may partition a 16x16 tensor over 2 warps (i.e. 64 threads) as follows:
 
 [ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
 [ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
@@ -252,81 +324,142 @@ for
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
+  CTAsPerCGA = {1, 1}
+}>
+
+Example 2, a row-major coalesced layout may partition a 32x32 tensor over 2 warps (i.e. 64 threads) as follows:
+
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35  0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35  0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39  4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39  4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+...                                                 ...
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63  28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63  28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35  0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35  0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39  4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39  4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+...                                                 ...
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63  28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63  28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+for
+
+#triton_gpu.blocked_layout<{
+  sizePerThread = {2, 2}
+  threadsPerWarp = {8, 4}
+  warpsPerCTA = {1, 2}
+  CTAsPerCGA = {1, 1}
+}>
+
+Example 3, A row-major coalesced layout may partition a 32x32 tensor over 2 warps (i.e. 64 threads) and
+4 CTAs (taking 2x2 for example) as follows:
+
+CTA [0,0]                                              CTA [0,1]
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]  [ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]  [ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]  [ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]  [ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+...                                                    ...
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]  [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]  [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+
+CTA [1,0]                                              CTA [1,1]
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]  [ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]  [ 0  0  1  1  2  2  3  3  ; 32 32 33 33 34 34 35 35 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]  [ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+[ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]  [ 4  4  5  5  6  6  7  7  ; 36 36 37 37 38 38 39 39 ]
+...                                                    ...
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]  [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+[ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]  [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
+for
+
+#triton_gpu.blocked_layout<{
+  sizePerThread = {2, 2}
+  threadsPerWarp = {8, 4}
+  warpsPerCTA = {1, 2}
+  CTAsPerCGA = {2, 2}
 }>
 }];
-
-
-  let builders = [
-    // Custom builder initializes sizePerWarp and sizePerCTA automatically
-    // TODO: compiles on MacOS but not linux?
-    // AttrBuilder<(ins "ArrayRef<unsigned>":$sizePerThread,
-    //                  "ArrayRef<unsigned>":$threadsPerWarp,
-    //                  "ArrayRef<unsigned>":$warpsPerCTA,
-    //                  "ArrayRef<unsigned>":$order), [{
-    //   int rank = threadsPerWarp.size();
-    //   SmallVector<unsigned, 4> sizePerWarp(rank);
-    //   SmallVector<unsigned, 4> sizePerCTA(rank);
-    //   for (unsigned i = 0; i < rank; i++) {
-    //     sizePerWarp.push_back(sizePerThread[i] * threadsPerWarp[i]);
-    //     sizePerCTA.push_back(sizePerWarp[i] * warpsPerCTA[i]);
-    //   }
-    //   return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order, sizePerWarp, sizePerCTA);
-    // }]>,
-    // Custom builder initializes sizePerWarp and sizePerCTA automatically
-    // Default builder takes sizePerThread, order and numWarps, and tries to
-    // pack numWarps*32 threads in the provided order for use in a type
-    // of the given shape.
-    AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
-                     "ArrayRef<unsigned>":$sizePerThread,
-                     "ArrayRef<unsigned>":$order,
-                     "unsigned":$numWarps,
-                     "unsigned":$threadsPerWarp), [{
-      int rank = sizePerThread.size();
-      unsigned remainingLanes = threadsPerWarp;
-      unsigned remainingThreads = numWarps*threadsPerWarp;
-      unsigned remainingWarps = numWarps;
-      unsigned prevLanes = 1;
-      unsigned prevWarps = 1;
-      SmallVector<unsigned, 4> rankedThreadsPerWarp(rank);
-      SmallVector<unsigned, 4> warpsPerCTA(rank);
-      for (int _dim = 0; _dim < rank - 1; ++_dim) {
-        int i = order[_dim];
-        unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, shape[i] / sizePerThread[i]);
-        rankedThreadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
-        warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / rankedThreadsPerWarp[i], 1, remainingWarps);
-        remainingWarps /= warpsPerCTA[i];
-        remainingLanes /= rankedThreadsPerWarp[i];
-        remainingThreads /= threadsPerCTA;
-        prevLanes *= rankedThreadsPerWarp[i];
-        prevWarps *= warpsPerCTA[i];
-      }
-      // Expand the last dimension to fill the remaining lanes and warps
-      rankedThreadsPerWarp[order[rank-1]] = threadsPerWarp / prevLanes;
-      warpsPerCTA[order[rank-1]] = numWarps / prevWarps;
-
-      return $_get(context, sizePerThread, rankedThreadsPerWarp, warpsPerCTA, order);
-
-    }]>
-  ];
-
-  let extraClassDeclaration = extraBaseClassDeclaration # [{
-    SliceEncodingAttr squeeze(int axis);
-  }];
 
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$sizePerThread,
     ArrayRefParameter<"unsigned">:$threadsPerWarp,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    // fastest-changing axis first
-    ArrayRefParameter<
-      "unsigned",
-      "order of axes by the rate of changing"
-    >:$order
-    // These attributes can be inferred from the rest
-    // ArrayRefParameter<"unsigned">:$sizePerWarp,
-    // ArrayRefParameter<"unsigned">:$sizePerCTA
+    ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
+    "CTALayoutAttr":$CTALayout
   );
+
+  let builders = [
+    AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$sizePerThread,
+                     "ArrayRef<unsigned>":$order,
+                     "unsigned":$numWarps,
+                     "unsigned":$numThreadsPerWarp,
+                     "CTALayoutAttr":$CTALayout), [{
+      unsigned rank = sizePerThread.size();
+      SmallVector<unsigned, 4> threadsPerWarp(rank);
+      SmallVector<unsigned, 4> warpsPerCTA(rank);
+      SmallVector<int64_t> shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
+
+      unsigned remainingLanes = numThreadsPerWarp;
+      unsigned remainingThreads = numWarps * numThreadsPerWarp;
+      unsigned remainingWarps = numWarps;
+      unsigned prevLanes = 1;
+      unsigned prevWarps = 1;
+
+      // starting from the contiguous dimension
+      for (unsigned d = 0; d < rank - 1; ++d) {
+        unsigned i = order[d];
+        unsigned threadsPerCTA = std::clamp<unsigned>(remainingThreads, 1, shapePerCTA[i] / sizePerThread[i]);
+        threadsPerWarp[i] = std::clamp<unsigned>(threadsPerCTA, 1, remainingLanes);
+        warpsPerCTA[i] = std::clamp<unsigned>(threadsPerCTA / threadsPerWarp[i], 1, remainingWarps);
+        remainingWarps /= warpsPerCTA[i];
+        remainingLanes /= threadsPerWarp[i];
+        remainingThreads /= threadsPerCTA;
+        prevLanes *= threadsPerWarp[i];
+        prevWarps *= warpsPerCTA[i];
+      }
+
+      // Expand the last dimension to fill the remaining lanes and warps
+      threadsPerWarp[order[rank - 1]] = numThreadsPerWarp / prevLanes;
+      warpsPerCTA[order[rank - 1]] = numWarps / prevWarps;
+
+      return $_get(context, sizePerThread, threadsPerWarp, warpsPerCTA, order, CTALayout);
+    }]>,
+
+    AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$sizePerThread,
+                     "ArrayRef<unsigned>":$order,
+                     "unsigned":$numWarps,
+                     "unsigned":$numThreadsPerWarp,
+                     "unsigned":$numCTAs), [{
+      unsigned rank = sizePerThread.size();
+      SmallVector<unsigned, 4> CTAsPerCGA(rank);
+      SmallVector<unsigned, 4> CTASplitNum(rank);
+      ArrayRef<unsigned> CTAOrder = order;
+
+      unsigned remainingCTAs = numCTAs;
+
+      // starting from the most strided dimension
+      for (int d = rank - 1; d >= 0; --d) {
+        unsigned i = order[d];
+        CTAsPerCGA[i] = std::clamp<unsigned>(remainingCTAs, 1, shape[i] / sizePerThread[i]);
+        CTASplitNum[i] = CTAsPerCGA[i];
+        remainingCTAs /= CTAsPerCGA[i];
+      }
+
+      CTAsPerCGA[rank - 1] *= remainingCTAs; // wrap at CTA level
+
+      CTALayoutAttr CTALayout = CTALayoutAttr::get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
+      return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CTALayout);
+    }]>
+  ];
+
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    SliceEncodingAttr squeeze(int axis);
+  }];
 
   let hasCustomAssemblyFormat = 1;
 }
@@ -423,13 +556,17 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     ins
     "unsigned":$versionMajor,
     "unsigned":$versionMinor,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
+    "CTALayoutAttr":$CTALayout,
+    ArrayRefParameter<"unsigned">:$instrShape
   );
 
   let builders = [
     // Specially for MMAV1(Volta)
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
+                     "CTALayoutAttr":$CTALayout,
+                     "ArrayRef<unsigned>":$instrShape,
                      "ArrayRef<int64_t>":$shapeC,
                      "bool":$isARow,
                      "bool":$isBRow,
@@ -442,7 +579,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                          (isBRow * (1<<1)) |\
                          (isAVec4 * (1<<2)) |\
                          (isBVec4 * (1<<3));
-
 
       // TODO: Share code with
       // DotOpMmaV1ConversionHelper::AParam/BParam, since same code to compute the
@@ -468,11 +604,13 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
           wpt[1] = std::clamp<int>(wpt[1] * 2, 1, shapeC[1] / spw[1]);
       } while (wpt_nm1 != wpt);
 
-      return $_get(context, versionMajor, versionMinor, wpt);
+      return $_get(context, versionMajor, versionMinor, wpt, CTALayout, instrShape);
     }]>,
 
     AttrBuilder<(ins "int":$versionMajor,
                      "int":$numWarps,
+                     "CTALayoutAttr":$CTALayout,
+                     "ArrayRef<unsigned>":$instrShape,
                      "ArrayRef<int64_t>":$shapeA,
                      "ArrayRef<int64_t>":$shapeB,
                      "ArrayRef<int64_t>":$shapeC,
@@ -482,15 +620,21 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       assert(versionMajor == 1 && "This builder is specially for versionMajor==1");
       bool isAVec4 = !isARow && (shapeA[isARow] <= 16);
       bool isBVec4 = isBRow && (shapeB[isBRow] <= 16);
-      return get(context, versionMajor, numWarps, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
+      return get(context, versionMajor, numWarps, CTALayout, instrShape, shapeC, isARow, isBRow, isAVec4, isBVec4, id);
     }]>
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     bool isVolta() const;
+    bool isTuring() const;
     bool isAmpere() const;
+    bool isHopper() const;
+
+    unsigned getElemsPerThreadOfOperand(int opIdx, ArrayRef<int64_t> shape) const;
+
     // Get [isARow, isBRow, isAVec4, isBVec4, id] from versionMinor
     std::tuple<bool, bool, bool, bool, int> decodeVoltaLayoutStates() const;
+
     // Number of bits in versionMinor to hold the ID of the MMA encoding instance.
     // Here 5 bits can hold 32 IDs in a single module.
     static constexpr int numBitsToHoldMmaV1ID{5};
@@ -574,7 +718,8 @@ The data will be distributed between threads as follows:
     ins
     "unsigned":$nonKDim,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "bool":$isTransposed
+    "bool":$isTransposed,
+    "CTALayoutAttr":$CTALayout
   );
 
   let hasCustomAssemblyFormat = 1;
@@ -669,7 +814,5 @@ section 9.7.13.4.1 for more details.
 #endif
   }];
 }
-
-
 
 #endif

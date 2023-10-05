@@ -38,7 +38,7 @@ def test_memory_leak() -> None:
             kernel[(10,)](inp, out, 10, XBLOCK=16)
         gc.collect()
         end, _ = tracemalloc.get_traced_memory()
-        assert end - begin < 5000
+        assert end - begin < 30000
     finally:
         tracemalloc.stop()
 

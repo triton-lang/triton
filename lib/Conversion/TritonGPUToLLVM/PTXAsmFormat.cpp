@@ -51,6 +51,14 @@ PTXBuilder::Operand *PTXBuilder::newOperand(StringRef constraint, bool init) {
   return opr;
 }
 
+PTXBuilder::Operand *PTXBuilder::newOperand(unsigned operandIndex) {
+  assert(operandIndex < oprCounter && "operand index out of range");
+  auto *opr = newOperand();
+  opr->idx = oprCounter++;
+  opr->constraint = std::to_string(operandIndex);
+  return opr;
+}
+
 PTXBuilder::Operand *PTXBuilder::newConstantOperand(const std::string &v) {
   argArchive.emplace_back(std::make_unique<Operand>());
   argArchive.back()->repr = [v](int idx) { return v; };

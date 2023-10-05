@@ -54,9 +54,12 @@ void load_{kernel_name}() {{
 /*
 {kernel_docstring}
 */
-CUresult {kernel_name}(CUstream stream, unsigned int gX, unsigned int gY, unsigned int gZ, {signature}) {{
+CUresult {kernel_name}(CUstream stream, {signature}) {{
     if ({kernel_name}_func == NULL)
        load_{kernel_name}();
+    unsigned int gX = {gridX};
+    unsigned int gY = {gridY};
+    unsigned int gZ = {gridZ};
     void *args[{num_args}] = {{ {arg_pointers} }};
     // TODO: shared memory
     if(gX * gY * gZ > 0)

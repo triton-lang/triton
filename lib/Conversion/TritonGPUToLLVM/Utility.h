@@ -16,6 +16,7 @@
 #define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
 #define sext(...) rewriter.create<LLVM::SExtOp>(loc, __VA_ARGS__)
 #define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
+#define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
 #define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
@@ -33,6 +34,7 @@
 #define umin(...) rewriter.create<LLVM::UMinOp>(loc, __VA_ARGS__)
 #define fmin(...) rewriter.create<LLVM::MinNumOp>(loc, __VA_ARGS__)
 #define shl(...) rewriter.create<LLVM::ShlOp>(loc, __VA_ARGS__)
+#define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
 #define and_(...) rewriter.create<LLVM::AndOp>(loc, __VA_ARGS__)
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
@@ -51,6 +53,8 @@
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
+#define load_dsmem(...) LLVM::createLoadDSmem(loc, rewriter, __VA_ARGS__)
+#define store_dsmem(...) LLVM::createStoreDSmem(loc, rewriter, __VA_ARGS__)
 #define fcmp_ogt(lhs, rhs)                                                     \
   rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
                                 LLVM::FCmpPredicate::ogt, lhs, rhs)
@@ -83,6 +87,15 @@
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
+#define barSync(rewriter, op, bar, numThreads)                                 \
+  do {                                                                         \
+    ::mlir::triton::PTXBuilder ptxBuilder;                                     \
+    auto &barSyncOp = *ptxBuilder.create<>("bar.sync");                        \
+    barSyncOp(ptxBuilder.newConstantOperand(bar),                              \
+              ptxBuilder.newConstantOperand(numThreads));                      \
+    auto voidTy = void_ty(op->getContext());                                   \
+    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
+  } while (0)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::NullOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
@@ -92,6 +105,8 @@
 #define i64_ty rewriter.getIntegerType(64)
 #define i32_ty rewriter.getIntegerType(32)
 #define i16_ty rewriter.getIntegerType(16)
+#define i32_ty rewriter.getIntegerType(32)
+#define i64_ty rewriter.getIntegerType(64)
 #define ui32_ty rewriter.getIntegerType(32, false)
 #define f16_ty rewriter.getF16Type()
 #define bf16_ty rewriter.getBF16Type()
@@ -182,13 +197,13 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 namespace LLVM {
 using namespace mlir::triton;
 
-Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v);
+Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
 
 /// Create a 32-bit float constant.
-Value createConstantF32(Location loc, PatternRewriter &rewriter, float v);
+Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
 
 /// Create a 64-bit float constant.
-Value createConstantF64(Location loc, PatternRewriter &rewriter, float v);
+Value createConstantF64(Location loc, OpBuilder &rewriter, float v);
 
 /// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
@@ -197,6 +212,28 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
 /// Create an integer constant of \param width bits.
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value);
+
+/// Usage of macro load_dsmem
+/// (1) load_dsmem(addr, ctaId)
+/// (2) load_dsmem(addr, ctaId, vec)
+Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId);
+SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
+                                   Value addr, Value ctaId, unsigned vec);
+
+/// Usage of macro store_dsmem
+/// (1) store_dsmem(addr, ctaId, value, pred)
+/// (2) store_dsmem(addr, ctaId, value)
+/// (3) store_dsmem(addr, ctaId, values, pred)
+/// (4) store_dsmem(addr, ctaId, values)
+void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId, Value value, Value pred);
+void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId, Value value);
+void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId, ArrayRef<Value> values, Value pred);
+void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId, ArrayRef<Value> values);
 
 /// Helper function to get strides from a given shape and its order
 SmallVector<Value>
@@ -296,6 +333,7 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i, Value laneId);
 
+Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 

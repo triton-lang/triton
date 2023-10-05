@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
@@ -47,6 +48,12 @@ public:
     // Sink conversions into loops when they will increase
     // register pressure
     DenseMap<Operation *, Operation *> opToMove;
+    auto moveAfter = [](Operation *lhs, Operation *rhs) {
+      auto lhsId = getWSRoleId(lhs);
+      auto rhsId = getWSRoleId(rhs);
+      if (lhsId == rhsId)
+        lhs->moveAfter(rhs);
+    };
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       if (!willIncreaseRegisterPressure(op))
         return;
@@ -81,7 +88,7 @@ public:
       Operation *argOp = op.getOperand().getDefiningOp();
       if (!argOp)
         return;
-      op->moveAfter(argOp);
+      moveAfter(op, argOp);
     });
     // Move transpositions just after their definition
     opToMove.clear();
@@ -89,7 +96,7 @@ public:
       Operation *argOp = op.getOperand().getDefiningOp();
       if (!argOp)
         return;
-      op->moveAfter(argOp);
+      moveAfter(op, argOp);
     });
     // Move `dot` operand so that conversions to opIdx=1 happens after
     // conversions to opIdx=0
@@ -122,7 +129,7 @@ public:
       // after the conversion to OpIdx=0.
       if (!dom.dominates(op.getOperation(), AOp.getOperation()))
         return;
-      op->moveAfter(AOp);
+      moveAfter(op, AOp);
     });
     return;
   }

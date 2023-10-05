@@ -70,7 +70,8 @@ def test_nested1_change():
 def reset_tmp_dir():
     os.environ["TRITON_CACHE_DIR"] = tmpdir
     if os.path.exists(tmpdir):
-        shutil.rmtree(tmpdir)
+        # https://stackoverflow.com/questions/303200/how-do-i-remove-delete-a-folder-that-is-not-empty
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def test_reuse():
@@ -98,7 +99,7 @@ def test_specialize(mode):
     reset_tmp_dir()
     x = torch.empty(1, dtype=torch.int32, device='cuda')
     function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 3, 'disable': 1}[mode]
+    target = {'enable': 4, 'disable': 1}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1,)](x, i, BLOCK=512)
     assert counter == target
