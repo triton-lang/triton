@@ -22,7 +22,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.language.atomic_cas" href="triton.language.atomic_cas.html" />
+    <link rel="next" title="triton.language.where" href="triton.language.where.html" />
     <link rel="prev" title="triton.language.load" href="triton.language.load.html" /> 
 </head>
 
@@ -64,8 +64,6 @@
 <li class="toctree-l4"><a class="reference internal" href="#triton.language.store"><code class="docutils literal notranslate"><span class="pre">store()</span></code></a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.atomic_cas.html">triton.language.atomic_cas</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.atomic_xchg.html">triton.language.atomic_xchg</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
@@ -124,15 +122,24 @@
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">store</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boundary_check</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eviction_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.store" title="Permalink to this definition">¶</a></dt>
 <dd><dl class="simple">
 <dt>Store a tensor of data into memory locations defined by <cite>pointer</cite>:</dt><dd><ol class="arabic simple">
-<li><p><cite>pointer</cite> could be a single element pointer, then a scalar will be stored
-- <cite>mask</cite> must be scalar too
-- <cite>boundary_check</cite> and <cite>padding_option</cite> must be empty</p></li>
-<li><p><cite>pointer</cite> could be element-wise tensor of pointers, in which case:
-- <cite>mask</cite> is implicitly broadcast to <cite>pointer.shape</cite>
-- <cite>boundary_check</cite> must be empty</p></li>
-<li><p>or <cite>pointer</cite> could be a block pointer defined by <cite>make_block_ptr</cite>, in which case:
-- <cite>mask</cite> must be None
-- <cite>boundary_check</cite> can be specified to control the behavior of out-of-bound access</p></li>
+<li><p><cite>pointer</cite> could be a single element pointer, then a scalar will be stored</p>
+<ul class="simple">
+<li><p><cite>mask</cite> must be scalar too</p></li>
+<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> must be empty</p></li>
+</ul>
+</li>
+<li><p><cite>pointer</cite> could be element-wise tensor of pointers, in which case:</p>
+<ul class="simple">
+<li><p><cite>mask</cite> is implicitly broadcast to <cite>pointer.shape</cite></p></li>
+<li><p><cite>boundary_check</cite> must be empty</p></li>
+</ul>
+</li>
+<li><p>or <cite>pointer</cite> could be a block pointer defined by <cite>make_block_ptr</cite>, in which case:</p>
+<ul class="simple">
+<li><p><cite>mask</cite> must be None</p></li>
+<li><p><cite>boundary_check</cite> can be specified to control the behavior of out-of-bound access</p></li>
+</ul>
+</li>
 </ol>
 </dd>
 </dl>
@@ -158,7 +165,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="triton.language.load.html" class="btn btn-neutral float-left" title="triton.language.load" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.language.atomic_cas.html" class="btn btn-neutral float-right" title="triton.language.atomic_cas" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.language.where.html" class="btn btn-neutral float-right" title="triton.language.where" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

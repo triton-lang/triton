@@ -64,8 +64,6 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.store.html">triton.language.store</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.atomic_cas.html">triton.language.atomic_cas</a></li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.atomic_xchg.html">triton.language.atomic_xchg</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#indexing-ops">Indexing Ops</a></li>
@@ -124,17 +122,26 @@
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boundary_check</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding_option</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_modifier</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eviction_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">volatile</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.load" title="Permalink to this definition">¶</a></dt>
 <dd><dl class="simple">
 <dt>Return a tensor of data whose values are loaded from memory at location defined by <cite>pointer</cite>:</dt><dd><ol class="arabic simple">
-<li><p><cite>pointer</cite> could be a single element pointer, then a scalar will be loaded
-- <cite>mask</cite> and <cite>other</cite> must be scalar too
-- <cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite>
-- <cite>boundary_check</cite> and <cite>padding_option</cite> must be empty</p></li>
-<li><p><cite>pointer</cite> could be element-wise tensor of pointers, in which case:
-- <cite>mask</cite> and <cite>other</cite> are implicitly broadcast to <cite>pointer.shape</cite>
-- <cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite>
-- <cite>boundary_check</cite> and <cite>padding_option</cite> must be empty</p></li>
-<li><p><cite>pointer</cite> could be a block pointer defined by <cite>make_block_ptr</cite>, in which case:
-- <cite>mask</cite> and <cite>other</cite> must be None
-- <cite>boundary_check</cite> and <cite>padding_option</cite> can be specified to control the behavior of out-of-bound access</p></li>
+<li><p><cite>pointer</cite> could be a single element pointer, then a scalar will be loaded</p>
+<ul class="simple">
+<li><p><cite>mask</cite> and <cite>other</cite> must be scalar too</p></li>
+<li><p><cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite></p></li>
+<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> must be empty</p></li>
+</ul>
+</li>
+<li><p><cite>pointer</cite> could be element-wise tensor of pointers, in which case:</p>
+<ul class="simple">
+<li><p><cite>mask</cite> and <cite>other</cite> are implicitly broadcast to <cite>pointer.shape</cite></p></li>
+<li><p><cite>other</cite> is implicitly typecast to <cite>pointer.dtype.element_ty</cite></p></li>
+<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> must be empty</p></li>
+</ul>
+</li>
+<li><p><cite>pointer</cite> could be a block pointer defined by <cite>make_block_ptr</cite>, in which case:</p>
+<ul class="simple">
+<li><p><cite>mask</cite> and <cite>other</cite> must be None</p></li>
+<li><p><cite>boundary_check</cite> and <cite>padding_option</cite> can be specified to control the behavior of out-of-bound access</p></li>
+</ul>
+</li>
 </ol>
 </dd>
 </dl>
