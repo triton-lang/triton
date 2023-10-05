@@ -18,11 +18,8 @@ using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
-<<<<<<< HEAD
 using ::mlir::triton::gpu::MfmaEncodingAttr;
-=======
 using ::mlir::triton::gpu::getUniqueContigPerThread;
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -79,7 +76,6 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
     }
   }
 
-<<<<<<< HEAD
 #ifdef USE_ROCM
   if (srcLayout.isa<MfmaEncodingAttr>() &&
       srcLayout.dyn_cast<MfmaEncodingAttr>().getIsTransposed() &&
@@ -88,18 +84,7 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
       return {};
 #endif
 
-  assert(srcLayout && dstLayout &&
-         "Unexpected layout in getScratchConfigForCvtLayout()");
-  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  unsigned srcContigPerThread = getContigPerThread(srcLayout)[inOrd[0]];
-  unsigned dstContigPerThread = getContigPerThread(dstLayout)[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  inVec = outOrd[0] == 0 ? 1 : inOrd[0] == 0 ? 1 : srcContigPerThread;
-  outVec = outOrd[0] == 0 ? 1 : dstContigPerThread;
-=======
   assert(srcLayout && dstLayout && "Unexpected layout in getRepShape()");
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
   auto srcShapePerCTA = getShapePerCTA(srcTy);
   auto dstShapePerCTA = getShapePerCTA(dstTy);

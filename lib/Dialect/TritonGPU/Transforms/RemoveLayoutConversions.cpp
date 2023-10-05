@@ -318,7 +318,6 @@ void LayoutPropagation::initAnchorLayout() {
           if (tensorType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() &&
               !hasConvertToMMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
-<<<<<<< HEAD
 #ifdef USE_ROCM
           // Workaround to not propagate MFMA layout in case there are
           // no chained dots MFMA layout is expensive to convert, so we want
@@ -331,10 +330,7 @@ void LayoutPropagation::initAnchorLayout() {
               !hasConvertToMFMATransisitiveUse(op, tensorType.getEncoding()))
             continue;
 #endif
-          layouts.insert({result, tensorType.getEncoding()});
-=======
           layouts.insert({result, LayoutInfo(tensorType.getEncoding())});
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
         }
       }
     }

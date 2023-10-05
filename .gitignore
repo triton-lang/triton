@@ -30,11 +30,6 @@ cuobjdump
 nvdisasm
 ptxas
 
-<<<<<<< HEAD
-# HIP
-log*
-python/triton/third_party/cuda/bin/ptxas
-=======
 # Docs
 docs/_build/
 docs/python-api/generated/
@@ -49,4 +44,3 @@ docs/getting-started/tutorials
 /compile_commands.json
 .vscode
 .vs
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33

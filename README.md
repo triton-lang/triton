@@ -60,11 +60,6 @@ lit -v test
 
 ```
 git clone https://github.com/openai/triton.git;
-<<<<<<< HEAD
-cd triton/python;
-pip install ninja cmake; # build-time dependencies
-pip install -e .
-=======
 cd triton;
 
 pip install ninja cmake wheel; # build-time dependencies
@@ -82,7 +77,6 @@ source .venv/bin/activate;
 
 pip install ninja cmake wheel; # build-time dependencies
 pip install -e python
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 ```
 
 # Building with a custom LLVM
@@ -105,27 +99,6 @@ arbitrary LLVM version.
    modifications to LLVM.
 
 3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
-<<<<<<< HEAD
-
-       $ cd $HOME/llvm-project  # your clone of LLVM.
-       $ mkdir build
-       $ cd build
-       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON  ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm"
-       $ ninja
-
-4. Grab a snack, this will take a while.
-
-5. Build Triton as above, but set the following environment variables.
-
-       # Modify as appropriate to point to your LLVM build.
-       $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
-
-       $ cd <triton install>/python
-       $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
-         LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
-         LLVM_SYSPATH=$LLVM_BUILD_DIR \
-         pip install -e .
-=======
 
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
@@ -180,7 +153,6 @@ $ ninja test
 # Run lit tests.
 $ lit test
 ```
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
 # Changelog
 

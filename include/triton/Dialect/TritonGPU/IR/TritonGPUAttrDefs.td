@@ -113,7 +113,17 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "ArrayRef<unsigned>":$order,
                      "CTALayoutAttr":$CTALayout,
                      "unsigned":$typeWidthInBit), [{
-<<<<<<< HEAD
+        bool needTrans = false; // default value
+        return get(context, dotOpEnc, shape, order, CTALayout, typeWidthInBit, needTrans);
+    }]>,
+
+
+    AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
+                     "ArrayRef<int64_t>":$shape,
+                     "ArrayRef<unsigned>":$order,
+                     "CTALayoutAttr":$CTALayout,
+                     "unsigned":$typeWidthInBit,
+                     "bool":$needTrans), [{
 
 #ifdef USE_ROCM
         // ---- begin GFX908/GFX90A ----
@@ -156,18 +166,6 @@ compared to 1*64 when the hasLeadingOffset is false.
           }
         }
 #endif
-=======
-        bool needTrans = false; // default value
-        return get(context, dotOpEnc, shape, order, CTALayout, typeWidthInBit, needTrans);
-    }]>,
-
-    AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
-                     "ArrayRef<int64_t>":$shape,
-                     "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout,
-                     "unsigned":$typeWidthInBit,
-                     "bool":$needTrans), [{
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
         auto mmaEnc = dotOpEnc.getParent().dyn_cast<MmaEncodingAttr>();
 
         if(!mmaEnc)

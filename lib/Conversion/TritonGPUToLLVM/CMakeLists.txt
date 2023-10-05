@@ -1,32 +1,13 @@
-<<<<<<< HEAD
 add_library(rocm_libraries SHARED IMPORTED )
 set_target_properties(rocm_libraries PROPERTIES IMPORTED_LOCATION ${ROCM_LIBRARIES})
-=======
 # Separate out PTX/GCN builders to avoid cyclic dependencies as TritonAnalysis
 # depends on it.
 set(LLVM_OPTIONAL_SOURCES
     GCNAsmFormat.cpp
     PTXAsmFormat.cpp
   )
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
 add_mlir_conversion_library(TritonGPUToLLVM
-    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
-    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
-    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
-    ConvertLayoutOpToLLVM.cpp
-    DotOpToLLVM/FMA.cpp
-    DotOpToLLVM/MMAv1.cpp
-    DotOpToLLVM/MMAv2.cpp
-    DotOpToLLVM/WGMMA.cpp
-    DotOpToLLVM.cpp
-    ElementwiseOpToLLVM.cpp
-    LoadStoreOpToLLVM.cpp
-    BarrierOpToLLVM.cpp
-    TritonGPUToLLVM.cpp
-<<<<<<< HEAD
-    GCNAsmFormat.cpp
-    PTXAsmFormat.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
@@ -35,13 +16,15 @@ add_mlir_conversion_library(TritonGPUToLLVM
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/MMAv1.cpp
     DotOpToLLVM/MMAv2.cpp
+    DotOpToLLVM/WGMMA.cpp
     DotOpToLLVM/MFMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
+    BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
-=======
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+    GCNAsmFormat.cpp
+    PTXAsmFormat.cpp
     TritonGPUToLLVMPass.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp

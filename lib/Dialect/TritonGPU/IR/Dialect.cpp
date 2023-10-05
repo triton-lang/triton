@@ -1768,34 +1768,8 @@ struct TritonGPUInferLayoutInterface
 // Canonicalizer
 //===----------------------------------------------------------------------===//
 
-<<<<<<< HEAD
-LogicalResult ConvertLayoutOp::canonicalize(ConvertLayoutOp op,
-                                            PatternRewriter &rewriter) {
-  // we don't handle conversions to DotOperandEncodingAttr
-  // this is a heuristics to accommodate fused attention
-  auto srcType = op.getOperand().getType().cast<RankedTensorType>();
-  auto dstType = op.getType().cast<RankedTensorType>();
-  if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
-      (srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() ||
-       srcType.getEncoding().isa<triton::gpu::MfmaEncodingAttr>()))
-    return mlir::failure();
-  // for hopper MMAv3
-  if (!op.use_empty()) {
-    bool hasDotUser = false;
-    for (Operation *dot : op.getResult().getUsers())
-      if (isa<triton::DotOp>(dot))
-        hasDotUser = true;
-
-    if (hasDotUser) {
-      if (dstType.getEncoding().isa<triton::gpu::SharedEncodingAttr>() &&
-          srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
-        return mlir::failure();
-    }
-  }
-=======
 struct CanonicalizeConvertFromView
     : public mlir::OpRewritePattern<triton::ViewOp> {
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
   CanonicalizeConvertFromView(MLIRContext *context)
       : OpRewritePattern<triton::ViewOp>(context, 1) {}
@@ -1829,7 +1803,8 @@ struct CanonicalizeConvertFromConvert
     auto srcType = op.getOperand().getType().cast<RankedTensorType>();
     auto dstType = op.getType().cast<RankedTensorType>();
     if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
-        srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+        (srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() ||
+        srcType.getEncoding().isa<triton::gpu::MfmaEncodingAttr>()))
       return mlir::failure();
     // for hopper MMAv3
     if (!op.use_empty()) {

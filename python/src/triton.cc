@@ -2096,9 +2096,7 @@ void init_triton_translation(py::module &m) {
            const std::vector<std::string> &paths) {
           ::mlir::triton::addExternalLibs(op, names, paths);
         });
-}
 
-<<<<<<< HEAD
   m.def(
       "translate_llvmir_to_hsaco",
       [](const std::string llvmIR, std::string gfx_arch, std::string gfx_triple,
@@ -2116,7 +2114,8 @@ void init_triton_translation(py::module &m) {
         return hsacoCode;
       },
       ret::take_ownership);
-=======
+}
+
 void init_triton_interpreter(py::module &&m) {
   using ret = py::return_value_policy;
 
@@ -2155,7 +2154,6 @@ void init_triton_interpreter(py::module &&m) {
       }
     }
   });
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 }
 
 void init_triton(py::module &m) {

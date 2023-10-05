@@ -133,109 +133,10 @@ private:
     return srcValues;
   }
 
-<<<<<<< HEAD
-  // Calculates the write index in the shared memory where we would be writing
-  // the within-thread accumulations before we start doing across-threads
-  // accumulations. `index` is the index of the within-thread accumulations in
-  // the full tensor, whereas `writeIdx` is the mapped-to index in the shared
-  // memory
-  void getWriteIndexBasic(ConversionPatternRewriter &rewriter, Location loc,
-                          Attribute layout, SmallVector<Value> &index,
-                          SmallVector<Value> &writeIdx,
-                          std::map<int, Value> &ints, unsigned originalAxis,
-                          unsigned axis) const {
-    if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      // Recover the axis in the parent layout
-      auto parentAxis = axis < sliceLayout.getDim() ? axis : axis + 1;
-      auto parentLayout = sliceLayout.getParent();
-      getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
-                         originalAxis, parentAxis);
-      return;
-    }
-
-    writeIdx = index;
-    auto sizePerThread = triton::gpu::getSizePerThread(layout);
-    Value axisSizePerThread = ints[sizePerThread[axis]];
-    Value _8 = ints[8];
-    Value _16 = ints[16];
-#ifdef USE_ROCM
-    Value _2 = ints[2];
-    Value _4 = ints[4];
-    Value _32 = ints[32];
-#endif
-
-    if (layout.isa<BlockedEncodingAttr>()) {
-      // A single thread owns axisSizePerThread contiguous values
-      // on the reduction axis. After within thread reduction,
-      // we would have a single accumulation every `axisSizePerThread`
-      // contiguous values in the original tensor, so we would need
-      // to map every `axisSizePerThread` to 1 value in smem as:
-      // writeIdx[originalAxis] = index[originalAxis] / axisSizePerThread
-      writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
-    } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
-      if (!mmaLayout.isAmpere() && !mmaLayout.isHopper()) {
-        llvm::report_fatal_error("Unsupported layout");
-      }
-      if (originalAxis == 0) {
-        // Because warpTileSize = [16, 8] and threadsPerWarp = [8, 4], each 8
-        // rows in smem would correspond to a warp. The mapping
-        // is: (warp_index) x 8 + (row index within warp)
-        writeIdx[originalAxis] = add(mul(udiv(index[originalAxis], _16), _8),
-                                     urem(index[originalAxis], _8));
-      } else {
-        // Same as BlockedEncodingAttr case
-        writeIdx[originalAxis] = udiv(index[originalAxis], axisSizePerThread);
-      }
-    } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
-      // TODO: Support MFMA transposed layout.
-      if (axis == 0) {
-        // Because warpTileSize = [32, 32] and threadsPerWarp = [2, 32], each 2
-        // rows in smem would correspond to a warp. The mapping
-        // is: (warp_index) x 2 + (row index within warp)
-        writeIdx[axis] = add(mul(udiv(index[axis], _32), _2),
-                             udiv(urem(index[axis], _32), _4));
-      } else {
-        // Same as BlockedEncodingAttr case
-        writeIdx[axis] = udiv(index[axis], axisSizePerThread);
-      }
-    } else {
-      llvm::report_fatal_error("Unsupported layout");
-    }
-  }
-
-  // Use shared memory for reduction within warps and across warps
-  LogicalResult
-  matchAndRewriteBasic(triton::ReduceOp op, OpAdaptor adaptor,
-                       ConversionPatternRewriter &rewriter) const {
-    ReduceOpHelper helper(op);
-    Location loc = op.getLoc();
-    unsigned axis = op.getAxis();
-
-    auto srcTys = op.getInputTypes();
-    auto srcLayout = helper.getSrcLayout();
-    if (!helper.isSupportedLayout()) {
-      assert(false && "Unexpected srcLayout in ReduceOpConversion");
-    }
-    // The order of the axes for the the threads within the warp
-    auto srcOrd = triton::gpu::getOrder(srcLayout);
-    auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
-    auto srcShape = helper.getSrcShape();
-
-    SmallVector<Type> elemPtrTys(srcTys.size());
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto ty = srcTys[i].getElementType();
-      auto llvmElemTy = getTypeConverter()->convertType(ty);
-      elemPtrTys[i] = LLVM::LLVMPointerType::get(llvmElemTy, 3);
-    }
-    auto llvmIndexTy = getTypeConverter()->getIndexType();
-
-    auto smemShape = helper.getScratchConfigBasic();
-=======
   SmallVector<Value> getSmemBases(ReduceOpHelper &helper, triton::ReduceOp op,
                                   SmallVector<unsigned> smemShape,
                                   ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     unsigned elems = product<unsigned>(smemShape);
     // indices will store the index of the op operands in descending order
     // of their bitwidths
@@ -251,93 +152,10 @@ private:
         bitcast(getSharedMemoryBase(loc, rewriter, op.getOperation()),
                 getElementPtrType(op, indices[0]));
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-<<<<<<< HEAD
-      smemBases[i] =
-          bitcast(gep(elemPtrTys[i - 1], smemBases[i - 1], i32_val(elems)),
-                  elemPtrTys[i]);
-    }
-
-    auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
-    std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
-    std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
-    reduceWithinThreads(helper, srcValues, accs, indices, rewriter);
-
-    // cached int32 constants
-    std::map<int, Value> ints;
-    ints[0] = i32_val(0);
-    for (int N = smemShape[axis] / 2; N > 0; N >>= 1)
-      ints[N] = i32_val(N);
-    ints[sizePerThread[axis]] = i32_val(sizePerThread[axis]);
-    ints[8] = i32_val(8);
-    ints[16] = i32_val(16);
-#ifdef USE_ROCM
-    ints[2] = i32_val(2);
-    ints[4] = i32_val(4);
-    ints[32] = i32_val(32);
-#endif
-    // reduce across threads
-    for (auto it : accs) {
-      const SmallVector<unsigned> &key = it.first;
-      auto &acc = it.second;
-      // get the writeIdx at which to write in smem
-      SmallVector<Value> writeIdx;
-      getWriteIndexBasic(rewriter, loc, srcLayout, indices[key], writeIdx, ints,
-                         axis, axis);
-
-      // calculate the offset in smem for that writeIdx
-      Value writeOffset = linearize(rewriter, loc, writeIdx, smemShape, srcOrd);
-      SmallVector<Value> writePtrs(op.getNumOperands());
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        // Store the within-thread accumulated value into shared memory
-        writePtrs[i] = gep(elemPtrTys[i], smemBases[i], writeOffset);
-        store(acc[i], writePtrs[i]);
-      }
-
-      SmallVector<Value> readIdx(writeIdx.size(), ints[0]);
-      // Perform parallel reduction with sequential addressing
-      // E.g. We reduce `smemShape[axis]` elements into `smemShape[axis]/2`
-      // elements using `smemShape[axis]/2` threads where each thread
-      // would accumalte values that are `smemShape[axis]/2` apart
-      // to avoid bank conflicts. Then we repeat with `smemShape[axis]/4`
-      // threads, .. etc.
-      for (int N = smemShape[axis] / 2; N > 0; N >>= 1) {
-        // The readIdx will be N elements away on the reduction axis
-        readIdx[axis] = ints[N];
-        // If the writeIdx is greater or equal to N, do nothing
-        Value readMask = icmp_slt(writeIdx[axis], ints[N]);
-        // Calculate the readOffset, if readMask is False, readOffset=0
-        // meaning we reduce the value at writeIdx with itself
-        Value readOffset = select(
-            readMask, linearize(rewriter, loc, readIdx, smemShape, srcOrd),
-            ints[0]);
-        SmallVector<Value> readPtrs(op.getNumOperands());
-        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-          // The readPtr is readOffset away from writePtr
-          readPtrs[i] = gep(elemPtrTys[i], writePtrs[i], readOffset);
-        }
-
-        sync(rewriter, loc, op);
-
-        // Combine accumulator value from another thread
-        SmallVector<Value> cur(op.getNumOperands());
-        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-          cur[i] = load(readPtrs[i]);
-        }
-        accumulate(rewriter, op.getCombineOp(), acc, cur, false);
-
-        sync(rewriter, loc, op);
-
-        // Publish our new accumulator value to shared memory
-        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-          store(acc[i], writePtrs[i]);
-        }
-      }
-=======
       indexToBase[indices[i]] =
           bitcast(gep(getElementPtrType(op, indices[i - 1]),
                       indexToBase[indices[i - 1]], i32_val(elems)),
                   getElementPtrType(op, indices[i]));
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     }
     // smemBases[k] is the base pointer for the k-th operand
     SmallVector<Value> smemBases(op.getNumOperands());
@@ -485,11 +303,7 @@ private:
       }
 #endif
       for (unsigned i = 0; i < acc.size(); ++i) {
-<<<<<<< HEAD
-        shfl[i] = shflSync(loc, rewriter, acc[i], shuffleIdx);
-=======
-        shfl[i] = shflSync(loc, rewriter, acc[i], N * interleave);
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+	shfl[i] = shflSync(loc, rewriter, acc[i], shuffleIdx * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }
@@ -597,27 +411,6 @@ private:
     auto order = getOrder(srcLayout);
     SmallVector<Value> multiDimLaneId =
         delinearize(rewriter, loc, laneId, threadsPerWarp, order);
-<<<<<<< HEAD
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-
-#ifdef USE_ROCM
-    auto srcTys = op.getInputTypes();
-    auto inputTy = srcTys[0].cast<RankedTensorType>();
-    auto inMfma =
-        inputTy.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
-    // Original logic is buggy for warpsPerCTA=[2, 2], but works fine for
-    // warpsPerCTA=[4, 1] (that is used in flash attention, thus tested).
-    // TODO: Check whether this is the case for MMA layout as well, if yes, this
-    // should be fixed in the upstream repo.
-    if (inMfma) {
-      multiDimLaneId = delinearize(rewriter, loc, laneId, threadsPerWarp);
-      multiDimWarpId = delinearize(rewriter, loc, warpId, warpsPerCTA);
-    }
-#endif
-
-=======
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     Value laneIdAxis = multiDimLaneId[axis];
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);

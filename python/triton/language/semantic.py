@@ -1354,8 +1354,7 @@ def dot(lhs: tl.tensor,
         max_num_imprecise_acc: int,
         out_dtype: tl.dtype,
         builder: ir.builder) -> tl.tensor:
-<<<<<<< HEAD
-    def assert_dtypes_valid(lhs_dtype, rhs_dtype, arch):
+    def assert_dtypes_valid(lhs_dtype, rhs_dtype, target):
         if is_hip():
             assert lhs.dtype == rhs.dtype or (lhs.type.scalar.is_fp8() and rhs.type.scalar.is_fp16()) or \
                 (lhs.type.scalar.is_fp16() and rhs.type.scalar.is_fp8()) or (lhs.type.scalar.is_fp8() and rhs.type.scalar.is_fp8()), \
@@ -1364,35 +1363,12 @@ def dot(lhs: tl.tensor,
             return
 
         # Checks for non-cuda archs
-        if _is_cuda(builder.arch):
+        if target.capability < 90:
             # Checks for cuda arch
             if arch < 90:
                 assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(), "Dot op does not support fp8e4nv on CUDA arch < 90"
-=======
-    def assert_dtypes_valid(lhs_dtype, rhs_dtype, target):
-        # Checks for non-cuda archs
-        if not _is_cuda(target):
-            assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
-            return
-        # Checks for cuda arch
-        if target.capability < 90:
-            assert not lhs_dtype.is_fp8e4nv() and not rhs_dtype.is_fp8e4nv(), "Dot op does not support fp8e4nv on CUDA arch < 90"
-            if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
-                return
-            assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
-        else:
-            assert not lhs_dtype.is_fp8e4b15() and not rhs_dtype.is_fp8e4b15(), "Dot op does not support fp8e4b15 on CUDA arch >= 90"
-            assert not lhs_dtype.is_fp8e4b15x4() and not rhs_dtype.is_fp8e4b15x4(), "Dot op does not support fp8e4b15x4 on CUDA arch >= 90"
-            if lhs_dtype.is_int() or rhs_dtype.is_int():
-                assert lhs_dtype == rhs_dtype, f"Both operands must be same type. First operand ({lhs_dtype}) and second operand ({rhs_dtype})"
-                assert lhs_dtype.is_int8() or lhs_dtype.is_uint8(), f"Both operands must be either int8 or uint8. Operand type ({lhs_dtype})"
-            elif lhs_dtype.is_fp8() or rhs_dtype.is_fp8():
-                assert lhs_dtype.is_fp8e4nv() or lhs_dtype.is_fp8e5(), f"Only supports fp8e4nv or fp8e5. First operand ({lhs_dtype})"
-                assert rhs_dtype.is_fp8e4nv() or rhs_dtype.is_fp8e5(), f"Only supports fp8e4nv or fp8e5. Second operand ({rhs_dtype})"
-            else:
-                assert lhs_dtype.is_fp16() or lhs_dtype.is_bf16() or lhs_dtype.is_fp32() or lhs_dtype.is_int1(), f"Unsupported dtype {lhs_dtype}"
-                assert rhs_dtype.is_fp16() or rhs_dtype.is_bf16() or rhs_dtype.is_fp32() or rhs_dtype.is_int1(), f"Unsupported dtype {rhs_dtype}"
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+                if lhs_dtype.is_fp8() and rhs_dtype.is_fp8():
+                  return
                 assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
             else:
                 assert not lhs_dtype.is_fp8e4b15() and not rhs_dtype.is_fp8e4b15(), "Dot op does not support fp8e4b15 on CUDA arch >= 90"
@@ -1412,12 +1388,8 @@ def dot(lhs: tl.tensor,
         assert lhs_dtype == rhs_dtype, f"First input ({lhs_dtype}) and second input ({rhs_dtype}) must have the same dtype!"
         return
 
-<<<<<<< HEAD
     assert lhs.type.is_block() and rhs.type.is_block()
-    assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.arch)
-=======
     assert_dtypes_valid(lhs.dtype, rhs.dtype, builder.target)
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
     assert len(lhs.shape) == 2, f"First input shape ({lhs.shape}) is not two dimensional!"
     assert len(rhs.shape) == 2, f"Second input shape ({rhs.shape}) is not two dimensional!"
@@ -1480,11 +1452,8 @@ def dot(lhs: tl.tensor,
         ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32),
                         ret_ty)
         return cast(ret, ret_scalar_ty, builder)
-<<<<<<< HEAD
 
     _0 = builder.create_splat(_0, [M, N])
-=======
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
     if acc is None:
         acc_handle = builder.create_splat(_0, [M, N])

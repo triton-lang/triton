@@ -912,6 +912,7 @@ const std::string Fp16_to_Fp8E4M3Nv = "{ \n"
                                       "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
                                       "}";
 
+#ifndef USE_ROCM
 // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
 const std::string Fp8E4M3Nv_to_Bf16 =
     "{                                       \n"
@@ -937,7 +938,6 @@ const std::string Bf16_to_Fp8E4M3Nv =
     "}";
 
 /* ----- Packed integer to BF16 ------ */
-#ifndef USE_ROCM
 const std::string S8_to_Bf16 =
     "{                                           \n"
     ".reg .s8 s<4>;                              \n"
@@ -1398,12 +1398,15 @@ struct FpToFpOpConversion
         {{F16TyID, F8E5M2FNUZTyID}, Fp16_to_Fp8E5M2FNUZ},
         // F8 -> BF16
         {{F8E5M2TyID, BF16TyID}, Fp8E5M2_to_Bf16},
+#ifndef USE_ROCM
         {{F8E4M3TyID, BF16TyID}, Fp8E4M3Nv_to_Bf16},
+#endif
         // BF16 -> F8
         {{BF16TyID, F8E5M2TyID}, Bf16_to_Fp8E5M2},
+#ifndef USE_ROCM
         {{BF16TyID, F8E4M3TyID}, Bf16_to_Fp8E4M3Nv},
+#endif
     };
-
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
     if (srcTy.isFloat8E4M3FNUZ()) {

@@ -337,16 +337,11 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-<<<<<<< HEAD
                  int i, Value laneId);
-
-=======
-                 int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i);
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);

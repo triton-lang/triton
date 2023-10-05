@@ -1059,7 +1059,6 @@ private:
     return failure();
   }
 
-<<<<<<< HEAD
 #ifdef USE_ROCM
   // shared -> dot_operand if the result layout is mma
   Value lowerSharedToDotOperandMFMA(
@@ -1084,7 +1083,6 @@ private:
     return res;
   }
 #endif
-=======
   // mma -> mma
   LogicalResult lowerMmaToMma(triton::gpu::ConvertLayoutOp op,
                               OpAdaptor adaptor,
@@ -1121,7 +1119,6 @@ private:
     rewriter.replaceOp(op, view);
     return success();
   }
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 
   // shared -> dot_operand if the result layout is mma
   Value lowerSharedToDotOperandMMA(

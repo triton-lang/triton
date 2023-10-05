@@ -1,10 +1,5 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
-<<<<<<< HEAD
-
-#include "mlir/Conversion/Passes.h"
-=======
 #include "LLVMPasses.h"
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/Passes.h"
@@ -44,14 +39,9 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/SourceMgr.h"
-<<<<<<< HEAD
-
-#include <iostream>
-=======
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include <optional>
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -469,12 +459,8 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(mlir::createConvertIndexToLLVMPass());
   pm.addPass(
-<<<<<<< HEAD
-      createConvertTritonGPUToLLVMPass({computeCapability, &tmaInfos, target}));
-#ifndef USE_ROCM
-=======
       createConvertTritonGPUToLLVMPass(computeCapability, target, &tmaInfos));
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+#ifndef USE_ROCM
   pm.addPass(createConvertNVGPUToLLVMPass());
 #endif
   pm.addPass(mlir::createArithToLLVMConversionPass());

@@ -347,15 +347,9 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-<<<<<<< HEAD
-    stride *= ceil<unsigned int>(type.getShape()[dim], sizePerThreads[dim] *
-                                                           threadsPerWarp[dim] *
-                                                           warpsPerCTA[dim]);
-=======
     stride *= ceil<unsigned int>(getShape()[dim], sizePerThreads[dim] *
                                                       threadsPerWarp[dim] *
                                                       warpsPerCTA[dim]);
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
   }
   llvm_unreachable("Axis not found in order");
 }
@@ -543,7 +537,6 @@ bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          !srcTy.getElementType().isF32();
 }
 
-<<<<<<< HEAD
 #ifdef USE_ROCM
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   auto srcLayout = srcTy.getEncoding();
@@ -562,19 +555,6 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
 }
 #endif
 
-bool isMmaToMmaShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
-  auto src = srcTy.getEncoding().cast<triton::gpu::MmaEncodingAttr>();
-  auto dst = dstTy.getEncoding().cast<triton::gpu::MmaEncodingAttr>();
-  auto srcElemsPerThread = triton::gpu::getTotalElemsPerThread(srcTy);
-  auto dstElemsPerThread = triton::gpu::getTotalElemsPerThread(dstTy);
-  // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
-  return src.getVersionMajor() == 3 && src.getWarpsPerCTA()[1] == 1 &&
-         dst.getVersionMajor() == 3 && dst.getWarpsPerCTA()[1] == 1 &&
-         srcElemsPerThread == dstElemsPerThread;
-}
-
-=======
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
 bool isSingleValue(Value value) {
   // Don't consider load as expensive if it is loading a scalar.
   if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>())

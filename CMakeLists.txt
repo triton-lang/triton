@@ -248,6 +248,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonNvidiaGPUTransforms
     TritonLLVMIR
     TritonPTX
+    TritonHSACO
     ${dialect_libs}
     ${conversion_libs}
 

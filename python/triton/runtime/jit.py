@@ -351,7 +351,7 @@ class JITFunction(KernelInterface[T]):
         def regular_args_v(args_proxy):
             return [args_proxy[arg_name] for arg_name in regular_args]
 
-        def launcher_body(args_proxy, grid, num_warps, num_ctas, num_stages, enable_warp_specialization, extern_libs, stream, warmup, device, device_type):
+        def launcher_body(args_proxy, grid, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, extern_libs, stream, warmup, device, device_type):
             from ..compiler import (CompiledKernel, compile,
                                     get_arch_default_num_stages,
                                     get_arch_default_num_warps)
@@ -402,7 +402,7 @@ class JITFunction(KernelInterface[T]):
             if num_stages is None:
                 num_stages = get_arch_default_num_stages(device_type)
 
-            key = (version_key(), sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, enable_warp_specialization, self.debug)
+            key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, self.debug)
             if extern_libs is not None:
                 key = (key, tuple(extern_libs.items()))
 
@@ -430,8 +430,8 @@ class JITFunction(KernelInterface[T]):
                 for i, arg in constants.items():
                     if callable(arg):
                         raise TypeError(f"Callable constexpr at index {i} is not supported")
-                if not self._call_hook(key, signature, device, constants, num_warps, num_ctas, num_stages, enable_warp_specialization, extern_libs, configs):
-                    bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, enable_warp_specialization=enable_warp_specialization, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
+                if not self._call_hook(key, signature, device, constants, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, extern_libs, configs):
+                    bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, waves_per_eu=waves_per_eu, matrix_instr_nonkdim=matrix_instr_nonkdim, enable_warp_specialization=enable_warp_specialization, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
                     # Create tensormaps and append to args
                     args = bin.assemble_tensormap_to_arg(args)
                     if not warmup:
@@ -446,90 +446,8 @@ class JITFunction(KernelInterface[T]):
         args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
         src = f"""
 import triton
-<<<<<<< HEAD
 def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, waves_per_eu=0, matrix_instr_nonkdim=0, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
-    from ..compiler import compile, CompiledKernel, get_arch_default_num_warps, get_arch_default_num_stages
-    sig_key = {f'{sig_keys},' if len(sig_keys) > 0 else ()}
-    constexpr_key = {f'{constexpr_keys},' if len(constexpr_keys) > 0 else ()}
-    spec_key = {f'{spec_keys},' if len(spec_keys) > 0 else ()}
-    assert num_ctas > 0
-    assert grid is not None
-    if callable(grid):
-        grid = grid({{{grid_args}}})
-    grid_size = len(grid)
-    grid_0 = grid[0]
-    grid_1 = grid[1] if grid_size > 1 else 1
-    grid_2 = grid[2] if grid_size > 2 else 1
-
-    if device_type is None:
-        device_types = [_device_type for _device_type in {device_types} if _device_type != '']
-        device_type = self._conclude_device_type(device_types, {pinned_memory_flags})
-
-    device_backend = None
-    if device_type not in ['cuda']:
-        device_backend = get_backend(device_type)
-        if device_backend is None:
-            raise ValueError('Cannot find backend for ' + device_type)
-
-    if device is None:
-        if device_type in ['cuda']:
-            device = get_current_device()
-            set_current_device(device)
-        else:
-            device = device_backend.get_current_device()
-            device_backend.set_current_device(device)
-    if stream is None and not warmup:
-        if device_type in ['cuda']:
-            stream = get_cuda_stream(device)
-        else:
-            stream = device_backend.get_stream()
-
-    if num_warps is None:
-        num_warps = get_arch_default_num_warps(device_type)
-    if num_stages is None:
-        num_stages = get_arch_default_num_stages(device_type)
-
-    key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, self.debug)
-    if not extern_libs is None:
-      key = (key, tuple(extern_libs.items()))
-
-    bin = cache[device].get(key, None)
-    if bin is not None:
-      # build dict of constant values
-      args = [{args}]
-      # Create tensormaps and append to args
-      args = bin.assemble_tensormap_to_arg(args)
-      if not warmup:
-          bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.num_ctas, bin.clusterDims[0], bin.clusterDims[1], bin.clusterDims[2], bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
-      return bin
-    # kernel not cached -- compile
-    else:
-      # build dict of constant values
-      args = [{args}]
-      all_args = {', '.join([f'{arg}' for arg in self.arg_names]) + ', ' if len(self.arg_names) > 0 else ()}
-      configs = self._get_config(*all_args),
-      constants = self._make_constants(constexpr_key)
-      constants.update({{i: None for i, arg in enumerate(all_args) if arg is None}})
-      constants.update({{i: 1 for i in configs[0].equal_to_1}})
-      # build kernel signature -- doesn't include specialized arguments
-      signature = {{ i: self._type_of(_key_of(arg)) for i, arg in enumerate(all_args) if i not in self.constexprs }}
-      # build stub signature -- includes arguments that are specialized
-      for i, arg in constants.items():
-        if callable(arg):
-          raise TypeError(f"Callable constexpr at index {{i}} is not supported")
-      if not self._call_hook(key, signature, device, constants, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, extern_libs, configs):
-        bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, waves_per_eu=waves_per_eu, matrix_instr_nonkdim=matrix_instr_nonkdim, enable_warp_specialization=enable_warp_specialization, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
-        # Create tensormaps and append to args
-        args = bin.assemble_tensormap_to_arg(args)
-        if not warmup:
-            bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.num_ctas, bin.clusterDims[0], bin.clusterDims[1], bin.clusterDims[2], bin.shared, stream, bin.cu_function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, bin, *args)
-        self.cache[device][key] = bin
-        return bin
-      return None
-=======
-def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
-    return launcher_body({{{args_map}}}, grid, num_warps, num_ctas, num_stages, enable_warp_specialization, extern_libs, stream, warmup, device, device_type)
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+    return launcher_body({{{args_map}}}, grid, num_warps, num_ctas, num_stages, waves_per_eu, matrix_instr_nonkdim, enable_warp_specialization, extern_libs, stream, warmup, device, device_type)
 """
         scope = {"launcher_body": launcher_body}
         exec(src, scope)

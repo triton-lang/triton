@@ -275,21 +275,24 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 }
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-<<<<<<< HEAD
-                            Value val, int i, const std::string &shuffleType,
-                            const std::string &clamp, Value laneId = Value()) {
-=======
-                            Value val, Value i, NVVM::ShflKind mode,
-                            Value clamp) {
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+                            Value val, Value i, int strideInt, NVVM::ShflKind mode,
+                            Value clamp, Value laneId = Value()) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
+  //int stride = i.cast<unsigned>();
+  //int stride = i.dyn_cast<int>();
+  //int stride = i.cast<int>().getValue().getSExtValue();
+  //int stride = i.Value();
+  //constantOp.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+  //unsigned strideint = i.cast<IntegerAttr>().getValue().getSExtValue();
+  //auto intAttr = i.dyn_cast_or_null<IntegerAttr>();
+  //auto strideint = intAttr.getValue().getSExtValue();
 
 #ifdef USE_ROCM
   //On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on 32bit/dwords
   //so we need promote to 32 here.
   if (bits == 8) {
     Value i32Val = sext(i32_ty, val);
-    Value result = commonShflSync(loc, rewriter, i32Val, i, shuffleType, clamp, laneId);
+    Value result = commonShflSync(loc, rewriter, i32Val, i, strideInt, mode, clamp, laneId);
     return trunc(i8_ty, result);
   }
 #endif
@@ -299,24 +302,19 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-<<<<<<< HEAD
-    val0 = commonShflSync(loc, rewriter, val0, i, shuffleType, clamp, laneId);
-    val1 = commonShflSync(loc, rewriter, val1, i, shuffleType, clamp, laneId);
-=======
-    val0 = commonShflSync(loc, rewriter, val0, i, mode, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, mode, clamp);
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+    val0 = commonShflSync(loc, rewriter, val0, i, strideInt, mode, clamp, laneId);
+    val1 = commonShflSync(loc, rewriter, val1, i, strideInt, mode, clamp, laneId);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
     return bitcast(vec, val.getType());
   }
-<<<<<<< HEAD
 
 #ifdef USE_ROCM
   GCNBuilder builder;
-  if (shuffleType == "bfly") {
-    if (i > 16) {
+  switch (mode) {
+  case NVVM::ShflKind::bfly:
+    if (strideInt > 16) {
       Value threadId =
           rewriter
               .create<UnrealizedConversionCastOp>(
@@ -342,13 +340,14 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
       auto dOpr = builder.newOperand("=v");
       auto aOpr = builder.newOperand(val, "v");
       auto maskOpr =
-          builder.newConstantOperand("offset:" + std::to_string(masks[i]));
+          builder.newConstantOperand("offset:" + std::to_string(masks[strideInt]));
       (*shfl)(dOpr, aOpr, maskOpr);
     }
-  } else { // shuffle_up
-    assert(shuffleType == "up" && "Only shfl_bfly and shfl_up are supported");
-    Value mask = icmp_slt(laneId, i32_val(i));
-    Value delta = sub(laneId, i32_val(i));
+    break;
+  case NVVM::ShflKind::up:
+    //assert(shuffleType == "up" && "Only shfl_bfly and shfl_up are supported");
+    Value mask = icmp_slt(laneId, i);
+    Value delta = sub(laneId, i);
     Value index = select(mask, laneId, delta);
     Value byteOffset = i32_val(2);
     Value permuteAddr = shl(index, byteOffset);
@@ -357,22 +356,13 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     auto addrOpr = builder.newOperand(permuteAddr, "v");
     auto aOpr = builder.newOperand(val, "v");
     (*shfl)(dOpr, addrOpr, aOpr);
+    break;
   }
+
   auto swait = builder.create("s_waitcnt lgkmcnt(0)");
   (*swait)();
   return builder.launch(rewriter, loc, val.getType(), true);
 #else
-  PTXBuilder builder;
-  auto &shfl = builder.create("shfl.sync")->o(shuffleType).o("b32");
-  auto *dOpr = builder.newOperand("=r");
-  auto *aOpr = builder.newOperand(val, "r");
-  auto *bOpr = builder.newConstantOperand(i);
-  auto *cOpr = builder.newConstantOperand(clamp);
-  auto *maskOpr = builder.newConstantOperand("0xffffffff");
-  shfl(dOpr, aOpr, bOpr, cOpr, maskOpr);
-  return builder.launch(rewriter, loc, val.getType(), false);
-#endif
-=======
   Type type = val.getType();
   if (type != i32_ty) {
     val = bitcast(val, int_ty(bits));
@@ -386,24 +376,19 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     result = bitcast(result, type);
   }
   return result;
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+#endif
 }
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
+  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::bfly,
                         i32_val(0x1f));
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-<<<<<<< HEAD
                  int i, Value laneId) {
-  return commonShflSync(loc, rewriter, val, i, "up", "0x0", laneId);
-=======
-                 int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
-                        i32_val(0x0));
->>>>>>> ac9fa68d18c777e421bd3f6fb1ddcfd60b6fda33
+  return commonShflSync(loc, rewriter, val, i32_val(i), i, NVVM::ShflKind::up,
+		  i32_val(0x0), laneId);
 }
 
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
@@ -413,7 +398,7 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i) {
-  return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
+  return commonShflSync(loc, rewriter, val, i, 0, NVVM::ShflKind::idx,
                         i32_val(0x1f));
 }
 
