@@ -155,9 +155,9 @@ import torch
 import triton
 import triton.language as tl
 
-BLOCK_SIZE_M = 32
-BLOCK_SIZE_N = 64
-BLOCK_SIZE_K = 32
+BLOCK_SIZE_M = 128
+BLOCK_SIZE_N = 256
+BLOCK_SIZE_K = 64
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
 #   - A list of `triton.Config` objects that define different configurations of
 #       meta-parameters (e.g., `BLOCK_SIZE_M`) and compilation options (e.g., `num_warps`) to try
@@ -225,9 +225,9 @@ def matmul_kernel(
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     initialA = tl.arange(0, BLOCK_SIZE_M)
-    initialB = tl.arange(0, BLOCK_SIZE_N)
+    initialB = tl.arange(0, BLOCK_SIZE_K)
     offsetsA = initialA * (tl.cdiv(K, BLOCK_SIZE_K)) + offsetsA_ptr
-    offsetsB = initialB + offsetsB_ptr
+    offsetsB = initialB * (tl.cdiv(K, BLOCK_SIZE_K)) + offsetsB_ptr
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
@@ -238,9 +238,11 @@ def matmul_kernel(
         oA = tl.load(offsetsA)
         offsetsA += 1
         oB = tl.load(offsetsB)
-        offsetsB += BLOCK_SIZE_N
-        a_ptrs += oA[:, None]
-        b_ptrs += oB[None, :]
+        offsetsB += 1
+        a_ptrs += tl.multiple_of(oA[:, None], (16, 16))
+        b_ptrs += tl.multiple_of(oB[:, None], (16, 16))
+        # a_ptrs += oA[:, None]
+        # b_ptrs += oB[None, :]
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
@@ -288,8 +290,8 @@ def matmul(a, b, activation=""):
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     offsetsA = torch.full((BLOCK_SIZE_M, a.shape[1] // BLOCK_SIZE_K), BLOCK_SIZE_K * a.stride(1), device=a.device, dtype=torch.int64)
     offsetsA[:, 0] = 0
-    offsetsB = torch.full((a.shape[1] // BLOCK_SIZE_K, BLOCK_SIZE_N), BLOCK_SIZE_K * b.stride(0), device=a.device, dtype=torch.int64)
-    offsetsB[0, :] = 0
+    offsetsB = torch.full((BLOCK_SIZE_K, a.shape[1] // BLOCK_SIZE_K), BLOCK_SIZE_K * b.stride(0), device=a.device, dtype=torch.int64)
+    offsetsB[:, 0] = 0
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
@@ -312,10 +314,10 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float32) * .1
+a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 # a = torch.repeat_interleave(torch.arange(512).view(-1, 1), 512, dim=1)
 # a = torch.tensor(a, device='cuda', dtype=torch.float32)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float32) * .1
+b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
 # b = torch.eye(512, device='cuda', dtype=torch.float32)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
