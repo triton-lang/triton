@@ -30,8 +30,8 @@ Note that this feature is still experimental and may change in the future.
 # %%
 # Make a Block Pointer
 # --------------------
-# A block pointer pointers to a block in a parent tensor and is constructed by :code:`make_block_ptr` function,
-# which takes the following information as arguments:
+# A block pointer is a reference that points to a specific block within a parent tensor.
+# It is created using the :code:`make_block_ptr`` function, which takes the following arguments:
 #
 # * :code:`base`: the base pointer to the parent tensor;
 #
@@ -45,8 +45,8 @@ Note that this feature is still experimental and may change in the future.
 #
 # * :code:`order`: the order of the block, which means how the block is laid out in memory.
 #
-# For example, to a block pointer to a :code:`BLOCK_SIZE_M * BLOCK_SIZE_K` block in a row-major 2D matrix A by
-# offsets :code:`(pid_m * BLOCK_SIZE_M, 0)` and strides :code:`(stride_am, stride_ak)`, we can use the following code
+# For example, if you want to create a block pointer pointing to a :code:`BLOCK_SIZE_M * BLOCK_SIZE_K` block within a row-major :code:`M * K` matrix A
+# using offsets :code:`(pid_m * BLOCK_SIZE_M, 0)`` and strides :code:`(stride_am, stride_ak)`, you can use the following code 
 # (exactly the same as the previous matrix multiplication tutorial):
 #
 # .. code-block:: python
@@ -56,26 +56,36 @@ Note that this feature is still experimental and may change in the future.
 #                                     order=(1, 0))
 #
 # Note that the :code:`order` argument is set to :code:`(1, 0)`, which means the second axis is the inner dimension in
-# terms of storage, and the first axis is the outer dimension. This information may sound redundant, but it is necessary
+# terms of storage, and the first axis is the outer dimension. This information may seem redundant, but it is necessary
 # for some hardware backends to optimize for better performance.
 
 # %%
 # Load/Store a Block Pointer
 # --------------------------
-# To load/store a block pointer, we can use :code:`load/store` function, which takes a block pointer as an argument,
-# de-references it, and loads/stores a block. You may mask some values in the block, here we have an extra argument
-# :code:`boundary_check` to specify whether to check the boundary of each axis for the block pointer. With check on,
-# out-of-bound values will be masked according to the :code:`padding_option` argument (load only), which can be
-# :code:`zero` or :code:`nan`. Temporarily, we do not support other values due to some hardware limitations. In this
-# mode of block pointer load/store does not support :code:`mask` or :code:`other` arguments in the legacy mode.
+# To load/store a block using a block pointer, you can utilize the :code:`load/store` function.
+# These functions take a block pointer as their input, dereference it, and perform loading/storing operations on the specified block.
+# Additionally, there is an optional argument :code:`boundary_check` that allows you to specify whether boundary checks should be performed along each axis of the block pointer.
+# When boundary checks are enabled, any out-of-bounds values will be masked according to the specified :code:`padding_option` (for load operations only).
+# The `padding_option` can be either zero or NaN.
+# Currently, we don't support other padding options due to hardware limitations.
+# It's important to note that in this mode of block pointer load/store, you cannot use additional arguments or masks, as it operates in legacy mode.
 #
-# So to load the block pointer of A in the previous section, we can simply write
-# :code:`a = tl.load(a_block_ptr, boundary_check=(0, 1))`. Boundary check may cost extra performance, so if you can
-# guarantee that the block pointer is always in-bound in some axis, you can turn off the check by not passing the index
-# into the :code:`boundary_check` argument. For example, if we know that :code:`M` is a multiple of
-# :code:`BLOCK_SIZE_M`, we can replace with :code:`a = tl.load(a_block_ptr, boundary_check=(1, ))`, since axis 0 is
-# always in bound.
-
+# For example, to load the block pointed to by `a_block_ptr` (from the previous section), you can simply use:
+#
+# .. code-block:: python
+#
+#     a = tl.load(a_block_ptr, boundary_check=(0, 1))
+#
+# In the above example, we enable boundary checks along both axes.
+# Boundary check may cost extra and impact performance, so if you can guarantee that the block pointer is always in-bound in some axis, you can turn off the check by not passing the axis into the :code:`boundary_check` argument.
+#
+# For example, if you know that the value of `M` is always a multiple of `BLOCK_SIZE_M`, you can be guaranteed that all elements on axis 0 are in-bound.
+# You can thus avoid unnecessary boundary checks on axis 0 and improve performance using:
+#
+# .. code-block:: python
+#
+#     a = tl.load(a_block_ptr, boundary_check=(1,))
+#
 # %%
 # Advance a Block Pointer
 # -----------------------
