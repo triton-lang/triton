@@ -85,10 +85,9 @@ const std::string Bf16_to_Fp8E5M2 =
 // This data-type is a variant of the standard FP8E4M3 format.
 // It was designed for fast software conversion to FP16 on
 // nvidia GPUs that do not support it natively.
-// Specifically, this data-type:
-//    - has infinities
-//    - has multiple nans (when all exponent bits are 1)
-//    - has an exponent bias of 15 (vs. 7 for fp8e4m3)
+// This is the same format as FP8E4M3Nv, but:
+//   - the exponent bias is 15 instead of 7
+//   - 0xff and 0x7f are mapped to +-1.750 instead of +-nan
 const std::string Fp8E4M3B15_to_Fp16 =
     "{                                      \n"
     ".reg .b32 a<2>, b<2>;                  \n"
