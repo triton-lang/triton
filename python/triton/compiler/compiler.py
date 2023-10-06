@@ -162,14 +162,14 @@ def _add_external_libs(mod, libs):
     add_external_libs(mod, list(libs.keys()), list(libs.values()))
 
 
-def ttgir_to_llir(mod, extern_libs, arch, tma_infos):
+def ttgir_to_llir(mod, extern_libs, arch, tma_infos, waves_per_eu=0):
     if extern_libs:
         _add_external_libs(mod, extern_libs)
     # TODO: separate tritongpu_to_llvmir for different backends
     if _is_cuda(arch):
-        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, runtime.TARGET.NVVM)
+        return translate_triton_gpu_to_llvmir(mod, arch, tma_infos, runtime.TARGET.NVVM, waves_per_eu)
     else:
-        return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.ROCDL)
+        return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.ROCDL, waves_per_eu)
 
 
 # PTX translation
@@ -308,6 +308,7 @@ def make_hash(fn, arch, env_vars, **kwargs):
         num_warps = kwargs.get("num_warps", 4)
         num_ctas = kwargs.get("num_ctas", 1)
         num_stages = kwargs.get("num_stages", 3)
+        waves_per_eu = kwargs.get("waves_per_eu", 0)
         enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
         enable_persistent = kwargs.get("enable_persistent", False)
         debug = kwargs.get("debug", False)
@@ -315,7 +316,7 @@ def make_hash(fn, arch, env_vars, **kwargs):
         get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1), sorted(conf.ids_of_folded_args), sorted(conf.divisible_by_8))
         configs_key = [get_conf_key(conf) for conf in configs]
         env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{arch}-{env_vars_list}"
+        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{waves_per_eu}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{arch}-{env_vars_list}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     return hashlib.md5((Path(fn).read_text() + version_key()).encode("utf-8")).hexdigest()
@@ -472,6 +473,7 @@ def compile(fn, **kwargs):
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
     num_stages = kwargs.get("num_stages", get_arch_default_num_stages(device_type, capability=capability))
+    waves_per_eu = kwargs.get("waves_per_eu", 0)
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
@@ -499,7 +501,7 @@ def compile(fn, **kwargs):
     stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
                        lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
     stages["llir"] = (lambda path: Path(path).read_text(),
-                      lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos))
+                      lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos, waves_per_eu))
     if is_cuda:
         add_cuda_stages(arch, extern_libs, stages)
     elif is_hip:
@@ -571,6 +573,7 @@ def compile(fn, **kwargs):
                     "warp_size": warp_size,
                     "num_ctas": num_ctas,
                     "num_stages": num_stages,
+                    "waves_per_eu": waves_per_eu,
                     "enable_warp_specialization": enable_warp_specialization,
                     "enable_persistent": enable_persistent,
                     "constants": _get_jsonable_constants(constants),
@@ -689,6 +692,7 @@ class CompiledKernel:
         self.warp_size = metadata["warp_size"]
         self.num_ctas = metadata["num_ctas"]
         self.num_stages = metadata["num_stages"]
+        self.waves_per_eu = metadata["waves_per_eu"]
         self.clusterDims = metadata["clusterDims"]
         if "tensormaps_info" in metadata:
             self.tensormaps_info = metadata["tensormaps_info"]

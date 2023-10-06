@@ -126,11 +126,13 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   llvm::LLVMContext llvmContext;
   mlir::triton::gpu::TMAMetadataTy tmaInfos;
 #ifdef USE_ROCM
-  auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module,
-                                           SMArch.getValue(), tmaInfos, Target::ROCDL);
+  auto llvmir =
+      translateTritonGPUToLLVMIR(&llvmContext, *module, SMArch.getValue(),
+                                 tmaInfos, Target::ROCDL, 0 /*wavesPerEU*/);
 #else
-  auto llvmir = translateTritonGPUToLLVMIR(&llvmContext, *module,
-                                           SMArch.getValue(), tmaInfos, Target::Default);
+  auto llvmir =
+      translateTritonGPUToLLVMIR(&llvmContext, *module, SMArch.getValue(),
+                                 tmaInfos, Target::Default, 0 /*wavesPerEU*/);
 #endif
   if (!llvmir) {
     llvm::errs() << "Translate to LLVM IR failed";

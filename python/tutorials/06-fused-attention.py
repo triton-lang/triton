@@ -464,6 +464,7 @@ class _attention(torch.autograd.Function):
             BLOCK_N = 64
             num_warps = 4
             num_stages = 1
+            waves_per_eu = 2 if causal else 3
 
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
@@ -481,7 +482,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
             IS_CAUSAL=causal,
             num_warps=num_warps,
-            num_stages=num_stages)
+            num_stages=num_stages, waves_per_eu=waves_per_eu)
 
         ctx.save_for_backward(q, k, v, o, L)
         ctx.grid = grid
@@ -560,7 +561,7 @@ class _attention(torch.autograd.Function):
                 v.stride(0), v.stride(1), v.stride(2), v.stride(3),
                 q.shape[0], q.shape[1], q.shape[2],
                 BLOCK_M=2*BLOCK, BLOCK_N=BLOCK,
-                BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=4,
+                BLOCK_DMODEL=ctx.BLOCK_DMODEL, num_warps=4, waves_per_eu=1,
                 num_stages=1,
             )
         # print(h.asm["ttgir"])
