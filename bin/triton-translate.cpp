@@ -106,6 +106,7 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
 
   registerAsmPrinterCLOptions();
   registerMLIRContextCLOptions();
+  registerPassManagerCLOptions();
   llvm::cl::ParseCommandLineOptions(argc, argv, toolName);
 
   mlir::MLIRContext context;

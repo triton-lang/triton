@@ -434,10 +434,10 @@ static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
   // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
   return src && dst && src.getVersionMajor() == 3 &&
          src.getWarpsPerCTA()[1] == 1 && dst.getVersionMajor() == 3 &&
-         dst.getWarpsPerCTA()[1] == 1 && srcInstrShape[2] == dstInstrShape[2];
+         dst.getWarpsPerCTA()[1] == 1;
 }
 
-bool isMmaToMmaShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   return isMmaToMmaShortcut(srcTy.getEncoding(), dstTy.getEncoding());
 }
 
@@ -453,7 +453,7 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
          srcTy.getElementType().isF16();
 }
 
-bool isMmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (matchMmaV3AndDotOperandLayout(srcTy, dstTy))
     return true;
   // dot_op<opIdx=0, parent=#mma> = #mma
