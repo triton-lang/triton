@@ -38,6 +38,17 @@ bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
          getParentOrder(getSrcLayout())[0];
 }
 
+SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
+  auto srcLayout = getSrcLayout();
+  auto order = triton::gpu::getOrder(srcLayout);
+  auto it = std::find(order.begin(), order.end(), axis);
+  // delete the axis from order
+  order.erase(it);
+  // insert axis at the beginning of order
+  order.insert(order.begin(), axis);
+  return order;
+}
+
 // Thread offset is the thread index offset of two adjacent threads on the
 // reduction axis within the warp.
 unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
@@ -56,11 +67,11 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
     threadOffset = threadsPerWarp[sliceLayout.getDim()];
   } else {
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcLayout);
-    if (threadsPerWarp.size() == 1) {
-      threadOffset = 1;
-    } else {
-      assert(threadsPerWarp.size() == 2 && "Only supports 2D layouts");
-      threadOffset = axis == 0 ? threadsPerWarp[1] : threadsPerWarp[0];
+    auto order = triton::gpu::getOrder(srcLayout);
+    for (unsigned i = 0; i < order.size(); i++) {
+      if (order[i] == axis)
+        break;
+      threadOffset *= threadsPerWarp[order[i]];
     }
   }
   return threadOffset;
