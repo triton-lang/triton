@@ -597,30 +597,31 @@ except BaseException:
 
 BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
-configs = [
-    triton.testing.Benchmark(
-        x_names=["N_CTX"],
-        x_vals=[2**i for i in range(10, 15)],
-        line_arg="provider",
-        line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
-        line_names=["Triton"] + (["Flash-2"] if HAS_FLASH else []),
-        styles=[("red", "-"), ("blue", "-")],
-        ylabel="ms",
-        plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-causal={causal}",
-        args={
-            "H": N_HEADS,
-            "BATCH": BATCH,
-            "D_HEAD": D_HEAD,
-            "dtype": torch.float16,
-            "mode": mode,
-            "causal": causal,
-        },
-    )
-    for mode in ["fwd", "bwd"]
-    for causal in [True, False]
-    ## TODO: enable causal=False for bwd kernel
-    if not (causal == False and mode == "bwd")
-]
+configs = []
+for mode in ["fwd", "bwd"]:
+    for causal in [True, False]:
+        if mode == "bwd" and not causal:
+            continue
+        configs.append(
+            triton.testing.Benchmark(
+                x_names=["N_CTX"],
+                x_vals=[2**i for i in range(10, 15)],
+                line_arg="provider",
+                line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
+                line_names=["Triton"] + (["Flash-2"] if HAS_FLASH else []),
+                styles=[("red", "-"), ("blue", "-")],
+                ylabel="ms",
+                plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-causal={causal}",
+                args={
+                    "H": N_HEADS,
+                    "BATCH": BATCH,
+                    "D_HEAD": D_HEAD,
+                    "dtype": torch.float16,
+                    "mode": mode,
+                    "causal": causal,
+                },
+            )
+        )
 
 
 @triton.testing.perf_report(configs)
