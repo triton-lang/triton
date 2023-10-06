@@ -54,6 +54,8 @@ public:
 
   SmallVector<unsigned> getScratchConfig();
 
+  SmallVector<unsigned> getOrderWithAxisAtBeginning();
+
   unsigned getScratchSizeInBytes();
 
   bool isSupportedLayout();
