@@ -81,6 +81,7 @@ llvm_update_compile_flags(triton-translate)
 mlir_check_all_link_libraries(triton-translate)
 
 add_llvm_executable(triton-llvm-opt
+  PARTIAL_SOURCES_INTENDED
   triton-llvm-opt.cpp
 
   DEPENDS

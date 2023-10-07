@@ -1,7 +1,9 @@
 import contextlib
 import functools
+import platform
 import io
 import os
+from queue import Empty
 import shutil
 import subprocess
 import sys
@@ -18,6 +20,9 @@ def is_hip():
 
 @functools.lru_cache()
 def libcuda_dirs():
+    if platform.system() == "Windows":
+        return [os.environ.get("CUDA_PATH") + "\\lib\\x64"]
+
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
     # each line looks like the following:
     # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
@@ -84,12 +89,20 @@ def _build(name, src, srcdir):
     if scheme == 'posix_local':
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
+    if platform.system() == "Windows":
+        py_libraries_dir = os.path.join(sys.prefix, "libs")
 
     if is_hip():
         ret = subprocess.check_call([cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{hip_lib_dir}", "-lamdhip64", "-o", so])
     else:
-        cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
-        cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
+        if cc == "cl":
+            cc_cmd = [cc, src, "/nologo", "/O2", "/LD", f"/I{cu_include_dir}", f"/I{py_include_dir}", f"/I{srcdir}"]
+            cc_cmd += ["/link", "cuda.lib", f"/OUT:{so}"]
+            cc_cmd += [f"/LIBPATH:{dir}" for dir in cuda_lib_dirs]
+            cc_cmd += [f"/LIBPATH:{py_libraries_dir}"]            
+        else:
+            cc_cmd = [cc, src, "-O3", f"-I{cu_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-lcuda", "-o", so]
+            cc_cmd += [f"-L{dir}" for dir in cuda_lib_dirs]
         ret = subprocess.check_call(cc_cmd)
 
     if ret == 0:

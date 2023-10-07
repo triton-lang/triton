@@ -56,6 +56,7 @@ add_mlir_conversion_library(TritonGPUToLLVM
 )
 
 add_mlir_library(ASMBuilder
+  PARTIAL_SOURCES_INTENDED
   GCNAsmFormat.cpp
   PTXAsmFormat.cpp
 

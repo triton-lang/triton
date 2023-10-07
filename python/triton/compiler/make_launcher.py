@@ -1,5 +1,6 @@
 import hashlib
 import os
+import platform
 import tempfile
 
 from ..common import _build
@@ -25,7 +26,12 @@ def make_stub(name, signature, constants, ids, **kwargs):
     # name of files that are cached
     so_cache_key = make_so_cache_key(version_key(), signature, constants, ids, **kwargs)
     so_cache_manager = get_cache_manager(so_cache_key)
-    so_name = f"{name}.so"
+
+    if platform.system() == "Windows":
+        suffix = "dll"
+    else:
+        suffix = "so"
+    so_name = f"{name}.{suffix}"
     # retrieve stub from cache if it exists
     cache_path = so_cache_manager.get_file(so_name)
     if cache_path is None:
@@ -105,7 +111,9 @@ def generate_launcher(constants, signature, ids):
 #include \"cuda.h\"
 #include <stdbool.h>
 #include <Python.h>
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 
 static inline void gpuAssert(CUresult code, const char *file, int line)
 {{
@@ -126,6 +134,7 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 
 #define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
+#ifndef _WIN32
 typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra);
 
 static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
@@ -146,6 +155,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   }}
   return cuLaunchKernelExHandle;
 }}
+#endif
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
@@ -171,11 +181,15 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
       config.hStream = stream;
       config.attrs = launchAttr;
       config.numAttrs = 2;
+#ifndef _WIN32
       static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
       if (cuLaunchKernelExHandle == NULL) {{
         cuLaunchKernelExHandle = getLaunchKernelExHandle();
       }}
       CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
+#else
+      CUDA_CHECK(cuLaunchKernelEx(&config, function, params, 0));
+#endif
     }}
   }}
 }}

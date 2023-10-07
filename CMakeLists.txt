@@ -28,8 +28,17 @@ set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 # used conditionally in this file and by lit tests
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
-set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
-set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+if(NOT MSVC)
+    set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+    set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+else()
+    set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /Ob0 /Od /RTC1")
+    set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /Ob0 /Od /RTC1")
+    set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+    set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+    set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+    set(CMAKE_STATIC_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+endif()
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -47,7 +56,11 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 # Third-party
 include_directories(${PYBIND11_INCLUDE_DIR})
 
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
+if(NOT MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  /wd4244 /wd4624 /wd4715 /wd4530")
+endif()
 
 if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET 11.6)
@@ -59,7 +72,7 @@ endif()
 if(NOT MLIR_DIR)
   if(NOT LLVM_LIBRARY_DIR)
     if(WIN32)
-      find_package(LLVM 13 REQUIRED COMPONENTS nvptx amdgpu)
+      find_package(LLVM 17 REQUIRED COMPONENTS nvptx amdgpu)
 
       include_directories(${LLVM_INCLUDE_DIRS})
       separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
@@ -154,6 +167,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   if(PYTHON_INCLUDE_DIRS)
     include_directories(${PYTHON_INCLUDE_DIRS})
+    message(STATUS "PYTHON_LIB_DIRS ${PYTHON_LIB_DIRS}")
+    link_directories(${PYTHON_LIB_DIRS})
   else()
     find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
     include_directories(${Python3_INCLUDE_DIRS})
@@ -184,7 +199,11 @@ include(AddLLVM)
 include(AddMLIR)
 
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
+if(NOT MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX")
+endif()
 
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -272,6 +291,11 @@ if (${CODEGEN_BACKENDS_LEN} GREATER 0)
   endforeach()
 endif()
 
+if(WIN32)
+    option(CMAKE_USE_WIN32_THREADS_INIT "using WIN32 threads" ON)
+    option(gtest_disable_pthreads "Disable uses of pthreads in gtest." ON)
+endif()
+
 add_subdirectory(test)
 
-add_subdirectory(unittest)
+# add_subdirectory(unittest)

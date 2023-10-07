@@ -13,7 +13,7 @@ add_mlir_translation_library(TritonLLVMIR
         ${CMAKE_DL_LIBS}
         PUBLIC
         MLIRArithToLLVM
-        MLIRBuiltinToLLVMIRTranslation
+#        MLIRBuiltinToLLVMIRTranslation
         MLIRExecutionEngineUtils
         MLIRIndexToLLVM
         MLIRIR

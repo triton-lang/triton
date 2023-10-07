@@ -109,7 +109,10 @@ def _path_to_binary(binary: str):
     ]
 
     for p in paths:
-        bin = p.split(" ")[0]
+        if os.name != "nt":
+            bin = p.split(" ")[0]
+        else:
+            bin = p
         if os.path.exists(bin) and os.path.isfile(bin):
             result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
             if result is not None:

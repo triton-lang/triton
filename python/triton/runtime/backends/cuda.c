@@ -1,5 +1,7 @@
 #include "cuda.h"
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -79,10 +81,18 @@ static inline void gpuAssert(CUresult code, const char *file, int line) {
 #define DISPATCH_ARGS_N(_14, _13, _12, _11, _10, _9, _8, _7, _6, _5, _4, _3,   \
                         _2, _1, N, ...)                                        \
   ADD_ENUM_ITEM_##N
+#ifndef _WIN32
 #define DISPATCH_ARGS(...)                                                     \
   DISPATCH_ARGS_N(__VA_ARGS__, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1,  \
                   0)                                                           \
   (__VA_ARGS__)
+#else
+#define EXPAND_ARGS(args) args
+#define DISPATCH_ARGS(...)                                                     \
+  DISPATCH_ARGS_N EXPAND_ARGS((__VA_ARGS__, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, \
+                              4, 3, 2, 1, 0))                                  \
+  (__VA_ARGS__)
+#endif
 
 #define ADD_ENUM_TO_MODULE(module, enum_name, ...)                             \
   do {                                                                         \
@@ -349,6 +359,7 @@ static cuuint32_t *list_to_cuuint32_array(PyObject *listObj) {
   return array;
 }
 
+#ifndef _WIN32
 typedef CUresult (*cuTensorMapEncodeTiled_t)(
     CUtensorMap *tensorMap, CUtensorMapDataType tensorDataType,
     cuuint32_t tensorRank, void *globalAddress, const cuuint64_t *globalDim,
@@ -378,6 +389,7 @@ static cuTensorMapEncodeTiled_t getCuTensorMapEncodeTiledHandle() {
   }
   return cuTensorMapEncodeTiledHandle;
 }
+#endif
 
 static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   CUtensorMap *tensorMap = (CUtensorMap *)malloc(sizeof(CUtensorMap));
@@ -405,6 +417,7 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
   cuuint32_t *boxDim = list_to_cuuint32_array(boxDimObj);
   cuuint32_t *elementStrides = list_to_cuuint32_array(elementStridesObj);
 
+#ifndef _WIN32
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiledHandle = NULL;
   if (cuTensorMapEncodeTiledHandle == NULL) {
     cuTensorMapEncodeTiledHandle = getCuTensorMapEncodeTiledHandle();
@@ -416,6 +429,15 @@ static PyObject *tensorMapEncodeTiled(PyObject *self, PyObject *args) {
       globalStrides, boxDim, elementStrides, interleave, swizzle, l2Promotion,
       oobFill));
   Py_END_ALLOW_THREADS;
+#else
+  // Call the function
+  Py_BEGIN_ALLOW_THREADS;
+  CUDA_CHECK(cuTensorMapEncodeTiled(
+      tensorMap, tensorDataType, tensorRank, globalAddress, globalDim,
+      globalStrides, boxDim, elementStrides, interleave, swizzle, l2Promotion,
+      oobFill));
+  Py_END_ALLOW_THREADS;
+#endif
 
   // Clean up
   free(globalDim);

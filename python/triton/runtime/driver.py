@@ -1,6 +1,7 @@
 import abc
 import hashlib
 import os
+import platform
 import tempfile
 from pathlib import Path
 
@@ -36,7 +37,10 @@ class CudaUtils(object):
         src = Path(os.path.join(dirname, "backends", "cuda.c")).read_text()
         key = hashlib.md5(src.encode("utf-8")).hexdigest()
         cache = get_cache_manager(key)
-        fname = "cuda_utils.so"
+        suffix = "so"
+        if platform.system() == "Windows":
+            suffix = "dll"
+        fname = "cuda_utils." + suffix
         cache_path = cache.get_file(fname)
         if cache_path is None:
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -47,7 +51,12 @@ class CudaUtils(object):
                 with open(so, "rb") as f:
                     cache_path = cache.put(f.read(), fname, binary=True)
         import importlib.util
-        spec = importlib.util.spec_from_file_location("cuda_utils", cache_path)
+        if platform.system() == "Windows":
+            import importlib.machinery
+            loader = importlib.machinery.ExtensionFileLoader("cuda_utils", cache_path)
+            spec = importlib.machinery.ModuleSpec(name="cuda_utils", loader=loader, origin=cache_path)
+        else:
+            spec = importlib.util.spec_from_file_location("cuda_utils", cache_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
