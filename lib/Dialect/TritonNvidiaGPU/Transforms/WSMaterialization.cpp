@@ -79,6 +79,7 @@ void materializeGetAgentIdOp(Operation *parentOp) {
     builder.setInsertionPoint(agentIdOp);
     Value globalRoleId = builder.create<arith::ConstantIntOp>(loc, 0, 32);
     int globalNumWarps = 0;
+    SmallVector<Operation *> deprecatedOps;
     for (auto cmpOp : agentIdOp->getUsers()) {
       assert(isa<arith::CmpIOp>(cmpOp));
       for (auto u : cmpOp->getUsers()) {
@@ -111,10 +112,13 @@ void materializeGetAgentIdOp(Operation *parentOp) {
           Value cond =
               builder.create<arith::AndIOp>(loc, lowerBound, upperBound);
           cmpOp->getResult(0).replaceAllUsesWith(cond);
-          cmpOp->erase();
+          deprecatedOps.push_back(cmpOp);
           break;
         }
       }
+    }
+    for (Operation *cmpOp : deprecatedOps) {
+      cmpOp->erase();
     }
   });
 }
@@ -530,6 +534,7 @@ void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
         builder.create<arith::ConstantIntOp>(loc, nameBarrierId - 1, 32);
     // Process mutex users
     int numUsers = 0;
+    SmallVector<Operation *> deprecatedOps;
     for (Operation *user : createMutexOp.getResult().getUsers()) {
       numUsers++;
       assert(numUsers <= 2);
@@ -543,14 +548,20 @@ void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
         Value barLeave = builder.create<arith::SelectOp>(
             loc, isRole0, namedBarrierId1, namedBarrierId0);
         builder.create<ttng::NamedBarrierArriveOp>(loc, barLeave, numThreads);
-      } else
+      } else {
         llvm_unreachable("Unexpected user of mutex");
+      }
+      deprecatedOps.push_back(user);
+    }
+    for (Operation *user : deprecatedOps) {
       user->erase();
     }
     nameBarrierId -= 2;
     nameBarrierIdEnd -= 2;
-    createMutexOp.erase();
   });
+
+  parentOp->walk(
+      [](ttng::CreateMutexOp createMutexOp) { createMutexOp.erase(); });
 }
 
 void processLockOp(OpBuilder &builder, ttng::LockOp op) {
@@ -587,6 +598,7 @@ void materializeMutexOperationsOthers(ModuleOp parentOp) {
     OpBuilder builder(createMutexOp);
 
     // Process mutex users
+    SmallVector<Operation *> deprecatedOps;
     for (Operation *user : createMutexOp.getResult().getUsers()) {
       auto loc = user->getLoc();
       builder.setInsertionPoint(user);
@@ -596,6 +608,9 @@ void materializeMutexOperationsOthers(ModuleOp parentOp) {
         processUnlockOp(builder, op);
       else
         llvm_unreachable("Unexpected user of mutex");
+      deprecatedOps.push_back(user);
+    }
+    for (Operation *user : deprecatedOps) {
       user->erase();
     }
 
