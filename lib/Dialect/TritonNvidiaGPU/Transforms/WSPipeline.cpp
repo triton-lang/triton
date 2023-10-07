@@ -738,7 +738,6 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
               loc, dotOp.getA(), dotOp.getB(), dotOp.getC(),
               dotOp.getAllowTF32(), dotOp.getMaxNumImpreciseAcc());
       dot.replaceAllUsesWith(dotAsync.getResult());
-      builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(loc, 1);
 
       // 1. insert ConsumerReleaseOp for DotAsyncOps
       Value cond = builder.createWithAgentIds<arith::CmpIOp>(
@@ -761,8 +760,11 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
 
       // 2. If there's any outstanding DotAsyncOps, we need to wait for them.
       builder.setInsertionPointAfter(forOp);
-      builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(forOp.getLoc(),
-                                                                0);
+      unsigned resultIndex = dotAsync->getUses().begin()->getOperandNumber();
+      Value result = forOp->getResult(resultIndex);
+      auto dotWait = builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(
+          forOp.getLoc(), result, 0);
+      result.replaceAllUsesExcept(dotWait.getResult(), dotWait);
 
       // 3. insert ConsumerReleaseOp for outstanding DotAsyncOps
       Value one_ = builder.createWithAgentIds<arith::ConstantIntOp>(
