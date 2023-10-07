@@ -52,7 +52,6 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       triton_nvidia_gpu.mbarrier_wait %33, %arg23 : <i64, 3>
       // CHECK: triton_nvidia_gpu.fence_async_shared
       %34 = triton_nvidia_gpu.dot_async %arg15, %arg16, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf16, #shared1> * tensor<128x128xf16, #shared1> -> tensor<128x128xf32, #mma>
-      triton_nvidia_gpu.dot_wait {pendings = 1 : i32}
       %35 = tt.advance %arg11, [%c0_i32, %c128_i32] : <tensor<128x128xf16, #blocked>, 1>
       %36 = tt.advance %arg12, [%c128_i32, %c0_i32] : <tensor<128x128xf16, #blocked>, 1>
       %37 = arith.addi %arg19, %c128_i32 : i32
@@ -88,10 +87,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %64 = arith.ori %62, %63 : i1
       scf.yield %34, %35, %36, %47, %49, %s_48, %50, %42, %43, %37, %53, %41, %54, %59, %64 : tensor<128x128xf32, #mma>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, tensor<3x128x128xf16, #shared1>, tensor<128x128xf16, #shared1>, tensor<128x128xf16, #shared1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, i32, i32, i32, i32, i1, i1
     }
-    scf.if %10 {
-      triton_nvidia_gpu.dot_wait {pendings = 0 : i32}
-    }
-    %31 = arith.truncf %30#0 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
+    %w = triton_nvidia_gpu.dot_wait %30#0 {pendings = 0 : i32} : tensor<128x128xf32, #mma>
+    %31 = arith.truncf %w : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
     %32 = triton_gpu.convert_layout %31 : (tensor<128x128xf16, #mma>) -> tensor<128x128xf16, #shared1>
     triton_nvidia_gpu.store_async %8, %32 : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<128x128xf16, #shared1>
     triton_gpu.async_bulk_commit_group
@@ -158,7 +155,6 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       triton_nvidia_gpu.mbarrier_wait %33, %arg23 : <i64, 3>
       // CHECK: triton_nvidia_gpu.fence_async_shared
       %34 = triton_nvidia_gpu.dot_async %arg15, %arg16, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x128xf16, #shared1> * tensor<128x128xf16, #shared1> -> tensor<128x128xf32, #mma>
-      triton_nvidia_gpu.dot_wait {pendings = 1 : i32}
       %35 = tt.advance %arg11, [%c0_i32, %c128_i32] : <tensor<128x128xf16, #blocked>, 1>
       %36 = tt.advance %arg12, [%c128_i32, %c0_i32] : <tensor<128x128xf16, #blocked>, 1>
       %37 = arith.addi %arg19, %c128_i32 : i32
@@ -192,10 +188,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %64 = arith.ori %62, %63 : i1
       scf.yield %34, %35, %36, %47, %49, %48, %50, %42, %43, %37, %53, %41, %54, %59, %64 : tensor<128x128xf32, #mma>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<3x128x128xf16, #shared1>, tensor<3x128x128xf16, #shared1>, tensor<128x128xf16, #shared1>, tensor<128x128xf16, #shared1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, !tt.ptr<tensor<128x128xf16, #blocked>, 1>, i32, i32, i32, i32, i1, i1
     }
-    scf.if %10 {
-      triton_nvidia_gpu.dot_wait {pendings = 0 : i32}
-    }
-    %31 = arith.truncf %30#0 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
+    %w = triton_nvidia_gpu.dot_wait %30#0 {pendings = 0 : i32} : tensor<128x128xf32, #mma>
+    %31 = arith.truncf %w : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
     %32 = triton_gpu.convert_layout %31 : (tensor<128x128xf16, #mma>) -> tensor<128x128xf16, #shared1>
     triton_nvidia_gpu.store_async %8, %32 : !tt.ptr<tensor<128x128xf16, #blocked>, 1>, tensor<128x128xf16, #shared1>
     triton_gpu.async_bulk_commit_group
