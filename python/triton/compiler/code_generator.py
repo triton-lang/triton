@@ -689,9 +689,13 @@ class CodeGenerator(ast.NodeVisitor):
             for name in loop_defs:
                 if name in liveins:
                     # We should not def new constexpr
-                    assert _is_triton_tensor(loop_defs[name])
-                    assert _is_triton_tensor(liveins[name])
-                    assert loop_defs[name].type == liveins[name].type
+                    assert _is_triton_tensor(loop_defs[name]), f'cannoe reassign constxpr {name} in the loop'
+                    assert _is_triton_tensor(liveins[name]), f'cannot reasign constexpr {name} in the loop'
+                    assert loop_defs[name].type == liveins[name].type, \
+                        f'Loop-carried variable {name} has initial type {liveins[name].type} '\
+                        f'but is re-assigned to {loop_defs[name].type} in loop! '\
+                        f'Please make sure that the type stays consistent.'
+
                     # these are loop-carried values
                     names.append(name)
                     ret_types.append(loop_defs[name].type)
