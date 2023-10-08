@@ -202,17 +202,31 @@ dot wait
 Syntax:
 
 ```
-operation ::= `triton_nvidia_gpu.dot_wait` attr-dict
+operation ::= `triton_nvidia_gpu.dot_wait` $input attr-dict `:` type($input)
 ```
 
 This operation defining the waiting action for a async dot, MMAv3 .e.g.
 The subsequent operations should not execute until this operation completes waiting.
+
+Interfaces: InferTypeOpInterface
 
 #### Attributes:
 
 | Attribute | MLIR Type | Description |
 | :-------: | :-------: | ----------- |
 | `pendings` | ::mlir::IntegerAttr | 32-bit signless integer attribute
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `input` | tensor of floating-point values or tensor of integer values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `output` | tensor of floating-point values or tensor of integer values
 
 ### `triton_nvidia_gpu.extract_mbarrier` (::mlir::triton::nvidia_gpu::ExtractMBarrierOp)
 

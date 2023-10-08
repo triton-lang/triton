@@ -117,21 +117,29 @@ Credits: OpenAI kernel team</p>
 <ul class="sphx-glr-horizontal">
 <li><img src="../../_images/sphx_glr_06-fused-attention_001.png" srcset="../../_images/sphx_glr_06-fused-attention_001.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
 <li><img src="../../_images/sphx_glr_06-fused-attention_002.png" srcset="../../_images/sphx_glr_06-fused-attention_002.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_06-fused-attention_003.png" srcset="../../_images/sphx_glr_06-fused-attention_003.png" alt="06 fused attention" class = "sphx-glr-multi-img"/></li>
 </ul>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd:
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head48-d64-fwd-causal=True:
      N_CTX      Triton
-0   1024.0  127.313639
-1   2048.0  153.650918
-2   4096.0  169.731156
-3   8192.0  177.565129
-4  16384.0  183.684289
-fused-attention-batch4-head48-d64-bwd:
+0   1024.0  125.234374
+1   2048.0  151.637800
+2   4096.0  166.216529
+3   8192.0  175.392600
+4  16384.0  180.835644
+fused-attention-batch4-head48-d64-fwd-causal=False:
      N_CTX      Triton
-0   1024.0   68.700791
-1   2048.0   90.999183
-2   4096.0  106.055138
-3   8192.0  116.220926
-4  16384.0  121.412738
+0   1024.0  166.364243
+1   2048.0  176.197563
+2   4096.0  180.808891
+3   8192.0  182.646431
+4  16384.0  183.621470
+fused-attention-batch4-head48-d64-bwd-causal=True:
+     N_CTX      Triton
+0   1024.0   68.810675
+1   2048.0   91.319686
+2   4096.0  106.177072
+3   8192.0  116.242725
+4  16384.0  121.454854
 </pre></div>
 </div>
 <div class="line-block">
@@ -155,13 +163,17 @@ fused-attention-batch4-head48-d64-bwd:
     <span class="n">STAGE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">offs_m</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">offs_n</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">N_CTX</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="c1"># range of values handled by this stage</span>
     <span class="k">if</span> <span class="n">STAGE</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
         <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">start_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
-    <span class="k">else</span><span class="p">:</span>
+    <span class="k">elif</span> <span class="n">STAGE</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
         <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="o">=</span> <span class="n">start_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="p">(</span><span class="n">start_m</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">BLOCK_M</span>
         <span class="n">lo</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">multiple_of</span><span class="p">(</span><span class="n">lo</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">)</span>
+    <span class="c1"># causal = False</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">N_CTX</span>
     <span class="n">K_block_ptr</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">advance</span><span class="p">(</span><span class="n">K_block_ptr</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">lo</span><span class="p">))</span>
     <span class="n">V_block_ptr</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">advance</span><span class="p">(</span><span class="n">V_block_ptr</span><span class="p">,</span> <span class="p">(</span><span class="n">lo</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
     <span class="c1"># loop over k, v and update accumulator</span>
@@ -286,23 +298,25 @@ fused-attention-batch4-head48-d64-bwd:
     <span class="c1"># load q: it will stay in SRAM throughout</span>
     <span class="n">q</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">Q_block_ptr</span><span class="p">)</span>
     <span class="c1"># stage 1: off-band</span>
+    <span class="c1"># For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE</span>
+    <span class="c1"># For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE</span>
     <span class="k">if</span> <span class="n">STAGE</span> <span class="o">&amp;</span> <span class="mi">1</span><span class="p">:</span>
         <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span> <span class="o">=</span> <span class="n">_attn_fwd_inner</span><span class="p">(</span>
             <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K_block_ptr</span><span class="p">,</span> <span class="n">V_block_ptr</span><span class="p">,</span>
             <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>
             <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span>
-            <span class="mi">1</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span>
+            <span class="mi">4</span> <span class="o">-</span> <span class="n">STAGE</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
         <span class="p">)</span>
-    <span class="c1"># barrier makes it easier for compielr to schedule the</span>
-    <span class="c1"># two loops independently</span>
-    <span class="n">tl</span><span class="o">.</span><span class="n">debug_barrier</span><span class="p">()</span>
     <span class="c1"># stage 2: on-band</span>
     <span class="k">if</span> <span class="n">STAGE</span> <span class="o">&amp;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="c1"># barrier makes it easier for compielr to schedule the</span>
+        <span class="c1"># two loops independently</span>
+        <span class="n">tl</span><span class="o">.</span><span class="n">debug_barrier</span><span class="p">()</span>
         <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span> <span class="o">=</span> <span class="n">_attn_fwd_inner</span><span class="p">(</span>
             <span class="n">acc</span><span class="p">,</span> <span class="n">l_i</span><span class="p">,</span> <span class="n">m_i</span><span class="p">,</span> <span class="n">q</span><span class="p">,</span> <span class="n">K_block_ptr</span><span class="p">,</span> <span class="n">V_block_ptr</span><span class="p">,</span>
             <span class="n">start_m</span><span class="p">,</span> <span class="n">qk_scale</span><span class="p">,</span>
             <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_DMODEL</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">,</span>
-            <span class="mi">2</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span>
+            <span class="mi">2</span><span class="p">,</span> <span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span>
         <span class="p">)</span>
     <span class="c1"># epilogue</span>
     <span class="n">m_i</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">log2</span><span class="p">(</span><span class="n">l_i</span><span class="p">)</span>
@@ -586,6 +600,7 @@ fused-attention-batch4-head48-d64-bwd:
         <span class="n">BLOCK_N</span> <span class="o">=</span> <span class="mi">64</span> <span class="k">if</span> <span class="n">Lk</span> <span class="o">&lt;=</span> <span class="mi">64</span> <span class="k">else</span> <span class="mi">32</span>
         <span class="n">num_stages</span> <span class="o">=</span> <span class="mi">4</span> <span class="k">if</span> <span class="n">Lk</span> <span class="o">&lt;=</span> <span class="mi">64</span> <span class="k">else</span> <span class="mi">3</span>
         <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">4</span>
+        <span class="n">stage</span> <span class="o">=</span> <span class="mi">3</span> <span class="k">if</span> <span class="n">causal</span> <span class="k">else</span> <span class="mi">1</span>
         <span class="c1"># Tuning for H100</span>
         <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">9</span><span class="p">:</span>
             <span class="n">num_warps</span> <span class="o">=</span> <span class="mi">8</span>
@@ -603,7 +618,7 @@ fused-attention-batch4-head48-d64-bwd:
             <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">BLOCK_M</span><span class="p">,</span>
             <span class="n">BLOCK_N</span><span class="o">=</span><span class="n">BLOCK_N</span><span class="p">,</span>
             <span class="n">BLOCK_DMODEL</span><span class="o">=</span><span class="n">Lk</span><span class="p">,</span>
-            <span class="n">STAGE</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+            <span class="n">STAGE</span><span class="o">=</span><span class="n">stage</span><span class="p">,</span>
             <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>
             <span class="n">num_stages</span><span class="o">=</span><span class="n">num_stages</span><span class="p">,</span>
         <span class="p">)</span>
@@ -714,30 +729,34 @@ fused-attention-batch4-head48-d64-bwd:
 <span class="k">except</span> <span class="ne">BaseException</span><span class="p">:</span>
     <span class="n">HAS_FLASH</span> <span class="o">=</span> <span class="kc">False</span>
 
+<span class="n">TORCH_HAS_FP8</span> <span class="o">=</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="s1">&#39;float8_e5m2&#39;</span><span class="p">)</span>
 <span class="n">BATCH</span><span class="p">,</span> <span class="n">N_HEADS</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">64</span>
 <span class="c1"># vary seq length for fixed head and batch=4</span>
-<span class="n">configs</span> <span class="o">=</span> <span class="p">[</span>
-    <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
-        <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;N_CTX&quot;</span><span class="p">],</span>
-        <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">)],</span>
-        <span class="n">line_arg</span><span class="o">=</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span>
-        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;triton&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;flash&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
-        <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Triton&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;Flash-2&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
-        <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;red&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
-        <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;ms&quot;</span><span class="p">,</span>
-        <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;fused-attention-batch</span><span class="si">{</span><span class="n">BATCH</span><span class="si">}</span><span class="s2">-head</span><span class="si">{</span><span class="n">N_HEADS</span><span class="si">}</span><span class="s2">-d</span><span class="si">{</span><span class="n">D_HEAD</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-        <span class="n">args</span><span class="o">=</span><span class="p">{</span>
-            <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">N_HEADS</span><span class="p">,</span>
-            <span class="s2">&quot;BATCH&quot;</span><span class="p">:</span> <span class="n">BATCH</span><span class="p">,</span>
-            <span class="s2">&quot;D_HEAD&quot;</span><span class="p">:</span> <span class="n">D_HEAD</span><span class="p">,</span>
-            <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span>
-            <span class="s2">&quot;mode&quot;</span><span class="p">:</span> <span class="n">mode</span><span class="p">,</span>
-            <span class="s2">&quot;causal&quot;</span><span class="p">:</span> <span class="n">causal</span><span class="p">,</span>
-        <span class="p">},</span>
-    <span class="p">)</span>
-    <span class="k">for</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;fwd&quot;</span><span class="p">,</span> <span class="s2">&quot;bwd&quot;</span><span class="p">]</span>
-    <span class="k">for</span> <span class="n">causal</span> <span class="ow">in</span> <span class="p">[</span><span class="kc">True</span><span class="p">]</span>
-<span class="p">]</span>
+<span class="n">configs</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">mode</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;fwd&quot;</span><span class="p">,</span> <span class="s2">&quot;bwd&quot;</span><span class="p">]:</span>
+    <span class="k">for</span> <span class="n">causal</span> <span class="ow">in</span> <span class="p">[</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;bwd&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">causal</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">configs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
+                <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;N_CTX&quot;</span><span class="p">],</span>
+                <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">)],</span>
+                <span class="n">line_arg</span><span class="o">=</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span>
+                <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;triton&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;flash&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
+                <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Triton&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s2">&quot;Flash-2&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">HAS_FLASH</span> <span class="k">else</span> <span class="p">[]),</span>
+                <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;red&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
+                <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;ms&quot;</span><span class="p">,</span>
+                <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;fused-attention-batch</span><span class="si">{</span><span class="n">BATCH</span><span class="si">}</span><span class="s2">-head</span><span class="si">{</span><span class="n">N_HEADS</span><span class="si">}</span><span class="s2">-d</span><span class="si">{</span><span class="n">D_HEAD</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s2">-causal=</span><span class="si">{</span><span class="n">causal</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                <span class="n">args</span><span class="o">=</span><span class="p">{</span>
+                    <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">N_HEADS</span><span class="p">,</span>
+                    <span class="s2">&quot;BATCH&quot;</span><span class="p">:</span> <span class="n">BATCH</span><span class="p">,</span>
+                    <span class="s2">&quot;D_HEAD&quot;</span><span class="p">:</span> <span class="n">D_HEAD</span><span class="p">,</span>
+                    <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span>
+                    <span class="s2">&quot;mode&quot;</span><span class="p">:</span> <span class="n">mode</span><span class="p">,</span>
+                    <span class="s2">&quot;causal&quot;</span><span class="p">:</span> <span class="n">causal</span><span class="p">,</span>
+                <span class="p">},</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span><span class="n">configs</span><span class="p">)</span>
@@ -750,7 +769,7 @@ fused-attention-batch4-head48-d64-bwd:
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;triton&quot;</span><span class="p">:</span>
         <span class="n">q</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
         <span class="n">k</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;fwd&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;fwd&quot;</span> <span class="ow">and</span> <span class="n">TORCH_HAS_FP8</span><span class="p">:</span>
             <span class="n">q</span> <span class="o">=</span> <span class="n">q</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
             <span class="n">k</span> <span class="o">=</span> <span class="n">k</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
         <span class="n">v</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">BATCH</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">N_CTX</span><span class="p">,</span> <span class="n">D_HEAD</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -784,7 +803,7 @@ fused-attention-batch4-head48-d64-bwd:
 <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  13.626 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes  18.366 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-python docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/54a35f6ec55f9746935b9566fb6bb1df/06-fused-attention.py"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Python</span> <span class="pre">source</span> <span class="pre">code:</span> <span class="pre">06-fused-attention.py</span></code></a></p>

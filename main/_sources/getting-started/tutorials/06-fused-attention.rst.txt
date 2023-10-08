@@ -28,7 +28,7 @@ Extra Credits:
 - Original flash attention paper (https://arxiv.org/abs/2205.14135)
 - Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 13-659
+.. GENERATED FROM PYTHON SOURCE LINES 13-670
 
 
 
@@ -49,25 +49,39 @@ Extra Credits:
          :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_002.png
          :class: sphx-glr-multi-img
 
+    *
+
+      .. image-sg:: /getting-started/tutorials/images/sphx_glr_06-fused-attention_003.png
+         :alt: 06 fused attention
+         :srcset: /getting-started/tutorials/images/sphx_glr_06-fused-attention_003.png
+         :class: sphx-glr-multi-img
+
 
 .. rst-class:: sphx-glr-script-out
 
  .. code-block:: none
 
-    fused-attention-batch4-head48-d64-fwd:
+    fused-attention-batch4-head48-d64-fwd-causal=True:
          N_CTX      Triton
-    0   1024.0  127.313639
-    1   2048.0  153.650918
-    2   4096.0  169.731156
-    3   8192.0  177.565129
-    4  16384.0  183.684289
-    fused-attention-batch4-head48-d64-bwd:
+    0   1024.0  125.234374
+    1   2048.0  151.637800
+    2   4096.0  166.216529
+    3   8192.0  175.392600
+    4  16384.0  180.835644
+    fused-attention-batch4-head48-d64-fwd-causal=False:
          N_CTX      Triton
-    0   1024.0   68.700791
-    1   2048.0   90.999183
-    2   4096.0  106.055138
-    3   8192.0  116.220926
-    4  16384.0  121.412738
+    0   1024.0  166.364243
+    1   2048.0  176.197563
+    2   4096.0  180.808891
+    3   8192.0  182.646431
+    4  16384.0  183.621470
+    fused-attention-batch4-head48-d64-bwd-causal=True:
+         N_CTX      Triton
+    0   1024.0   68.810675
+    1   2048.0   91.319686
+    2   4096.0  106.177072
+    3   8192.0  116.242725
+    4  16384.0  121.454854
 
 
 
@@ -97,13 +111,17 @@ Extra Credits:
         STAGE: tl.constexpr,
         offs_m: tl.constexpr,
         offs_n: tl.constexpr,
+        N_CTX: tl.constexpr,
     ):
         # range of values handled by this stage
         if STAGE == 1:
             lo, hi = 0, start_m * BLOCK_M
-        else:
+        elif STAGE == 2:
             lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
             lo = tl.multiple_of(lo, BLOCK_M)
+        # causal = False
+        else:
+            lo, hi = 0, N_CTX
         K_block_ptr = tl.advance(K_block_ptr, (0, lo))
         V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
         # loop over k, v and update accumulator
@@ -228,23 +246,25 @@ Extra Credits:
         # load q: it will stay in SRAM throughout
         q = tl.load(Q_block_ptr)
         # stage 1: off-band
+        # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
+        # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
         if STAGE & 1:
             acc, l_i, m_i = _attn_fwd_inner(
                 acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
                 start_m, qk_scale,
                 BLOCK_M, BLOCK_DMODEL, BLOCK_N,
-                1, offs_m, offs_n,
+                4 - STAGE, offs_m, offs_n, N_CTX,
             )
-        # barrier makes it easier for compielr to schedule the
-        # two loops independently
-        tl.debug_barrier()
         # stage 2: on-band
         if STAGE & 2:
+            # barrier makes it easier for compielr to schedule the
+            # two loops independently
+            tl.debug_barrier()
             acc, l_i, m_i = _attn_fwd_inner(
                 acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
                 start_m, qk_scale,
                 BLOCK_M, BLOCK_DMODEL, BLOCK_N,
-                2, offs_m, offs_n,
+                2, offs_m, offs_n, N_CTX,
             )
         # epilogue
         m_i += tl.math.log2(l_i)
@@ -528,6 +548,7 @@ Extra Credits:
             BLOCK_N = 64 if Lk <= 64 else 32
             num_stages = 4 if Lk <= 64 else 3
             num_warps = 4
+            stage = 3 if causal else 1
             # Tuning for H100
             if torch.cuda.get_device_capability()[0] == 9:
                 num_warps = 8
@@ -545,7 +566,7 @@ Extra Credits:
                 BLOCK_M=BLOCK_M,
                 BLOCK_N=BLOCK_N,
                 BLOCK_DMODEL=Lk,
-                STAGE=3,
+                STAGE=stage,
                 num_warps=num_warps,
                 num_stages=num_stages,
             )
@@ -656,30 +677,34 @@ Extra Credits:
     except BaseException:
         HAS_FLASH = False
 
+    TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
     BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
     # vary seq length for fixed head and batch=4
-    configs = [
-        triton.testing.Benchmark(
-            x_names=["N_CTX"],
-            x_vals=[2**i for i in range(10, 15)],
-            line_arg="provider",
-            line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
-            line_names=["Triton"] + (["Flash-2"] if HAS_FLASH else []),
-            styles=[("red", "-"), ("blue", "-")],
-            ylabel="ms",
-            plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}",
-            args={
-                "H": N_HEADS,
-                "BATCH": BATCH,
-                "D_HEAD": D_HEAD,
-                "dtype": torch.float16,
-                "mode": mode,
-                "causal": causal,
-            },
-        )
-        for mode in ["fwd", "bwd"]
-        for causal in [True]
-    ]
+    configs = []
+    for mode in ["fwd", "bwd"]:
+        for causal in [True, False]:
+            if mode == "bwd" and not causal:
+                continue
+            configs.append(
+                triton.testing.Benchmark(
+                    x_names=["N_CTX"],
+                    x_vals=[2**i for i in range(10, 15)],
+                    line_arg="provider",
+                    line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
+                    line_names=["Triton"] + (["Flash-2"] if HAS_FLASH else []),
+                    styles=[("red", "-"), ("blue", "-")],
+                    ylabel="ms",
+                    plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-causal={causal}",
+                    args={
+                        "H": N_HEADS,
+                        "BATCH": BATCH,
+                        "D_HEAD": D_HEAD,
+                        "dtype": torch.float16,
+                        "mode": mode,
+                        "causal": causal,
+                    },
+                )
+            )
 
 
     @triton.testing.perf_report(configs)
@@ -692,7 +717,7 @@ Extra Credits:
         if provider == "triton":
             q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
             k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
-            if mode == "fwd":
+            if mode == "fwd" and TORCH_HAS_FP8:
                 q = q.to(torch.float8_e5m2)
                 k = k.to(torch.float8_e5m2)
             v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
@@ -728,7 +753,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** ( 0 minutes  13.626 seconds)
+   **Total running time of the script:** ( 0 minutes  18.366 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:

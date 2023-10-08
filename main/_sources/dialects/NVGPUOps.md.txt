@@ -67,7 +67,7 @@ operation ::= `nvgpu.cluster_id` attr-dict
 
 Traits: AlwaysSpeculatableImplTrait
 
-Interfaces: ConditionallySpeculatable, NoMemoryEffect (MemoryEffectOpInterface)
+Interfaces: ConditionallySpeculatable, InferTypeOpInterface, NoMemoryEffect (MemoryEffectOpInterface)
 
 Effects: MemoryEffects::Effect{}
 
@@ -280,6 +280,8 @@ operation ::= `nvgpu.offset_of_stmatrix_v4` operands attr-dict `:` type(operands
 ```
 
 
+Interfaces: InferTypeOpInterface
+
 #### Attributes:
 
 | Attribute | MLIR Type | Description |
@@ -313,6 +315,8 @@ Syntax:
 operation ::= `nvgpu.offset_of_sts64` operands attr-dict `:` type(operands) `->` type($offset)
 ```
 
+
+Interfaces: InferTypeOpInterface
 
 #### Attributes:
 
@@ -549,6 +553,8 @@ operation ::= `nvgpu.wgmma_desc_create` $buffer `,` $height attr-dict `:` functi
 ```
 
 
+Interfaces: InferTypeOpInterface
+
 #### Attributes:
 
 | Attribute | MLIR Type | Description |
@@ -628,13 +634,27 @@ operation ::= `nvgpu.wgmma` $opA `,` $opB (`,` $opC^)? attr-dict `:` functional-
 Syntax:
 
 ```
-operation ::= `nvgpu.wgmma_wait_group` attr-dict
+operation ::= `nvgpu.wgmma_wait_group` $input attr-dict `:` type($input)
 ```
 
+
+Interfaces: InferTypeOpInterface
 
 #### Attributes:
 
 | Attribute | MLIR Type | Description |
 | :-------: | :-------: | ----------- |
 | `pendings` | ::mlir::IntegerAttr | 32-bit signless integer attribute
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `input` | LLVM structure type
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `output` | LLVM structure type
 
