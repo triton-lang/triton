@@ -265,7 +265,7 @@ class Mark:
         self.fn = fn
         self.benchmarks = benchmarks
 
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, **kwrags):
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, return_df=False, **kwrags):
         import os
 
         import matplotlib.pyplot as plt
@@ -321,11 +321,18 @@ class Mark:
             if save_path:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
         df = df[x_names + bench.line_names]
+        if diff_col and df.shape[1] == 2:
+            col0,col1= df.columns.tolist()
+            df['Diff'] =  df[col1] - df[col0]
+
         if print_data:
             print(bench.plot_name + ':')
             print(df)
         if save_path:
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
+
+        if return_df:
+            return df
 
     def run(self, show_plots=False, print_data=False, save_path='', **kwargs):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
