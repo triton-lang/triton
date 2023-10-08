@@ -265,7 +265,7 @@ class Mark:
         self.fn = fn
         self.benchmarks = benchmarks
 
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, return_df=False, **kwrags):
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, **kwrags):
         import os
 
         import matplotlib.pyplot as plt
@@ -330,23 +330,27 @@ class Mark:
             print(df)
         if save_path:
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
+        return df
 
-        if return_df:
-            return df
-
-    def run(self, show_plots=False, print_data=False, save_path='', **kwargs):
+    def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
+        result_dfs = []
         if save_path:
             html = open(os.path.join(save_path, "results.html"), "w")
             html.write("<html><body>\n")
         for bench in benchmarks:
-            result_df = self._run(bench, save_path, show_plots, print_data, **kwargs)
+            result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
             if save_path:
                 html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
         if save_path:
             html.write("</body></html>\n")
-        return result_df
+        if return_df:
+            if has_single_bench:
+                return result_dfs[0]
+            else:
+                return result_dfs
+        return None
 
 def perf_report(benchmarks):
     """
