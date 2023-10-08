@@ -341,12 +341,12 @@ class Mark:
             html = open(os.path.join(save_path, "results.html"), "w")
             html.write("<html><body>\n")
         for bench in benchmarks:
-            self._run(bench, save_path, show_plots, print_data, **kwargs)
+            result_df = self._run(bench, save_path, show_plots, print_data, **kwargs)
             if save_path:
                 html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
         if save_path:
             html.write("</body></html>\n")
-
+        return result_df
 
 def perf_report(benchmarks):
     """
