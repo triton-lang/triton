@@ -13,12 +13,11 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import BaseBackend, register_backend
+from triton.common.backend import BaseBackend, core_version_key, register_backend
 from triton.common.build import quiet
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
 from triton.runtime.driver import DriverBase
-from triton.runtime.jit import version_key
 
 
 def build_for_backend(name, src, srcdir):
@@ -163,9 +162,12 @@ class ExtensionBackend(BaseBackend):
     def get_architecture_descriptor(self, **kwargs):
         return ""
 
+    def get_version_key(self):
+        return core_version_key()
+
     def make_launcher_stub(self, name, signature, constants):
         # name of files that are cached
-        so_cache_key = make_so_cache_key(version_key(), signature, constants)
+        so_cache_key = make_so_cache_key(self.get_version_key(), signature, constants)
         so_cache_manager = get_cache_manager(so_cache_key)
         so_name = f"{name}.so"
         # retrieve stub from cache if it exists
