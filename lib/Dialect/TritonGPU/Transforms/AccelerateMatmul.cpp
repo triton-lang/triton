@@ -160,25 +160,42 @@ public:
   /// @brief Choose MFMA instruction parameters
   /// @param dot target dot operation
   /// @param mfmaVersion
+  /// @param nonKDim
   /// @return pair {nonKDim, kDim} sizes of one MFMA instruction arguments
-  std::pair<int64_t, int64_t> chooseMfmaDimensions(tt::DotOp dot, int mfmaVersion) const {
-    int64_t nonKDim = 32;
+  std::pair<int64_t, int64_t> chooseMfmaDimensions(tt::DotOp dot,
+                                                   int mfmaVersion,
+                                                   int64_t nonKDim) const {
     // number of matrix elements along k dim per one MFMA intruction
     int64_t kDim = -1;
     auto opType = dot.getA().getType().cast<RankedTensorType>();
     auto elemType = opType.getElementType();
-    if (elemType.isF32())
-      kDim = 2;
-    if (elemType.isF16())
-      kDim = 8;
-    if (elemType.isBF16()) {
-      if (mfmaVersion == 1)
-        kDim = 4;
-      if (mfmaVersion == 2)
+    if (nonKDim == 32) {
+      if (elemType.isF32())
+        kDim = 2;
+      if (elemType.isF16())
         kDim = 8;
+      if (elemType.isBF16()) {
+        if (mfmaVersion == 1)
+          kDim = 4;
+        if (mfmaVersion == 2)
+          kDim = 8;
+      }
+      if (elemType.isInteger(8))
+        kDim = 8;
+    } else {
+      if (elemType.isF32())
+        kDim = 4;
+      if (elemType.isF16())
+        kDim = 16;
+      if (elemType.isBF16()) {
+        if (mfmaVersion == 1)
+          kDim = 8;
+        if (mfmaVersion == 2)
+          kDim = 16;
+      }
+      if (elemType.isInteger(8))
+        kDim = 16;
     }
-    if (elemType.isInteger(8))
-      kDim = 8;
     assert(kDim != -1);
     return {nonKDim, kDim};
   }
@@ -193,7 +210,17 @@ public:
         !oldRetType.getEncoding().isa<ttg::BlockedEncodingAttr>())
       return failure();
 
-    if (!supportMFMA(dotOp))
+    // TODO replace with nonKDim with some heuristic in chooseMfmaDimensions
+    // function
+    int64_t externalNonKDim = 32;
+
+    const char *mfmaType = std::getenv("MFMA_TYPE");
+    if (mfmaType) {
+      externalNonKDim = std::stol(mfmaType);
+      assert(externalNonKDim == 32 || externalNonKDim == 16);
+    }
+
+    if (!supportMFMA(dotOp, externalNonKDim))
       return failure();
 
     auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
@@ -212,7 +239,8 @@ public:
 
     ttg::MfmaEncodingAttr mfmaEnc;
 
-    auto [nonKDim, kDim] = chooseMfmaDimensions(dotOp, mfmaVersion);
+    auto [nonKDim, kDim] =
+        chooseMfmaDimensions(dotOp, mfmaVersion, externalNonKDim);
 
     auto warpsPerTile = warpsPerTileMI200(dotOp, retShape, numWarps);
 
@@ -239,7 +267,15 @@ public:
                          .getOrder();
 
     // kWidth is a number of consecutive elements per one instruction per one thread
-    auto kWidth = kDim / 2;
+    auto kWidth = kDim;
+    // in mfma 32x32 case argument matrix groups elements in 2 groups
+    // in mfma 16x16 case argument matrix groups elements in 4 groups
+    if (nonKDim == 32) {
+      kWidth /= 2;
+    } else {
+      assert(nonKDim == 16);
+      kWidth /= 4;
+    }
     auto newAType = RankedTensorType::get(
         oldAType.getShape(), oldAType.getElementType(),
         ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth));

@@ -1281,6 +1281,11 @@ def gpu_matrix_core_version() -> int:
 def mfma_supported_granularity(m, n, k) -> bool:
     granularity_mn = 32
     granularity_k = 8
+    import os
+    if "MFMA_TYPE" in os.environ and os.environ["MFMA_TYPE"] == "16":
+        granularity_mn = 16
+        granularity_k = 16
+
     if m % granularity_mn != 0 or n % granularity_mn != 0:
         return False
     if k % granularity_k != 0:
@@ -1352,7 +1357,7 @@ def dot(lhs: tl.tensor,
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
         # TODO: This is CUDA specific, check if ROCm has the same limitation
-        assert lhs.shape[1].value >= 32, "small blocks not supported!"
+        assert is_hip() or lhs.shape[1].value >= 32, "small blocks not supported!"
         _0 = builder.get_int32(0)
         ret_scalar_ty = tl.int32
     elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():

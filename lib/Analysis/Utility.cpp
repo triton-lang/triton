@@ -378,10 +378,10 @@ bool supportMMA(triton::DotOp op, int version) {
 }
 
 #ifdef USE_ROCM
-static bool supportMFMAGranularity(int m, int n, int k) {
+static bool supportMFMAGranularity(int m, int n, int k, int64_t nonKDim) {
   // these limitations are dtype dependent, in future we may relax them
-  const int granularityMN = 32;
-  const int granularityK = 8;
+  const int granularityMN = nonKDim;
+  const int granularityK = nonKDim == 32 ? 8 : 16;
   if (m % granularityMN != 0 || n % granularityMN != 0)
     return false;
   if (k % granularityK != 0)
@@ -389,7 +389,7 @@ static bool supportMFMAGranularity(int m, int n, int k) {
   return true;
 }
 
-bool supportMFMA(triton::DotOp op) {
+bool supportMFMA(triton::DotOp op, int64_t nonKDim) {
   auto aTy = op.getA().getType().cast<RankedTensorType>();
   auto bTy = op.getB().getType().cast<RankedTensorType>();
 
@@ -403,7 +403,7 @@ bool supportMFMA(triton::DotOp op) {
   auto bShape = bTy.getShape();
 
   assert(aShape[1] == bShape[0]);
-  if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1]))
+  if (!supportMFMAGranularity(aShape[0], bShape[1], aShape[1], nonKDim))
     return false;
 
   return aElemTy.isF16() || aElemTy.isBF16() || aElemTy.isF32() ||
@@ -455,7 +455,7 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getKWidth() == 4 &&
          dotOperandLayout.getParent() == mfmaLayout &&
-         mfmaLayout.getIsTransposed() &&
+         mfmaLayout.getNonKDim() == 32 && mfmaLayout.getIsTransposed() &&
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 #endif

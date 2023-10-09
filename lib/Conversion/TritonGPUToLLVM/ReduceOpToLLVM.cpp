@@ -435,10 +435,13 @@ private:
       auto inMfma =
         inputTy.getEncoding().dyn_cast<triton::gpu::MfmaEncodingAttr>();
       if (inMfma && inMfma.getIsTransposed()) {
-        //assert(sizeIntraWarps == 2);
-        // Adjecant threads in y dimension in transposed MFMA layout are 32
+        assert(numLaneToReduce == 2 || numLaneToReduce == 4);
+        // for mfma 32x32 adjecant threads in y dimension in transposed MFMA layout are 32
         // apart: [[0 0 0 0 32 32 32 32 ...] [1 1 1 1 33 33 33 33 ...] ...].
-        shuffleIdx = 32;
+        // for mfma 16x16 adjecant threads in y dimension in transposed MFMA layout are 16
+        // apart: [[0 0 0 0 16 16 16 16 32 32 32 32 ...] [1 1 1 1 33 33 33 33 ...] ...].
+        const int warpSize = 64;
+        shuffleIdx = warpSize / N / 2;
       }
 #endif
       for (unsigned i = 0; i < acc.size(); ++i) {

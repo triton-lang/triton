@@ -107,6 +107,7 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
  * @param reps number of instructions repretition to fully cover dot operand
  * @param smemStrides strides in LDS tensor
  * @param loadVecSize number of elements loaded by one operation
+ * @param iNonKDim non-K dimension of dot operand
  * @return vector (i-th element corresponds to i-th load instruction) of
  * 2-element vectors(tensor row and col).
  */
@@ -115,7 +116,7 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
                          const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
                          Value laneId, int warpsPerGroup, int numOfElems,
                          ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
-                         int loadVecSize) {
+                         int loadVecSize, unsigned iNonKDim) {
   auto numM = reps[0];
   auto numK = reps[1];
   const int loadsPerThread = numOfElems / loadVecSize;
@@ -124,6 +125,7 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
 
   Value _0 = i32_val(0);
   Value _32 = i32_val(32);
+  Value nonKDim = i32_val(iNonKDim);
 
   for (int block = 0; block < numM; ++block) {
     Value blockVOffset = i32_val(block * elemsPerInstr[0] * warpsPerGroup);
@@ -134,8 +136,13 @@ computeTensorElemMapping(ConversionPatternRewriter &rewriter, Location loc,
       Value tileVOffset = _0;
       Value tileHOffset = i32_val(tile * elemsPerInstr[1]);
 
-      Value laneVOffset = urem(laneId, _32);
-      Value laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
+      Value laneVOffset = urem(laneId, nonKDim);
+      Value laneHOffset;
+      if (iNonKDim == 32)
+        laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
+      else
+        laneHOffset = mul(udiv(laneId, nonKDim), i32_val(numOfElems));
+
       for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
         Value elemVOffset = _0;
         Value elemHOffset = i32_val(loadId * loadVecSize);
@@ -176,7 +183,7 @@ computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
                     const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
                     Value laneId, int warpsPerGroup, int numOfElems,
                     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout) {
+                    SharedEncodingAttr srcLayout, unsigned nonKDim) {
   SmallVector<Value> strides{smemObj.strides[0], smemObj.strides[1]};
   SmallVector<Value> offsets{smemObj.offsets[0], smemObj.offsets[1]};
 
@@ -190,7 +197,7 @@ computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
 
   auto mapping = computeTensorElemMapping(rewriter, loc, elemsPerInstr, waveId,
                                           laneId, warpsPerGroup, numOfElems,
-                                          reps, offsets, vectorSize);
+                                          reps, offsets, vectorSize, nonKDim);
   llvm::SmallVector<Value> aOffsets(mapping.size());
   for (int i = 0; i < mapping.size(); ++i) {
     Value row = mapping[i][0];
@@ -205,7 +212,7 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
                     const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
                     Value laneId, int warpsPerGroup, int numOfElems,
                     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout) {
+                    SharedEncodingAttr srcLayout, unsigned nonKDim) {
   // transpose reps and offsets, because operand B has layout equal to
   // transposed operand A layout
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
@@ -222,7 +229,7 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
 
   auto mapping = computeTensorElemMapping(rewriter, loc, tElemsPerInstr, waveId,
                                           laneId, warpsPerGroup, numOfElems,
-                                          tReps, toffsets, vectorSize);
+                                          tReps, toffsets, vectorSize, nonKDim);
   llvm::SmallVector<Value> bOffsets(mapping.size());
   for (int i = 0; i < mapping.size(); ++i) {
     // swap row and col, because operand B layout is a transposed operand A
@@ -411,7 +418,8 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
             const SharedMemoryObject &smemObj) {
   auto mfmaLayout = encoding.getParent().cast<MfmaEncodingAttr>();
-  assert(mfmaLayout.getNonKDim() == 32);
+  auto nonKDim = mfmaLayout.getNonKDim();
+  assert(nonKDim == 32 || nonKDim == 16);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   auto aTensorTy = tensor.getType().cast<RankedTensorType>();
@@ -430,14 +438,15 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   auto numRepK = numReps[1];
 
   unsigned iWaveSize = triton::gpu::getWarpSize(mfmaLayout);
+  assert(iWaveSize == 64);
   Value waveSize = i32_val(iWaveSize);
   Value wave = udiv(thread, waveSize);
   Value lane = urem(thread, waveSize);
 
   Value waveM =
       getWaveM(rewriter, loc, wave, warpsPerCTA, mfmaInstrM, shape[0]);
-  int numOfElems =
-      std::max<int>(mfmaInstrM * mfmaInstrK / iWaveSize /*wave size*/, 1);
+  int numOfElems = mfmaInstrM * mfmaInstrK / iWaveSize;
+  assert(numOfElems >= 1);
   unsigned int maxNumWarps = shape[0] / mfmaInstrM;
   int warpsPerGroupM = std::min(warpsPerCTA[0], maxNumWarps);
   aElemTy = typeConverter->convertType(aElemTy);
@@ -498,7 +507,7 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   } else { // normal path
     SmallVector<Value> offsets = computeOffsetsAType(
         rewriter, loc, aElemsPerInstr, waveM, lane, warpsPerGroupM, numOfElems,
-        numReps, smemObj, sharedLayout);
+        numReps, smemObj, sharedLayout, nonKDim);
 
     Value smemBase = computeBasePtr(rewriter, loc, smemObj);
     Type resElemTy = typeConverter->convertType(aElemTy);
@@ -551,7 +560,8 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
             const SharedMemoryObject &smemObj) {
   auto mfmaLayout = encoding.getParent().cast<MfmaEncodingAttr>();
-  assert(mfmaLayout.getNonKDim() == 32);
+  auto nonKDim = mfmaLayout.getNonKDim();
+  assert(nonKDim == 32 || nonKDim == 16);
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   auto bTensorTy = tensor.getType().cast<RankedTensorType>();
@@ -569,20 +579,15 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   auto numRepN = numReps[1];
 
   unsigned iWaveSize = triton::gpu::getWarpSize(mfmaLayout);
+  assert(iWaveSize == 64);
   Value waveSize = i32_val(iWaveSize);
   Value wave = udiv(thread, waveSize);
   Value lane = urem(thread, waveSize);
 
   Value waveN =
       getWaveN(rewriter, loc, wave, warpsPerCTA, mfmaInstrN, shape[1]);
-  int numOfElems =
-      std::max<int>(mfmaInstrK * mfmaInstrN / iWaveSize /*wave size*/, 1);
-
-  int macroTileM = std::max<int>(shape[0] / (warpsPerCTA[0] * 32), 1);
-  int wptM = std::min<int>(warpsPerCTA[0], macroTileM);
-  int macroTileN = std::max<int>(shape[1] / (warpsPerCTA[1] * 32), 1);
-  int wptN = std::min<int>(warpsPerCTA[1], macroTileN);
-  int wpt = std::max<int>(wptM, wptN);
+  int numOfElems = mfmaInstrK * mfmaInstrN / iWaveSize;
+  assert(numOfElems >= 1);
 
   unsigned int maxNumWarps = shape[1] / mfmaInstrN;
   int warpsPerGroupN = std::min(warpsPerCTA[1], maxNumWarps);
@@ -648,7 +653,7 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
   } else { // normal path
     llvm::SmallVector<Value> offsets = computeOffsetsBType(
         rewriter, loc, bElemsPerInstr, waveN, lane, warpsPerGroupN, numOfElems,
-        numReps, smemObj, sharedLayout);
+        numReps, smemObj, sharedLayout, nonKDim);
 
     Value smemBase = computeBasePtr(rewriter, loc, smemObj);
     Type resElemTy = typeConverter->convertType(bElemTy);

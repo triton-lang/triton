@@ -82,7 +82,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                       .cast<RankedTensorType>()
                                       .getEncoding()
                                       .dyn_cast<MfmaEncodingAttr>();
-    if (!isOuter && mfmaLayout && supportMFMA(op)) {
+    if (!isOuter && mfmaLayout && supportMFMA(op, mfmaLayout.getNonKDim())) {
       return convertMFMA(op, adaptor, getTypeConverter(), rewriter);
     }
 #endif
