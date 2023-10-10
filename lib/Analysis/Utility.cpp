@@ -161,8 +161,10 @@ unsigned ReduceOpHelper::getThreadsReductionAxis() {
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
-  auto argsLayout = getSrcLayout();
-  return triton::gpu::getWarpsPerCTA(argsLayout)[axis] == 1;
+  auto srcLayout = getSrcLayout();
+  auto srcShape = getSrcShape();
+  return triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] ==
+         1;
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchConfig() {
