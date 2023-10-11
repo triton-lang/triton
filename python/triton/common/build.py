@@ -36,7 +36,13 @@ def libcuda_dirs():
 
 @functools.lru_cache()
 def rocm_path_dir():
-    return os.getenv("ROCM_PATH", default="/opt/rocm")
+    default_path = os.path.join(os.path.dirname(__file__), "..", "third_party", "rocm")
+    # Check if include files have been populated locally.  If so, then we are 
+    # most likely in a whl installation and he rest of our libraries should be here
+    if (os.path.exists(default_path+"/include/hip/hip_runtime.h")):
+        return default_path
+    else:
+        return os.getenv("ROCM_PATH", default="/opt/rocm")
 
 
 @contextlib.contextmanager

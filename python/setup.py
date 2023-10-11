@@ -298,6 +298,7 @@ setup(
         "triton/third_party",
         "triton/tools",
     ],
+    long_description_content_type="text/markdown",
     install_requires=[
         "filelock"
     ],
