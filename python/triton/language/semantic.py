@@ -1274,7 +1274,7 @@ def gpu_matrix_core_version() -> int:
     gpu_name = gfx_arch_details[1].split(':')[0]
     if gpu_name in ['gfx908']:
         return 1
-    if gpu_name in ['gfx90a', 'gfx940', 'gfx941']:
+    if gpu_name in ['gfx90a', 'gfx940', 'gfx941', 'gfx942']:
         return 2
     return 0
 
