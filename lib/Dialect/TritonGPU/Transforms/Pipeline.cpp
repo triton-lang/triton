@@ -1631,6 +1631,16 @@ void PipelinePass::asyncLaunchDots(scf::ForOp forOp) {
     return;
 
   OpBuilder builder(forOp);
+  // 0. insert dot_wait after the last dot in the loop as we implicitly pipeline
+  // wgmma ops by one stage.
+  // This is needed to prevent shared memory inputs to be overriden before the
+  // operation is completed.
+  // TODO: merge this with the rest of the pipelining transformation and look at
+  // a better representation for async dots.
+  tt::DotOp lastDot = dots.back();
+  builder.setInsertionPointAfter(lastDot);
+  auto dotWait = builder.create<tt::nvidia_gpu::DotWaitOp>(
+      lastDot.getLoc(), lastDot.getResult(), dots.size());
 
   // 1. replace Dot with DotAsync
   for (size_t idx = 0; idx < dots.size(); ++idx) {
@@ -1640,7 +1650,7 @@ void PipelinePass::asyncLaunchDots(scf::ForOp forOp) {
         dotOp.getLoc(), dotOp.getA(), dotOp.getB(), dotOp.getC(),
         dotOp.getAllowTF32(), dotOp.getMaxNumImpreciseAcc());
     dotOp.replaceAllUsesWith(dotAsync.getResult());
-    updateConsumerReleaseInfo(dotOp, dotAsync, /*stage=*/1);
+    updateConsumerReleaseInfo(dotOp, dotWait, /*stage=*/1);
     dotOp->erase();
   }
 
@@ -1749,7 +1759,7 @@ void PipelinePass::emitConsumerRelease(Value mbarTensor,
                        std::accumulate(CTASplitNum.begin(), CTASplitNum.end(),
                                        1, std::multiplies{});
   auto numConsumerThreads =
-      isa<ttng::DotAsyncOp>(lastUserWithLargestStage) ? 128 : 32;
+      isa<ttng::DotWaitOp>(lastUserWithLargestStage) ? 128 : 32;
   Value _0 = b.create<arith::ConstantIntOp>(loc, 0, 32);
   Value numArrives = b.create<arith::ConstantIntOp>(
       loc, numConsumerThreads / numRemoteCTAs, 32);
