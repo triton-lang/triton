@@ -1286,6 +1286,8 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
     :type ieee_rounding: bool
     """
     ieee_rounding = _constexpr_to_value(ieee_rounding)
+    x = _to_tensor(x, _builder)
+    y = _to_tensor(y, _builder)
     return semantic.fdiv(x, y, ieee_rounding, _builder)
 
 
@@ -1307,36 +1309,42 @@ def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
 @builtin
 @_add_math_1arg_docstr("exponential")
 def exp(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.exp(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("natural logarithm")
 def log(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.log(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("cosine")
 def cos(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.cos(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("sine")
 def sin(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.sin(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("square root")
 def sqrt(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.sqrt(x, _builder)
 
 
 @builtin
 @_add_math_1arg_docstr("absolute value")
 def abs(x, _builder=None):
+    x = _to_tensor(x, _builder)
     return semantic.abs(x, _builder)
 
 
