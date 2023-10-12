@@ -459,7 +459,11 @@ def compile(fn, **kwargs):
     capability = kwargs.get("cc", None)
 
     if device_type in ["cuda", "hip"]:
-        arch = get_architecture_descriptor(capability)
+        # hip with kwargs.get("cc", None) causes multiprocessing issues in torch.compile
+        if device_type == "hip":
+            arch = get_architecture_descriptor(None if type(capability) is int else capability)
+        else:
+            arch = get_architecture_descriptor(capability)
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
