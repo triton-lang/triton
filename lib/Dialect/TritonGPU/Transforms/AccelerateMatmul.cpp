@@ -117,7 +117,7 @@ class BlockedToMMA : public mlir::RewritePattern {
     int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
     int origBitWidth = finalBitWidth;
     SetVector<Operation *> slice;
-    mlir::getBackwardSlice(x, &slice, bwdFilter);
+    mlir::getBackwardSlice(x, &slice, {{bwdFilter}});
     Operation *firstOp = slice.empty() ? nullptr : *slice.begin();
     if (firstOp)
       if (Value arg = firstOp->getOperand(0))

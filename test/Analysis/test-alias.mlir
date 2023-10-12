@@ -216,10 +216,10 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   // CHECK-NEXT: %arg9 -> %cst_1
   // CHECK-NEXT: %0#0 -> %cst
   // CHECK-NEXT: %0#1 -> %cst_0
-  // CHECK-NEXT: %0#2 -> %cst_2,%cst_2
+  // CHECK-NEXT: %0#2 -> %cst_1,%cst_2,%cst_2
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>, tensor<128x32xf16, #A_SHARED>) {
     // CHECK-NEXT: %arg11 -> %cst_1,%cst_2,%cst_2
-    // CHECK-NEXT: %1 -> %cst_2,%cst_2
+    // CHECK-NEXT: %1 -> %cst_1,%cst_2,%cst_2
     %c_shared_next = scf.for %jv = %lb to %ub step %step iter_args(%c_shared_next = %c_shared) -> (tensor<128x32xf16, #A_SHARED>) {
       // CHECK-NEXT: %2 -> %cst_2,%cst_2
       %c_shared_next_next = scf.if %i1 -> tensor<128x32xf16, #A_SHARED> {

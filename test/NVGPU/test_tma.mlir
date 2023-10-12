@@ -2,9 +2,9 @@
 #SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32,  "triton_gpu.num-ctas" = 2 : i32} {
   tt.func @test_tma(%im2colOffsets0 : !llvm.struct<(i16, i16)>, %im2colOffsets1 : !llvm.struct<(i16, i16, i16)>) {
-    %mbarrier = llvm.mlir.null : !llvm.ptr<i64, 3>
-    %tmaDesc  = llvm.mlir.null : !llvm.ptr<i8, 1>
-    %dst      = llvm.mlir.null : !llvm.ptr<i8, 3>
+    %mbarrier = llvm.mlir.zero : !llvm.ptr<i64, 3>
+    %tmaDesc  = llvm.mlir.zero : !llvm.ptr<i8, 1>
+    %dst      = llvm.mlir.zero : !llvm.ptr<i8, 3>
     %l2desc   = arith.constant 0 : i64
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
