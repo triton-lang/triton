@@ -19,23 +19,21 @@ jobs:
           path: 'torchbench'
           submodules: 'recursive'
 
-      - name: Clear Triton cache
-        run: |
-          rm -rf ~/.triton
-
       - name: Update PATH
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
 
+      # We don't want to use to use torchbench nightlies here
       - name: Install TorchBench and models
         run: |
           cd torchbench
           python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
           python3 install.py
  
       - name: Install the latest Triton wheel
         run: |
-          python3 -m pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
+          python3 -m pip install --upgrade triton-nightly --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/
 
       - name: Tune Nvidia GPU
         run: |
@@ -47,8 +45,7 @@ jobs:
         run: |
           cd torchbench
           python3 test.py -v
-          
-    
+
       - name: Reset GPU clocks
         run: |
           sudo nvidia-smi -i 0 -rgc
