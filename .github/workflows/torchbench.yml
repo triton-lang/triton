@@ -8,7 +8,7 @@ env:
 
 jobs:
   TorchBench-Nvidia:
-    runs-on: ubuntu-latest #[self-hosted, A100]
+    runs-on: ubuntu-latest #[self-hosted, V100]
 
     steps:
       - name: Checkout TorchBench
@@ -29,12 +29,12 @@ jobs:
       # Force user install, TorchBench expects a conda environment
       - name: Install TorchBench and models
         run: |
-          cd torchbench
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
           echo -e "[install]\nprefix=${HOME}/.local\n" > ${HOME}/.pydistutils.cfg
           df -h
           du --max-depth=1 -h
+          cd torchbench
           python3 install.py
  
       - name: Install the latest Triton wheel
