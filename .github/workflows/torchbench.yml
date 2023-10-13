@@ -23,6 +23,7 @@ jobs:
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
           df -h
+          du --max-depth=1 -h
 
       # We don't want to use to use TorchBench nightlies here
       # Force user install, TorchBench expects a conda environment
@@ -37,6 +38,8 @@ jobs:
       - name: Install the latest Triton wheel
         run: |
           python3 -m pip install --upgrade triton-nightly --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/
+          df -h
+          du --max-depth=1 -h
 
       - name: Tune Nvidia GPU
         run: |
