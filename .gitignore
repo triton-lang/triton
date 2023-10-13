@@ -27,3 +27,7 @@ cmake-build-*
 
 # Third-party binaries
 ptxas
+
+# ROCM
+log*
+python/triton/third_party/cuda/bin/ptxas

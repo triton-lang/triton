@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.18)
 
+# build third_party backend for upstream and exit
+# TODO: check if this is working in CI
+option(BACKEND_MODE "Build ROCM BACKEND for upstream Triton" ON)
+if(BACKEND_MODE)
+    message(STATUS "Option is ON")
+    add_subdirectory(backend)
+    return()
+endif()
+
+# stand alone build
 if(POLICY CMP0116)
 # Introduced in cmake 3.20
 # https://cmake.org/cmake/help/latest/policy/CMP0116.html
