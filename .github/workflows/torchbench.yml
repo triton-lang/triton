@@ -1,0 +1,54 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+
+env:
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+
+jobs:
+  TorchBench-Nvidia:
+    runs-on: ubuntu-latest #[self-hosted, A100]
+
+    steps:
+      - name: Checkout TorchBench
+        uses: actions/checkout@v4
+        with:
+          repository: 'pytorch/benchmark'
+          ref: '7dc8e8113f8d5dc97aaa2bef94f9d389047cfcde'
+          path: 'torchbench'
+          submodules: 'recursive'
+
+      - name: Clear Triton cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Install TorchBench and models
+        run: |
+          cd torchbench
+          python3 -m pip install --upgrade pip
+          python3 install.py
+ 
+      - name: Install the latest Triton wheel
+        run: |
+          python3 -m pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
+
+      - name: Tune Nvidia GPU
+        run: |
+          sudo nvidia-smi -pm 1
+          sudo nvidia-smi --lock-gpu-clocks=1280,1280
+          nvidia-smi
+
+      - name: Run TorchBench
+        run: |
+          cd torchbench
+          python3 test.py -v
+          
+    
+      - name: Reset GPU clocks
+        run: |
+          sudo nvidia-smi -i 0 -rgc
