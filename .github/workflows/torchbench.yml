@@ -22,6 +22,7 @@ jobs:
       - name: Update PATH
         run: |
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+          df -h
 
       # We don't want to use to use TorchBench nightlies here
       # Force user install, TorchBench expects a conda environment
