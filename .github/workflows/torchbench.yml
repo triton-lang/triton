@@ -33,6 +33,8 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
           echo -e "[install]\nprefix=${HOME}/.local\n" > ${HOME}/.pydistutils.cfg
+          df -h
+          du --max-depth=1 -h
           python3 install.py
  
       - name: Install the latest Triton wheel
