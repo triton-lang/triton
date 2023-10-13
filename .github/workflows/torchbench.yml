@@ -1,4 +1,4 @@
-name: Integration Tests
+name: TorchBench Nightly
 
 on:
   workflow_dispatch:
