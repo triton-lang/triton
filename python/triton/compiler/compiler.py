@@ -36,6 +36,7 @@ from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
 class CudaTargetDescriptor:
     capability: int
     num_warps: int
+    enable_fp_fusion: bool
 
 
 def _is_cuda(target):
@@ -195,7 +196,7 @@ def llir_to_ptx(mod: Any, target: CudaTargetDescriptor, ptx_version: int = None)
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
-    return translate_llvmir_to_ptx(mod, target.capability, ptx_version)
+    return translate_llvmir_to_ptx(mod, target.capability, ptx_version, target.enable_fp_fusion)
 
 
 def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
@@ -206,7 +207,7 @@ def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
     :return: str
     '''
     ptxas, _ = path_to_ptxas()
-    return compile_ptx_to_cubin(ptx, ptxas, target.capability)
+    return compile_ptx_to_cubin(ptx, ptxas, target.capability, target.enable_fp_fusion)
 
 
 # ------------------------------------------------------------------------------
@@ -371,6 +372,7 @@ def compile(fn, **kwargs):
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
     num_stages = kwargs.get("num_stages", get_arch_default_num_stages(device_type, capability=capability))
+    enable_fp_fusion = kwargs.get("enable_fp_fusion", True)
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
@@ -393,7 +395,7 @@ def compile(fn, **kwargs):
     # build architecture descriptor
     if device_type == "cuda":
         _device_backend = get_backend(device_type)
-        target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps)
+        target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps, enable_fp_fusion=enable_fp_fusion)
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
