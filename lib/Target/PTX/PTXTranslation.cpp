@@ -44,7 +44,8 @@ static bool findAndReplace(std::string &str, const std::string &begin,
   return true;
 }
 
-std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
+std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version,
+                                 bool enable_fp_fusion) {
   // LLVM version in use may not officially support target hardware.
   // Supported versions for LLVM 14 are here:
   // https://github.com/llvm/llvm-project/blob/f28c006a5895fc0e329fe15fead81e37457cb1d1/clang/include/clang/Basic/BuiltinsNVPTX.def
@@ -84,7 +85,8 @@ std::string translateLLVMIRToPTX(llvm::Module &module, int cc, int version) {
   auto target =
       llvm::TargetRegistry::lookupTarget(module.getTargetTriple(), error);
   llvm::TargetOptions opt;
-  opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+  if (enable_fp_fusion)
+    opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
   opt.UnsafeFPMath = false;
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
