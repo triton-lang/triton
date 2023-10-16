@@ -139,7 +139,7 @@ def path_to_nvdisasm():
 
 
 @functools.lru_cache()
-def core_version_key():
+def compute_core_version_key():
     import pkgutil
     contents = []
     # frontend
@@ -166,8 +166,11 @@ def core_version_key():
             contents += [hashlib.sha1(f.read()).hexdigest()]
     return '-'.join(TRITON_VERSION) + '-'.join(contents)
 
-
+_cached_cuda_version_key = None
 def get_cuda_version_key():
-    key = core_version_key()
-    ptxas = path_to_ptxas()[0]
-    return key + '-' + hashlib.sha1(subprocess.check_output([ptxas, "--version"])).hexdigest()
+    global _cached_cuda_version_key
+    if _cached_cuda_version_key is None:
+        key = compute_core_version_key()
+        ptxas = path_to_ptxas()[0]
+        _cached_cuda_version_key = key + '-' + hashlib.sha1(subprocess.check_output([ptxas, "--version"])).hexdigest()
+    return _cached_cuda_version_key

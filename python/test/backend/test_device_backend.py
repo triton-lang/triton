@@ -13,7 +13,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import BaseBackend, core_version_key, register_backend
+from triton.common.backend import BaseBackend, compute_core_version_key, register_backend
 from triton.common.build import quiet
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
@@ -124,6 +124,7 @@ class ExtensionBackend(BaseBackend):
     def __init__(self, device_type: str) -> None:
         super(ExtensionBackend, self).__init__(device_type)
         self.driver = ExtensionDriver()
+        self.version_key = None
 
     def add_stages(self, arch, extern_libs, stages):
         filter_in_stages = ["ast", "ttir", "ttgir"]
@@ -163,7 +164,9 @@ class ExtensionBackend(BaseBackend):
         return ""
 
     def get_version_key(self):
-        return core_version_key()
+        if self.version_key is None:
+            self.version_key = compute_core_version_key()
+        return self.version_key
 
     def make_launcher_stub(self, name, signature, constants):
         # name of files that are cached
