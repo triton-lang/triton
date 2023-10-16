@@ -640,7 +640,10 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
     auto *currentOp = (slice)[currentIndex];
     // Compute and insert the backwardSlice starting from currentOp.
     backwardSlice.clear();
-    getBackwardSlice(currentOp, &backwardSlice, backwardFilter);
+    mlir::BackwardSliceOptions opt;
+    opt.omitBlockArguments = true;
+    opt.filter = backwardFilter;
+    getBackwardSlice(currentOp, &backwardSlice, opt);
     slice.insert(backwardSlice.begin(), backwardSlice.end());
 
     // Compute and insert the forwardSlice starting from currentOp.
