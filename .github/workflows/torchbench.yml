@@ -29,13 +29,13 @@ jobs:
       # Force user install, TorchBench expects a conda environment
       - name: Install TorchBench and models
         run: |
+          echo -e "[install]\nprefix=${HOME}/.local\n" > ${HOME}/.pydistutils.cfg
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-          echo -e "[install]\nprefix=${HOME}/.local\n" > ${HOME}/.pydistutils.cfg
           df -h
           du --max-depth=1 -h
           cd torchbench
-          python3 install.py
+          python3 install.py detectron2_fasterrcnn_r_101_c4
  
       - name: Install the latest Triton wheel
         run: |
