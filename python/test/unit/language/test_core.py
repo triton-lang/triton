@@ -3073,6 +3073,20 @@ def test_constexpr_scalar_shape(device):
     kernel[(1,)](x_tri, 32)
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256) % 8)
 
+
+@triton.jit
+def static_assert_func():
+    tl.static_assert(tl.constexpr(False), f"Assert is firing because the constexpr progation did not work properly")
+
+
+def test_constexpr_propagation():
+    @triton.jit
+    def _kernel(COND: tl.constexpr):
+        NEW_COND = COND
+        if NEW_COND:
+            static_assert_func()
+    _kernel[(1,)](False)
+
 # -------------
 # test call
 # -------------
