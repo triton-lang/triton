@@ -47,7 +47,7 @@ jobs:
         echo "Short LLVM commit hash: ${SHORT_LLVM_COMMIT_HASH}"
         echo "short_llvm_commit_hash=${SHORT_LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
 
-        INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.platform }}"
+        INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}"
         echo "LLVM installation directory name: ${INSTALL_DIR}"
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
 
@@ -73,8 +73,8 @@ jobs:
       uses: actions/cache@v3
       with:
         path: ${{ env.SCCACHE_DIR }}
-        key: ${{ matrix.config.platform }}-${{ env.short_llvm_commit_hash }}
-        restore-keys: ${{ matrix.config.platform }}-
+        key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
+        restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
 
     - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
       if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
