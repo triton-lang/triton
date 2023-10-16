@@ -4,6 +4,7 @@ from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
 from .._C.libtriton.triton import ir
+from ..common.build import is_hip
 from . import core as tl
 
 import triton._C.libtriton.triton as _triton
@@ -1300,6 +1301,19 @@ def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
     if not mfma_supported_granularity(M, N ,K):
         return False
     return True
+
+def gpu_has_mfma() -> bool:
+    if not is_hip():
+        return False
+    return True  # mfma supported in ['gfx908', 'gfx90a']
+
+
+def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
+    if not gpu_has_mfma():
+        return False
+    # TODO: Add check for configurations and types.
+    return True
+
 
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,

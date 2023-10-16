@@ -1,17 +1,18 @@
 import functools
 import os
 
+from ..common.build import is_hip
 from . import core
 
 
 @functools.lru_cache()
 def libdevice_path():
-    import torch
     third_party_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "third_party")
-    if torch.version.hip is None:
-        default = os.path.join(third_party_dir, "cuda", "lib", "libdevice.10.bc")
+    if is_hip():
+        default = os.path.join(third_party_dir, "hip", "lib", "bitcode", "cuda2gcn.bc")
     else:
-        default = os.path.join(third_party_dir, "rocm", "lib", "bitcode", "cuda2gcn.bc")
+        default = os.path.join(third_party_dir, "cuda", "lib", "libdevice.10.bc")
+
     return os.getenv("TRITON_LIBDEVICE_PATH", default)
 
 

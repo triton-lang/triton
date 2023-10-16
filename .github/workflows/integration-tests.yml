@@ -27,7 +27,7 @@ jobs:
         run: |
           if [ x"${{ github.repository }}" == x"openai/triton" ]; then
             echo '::set-output name=matrix-required::[["self-hosted", "A100"], ["self-hosted", "H100"]]'
-            echo '::set-output name=matrix-optional::[]'
+            echo '::set-output name=matrix-optional::[["self-hosted", "gfx908"], ["self-hosted", "arc770"]]'
           else
             echo '::set-output name=matrix-required::["ubuntu-latest"]'
             echo '::set-output name=matrix-optional::["ubuntu-latest"]'
@@ -210,10 +210,12 @@ jobs:
       - name: Install Triton on ROCM
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
+          git submodule update --init --recursive
           cd python
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
           python3 -m pip install torch==1.13.1 --index-url https://download.pytorch.org/whl/rocm5.2
+          export TRITON_CODEGEN_AMD_HIP_BACKEND=1
           python3 -m pip install --no-build-isolation -vvv '.[tests]'
 
       - name: Install Triton on XPU
@@ -235,7 +237,7 @@ jobs:
         if: ${{ env.BACKEND == 'ROCM'}}
         run: |
           cd python/test/unit/language
-          python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py::test_empty_kernel"
+          python3 -m pytest --capture=tee-sys -rfs --verbose "test_core.py"
 
       - name: Run python tests on XPU
         if: ${{ env.BACKEND == 'XPU'}}
