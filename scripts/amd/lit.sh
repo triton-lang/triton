@@ -18,4 +18,4 @@ lit -v "$LIT_TEST_DIR"
 # lit -v "$LIT_TEST_DIR/Target/tritongpu_to_llvmir.mlir"
 # lit -v "$LIT_TEST_DIR/Target/tritongpu_to_ptx.mlir?
 
-# triton-opt %s -split-input-file --convert-triton-gpu-rocm-to-llvm | FileCheck --check-prefixes=CHECK,GCN %s
+# triton-opt %s -split-input-file --convert-triton-gpu-to-llvm | FileCheck --check-prefixes=CHECK,GCN %s

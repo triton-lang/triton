@@ -257,7 +257,7 @@ void init_triton_rocm_translation(py::module &m) {
 
 void init_rocm_backend_for_triton(py::module &m) {
   // std::cout << "init_rocm_backend_for_triton" << std::endl;
-  py::module subm = m.def_submodule("triton_rocm");
+  py::module subm = m.def_submodule("triton");
 
   init_triton_rocm_translation(subm);
   // std::cout << "init_rocm_backend_for_triton: done!" << std::endl;

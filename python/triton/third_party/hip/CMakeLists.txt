@@ -1,7 +1,11 @@
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# FLAGS
+message(STATUS "HIP_BACKEND_MODE = ${HIP_BACKEND_MODE}")
+set(ROCM_DEFAULT_DIR "/opt/rocm")
+add_definitions( -DROCM_DEFAULT_DIR="${ROCM_DEFAULT_DIR}")
 set(ROCM_LIBRARIES
-  ${CMAKE_CURRENT_SOURCE_DIR}/../lib/rocm/libhsa-runtime64.so
+  ${CMAKE_CURRENT_SOURCE_DIR}/lib/hsa/libhsa-runtime64.so
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -16,7 +20,7 @@ set_property(GLOBAL PROPERTY GLOBAL_DEPENDS_DEBUG_MODE 1)
 
 # Python module
 if(TRITON_BUILD_PYTHON_MODULE)
-    message(STATUS "Adding ROCM Backend Python module")
+    message(STATUS "Adding HIP Backend Python module")
     set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR})
     set(PYTHON_SRC ${PYTHON_SRC_PATH}/rocm_backend_for_triton.cc)
     include_directories("." ${PYTHON_SRC_PATH})
@@ -33,9 +37,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     endif()
 
     add_library(rocm_backend_for_triton SHARED ${PYTHON_SRC})
-
-    # get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-    # get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
     set(ROCM_EXTENSION_LIBRARIES
             TritonAnalysisROCM
@@ -71,24 +72,38 @@ if(TRITON_BUILD_PYTHON_MODULE)
             MLIRMathToLLVM
             MLIRTransformUtils
             MLIRLLVMToLLVMIRTranslation
-            # MLIRNVVMToLLVMIRTranslation
             MLIRROCDLToLLVMIRTranslation
+            # MLIRNVVMToLLVMIRTranslation
             )
     target_link_libraries(rocm_backend_for_triton PRIVATE ${ROCM_EXTENSION_LIBRARIES})
     target_link_libraries(rocm_backend_for_triton PRIVATE ${LLVM_LIBRARIES})
-    # TODO: Figure out which target is sufficient to fix errors; rocm_backend_for_triton is
-    # apparently not enough
     link_libraries(stdc++fs)
-
     target_link_options(rocm_backend_for_triton PRIVATE ${LLVM_LDFLAGS})
 
-
-
+    # copy to upstream third_party dir
+    file(REMOVE_RECURSE ${PYTHON_THIRD_PARTY_PATH}/hip)
     file(INSTALL
-         ${CMAKE_CURRENT_SOURCE_DIR}/__init__.py
-         DESTINATION ${PYTHON_THIRD_PARTY_PATH}/hip/)
+         ${CMAKE_CURRENT_SOURCE_DIR}/
+         DESTINATION ${PYTHON_THIRD_PARTY_PATH}/hip)
 
-    file(INSTALL
-         ${CMAKE_CURRENT_SOURCE_DIR}/../python/triton/third_party/rocm/lib/bitcode
-         DESTINATION ${PYTHON_THIRD_PARTY_PATH}/hip/lib/)
+    # set HIP_BACKEND_MODE to true
+    set(HIP_BACKEND_PY "${PYTHON_THIRD_PARTY_PATH}/hip/hip_backend.py")
+    set(HIP_BACKEND_PY_STAMP "${PYTHON_THIRD_PARTY_PATH}/hip/hip_backend.py.stamp")
+
+    add_custom_command(
+        OUTPUT ${HIP_BACKEND_PY_STAMP}
+        COMMAND 
+            sed -i'' -e 's/HIP_BACKEND_MODE[[:space:]]*=[[:space:]]*False/HIP_BACKEND_MODE = True/' ${HIP_BACKEND_PY}
+            COMMAND 
+            touch ${HIP_BACKEND_PY_STAMP}
+        DEPENDS ${HIP_BACKEND_PY}
+        COMMENT "Modifying hip_backend.py to enable HIP_BACKEND_MODE."
+    )
+
+    add_custom_target(
+        modify_file 
+        ALL 
+        DEPENDS ${HIP_BACKEND_PY_STAMP}
+        COMMENT "Checking and applying modifications to hip_backend.py"
+    )
 endif()

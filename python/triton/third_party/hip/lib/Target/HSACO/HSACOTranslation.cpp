@@ -221,7 +221,7 @@ std::string generate_hsaco(llvm::Module *module, const std::string &triple,
   std::string lld_path = compiletime_path.string();
   if (!std::filesystem::exists(lld_path)) {
     std::string rocm_path = ::triton::tools::getenv("ROCM_PATH");
-    auto ROCM_DEFAULT_DIR = "/opt/rocm";
+    // auto ROCM_DEFAULT_DIR = "/opt/rocm";
     lld_path = (rocm_path.empty()) ? ROCM_DEFAULT_DIR : rocm_path;
     lld_path += "/llvm/bin/ld.lld";
   }

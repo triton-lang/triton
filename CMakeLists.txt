@@ -2,10 +2,9 @@ cmake_minimum_required(VERSION 3.18)
 
 # build third_party backend for upstream and exit
 # TODO: check if this is working in CI
-option(BACKEND_MODE "Build ROCM BACKEND for upstream Triton" ON)
-if(BACKEND_MODE)
-    message(STATUS "Option is ON")
-    add_subdirectory(backend)
+if(HIP_BACKEND_MODE)
+    message(STATUS "ROCM Third Party Backend Mode is ON")
+    add_subdirectory(python/triton/third_party/hip)
     return()
 endif()
 
@@ -212,9 +211,9 @@ include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party/rocm/lib/libhsa-runtime64.so)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party/hip/lib/hsa/libhsa-runtime64.so)
   set(ROCM_LIBRARIES
-    ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party/rocm/lib/libhsa-runtime64.so
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party/hip/lib/hsa/libhsa-runtime64.so
   )
 elseif(EXISTS "$ENV{ROCM_PATH}/lib/libhsa-runtime64.so" )
   set(ROCM_LIBRARIES
@@ -249,6 +248,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonNvidiaGPUTransforms
     TritonLLVMIR
     TritonPTX
+    TritonHSACO
     ${dialect_libs}
     ${conversion_libs}
 

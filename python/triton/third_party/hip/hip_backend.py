@@ -7,15 +7,40 @@ from pathlib import Path
 from typing import Any, Tuple
 
 
-# import triton._C.libtriton.triton as _triton
-import triton._C.librocm_backend_for_triton.triton_rocm as _triton_rocm
 from triton.common import _build
 from triton.common.backend import BaseBackend, register_backend
 from triton.compiler.make_launcher import get_cache_manager, version_key, make_so_cache_key
 from triton.compiler.utils import generate_cu_signature
 from triton.runtime import jit
 from triton.runtime.driver import HIPDriver
+from triton.compiler.compiler import optimize_ttgir, parse_mlir_module, ttgir_to_llir, ttir_to_ttgir
 
+HIP_BACKEND_MODE = False
+
+if HIP_BACKEND_MODE:
+    from ..._C.librocm_backend_for_triton import triton as _triton
+else:
+    from ..._C.libtriton import triton as _triton
+
+
+def make_stub(name, signature, constants, ids, **kwargs):
+    # name of files that are cached
+    so_cache_key = make_so_cache_key(version_key(), signature, constants, ids, **kwargs)
+    so_cache_manager = get_cache_manager(so_cache_key)
+    so_name = f"{name}.so"
+    # retrieve stub from cache if it exists
+    cache_path = so_cache_manager.get_file(so_name)
+    if cache_path is None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = generate_launcher_hip(constants, signature, ids)
+            src_path = os.path.join(tmpdir, "main.c")
+            with open(src_path, "w") as f:
+                f.write(src)
+            so = _build(name, src_path, tmpdir)
+            with open(so, "rb") as f:
+                return so_cache_manager.put(f.read(), so_name, binary=True)
+    else:
+        return cache_path
 
 
 def ty_to_cpp(ty):
@@ -38,9 +63,8 @@ def ty_to_cpp(ty):
 
 
 def generate_launcher_hip(constants, signature, ids):
-    # print("generate_launcher_hip")
     start_desc = len(signature)
-    # signature = generate_cu_signature(constants, signature, ids)
+    signature = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -152,7 +176,7 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
 }}
 
 static PyObject* launch(PyObject* self, PyObject* args) {{
-  // printf("launch\\n");
+   // printf("launch\\n");
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
@@ -216,28 +240,6 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
     return src
 
 
-def make_stub(name, signature, constants, ids, **kwargs):
-    # name of files that are cached
-    so_cache_key = make_so_cache_key(version_key(), signature, constants, ids, **kwargs)
-    so_cache_manager = get_cache_manager(so_cache_key)
-    so_name = f"{name}.so"
-    # retrieve stub from cache if it exists
-    cache_path = so_cache_manager.get_file(so_name)
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src = generate_launcher_hip(constants, signature, ids)
-            src_path = os.path.join(tmpdir, "main.c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(name, src_path, tmpdir)
-            with open(so, "rb") as f:
-                return so_cache_manager.put(f.read(), so_name, binary=True)
-    else:
-        return cache_path
-
-# AMDGCN translation
-
-
 def get_amdgcn_bitcode_paths(gfx_arch: str):
     # print("get_amdgcn_bitcode_paths")
     gpu_arch_agnostic_bitcode_libraries = ["opencl.bc",
@@ -248,7 +250,7 @@ def get_amdgcn_bitcode_paths(gfx_arch: str):
                                            "oclc_correctly_rounded_sqrt_on.bc",
                                            "oclc_unsafe_math_off.bc",
                                            "oclc_wavefrontsize64_on.bc",
-                                           "oclc_abi_version_400.bc",]
+                                           "oclc_abi_version_400.bc", ]
 
     gfx_arch_id = re.search('gfx(\\w+)', gfx_arch).group(1).strip()
 
@@ -295,8 +297,8 @@ def get_amdgpu_arch_fulldetails():
         gfx_arch = os.environ.get('MI_GPU_ARCH', arch_name)
         if gfx_arch is None:
             raise RuntimeError('gfx_arch is None (not specified)')
-        
-        return {"gfx_triple": arch_triple, "gfx_arch": gfx_arch, "gfx_features":arch_features}
+
+        return {"gfx_triple": arch_triple, "gfx_arch": gfx_arch, "gfx_features": arch_features}
     except BaseException:
         return None
 
@@ -345,21 +347,21 @@ def update_extern_libs(extern_libs: dict, gfx_arch: str):
 
 
 # passes
-def ttir_to_ttgir_rocm(module: str, compute_capability:int, num_warps:int, num_stages:int):
-    return _triton_rocm.translate_ttir_to_ttgir_rocm(module, compute_capability, num_warps, num_stages)
+def ttir_to_ttgir_rocm(module: str, compute_capability: int, num_warps: int, num_stages: int):
+    return _triton.translate_ttir_to_ttgir_rocm(module, compute_capability, num_warps, num_stages)
 
 
 def optimize_ttgir_rocm():
     pass
 
 
-def ttgir_to_llir_rocm(module: str, extern_libs: dict, arch:dict):
+def ttgir_to_llir_rocm(module: str, extern_libs: dict, arch: dict):
     names, paths = update_extern_libs(extern_libs, arch["gfx_arch"])
-    llvmIR = _triton_rocm.translate_ttgir_to_llvmir(module, names, paths)
+    llvmIR = _triton.translate_ttgir_to_llvmir(module, names, paths)
     return llvmIR
 
 
-def llir_to_amdgcn_and_hsaco(module: str, arch: dict):
+def llir_to_amdgcn_and_hsaco_rocm(module: str, arch: dict):
     '''
     Translate TritonGPU module to HSACO code based on full details of gpu architecture.
     :param mod: a TritonGPU dialect module
@@ -367,15 +369,24 @@ def llir_to_amdgcn_and_hsaco(module: str, arch: dict):
         - AMDGCN code
         - Path to HSACO object
     '''
-    return _triton_rocm.translate_llvmir_to_hsaco(module, arch["gfx_arch"], arch["gfx_triple"], arch["gfx_features"])
-
-# fused pass
+    return _triton.translate_llvmir_to_hsaco(module, arch["gfx_arch"], arch["gfx_triple"], arch["gfx_features"])
 
 
 def ttir_to_amdgcn_and_hsaco(module, context, arch, num_warps, num_stages, extern_libs) -> Tuple[str, str]:
     gfx_arch, gfx_triple, gfx_features = get_arch_details(arch)
     names, paths = update_extern_libs(extern_libs, gfx_arch)
-    return _triton_rocm.translate_triton_ir_to_amdgcn_and_hsaco(str(module), gfx_arch, gfx_triple, gfx_features, num_warps, num_stages, names, paths)
+    return _triton.translate_triton_ir_to_amdgcn_and_hsaco(str(module), gfx_arch, gfx_triple, gfx_features, num_warps, num_stages, names, paths)
+
+
+def llir_to_amdgcn_and_hsaco(mod: Any, gfx_arch: str, gfx_triple: str, gfx_features: str) -> Tuple[str, str]:
+    '''
+    Translate TritonGPU module to HSACO code based on full details of gpu architecture.
+    :param mod: a TritonGPU dialect module
+    :return:
+        - AMDGCN code
+        - Path to HSACO object
+    '''
+    return _triton.translate_llvmir_to_hsaco(mod, gfx_arch, gfx_triple, gfx_features)
 
 
 class HIPBackend(BaseBackend):
@@ -384,29 +395,53 @@ class HIPBackend(BaseBackend):
         self.driver = HIPDriver()
         self.stub_so_path = ""
 
-    def add_stages(self, arch: dict, extern_libs: dict, stages:dict):
-        # add stages
-        stages["ttgir"] = (lambda path: Path(path).read_text(),
-                            lambda src: ttir_to_ttgir_rocm(str(src), 0, arch["num_warps"], arch["num_stages"]))
-        stages["llir"] = (lambda path: Path(path).read_text(),
-                            lambda src: ttgir_to_llir_rocm(src, extern_libs, arch))
-        stages["amdgcn"] = (lambda path: Path(path).read_text(),
-                            lambda src: llir_to_amdgcn_and_hsaco(src, arch))
+    def is_standalone(self):
+        return not HIP_BACKEND_MODE
+
+    def add_stages(self, arch: dict, extern_libs: dict, stages: dict, other: dict = {}):
+        if self.is_standalone():
+            num_warps = arch["num_warps"]
+            num_ctas = arch["num_ctas"]
+            num_stages = arch["num_stages"]
+            gfx_arch = arch["gfx_arch"]
+            gfx_triple = arch["gfx_triple"]
+            gfx_features = arch["gfx_features"]
+
+            context = other["context"]
+            warp_size = other["warp_size"]
+            cluster_info = other["cluster_info"]
+            enable_warp_specialization = other["enable_warp_specialization"]
+            enable_persistent = other["enable_persistent"]
+            optimize_epilogue = other["optimize_epilogue"]
+            tma_infos = other["tma_infos"]
+            waves_per_eu = other["waves_per_eu"]
+            matrix_instr_nonkdim = other["matrix_instr_nonkdim"]
+
+            stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
+                               lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_instr_nonkdim))
+            stages["llir"] = (lambda path: Path(path).read_text(),
+                              lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos, waves_per_eu))
+
+            extern_libs.update(get_amdgcn_bitcode_paths(gfx_arch))
+            for key in list(extern_libs):
+                if extern_libs[key] == '' or extern_libs[key] is None:
+                    extern_libs.pop(key)
+
+            stages["amdgcn"] = (lambda path: Path(path).read_text(),
+                                lambda src: llir_to_amdgcn_and_hsaco(src, gfx_arch,
+                                                                     gfx_triple,
+                                                                     gfx_features))
+        else:
+            # add stages
+            stages["ttgir"] = (lambda path: Path(path).read_text(),
+                               lambda src: ttir_to_ttgir_rocm(str(src), 0, arch["num_warps"], arch["num_stages"]))
+            stages["llir"] = (lambda path: Path(path).read_text(),
+                              lambda src: ttgir_to_llir_rocm(src, extern_libs, arch))
+            stages["amdgcn"] = (lambda path: Path(path).read_text(),
+                                lambda src: llir_to_amdgcn_and_hsaco_rocm(src, arch))
 
     def add_meta_info(self, ir, module, next_module, metadata, asm):
         pass
-
-        # if ir == "amdgcn":
-        #     # print("HIPBackend.add_meta_info")
-        #     asm[ir] = str(next_module[0])
-
-        #     metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
-
-        #     if "shared" not in metadata.keys():
-        #         metadata["shared"] = _triton_rocm.get_shared_memory_size(module)
-        #         # metadata["shared"] = 32
-        #         # metadata["shared"] = 0
-        #     asm["hsaco_path"] = next_module[1]
 
     def get_driver(self):
         return self.driver
@@ -430,13 +465,14 @@ class HIPBackend(BaseBackend):
         return "hsaco_path"
 
     def get_architecture_descriptor(self, **kwargs):
-        # get arch 
+        # get arch
         arch = get_amdgpu_arch_fulldetails()
 
         # set default values
         arch["num_warps"] = 4
         arch["num_stages"] = 2
         arch["num_ctas"] = 1
+        arch["warp_size"] = 64
         return arch
 
     def make_launcher_stub(self, name, signature, constants, ids):
@@ -445,9 +481,13 @@ class HIPBackend(BaseBackend):
         return self.stub_so_path
 
     def get_shared_memory_size(self, module):
-        return _triton_rocm.get_shared_memory_size(module)
+        if self.is_standalone():
+            return _triton.get_shared_memory_size(module)
+        else:
+            return _triton.get_shared_memory_size(module)
 
     def get_num_warps(self, module):
-        return _triton_rocm.get_num_warps(module)
-
-register_backend("hip", HIPBackend)
+        if self.is_standalone():
+            return _triton.get_num_warps(module)
+        else:
+            return _triton.get_num_warps(module)

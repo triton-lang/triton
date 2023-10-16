@@ -15,6 +15,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Target/HSACO/HSACOTranslation.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "llvm/IR/LLVMContext.h"
@@ -142,6 +143,11 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
   } else if (targetKind == "ptx") {
     llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
                                                    ptxVersion.getValue());
+  } else if (targetKind == "hsaco") {
+    auto [module, hsaco] = mlir::triton::translateLLVMIRToHSACO(
+        *llvmir, GCNArch.getValue(), GCNTriple.getValue(),
+        GCNFeatures.getValue());
+    llvm::outs() << hsaco;
   } else {
     llvm::errs() << "Error: Unknown target specified: " << targetKind << "\n";
     return failure();
