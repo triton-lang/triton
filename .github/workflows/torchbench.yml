@@ -23,6 +23,7 @@ jobs:
         run: |
           python3 -m venv ${HOME}/torchbench/venv
           source ${HOME}/torchbench/venv/bin/activate
+          echo PATH=${PATH} >> $GITHUB_ENV
 
       # We don't want to use to use TorchBench nightlies here
       - name: Install TorchBench and models
@@ -51,4 +52,3 @@ jobs:
         if: always()
         run: |
           sudo nvidia-smi -i 0 -rgc
-          deactivate
