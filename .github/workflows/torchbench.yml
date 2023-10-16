@@ -44,17 +44,17 @@ jobs:
           df -h
           du --max-depth=1 -h
 
-      - name: Tune Nvidia GPU
-        run: |
-          sudo nvidia-smi -pm 1
-          sudo nvidia-smi --lock-gpu-clocks=1280,1280
-          nvidia-smi
+      # - name: Tune Nvidia GPU
+      #   run: |
+      #     sudo nvidia-smi -pm 1
+      #     sudo nvidia-smi --lock-gpu-clocks=1280,1280
+      #     nvidia-smi
 
       - name: Run TorchBench
         run: |
           cd torchbench
           python3 test.py -v
 
-      - name: Reset GPU clocks
-        run: |
-          sudo nvidia-smi -i 0 -rgc
+      # - name: Reset GPU clocks
+      #   run: |
+      #     sudo nvidia-smi -i 0 -rgc
