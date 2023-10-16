@@ -19,33 +19,22 @@ jobs:
           path: 'torchbench'
           submodules: 'recursive'
 
-      - name: Update PATH
+      - name: Create Python venv
         run: |
-          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
-          df -h
-          du --max-depth=1 -h
+          python3 -m venv ${HOME}/torchbench/venv
+          source ${HOME}/torchbench/venv/bin/activate
 
       # We don't want to use to use TorchBench nightlies here
-      # Force user install, TorchBench expects a conda environment
       - name: Install TorchBench and models
         run: |
-          cd python
-          ls
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-          df -h
-          du --max-depth=1 -h
-          cd ../torchbench
-          echo -e "[install]\nprefix=${HOME}/.local\n" > ${HOME}/.pydistutils.cfg
+          cd torchbench
           python3 install.py detectron2_fasterrcnn_r_101_c4
-          df -h
-          du --max-depth=1 -h
-          
+
       - name: Install the latest Triton wheel
         run: |
           python3 -m pip install --upgrade triton-nightly --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/
-          df -h
-          du --max-depth=1 -h
 
       - name: Tune Nvidia GPU
         run: |
@@ -58,6 +47,8 @@ jobs:
           cd torchbench
           python3 test.py -v TestBenchmark.test_detectron2_fasterrcnn_r_101_c4_train_cuda
 
-      - name: Reset GPU clocks
+      - name: Cleanup and reset GPU clocks
+        if: always()
         run: |
           sudo nvidia-smi -i 0 -rgc
+          deactivate
