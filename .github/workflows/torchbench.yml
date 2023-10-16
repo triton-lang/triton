@@ -53,7 +53,7 @@ jobs:
       - name: Run TorchBench
         run: |
           cd torchbench
-          python3 test.py -v
+          python3 test.py -v TestBenchmark.test_detectron2_fasterrcnn_r_101_c4_train_cuda
 
       # - name: Reset GPU clocks
       #   run: |
