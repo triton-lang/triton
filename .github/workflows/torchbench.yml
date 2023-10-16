@@ -8,7 +8,7 @@ env:
 
 jobs:
   TorchBench-Nvidia:
-    runs-on: ubuntu-latest #[self-hosted, V100]
+    runs-on: ubuntu-latest #[self-hosted, A100]
 
     steps:
       - name: Checkout TorchBench
