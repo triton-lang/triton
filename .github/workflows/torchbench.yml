@@ -11,6 +11,11 @@ jobs:
     runs-on: [self-hosted, A100]
 
     steps:
+      - name: Clear cache
+        run: |
+          rm -rf ${HOME}/.triton
+          rm -rf ${HOME}/torchbench
+
       - name: Checkout TorchBench
         uses: actions/checkout@v4
         with:
