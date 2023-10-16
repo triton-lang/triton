@@ -271,8 +271,8 @@ private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
 };
 
-class AxisInfoAnalysis
-    : public dataflow::SparseDataFlowAnalysis<dataflow::Lattice<AxisInfo>> {
+class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
+                             dataflow::Lattice<AxisInfo>> {
 private:
   AxisInfoVisitorList visitors;
 
@@ -284,7 +284,7 @@ private:
 
 public:
   AxisInfoAnalysis(DataFlowSolver &solver);
-  using dataflow::SparseDataFlowAnalysis<
+  using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
   using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
 

@@ -1914,7 +1914,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
-        "max": {"int32": "arith.maxsi", "float32": "arith.maxf", "float16": "arith.maxf"},
+        "max": {"int32": "arith.maxsi", "float32": "arith.maximumf", "float16": "arith.maximumf"},
         "sum": {"int32": "arith.addi", "float32": "arith.addf", "float16": "arith.addf"}
     }[reduce_op][dtype_str]
     numpy_op = {
