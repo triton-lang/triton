@@ -21,6 +21,7 @@ jobs:
 
       - name: Update PATH
         run: |
+          echo "BACKEND=CUDA" >> "${GITHUB_ENV}"
           echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
           df -h
           du --max-depth=1 -h
