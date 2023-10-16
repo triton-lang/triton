@@ -79,6 +79,7 @@ void materializeGetAgentIdOp(Operation *parentOp) {
     builder.setInsertionPoint(agentIdOp);
     Value globalRoleId = builder.create<arith::ConstantIntOp>(loc, 0, 32);
     int globalNumWarps = 0;
+    SmallVector<Operation *> deprecatedOps;
     for (auto cmpOp : agentIdOp->getUsers()) {
       assert(isa<arith::CmpIOp>(cmpOp));
       for (auto u : cmpOp->getUsers()) {
@@ -111,10 +112,13 @@ void materializeGetAgentIdOp(Operation *parentOp) {
           Value cond =
               builder.create<arith::AndIOp>(loc, lowerBound, upperBound);
           cmpOp->getResult(0).replaceAllUsesWith(cond);
-          cmpOp->erase();
+          deprecatedOps.push_back(cmpOp);
           break;
         }
       }
+    }
+    for (Operation *cmpOp : deprecatedOps) {
+      cmpOp->erase();
     }
   });
 }
@@ -145,39 +149,24 @@ LoadType scanLoadTypes(ttng::CreateTokenOp createTokenOp) {
 }
 
 Value getMBarrierPhaseBit(OpBuilder &builder, Operation *op,
-                          bool skipFirstWait) {
+                          bool emptyBarrier) {
   // TODO: currently we only support one loop, no nested loop, while or
   // condition.
   auto loc = op->getLoc();
   auto forOp = op->getParentOfType<scf::ForOp>();
   if (!forOp) {
-    return builder.create<arith::ConstantIntOp>(loc, skipFirstWait, 1);
+    return builder.create<arith::ConstantIntOp>(loc, emptyBarrier, 1);
   }
 
-  auto defOp = op->getOperand(0).getDefiningOp();
-  assert(isa<ttng::CreateTokenOp>(defOp) &&
-         "mbarrier's definingOp is not createTokenOp");
-  ttng::CreateTokenOp createTokenOp = dyn_cast<ttng::CreateTokenOp>(defOp);
-  Value numStage =
-      builder.create<arith::ConstantIntOp>(loc, createTokenOp.getNum(), 32);
-  Value curStep = forOp.getBody()->getArguments().back();
-  if (curStep.getType() == builder.getIndexType()) {
-    curStep =
-        builder.create<arith::IndexCastOp>(loc, numStage.getType(), curStep);
+  // for (..., phase, pipelineIdx)
+  unsigned numArgs = forOp.getBody()->getNumArguments();
+  assert(numArgs > 2 && "Unexpected number of arguments");
+  Value curPhase = forOp.getBody()->getArgument(numArgs - 2);
+  if (emptyBarrier) {
+    Value _1_1b = builder.create<arith::ConstantIntOp>(loc, 1, 1);
+    curPhase = builder.create<mlir::arith::XOrIOp>(loc, curPhase, _1_1b);
   }
-  Value curPhase = builder.create<arith::DivUIOp>(loc, curStep, numStage);
-  if (skipFirstWait) {
-    // If skipFirstWait, it waits for phaseBit 1
-    Value _1 = builder.create<arith::ConstantIntOp>(loc, 1, 32);
-    curPhase = builder.create<arith::AddIOp>(loc, curPhase, _1);
-  }
-  Value _2 = builder.create<arith::ConstantIntOp>(loc, 2, 32);
-  // TODO: May use alternative methods of phaseBit calculation to avoid high
-  // overhead of RemOp
-  Value phaseBit = builder.create<arith::RemUIOp>(loc, curPhase, _2);
-  Value _0 = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  return builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, phaseBit,
-                                       _0);
+  return curPhase;
 }
 
 int getTxBytes(ttng::InsertSliceAsyncV2Op load) {
@@ -260,7 +249,7 @@ void processProducerAcquireOp(OpBuilder &builder, ttng::ProducerAcquireOp op,
   auto loc = op.getLoc();
   // The first producer_aquire should be met immediately, so initailly producer
   // skips the fisrt wait
-  Value phase = getMBarrierPhaseBit(builder, op, 1);
+  Value phase = getMBarrierPhaseBit(builder, op, true);
   auto waitOp = builder.create<ttng::MBarrierWaitOp>(loc, bufferEmpty, phase);
   assert(op.getOperation()->hasAttr("async_agent"));
   setAgentIds(waitOp, getAgentIds(op.getOperation()));
@@ -296,7 +285,7 @@ void processProducerCommitOp(OpBuilder &builder, ttng::ProducerCommitOp op,
 void processConsumerWaitOp(OpBuilder &builder, ttng::ConsumerWaitOp op,
                            Value bufferFull) {
   auto loc = op.getLoc();
-  Value phase = getMBarrierPhaseBit(builder, op, 0);
+  Value phase = getMBarrierPhaseBit(builder, op, false);
   auto waitOp = builder.create<ttng::MBarrierWaitOp>(loc, bufferFull, phase);
   assert(op.getOperation()->hasAttr("async_agent"));
   setAgentIds(waitOp, getAgentIds(op.getOperation()));
@@ -530,6 +519,7 @@ void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
         builder.create<arith::ConstantIntOp>(loc, nameBarrierId - 1, 32);
     // Process mutex users
     int numUsers = 0;
+    SmallVector<Operation *> deprecatedOps;
     for (Operation *user : createMutexOp.getResult().getUsers()) {
       numUsers++;
       assert(numUsers <= 2);
@@ -543,14 +533,20 @@ void mutexSyncPingPang(Operation *parentOp, int numAgents, int &nameBarrierId,
         Value barLeave = builder.create<arith::SelectOp>(
             loc, isRole0, namedBarrierId1, namedBarrierId0);
         builder.create<ttng::NamedBarrierArriveOp>(loc, barLeave, numThreads);
-      } else
+      } else {
         llvm_unreachable("Unexpected user of mutex");
+      }
+      deprecatedOps.push_back(user);
+    }
+    for (Operation *user : deprecatedOps) {
       user->erase();
     }
     nameBarrierId -= 2;
     nameBarrierIdEnd -= 2;
-    createMutexOp.erase();
   });
+
+  parentOp->walk(
+      [](ttng::CreateMutexOp createMutexOp) { createMutexOp.erase(); });
 }
 
 void processLockOp(OpBuilder &builder, ttng::LockOp op) {
@@ -587,6 +583,7 @@ void materializeMutexOperationsOthers(ModuleOp parentOp) {
     OpBuilder builder(createMutexOp);
 
     // Process mutex users
+    SmallVector<Operation *> deprecatedOps;
     for (Operation *user : createMutexOp.getResult().getUsers()) {
       auto loc = user->getLoc();
       builder.setInsertionPoint(user);
@@ -596,6 +593,9 @@ void materializeMutexOperationsOthers(ModuleOp parentOp) {
         processUnlockOp(builder, op);
       else
         llvm_unreachable("Unexpected user of mutex");
+      deprecatedOps.push_back(user);
+    }
+    for (Operation *user : deprecatedOps) {
       user->erase();
     }
 

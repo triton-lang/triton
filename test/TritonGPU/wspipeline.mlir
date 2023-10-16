@@ -22,9 +22,10 @@
 // CHECK: triton_gpu.extract_slice
 // CHECK: triton_gpu.extract_slice
 // CHECK: triton_nvidia_gpu.dot_async
-// CHECK: triton_nvidia_gpu.dot_wait
+// CHECK: triton_nvidia_gpu.dot_wait {{.*}} pendings = 1
 // CHECK: triton_nvidia_gpu.consumer_release
 // CHECK: scf.yield
+// CHECK: triton_nvidia_gpu.dot_wait {{.*}} pendings = 0
 // CHECK: async_agent = dense<1> : vector<1xi32>
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
