@@ -35,6 +35,7 @@ jobs:
         run: |
           
           python3 -m pip install --upgrade pip
+          python3 -m pip install numba
           python3 -m pip install --upgrade torch==2.2.0.dev20231017 torchvision==0.17.0.dev20231017 torchaudio==2.2.0.dev20231017 --index-url https://download.pytorch.org/whl/nightly/cu121
           cd torchbench
           python3 install.py -v BERT_pytorch
