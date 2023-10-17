@@ -5,19 +5,13 @@ ADD sccache /sccache
 ADD "${llvm_dir}" /source/llvm-project
 ENV SCCACHE_DIR="/sccache"
 ENV SCCACHE_CACHE_SIZE="2G"
-
-RUN echo -e "[llvmtoolset-build]\nname=LLVM Toolset 13.0 - Build\nbaseurl=https://buildlogs.centos.org/c7-llvm-toolset-13.0.x86_64/\ngpgcheck=0\nenabled=1" > /etc/yum.repos.d/llvmtoolset-build.repo
 # Install build dependencies
-RUN yum install --assumeyes centos-release-scl
-RUN yum install --assumeyes --nogpgcheck llvm-toolset-13.0
-RUN yum install --assumeyes rh-python38-python-devel rh-python38-python-pip
-SHELL [ "/usr/bin/scl", "enable", "llvm-toolset-13.0", "rh-python38" ]
-
-RUN python3 -m pip install --upgrade pip
-RUN python3 -m pip install --upgrade cmake ninja sccache
+RUN yum install --assumeyes llvm-toolset
+RUN python3.8 -m pip install --upgrade pip
+RUN python3.8 -m pip install --upgrade cmake ninja sccache
 
 # Install MLIR's Python Dependencies
-RUN python3 -m pip install -r /source/llvm-project/mlir/python/requirements.txt
+RUN python3.8 -m pip install -r /source/llvm-project/mlir/python/requirements.txt
 
 # Configure, Build, Test, and Install LLVM
 RUN cmake -GNinja -Bbuild \
