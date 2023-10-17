@@ -6,9 +6,8 @@ ADD "${llvm_dir}" /source/llvm-project
 ENV SCCACHE_DIR="/sccache"
 ENV SCCACHE_CACHE_SIZE="2G"
 # Install build dependencies
-RUN yum install --assumeyes llvm-toolset
+RUN yum install --assumeyes llvm-toolset cmake ninja sccache
 RUN python3.8 -m pip install --upgrade pip
-RUN python3.8 -m pip install --upgrade cmake ninja sccache
 
 # Install MLIR's Python Dependencies
 RUN python3.8 -m pip install -r /source/llvm-project/mlir/python/requirements.txt
