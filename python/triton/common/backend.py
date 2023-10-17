@@ -166,7 +166,10 @@ def compute_core_version_key():
             contents += [hashlib.sha1(f.read()).hexdigest()]
     return '-'.join(TRITON_VERSION) + '-'.join(contents)
 
+
 _cached_cuda_version_key = None
+
+
 def get_cuda_version_key():
     global _cached_cuda_version_key
     if _cached_cuda_version_key is None:
