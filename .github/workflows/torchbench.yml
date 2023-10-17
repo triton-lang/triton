@@ -31,12 +31,12 @@ jobs:
           echo PATH=${PATH} >> $GITHUB_ENV
 
       # Torch nightly version below must match TorchBench commit above
-      # python3 -m pip install doctr fastnlp lightning-utilities matplotlib numba pyre_extensions
+      # python3 -m pip install doctr fastnlp matplotlib numba 
       - name: Install TorchBench and models
         run: |
-          
+          sudo apt-get install libpango-1.0-0
           python3 -m pip install --upgrade pip
-          python3 -m pip install lightning-utilities
+          python3 -m pip install lightning-utilities pyre_extensions
           python3 -m pip install --upgrade torchaudio==2.2.0.dev20231017 torch==2.2.0.dev20231017 torchrec==0.5.0.dev20231017 torchvision==0.17.0.dev20231017 --index-url https://download.pytorch.org/whl/nightly/cu121
           cd torchbench
           python3 install.py -v
@@ -50,7 +50,7 @@ jobs:
       - name: Run TorchBench
         run: |
           cd torchbench
-          python3 run_benchmark.py dynamo --performance --inference
+          python3 run_benchmark.py dynamo --performance --inference --inductor --devices=cuda --output-directory ./ --timing --stats 2>&1 | tee dynamo_log_pytorch-triton.txt
 
       - name: Install the latest Triton wheel
         run: |
@@ -60,7 +60,7 @@ jobs:
       - name: Run TorchBench Again
         run: |
           cd torchbench
-          python3 run_benchmark.py dynamo --performance --inference
+          python3 run_benchmark.py dynamo --performance --inference --inductor --devices=cuda --output-directory ./ --timing --stats 2>&1 | tee dynamo_log_triton-nightly.txt
   
       - name: Cleanup and reset GPU clocks
         if: always()
