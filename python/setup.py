@@ -74,6 +74,8 @@ def get_llvm_package_info():
         arch = 'arm64'
     if system == "Darwin":
         arch = platform.machine()
+        if arch == "x86_64":
+            arch = "x64"
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
         # TODO: arm64
