@@ -201,7 +201,7 @@ jobs:
       - name: Download latest main artifacts
         env:
           ARTIFACT_NAME: artifacts A100
-          ARTIFACT_JOB_NAME: Integration-Tests-Nvidia
+          ARTIFACT_JOB_NAME: Integration-Tests
           MAX_NUM_ACTIONS_PAGES: 30
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
