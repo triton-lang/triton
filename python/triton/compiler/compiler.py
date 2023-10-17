@@ -148,6 +148,7 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target,
     if capability // 10 >= 9:
         pm.add_tritongpu_fence_insertion_pass()
     pm.add_tritongpu_ws_fixup_missing_attrs_pass()
+    pm.add_tritongpu_optimize_thread_locality_pass()
     pm.run(mod)
     return mod
 

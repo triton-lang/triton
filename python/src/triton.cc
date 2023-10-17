@@ -1663,6 +1663,10 @@ void init_triton_ir(py::module &&m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUCoalescePass());
            })
+      .def("add_tritongpu_optimize_thread_locality_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUOptimizeThreadLocalityPass());
+           })
       .def("add_symbol_dce_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createSymbolDCEPass());
