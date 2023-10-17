@@ -3,7 +3,7 @@ ARG llvm_dir=llvm-project
 # Add the cache artifacts and the LLVM source tree to the container
 ADD "${llvm_dir}" /source/llvm-project
 # Install build dependencies
-RUN yum install --assumeyes llvm-toolset cmake ninja
+RUN yum install --assumeyes llvm-toolset cmake ninja-build
 RUN python3.8 -m pip install --upgrade pip
 
 # Install MLIR's Python Dependencies
