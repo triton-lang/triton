@@ -37,11 +37,11 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade torch==2.2.0.dev20231017 torchvision==0.17.0.dev20231017 torchaudio==2.2.0.dev20231017 --index-url https://download.pytorch.org/whl/nightly/cu121
           cd torchbench
-          python3 install.py -v DALLE2_pytorch
+          python3 install.py -v BERT_pytorch
 
-      - name: Install the latest Triton wheel
-        run: |
-          python3 -m pip install --upgrade triton-nightly --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/
+#      - name: Install the latest Triton wheel
+#        run: |
+#          python3 -m pip install --upgrade triton-nightly --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/
 
       - name: Tune Nvidia GPU
         run: |
@@ -52,7 +52,7 @@ jobs:
       - name: Run TorchBench
         run: |
           cd torchbench
-          python3 test.py -v TestBenchmark.test_DALLE2_pytorch_eval_cuda
+          python3 run.py BERT_pytorch -d cuda -t eval --torchdynamo inductor
 
       - name: Cleanup and reset GPU clocks
         if: always()
