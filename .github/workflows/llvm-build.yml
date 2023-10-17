@@ -8,9 +8,6 @@ on:
       - llvm-hash.txt
   workflow_dispatch:
 
-env:
-  SCCACHE_DIR: ${{ github.workspace }}/sccache
-
 permissions:
   contents: read
   id-token: write
@@ -65,14 +62,11 @@ jobs:
 
     - name: Install Prerequisites
       run: |
-        python3 -m pip install cmake ninja sccache
-        mkdir -p ${{ env.SCCACHE_DIR }}
-        rm -rf ${{ env.SCCACHE_DIR }}/*
+        python3 -m pip install cmake ninja
 
     - name: Enable Cache
       uses: actions/cache@v3
       with:
-        path: ${{ env.SCCACHE_DIR }}
         key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
         restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
 
@@ -84,7 +78,6 @@ jobs:
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
         -DCMAKE_LINKER=lld
         -DLLVM_BUILD_UTILS=ON
@@ -108,7 +101,6 @@ jobs:
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
         -DCMAKE_LINKER=lld
         -DCMAKE_OSX_ARCHITECTURES=arm64
@@ -140,9 +132,6 @@ jobs:
 
         # We remove the existing directory, otherwise docker will
         # create a subdirectory inside the existing directory.
-        rm -rf "${{ env.SCCACHE_DIR }}"
-        docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
-        sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
         docker rm "${CONTAINER_ID}"
 
 
@@ -166,6 +155,3 @@ jobs:
         az cache purge
         az account clear
       if: always()
-
-    - name: Dump Sccache Statistics
-      run: sccache --show-stats
