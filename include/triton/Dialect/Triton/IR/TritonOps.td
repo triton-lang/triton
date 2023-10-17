@@ -6,11 +6,11 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "mlir/IR/OpBase.td"
-include "mlir/IR/FunctionInterfaces.td" // FunctionOpInterface
 include "mlir/IR/SymbolInterfaces.td" // SymbolUserOpInterface
 include "mlir/IR/OpAsmInterface.td" // OpAsmOpInterface
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
+include "mlir/Interfaces/FunctionInterfaces.td" // FunctionOpInterface
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -668,6 +668,12 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
     void setCalleeFromCallable(CallInterfaceCallable callee) {
       (*this)->setAttr("callee", callee.get<SymbolRefAttr>());
     }
+
+    // Required by CallOpInterface.
+    MutableOperandRange getArgOperandsMutable() {
+      return getOperandsMutable();
+    }
+
   }];
 
   let assemblyFormat = [{

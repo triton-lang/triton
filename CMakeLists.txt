@@ -203,6 +203,13 @@ set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
+# TODO: Figure out which target is sufficient to fix errors; triton is
+# apparently not enough. Currently set linking libstdc++fs for all targets
+# to support some old version GCC compilers like 8.3.0.
+if (NOT WIN32 AND NOT APPLE)
+  link_libraries(stdc++fs)
+endif()
+
 if(TRITON_BUILD_PYTHON_MODULE)
   add_library(triton SHARED ${PYTHON_SRC})
   set(TRITON_LIBRARIES
@@ -240,9 +247,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton ${LLVM_LIBRARIES} z
       ${TRITON_LIBRARIES}
     )
-    # TODO: Figure out which target is sufficient to fix errors; triton is
-    # apparently not enough
-    link_libraries(stdc++fs)
   endif()
 
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
