@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: 'pytorch/benchmark'
-          ref: '7dc8e8113f8d5dc97aaa2bef94f9d389047cfcde'
+          ref: '7617d3f53f8ae8db938cda80173926968c7f0d4b'
           path: 'torchbench'
           submodules: 'recursive'
 
@@ -30,13 +30,14 @@ jobs:
           source ${HOME}/torchbench/venv/bin/activate
           echo PATH=${PATH} >> $GITHUB_ENV
 
-      # We don't want to use to use TorchBench nightlies here
+      # Torch nightly version below must match TorchBench commit above
       - name: Install TorchBench and models
         run: |
+          
           python3 -m pip install --upgrade pip
-          python3 -m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+          python3 -m pip install --upgrade torch==2.2.0.dev20231017 torchvision==0.17.0.dev20231017 torchaudio==2.2.0.dev20231017 --index-url https://download.pytorch.org/whl/nightly/cu121
           cd torchbench
-          python3 install.py detectron2_fasterrcnn_r_101_c4
+          python3 install.py -v DALLE2_pytorch
 
       - name: Install the latest Triton wheel
         run: |
@@ -51,7 +52,7 @@ jobs:
       - name: Run TorchBench
         run: |
           cd torchbench
-          python3 test.py -v TestBenchmark.test_detectron2_fasterrcnn_r_101_c4_train_cuda
+          python3 test.py -v TestBenchmark.test_DALLE2_pytorch_eval_cuda
 
       - name: Cleanup and reset GPU clocks
         if: always()
