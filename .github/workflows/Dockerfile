@@ -4,10 +4,6 @@ ARG llvm_dir=llvm-project
 ADD "${llvm_dir}" /source/llvm-project
 # Install build dependencies
 RUN yum install --assumeyes llvm-toolset cmake ninja-build
-RUN python3.8 -m pip install --upgrade pip
-
-# Install MLIR's Python Dependencies
-RUN python3.8 -m pip install -r /source/llvm-project/mlir/python/requirements.txt
 
 # Configure, Build, Test, and Install LLVM
 RUN cmake -GNinja -Bbuild \
@@ -21,7 +17,6 @@ RUN cmake -GNinja -Bbuild \
   -DLLVM_BUILD_UTILS=ON \
   -DLLVM_BUILD_TOOLS=ON \
   -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
   -DLLVM_ENABLE_PROJECTS=mlir \
   -DLLVM_INSTALL_UTILS=ON \
   -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU" \
