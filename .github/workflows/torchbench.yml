@@ -35,8 +35,8 @@ jobs:
         run: |
           
           python3 -m pip install --upgrade pip
-          python3 -m pip install numba
-          python3 -m pip install --upgrade torch==2.2.0.dev20231017 torchvision==0.17.0.dev20231017 torchaudio==2.2.0.dev20231017 --index-url https://download.pytorch.org/whl/nightly/cu121
+          python3 -m pip install matplotlib numba pyre_extensions
+          python3 -m pip install --upgrade torchaudio==2.2.0.dev20231017 torch==2.2.0.dev20231017 torchrec==0.5.0.dev20231017 torchvision==0.17.0.dev20231017 --index-url https://download.pytorch.org/whl/nightly/cu121
           cd torchbench
           python3 install.py -v BERT_pytorch
 
@@ -49,7 +49,7 @@ jobs:
       - name: Run TorchBench
         run: |
           cd torchbench
-          python3 run.py BERT_pytorch -d cuda -t eval --torchdynamo inductor
+          python3 run_benchmark.py dynamo --performance --inference
 
       - name: Install the latest Triton wheel
         run: |
@@ -59,7 +59,7 @@ jobs:
       - name: Run TorchBench Again
         run: |
           cd torchbench
-          python3 run.py BERT_pytorch -d cuda -t eval --torchdynamo inductor
+          python3 run_benchmark.py dynamo --performance --inference
   
       - name: Cleanup and reset GPU clocks
         if: always()
