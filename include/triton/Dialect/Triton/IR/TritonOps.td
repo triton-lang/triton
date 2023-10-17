@@ -10,10 +10,13 @@ include "mlir/IR/SymbolInterfaces.td" // SymbolUserOpInterface
 include "mlir/IR/OpAsmInterface.td" // OpAsmOpInterface
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
-include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/FunctionInterfaces.td" // FunctionOpInterface
+include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
+include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
+include "mlir/Interfaces/CastInterfaces.td" // CastOpInterface
+include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 
 //
 // Op Base
@@ -665,6 +668,12 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
     void setCalleeFromCallable(CallInterfaceCallable callee) {
       (*this)->setAttr("callee", callee.get<SymbolRefAttr>());
     }
+
+    // Required by CallOpInterface.
+    MutableOperandRange getArgOperandsMutable() {
+      return getOperandsMutable();
+    }
+
   }];
 
   let assemblyFormat = [{

@@ -45,7 +45,7 @@ static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
 
 SmallVector<unsigned, 2>
 warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
-  mlir::TransitiveFilter filter = [&dotOp](Operation *op) {
+  auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
   auto slices = mlir::getSlice(dotOp, {filter});
@@ -117,7 +117,10 @@ class BlockedToMMA : public mlir::RewritePattern {
     int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
     int origBitWidth = finalBitWidth;
     SetVector<Operation *> slice;
-    mlir::getBackwardSlice(x, &slice, {{bwdFilter}});
+    mlir::BackwardSliceOptions opt;
+    opt.omitBlockArguments = true;
+    opt.filter = bwdFilter;
+    getBackwardSlice(x, &slice, opt);
     Operation *firstOp = slice.empty() ? nullptr : *slice.begin();
     if (firstOp)
       if (Value arg = firstOp->getOperand(0))
@@ -212,11 +215,12 @@ public:
     ttg::MmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
       SetVector<Operation *> aBwdSlices, bBwdSlices;
-      mlir::TransitiveFilter isCvt = [](Operation *op) {
-        return isa<ConvertLayoutOp>(op);
-      };
-      getBackwardSlice(a, &aBwdSlices, {isCvt});
-      getBackwardSlice(b, &bBwdSlices, {isCvt});
+      auto isCvt = [](Operation *op) { return isa<ConvertLayoutOp>(op); };
+      mlir::BackwardSliceOptions opt;
+      opt.omitBlockArguments = true;
+      opt.filter = isCvt;
+      getBackwardSlice(a, &aBwdSlices, opt);
+      getBackwardSlice(b, &bBwdSlices, opt);
       // get the source of the first conversion found in slices
       auto getCvtArgOrder = [](Operation *op) {
         return cast<ConvertLayoutOp>(op)
