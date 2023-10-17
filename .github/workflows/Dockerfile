@@ -1,4 +1,4 @@
-FROM centos:7
+FROM quay.io/pypa/manylinux_2_28_x86_64
 ARG llvm_dir=llvm-project
 # Add the cache artifacts and the LLVM source tree to the container
 ADD sccache /sccache
