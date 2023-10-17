@@ -49,7 +49,7 @@ jobs:
       - name: Run TorchBench
         run: |
           cd torchbench
-          python3 run.py BERT_pytorch -d cuda -t train --torchdynamo inductor
+          python3 run.py BERT_pytorch -d cuda -t eval --torchdynamo inductor
 
       - name: Install the latest Triton wheel
         run: |
@@ -59,7 +59,7 @@ jobs:
       - name: Run TorchBench Again
         run: |
           cd torchbench
-          python3 run.py BERT_pytorch -d cuda -t train --torchdynamo inductor
+          python3 run.py BERT_pytorch -d cuda -t eval --torchdynamo inductor
   
       - name: Cleanup and reset GPU clocks
         if: always()
