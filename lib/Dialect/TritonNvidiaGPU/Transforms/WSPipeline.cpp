@@ -259,7 +259,7 @@ scf::ForOp createNewMathLoop(scf::ForOp forOp, int numStages,
 
   // 3. create newLoopArgs
   SmallVector<Value> newLoopArgs;
-  for (auto operand : forOp.getIterOperands())
+  for (auto operand : forOp.getInitArgs())
     newLoopArgs.push_back(operand);
 
   builder.setInsertionPoint(forOp);

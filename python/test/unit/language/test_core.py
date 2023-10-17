@@ -1914,7 +1914,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
-        "max": {"int32": "arith.maxsi", "float32": "arith.maxf", "float16": "arith.maxf"},
+        "max": {"int32": "arith.maxsi", "float32": "arith.maximumf", "float16": "arith.maximumf"},
         "sum": {"int32": "arith.addi", "float32": "arith.addf", "float16": "arith.addf"}
     }[reduce_op][dtype_str]
     numpy_op = {
@@ -3072,6 +3072,20 @@ def test_constexpr_scalar_shape(device):
     x_tri = to_triton(np.empty((256, ), dtype=np.int32), device=device)
     kernel[(1,)](x_tri, 32)
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256) % 8)
+
+
+@triton.jit
+def static_assert_func():
+    tl.static_assert(tl.constexpr(False), f"Assert is firing because the constexpr progation did not work properly")
+
+
+def test_constexpr_propagation():
+    @triton.jit
+    def _kernel(COND: tl.constexpr):
+        NEW_COND = COND
+        if NEW_COND:
+            static_assert_func()
+    _kernel[(1,)](False)
 
 # -------------
 # test call
