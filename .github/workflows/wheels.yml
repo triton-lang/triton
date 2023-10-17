@@ -48,6 +48,7 @@ jobs:
           export CIBW_BEFORE_BUILD="pip install cmake;"
           export CIBW_SKIP="cp{35,36}-*"
           export CIBW_BUILD="cp3*-manylinux_x86_64"
+          python3 -m pip install --upgrade cibuildwheel
           python3 -m cibuildwheel python --output-dir wheelhouse
 
       - name: Install Azure CLI
