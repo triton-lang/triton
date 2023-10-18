@@ -17,11 +17,11 @@ env:
 
 jobs:
   TorchBench-Nvidia:
+    # Disable H100 since we can't sudo
     strategy:
       matrix:
         #runner: [[self-hosted, A100], [self-hosted, H100]]
-        # Disable H100 since we cna't sudo
-        runner: [self-hosted, A100]
+        runner: [[self-hosted, A100]]
 
     runs-on: ${{ matrix.runner }}
 
