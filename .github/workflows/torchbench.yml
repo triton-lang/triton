@@ -93,10 +93,11 @@ jobs:
           tar -czf artifacts.tar.gz *.log *.csv
 
       - name: Upload artifacts archive
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
-          name: TorchBench Dynamo Logs
-          path: ${HOME}/torchbench/torchbench_dynamo_logs.tar.gz
+          name: TorchBench Dynamo Logs ${{ matrix.runner[1] }}
+          path: ~/torchbench/torchbench_dynamo_logs.tar.gz
+          if-no-files-found: error
   
       - name: Cleanup and reset GPU clocks
         if: always()
