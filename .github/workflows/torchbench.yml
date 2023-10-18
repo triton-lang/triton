@@ -39,6 +39,7 @@ jobs:
 
       - name: Create Python venv
         run: |
+          sudo apt-get install python3-venv
           python3 -m venv ${HOME}/torchbench/venv
           source ${HOME}/torchbench/venv/bin/activate
           echo PATH=${PATH} >> $GITHUB_ENV
