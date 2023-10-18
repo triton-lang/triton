@@ -93,9 +93,8 @@ class FileCacheManager(CacheManager):
         result = {}
         for c in child_paths:
             p = self._make_path(c)
-            if not os.path.exists(p):
-                raise Exception(f"Group file {p} does not exist from group {grp_filename} ")
-            result[c] = p
+            if os.path.exists(p):
+                result[c] = p
         return result
 
     # Note a group of pushed files as being part of a group
