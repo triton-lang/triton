@@ -2,13 +2,26 @@ name: TorchBench Nightly
 
 on:
   workflow_dispatch:
+    inputs:
+      test_pytorch-triton:
+        default: false
+        description: 'Run TorchBench with pytorch-triton before triton-nightly'
+        required: false
+        type: boolean
+  workflow_run:
+    workflows: ["Wheels"]
+    types: [completed]
 
 env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
 
 jobs:
   TorchBench-Nvidia:
-    runs-on: [self-hosted, A100]
+    strategy:
+      matrix:
+        runner: [[self-hosted, A100], [self-hosted, H100]]
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Clear cache
@@ -30,8 +43,7 @@ jobs:
           source ${HOME}/torchbench/venv/bin/activate
           echo PATH=${PATH} >> $GITHUB_ENV
 
-      # Torch nightly version below must match TorchBench commit above
-      # python3 -m pip install doctr fastnlp matplotlib numba 
+      # Torch nightly version below should match TorchBench commit above
       - name: Install TorchBench and models
         run: |
           sudo apt-get install --yes libpango-1.0-0
@@ -41,26 +53,45 @@ jobs:
           cd torchbench
           python3 install.py -v
 
-      - name: Tune Nvidia GPU
+      - name: Tune Nvidia GPU (A100)
+        if: ${{ contains(matrix.runner, 'A100') }}
         run: |
           sudo nvidia-smi -pm 1
-          sudo nvidia-smi --lock-gpu-clocks=1280,1280
+          sudo nvidia-smi --lock-gpu-clocks=1350,1350
           nvidia-smi
 
-      - name: Run TorchBench
+      - name: Tune Nvidia GPU (H100)
+        if: ${{ contains(matrix.runner, 'H100') }}
+        run: |
+          echo "ENABLE_TMA=1" >> "${GITHUB_ENV}"
+          nvidia-smi
+  
+      - name: Run TorchBench with pytorch-triton
+        if:  ${{ inputs.test_pytorch-triton }} 
         run: |
           cd torchbench
-          python3 run_benchmark.py dynamo --performance --inference --inductor --devices=cuda --output-directory ./ --timing --stats 2>&1 | tee dynamo_log_pytorch-triton.txt
+          python3 run_benchmark.py dynamo --performance --inference --inductor --devices=cuda --output-directory ./ --output dynamo_pytorch-triton.csv --timing --stats 2>&1 | tee dynamo_log_pytorch-triton.log
 
       - name: Install the latest Triton wheel
         run: |
           python3 -m pip uninstall --yes pytorch-triton
           python3 -m pip install --upgrade triton-nightly --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/
 
-      - name: Run TorchBench Again
+      - name: Run TorchBench with triton-nightly
         run: |
           cd torchbench
-          python3 run_benchmark.py dynamo --performance --inference --inductor --devices=cuda --output-directory ./ --timing --stats 2>&1 | tee dynamo_log_triton-nightly.txt
+          python3 run_benchmark.py dynamo --performance --inference --inductor --devices=cuda --output-directory ./ --output dynamo_triton-nightly.csv --timing --stats 2>&1 | tee dynamo_log_triton-nightly.log
+  
+      - name: Create artifacts archive
+        run: |
+          cd torchbench
+          tar -czf artifacts.tar.gz *.log *.csv
+
+      - name: Upload artifacts archive
+        uses: actions/upload-artifact@v2
+        with:
+          name: TorchBench Dynamo Logs
+          path: ${HOME}/torchbench/torchbench_dynamo_logs.tar.gz
   
       - name: Cleanup and reset GPU clocks
         if: always()
