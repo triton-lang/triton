@@ -519,8 +519,84 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ElementwiseOpConversionBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit) {}
+      TritonGPUToLLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
+        axisAnalysisPass(axisAnalysisPass) {}
+
+  // Try to deduplicate the resultVals based on the
+  // constancy properties of the result discovered by
+  // the axis analysis pass. If possible, redundant
+  // computation is eliminated.
+  SmallVector<Value> maybeDeduplicate(SourceOp op,
+                                      SmallVector<Value> resultVals) const {
+    if (!isMemoryEffectFree(op))
+      // the op has side effects: can't dedup
+      return resultVals;
+    SmallVector<Value> results = op->getResults();
+    if (results.size() == 0 || results.size() > 1)
+      // there must be exactly 1 result
+      return resultVals;
+    Value result = results[0];
+    Type type = result.getType();
+    if (!type)
+      return resultVals;
+    RankedTensorType rtType = type.dyn_cast<RankedTensorType>();
+    if (!rtType)
+      // the result must be a tensor
+      return resultVals;
+
+    SmallVector<unsigned> elemsPerThread =
+        triton::gpu::getElemsPerThread(rtType);
+    int rank = elemsPerThread.size();
+    if (product<unsigned>(elemsPerThread) != resultVals.size())
+      return resultVals;
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(result);
+    if (!axisInfo)
+      // axis info (e.g., constancy) not available
+      return resultVals;
+    SmallVector<int64_t> constancy = axisInfo->getConstancy();
+    if (rank != constancy.size())
+      return resultVals;
+    bool hasConstancy = false;
+    for (int i = 0; i < rank; ++i) {
+      if (elemsPerThread[i] < 1 || constancy[i] < 1)
+        return resultVals;
+      if (!(elemsPerThread[i] % constancy[i] == 0 ||
+            constancy[i] % elemsPerThread[i] == 0))
+        // either the constancy along each dimension must fit
+        // into the elemsPerThread or the other way around
+        return resultVals;
+      if (constancy[i] > 1)
+        hasConstancy = true;
+    }
+    if (!hasConstancy)
+      // nothing to deduplicate
+      return resultVals;
+
+    SmallVector<unsigned> strides(rank, 1);
+    for (int i = rank - 2; i >= 0; i--) {
+      strides[i] = strides[i + 1] * elemsPerThread[i + 1];
+    }
+    SmallVector<Value> dedupResultVals;
+    dedupResultVals.reserve(resultVals.size());
+    for (int i = 0; i < resultVals.size(); ++i) {
+      // each coordinate of the orig_idx is "coarsened" using the
+      // constancy along this dimension: the resulting dedup_idx
+      // points to the reused value in the original resultsVal
+      int orig_idx = i;
+      int dedup_idx = 0;
+      for (int j = rank - 1; j >= 0; j--) {
+        int coord_j = orig_idx % elemsPerThread[j];
+        dedup_idx += (coord_j / constancy[j] * constancy[j]) * strides[j];
+        orig_idx /= elemsPerThread[j];
+      }
+      dedupResultVals.push_back(resultVals[dedup_idx]);
+    }
+
+    return dedupResultVals;
+  }
 
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
@@ -561,6 +637,7 @@ public:
       auto argTy = op->getOperand(0).getType();
       resultVals = reorderValues(resultVals, argTy, resultTy);
     }
+    resultVals = maybeDeduplicate(op, resultVals);
     resultVals =
         packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     Value view = this->getTypeConverter()->packLLElements(loc, resultVals,
@@ -569,6 +646,9 @@ public:
 
     return success();
   }
+
+protected:
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
 
 private:
   int computeCapability;
@@ -601,8 +681,9 @@ struct FpToFpOpConversion
       triton::FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
   explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, benefit),
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
 
   static Value convertBf16ToFp32(Location loc,
@@ -1316,13 +1397,13 @@ void populateElementwiseOpToLLVMPatterns(
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, PatternBenefit benefit) {
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, axisInfoAnalysis, benefit);
   POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
   POPULATE_TERNARY_OP(arith::SelectOp, LLVM::SelectOp)
 #undef POPULATE_TERNARY_OP
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, axisInfoAnalysis, benefit);
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
   POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
@@ -1346,7 +1427,7 @@ void populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, axisInfoAnalysis, benefit);
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
@@ -1362,29 +1443,29 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
-  patterns.add<AbsIOpConversion>(typeConverter, benefit);
-  patterns.add<AbsFOpConversion>(typeConverter, benefit);
-  patterns.add<CmpIOpConversion>(typeConverter, benefit);
-  patterns.add<CmpFOpConversion>(typeConverter, benefit);
+  patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<CmpFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FDivOpConversion>(typeConverter, benefit);
-  patterns.add<FSubOpConversion>(typeConverter, benefit);
-  patterns.add<FAddOpConversion>(typeConverter, benefit);
-  patterns.add<FMulOpConversion>(typeConverter, benefit);
+  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<ExtFOpConversion>(typeConverter, benefit);
-  patterns.add<TruncFOpConversion>(typeConverter, benefit);
-  patterns.add<FPToSIOpConversion>(typeConverter, benefit);
-  patterns.add<SIToFPOpConversion>(typeConverter, benefit);
-  patterns.add<IndexCastOpLowering>(typeConverter, benefit);
+  patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FpToFpOpConversion>(typeConverter, computeCapability, benefit);
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, computeCapability, benefit);
 
-  patterns.add<ExternElementwiseOpConversion>(typeConverter, benefit);
-  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
+  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
-  patterns.add<ExpOpConversionApprox>(typeConverter, benefit);
+  patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
 }
