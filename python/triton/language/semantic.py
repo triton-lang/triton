@@ -1279,18 +1279,16 @@ def gpu_matrix_core_version() -> int:
     return 0
 
 def mfma_supported_granularity(m, n, k) -> bool:
-    granularity_mn = 32
-    granularity_k = 8
-    import os
-    if "MFMA_TYPE" in os.environ and os.environ["MFMA_TYPE"] == "16":
-        granularity_mn = 16
-        granularity_k = 16
+    # todo make this gran_type matrix element type sensitive
+    for gran_type in [(32, 8), (16, 16)]:
+        granularity_mn, granularity_k = gran_type
 
-    if m % granularity_mn != 0 or n % granularity_mn != 0:
-        return False
-    if k % granularity_k != 0:
-        return False
-    return True
+        if m % granularity_mn != 0 or n % granularity_mn != 0:
+            continue
+        if k % granularity_k != 0:
+            continue
+        return True
+    return False
 
 def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
     matrix_core_version = gpu_matrix_core_version()

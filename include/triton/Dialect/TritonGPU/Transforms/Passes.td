@@ -85,6 +85,29 @@ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::Modul
   ];
 }
 
+def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir::ModuleOp"> {
+  let summary = "accelerate matmul";
+
+  let description = [{
+    Optimize the input/output layout of `dot` instruction to make them compatible hardware accelerators
+    (e.g., AMD matrix cores)
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUAccelerateMatmulPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"matrixCoreVersion", "matrix-core-version",
+           "int32_t", /*default*/"0",
+           "device matrix core version">,
+    Option<"matrixInstructionSize", "matrix-instruction-size",
+           "int32_t", /*default*/"0",
+           "enforce matrix instruction MN size">
+  ];
+}
+
 def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "fuse transpositions";
 

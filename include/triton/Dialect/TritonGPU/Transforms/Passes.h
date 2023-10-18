@@ -16,6 +16,10 @@ std::unique_ptr<Pass> createTritonGPUStreamPipelinePass();
 std::unique_ptr<Pass>
 createTritonGPUAccelerateMatmulPass(int computeCapability = 80);
 
+std::unique_ptr<Pass>
+createTritonAMDGPUAccelerateMatmulPass(int matrixCoreVersion = 0,
+                                       int matrixInstructionSize = 0);
+
 std::unique_ptr<Pass> createTritonGPUPrefetchPass();
 
 std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();

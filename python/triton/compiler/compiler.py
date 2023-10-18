@@ -85,7 +85,7 @@ def ttir_to_ttgir(mod, num_warps, warpsize, num_ctas, arch):
 
 
 def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
-                   cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue):
+                   cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_inst_type):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
@@ -100,7 +100,8 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, arch,
     # TODO change interface of accelerate_matmul_pass
     if is_hip():
         matrix_core_version = gpu_matrix_core_version()
-        pm.add_tritongpu_accelerate_matmul_pass(matrix_core_version)
+        matrix_inst_size = matrix_inst_type
+        pm.add_tritonamdgpu_accelerate_matmul_pass(matrix_core_version, matrix_inst_size)
     pm.add_tritongpu_remove_layout_conversions_pass()
     if optimize_epilogue:
         pm.add_tritongpu_optimize_epilogue_pass()
@@ -310,6 +311,7 @@ def make_hash(fn, arch, env_vars, **kwargs):
         num_ctas = kwargs.get("num_ctas", 1)
         num_stages = kwargs.get("num_stages", 3)
         waves_per_eu = kwargs.get("waves_per_eu", 0)
+        matrix_instr_nonkdim = kwargs.get("matrix_instr_nonkdim", 0);
         enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
         enable_persistent = kwargs.get("enable_persistent", False)
         debug = kwargs.get("debug", False)
@@ -317,7 +319,7 @@ def make_hash(fn, arch, env_vars, **kwargs):
         get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1), sorted(conf.ids_of_folded_args), sorted(conf.divisible_by_8))
         configs_key = [get_conf_key(conf) for conf in configs]
         env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{waves_per_eu}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{arch}-{env_vars_list}"
+        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{waves_per_eu}-{matrix_instr_nonkdim}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{arch}-{env_vars_list}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     return hashlib.md5((Path(fn).read_text() + version_key()).encode("utf-8")).hexdigest()
@@ -479,6 +481,7 @@ def compile(fn, **kwargs):
     num_ctas = kwargs.get("num_ctas", 1)
     num_stages = kwargs.get("num_stages", get_arch_default_num_stages(device_type, capability=capability))
     waves_per_eu = kwargs.get("waves_per_eu", 0)
+    matrix_instr_nonkdim = kwargs.get("matrix_instr_nonkdim", 0)
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
@@ -504,7 +507,7 @@ def compile(fn, **kwargs):
     stages["ttir"] = (lambda path: parse_mlir_module(path, context),
                       lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, arch=arch), arch))
     stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                       lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
+                       lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, warp_size, num_ctas, arch), num_stages, num_warps, num_ctas, arch, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue, matrix_instr_nonkdim))
     stages["llir"] = (lambda path: Path(path).read_text(),
                       lambda src: ttgir_to_llir(src, extern_libs, arch, tma_infos, waves_per_eu))
     if is_cuda:
@@ -579,6 +582,7 @@ def compile(fn, **kwargs):
                     "num_ctas": num_ctas,
                     "num_stages": num_stages,
                     "waves_per_eu": waves_per_eu,
+                    "matrix_instr_nonkdim": matrix_instr_nonkdim,
                     "enable_warp_specialization": enable_warp_specialization,
                     "enable_persistent": enable_persistent,
                     "constants": _get_jsonable_constants(constants),
