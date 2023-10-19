@@ -715,7 +715,8 @@ struct FpToFpOpConversion
     if (srcElementType.isFloat8E4M3FNUZ() ||
         dstElementType.isFloat8E4M3FNUZ() ||
         (computeCapability >= 90 &&
-         ((srcElementType.isFloat8E5M2() && dstElementType.isF16()) ||
+         ((srcElementType.isFloat8E5M2() &&
+           (dstElementType.isF16() || dstElementType.isF32())) ||
           dstElementType.isFloat8E5M2()))) {
       numElements = 2;
     }
