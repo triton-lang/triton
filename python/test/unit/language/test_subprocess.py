@@ -9,7 +9,7 @@ print_path = os.path.join(dir_path, "print_helper.py")
 assert_path = os.path.join(dir_path, "assert_helper.py")
 
 # TODO: bfloat16 after LLVM-15
-assert_types = ["device_assert", "assert", "static_assert", "no_debug"]
+assert_types = ["device_assert", "device_assert_passes", "assert", "static_assert", "no_debug", "double_assert"]
 nested_types = [(caller, callee) for caller in ["true", "false", "none"] for callee in ["true", "false", "none"]]
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
 
@@ -46,11 +46,15 @@ def test_assert(func_type: str):
     for err in errs:
         if "x != 0" in err.decode("utf-8"):
             num_errs += 1
+
+    # Check for segfaults.
+    assert all("segmentation fault" not in line.decode("utf-8").lower() for line in errs)
+
     os.environ["TRITON_DEBUG"] = "0"
-    if func_type != "static_assert":
-        assert num_errs == 127
-    else:
+    if func_type == "static_assert" or func_type == "device_assert_passes":
         assert num_errs == 0
+    else:
+        assert num_errs == 127
 
 
 @pytest.mark.parametrize("caller_type, callee_type", nested_types)
