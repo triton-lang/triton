@@ -520,8 +520,7 @@ public:
 
   explicit ElementwiseOpConversionBase(
       TritonGPUToLLVMTypeConverter &typeConverter,
-      ModuleAxisInfoAnalysis &axisAnalysisPass,
-      PatternBenefit benefit = 1)
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         axisAnalysisPass(axisAnalysisPass) {}
 
@@ -1397,13 +1396,15 @@ void populateElementwiseOpToLLVMPatterns(
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, PatternBenefit benefit) {
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
   POPULATE_TERNARY_OP(triton::gpu::SelectOp, LLVM::SelectOp)
   POPULATE_TERNARY_OP(arith::SelectOp, LLVM::SelectOp)
 #undef POPULATE_TERNARY_OP
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
   POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
@@ -1427,7 +1428,8 @@ void populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit);
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
@@ -1459,10 +1461,13 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, computeCapability, benefit);
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
+                                   computeCapability, benefit);
 
-  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
+                                              benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter,
+                                                 axisInfoAnalysis, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
