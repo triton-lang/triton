@@ -219,8 +219,9 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
         return {};
       }
     } else {
-      llvm::report_fatal_error("DotOperandEncodingAttr non-MmaEncodingAttr parent not "
-                  "supported yet");
+      llvm::report_fatal_error(
+          "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+          "supported yet");
       return {};
     }
   } else {
@@ -330,8 +331,9 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
         llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
       }
     } else {
-      llvm::report_fatal_error("DotOperandEncodingAttr non-MmaEncodingAttr parent not "
-                  "supported yet");
+      llvm::report_fatal_error(
+          "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+          "supported yet");
     }
   } else {
     llvm::report_fatal_error("Unimplemented usage of getShapePerCTATile");
@@ -438,7 +440,8 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
      * in the branch where layout is an instance of SliceEncodingAttr. This is
      * inconvenient but safe.
      */
-    llvm::report_fatal_error("getCTAsPerCGA for SliceEncodingAttr is not well-defined");
+    llvm::report_fatal_error(
+        "getCTAsPerCGA for SliceEncodingAttr is not well-defined");
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>())
     ref = mmaLayout.getCTALayout().getCTAsPerCGA();
   else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
