@@ -232,8 +232,10 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
       return "orange";
     else if (layout.isa<triton::gpu::SharedEncodingAttr>())
       return "orangered";
-    else
-      assert(0 && "Unrecognized layout");
+    else {
+      llvm::report_fatal_error("Unrecognized layout");
+      return "unknown";
+    }
   } else {
     return "white";
   }
