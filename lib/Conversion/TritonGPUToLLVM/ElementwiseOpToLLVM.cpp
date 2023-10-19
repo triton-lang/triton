@@ -39,23 +39,30 @@ static const std::string Fp8E5M2_to_Fp16(bool hasNativeFP) {
 static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
   std::string ret;
   if (!hasNativeFP) {
-    ret =
-        "{                                      \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-        ".reg .b32 e112;                        \n"
-        "mov.u32 e112, 0x77807780;              \n" // 2**112 represented as
-                                                    // bf16x2
-        "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
-        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-        "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
-        "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
-        "lop3.b32 b0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-        "lop3.b32 b1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-        "mul.rn.bf16x2 $0, b0, e112;            \n" // b0.exp += 2**7-2**4
-        "mul.rn.bf16x2 $1, b1, e112;            \n" // exponent compensate = 112
-        "}";
+    ret = "{                                        \n"
+          ".reg .b32 a<2>, b<2>, c<4>, d<4>, e112;  \n" // if input = 0xf1f2f3f4
+          "mov.u32 e112, 0x77800000;                \n"
+          "prmt.b32 a0, 0, $2, 0x5140;              \n" // a0 = 0xf300f400
+          "prmt.b32 a1, 0, $2, 0x7362;              \n" // a1 = 0xf100f200
+          "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;    \n" // b0 = a0 & 0x7fff7fff
+          "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;    \n" // (strip sign)
+          "shr.b32  b0, b0, 3;                      \n" // b0 >>= 3
+          "shr.b32  b1, b1, 3;                      \n" // shift into bf16
+                                                        // position
+          "and.b32 c0, b0, 0xFFFF0000;              \n" // c0 = f3
+          "shl.b32 c1, b0, 16;                      \n" // c1 = f4
+          "and.b32 c2, b1, 0xFFFF0000;              \n" // c2 = f1
+          "shl.b32 c3, b1, 16;                      \n" // c3 = f2
+          "mul.f32 d0, c0, e112;                    \n" // d0 = c0 * 0x77800000
+          "mul.f32 d1, c1, e112;                    \n" // d1 = c1 * 0x77800000
+          "mul.f32 d2, c2, e112;                    \n" // d2 = c2 * 0x77800000
+          "mul.f32 d3, c3, e112;                    \n" // d3 = c3 * 0x77800000
+          "prmt.b32 b0, d0, d1, 0x3276;             \n" // b0 = 0xd3d4
+          "prmt.b32 b1, d2, d3, 0x3276;             \n" // b1 = 0xd1d2
+          "lop3.b32 $0, b0, 0x80008000, a0, 0xf8;   \n" // out0 =
+                                                        // b0|(0x80008000&a0)
+          "lop3.b32 $1, b1, 0x80008000, a1, 0xf8;   \n" // (restore sign)
+          "}";
   } else {
     ret = "{                                       \n"
           ".reg .b32 a;                            \n"
@@ -984,7 +991,7 @@ struct FDivOpConversion
     } else if (64 == bitwidth) {
       fdiv.o("rn").o("f64");
     } else {
-      assert(0 && bitwidth && "not supported");
+      llvm::report_fatal_error("Unsupported bitwidth");
     }
 
     auto res = ptxBuilder.newOperand(bitwidth == 32 ? "=r" : "=l");
@@ -1316,18 +1323,18 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
   POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
   POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)    // &
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)      // |
-  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)    // ^
-  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)    // <<
-  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)  // >>
-  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)  // >>
-  POPULATE_BINARY_OP(arith::MinFOp, LLVM::MinNumOp) // fmin
-  POPULATE_BINARY_OP(arith::MaxFOp, LLVM::MaxNumOp) // fmax
-  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)  // smin
-  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp)  // smax
-  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp)  // umin
-  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp)  // umax
+  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)        // &
+  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)          // |
+  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)        // ^
+  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)        // <<
+  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp)      // >>
+  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp)      // >>
+  POPULATE_BINARY_OP(arith::MinimumFOp, LLVM::MinNumOp) // fmin
+  POPULATE_BINARY_OP(arith::MaximumFOp, LLVM::MaxNumOp) // fmax
+  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp)      // smin
+  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp)      // smax
+  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp)      // umin
+  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp)      // umax
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \

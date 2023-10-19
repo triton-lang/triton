@@ -232,8 +232,10 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
       return "orange";
     else if (layout.isa<triton::gpu::SharedEncodingAttr>())
       return "orangered";
-    else
-      assert(0 && "Unrecognized layout");
+    else {
+      llvm::report_fatal_error("Unrecognized layout");
+      return "unknown";
+    }
   } else {
     return "white";
   }
@@ -342,8 +344,15 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     }
     return true;
   }
+  if (auto view = dyn_cast<triton::ViewOp>(op)) {
+    auto viewDstType = view.getType().cast<RankedTensorType>();
+    RankedTensorType newDstType = RankedTensorType::get(
+        viewDstType.getShape(), viewDstType.getElementType(), targetEncoding);
+    return !triton::gpu::isExpensiveView(view.getOperand().getType(),
+                                         newDstType);
+  }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::ViewOp>(op);
+             triton::MakeRangeOp, triton::SplatOp>(op);
 }
 
 //

@@ -98,7 +98,7 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
     auto dim = sliceLayout.getDim();
     auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] != 1)
-      assert(0 && "Layout conversion to be implemented");
+      llvm::report_fatal_error("Layout conversion to be implemented");
   }
 
   // Case where CTAsPerCGA of dstLayout in the sliced dim is not 1 is supported
@@ -640,7 +640,10 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
     auto *currentOp = (slice)[currentIndex];
     // Compute and insert the backwardSlice starting from currentOp.
     backwardSlice.clear();
-    getBackwardSlice(currentOp, &backwardSlice, backwardFilter);
+    mlir::BackwardSliceOptions opt;
+    opt.omitBlockArguments = true;
+    opt.filter = backwardFilter;
+    getBackwardSlice(currentOp, &backwardSlice, opt);
     slice.insert(backwardSlice.begin(), backwardSlice.end());
 
     // Compute and insert the forwardSlice starting from currentOp.

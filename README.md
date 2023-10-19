@@ -68,10 +68,10 @@ arbitrary LLVM version.
 1. Find the version of LLVM that Triton builds against.  Check `python/setup.py`
    for a line like
 
-       version = "llvm-17.0.0-c5dede880d17"
+       rev = "b1115f8c"
 
    This means that the version of Triton you have builds against
-   [LLVM](https://github.com/llvm/llvm-project) c5dede880d17.
+   [LLVM](https://github.com/llvm/llvm-project) b1115f8c.
 
 2. `git checkout` LLVM at this revision.  Optionally, make additional
    modifications to LLVM.
