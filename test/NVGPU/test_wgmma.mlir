@@ -2,7 +2,7 @@
 #SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 module attributes {"triton_gpu.num-warps" = 4 : i32,  "triton_gpu.num-ctas" = 2 : i32} {
   tt.func @test_tma(%opC : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>) {
-    %buffer = llvm.mlir.null : !llvm.ptr<i64, 3>
+    %buffer = llvm.mlir.zero : !llvm.ptr<i64, 3>
     %height = arith.constant 16 : i32
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.inline_asm
