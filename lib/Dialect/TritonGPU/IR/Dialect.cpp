@@ -339,6 +339,10 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
   return shape;
 }
 
+bool isExpensiveView(Type srcType, Type dstType) {
+  return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
+}
+
 namespace {
 
 /* Utility function used by getOrder and getCTAOrder of SliceEncodingAttr.
@@ -1360,7 +1364,7 @@ ParseResult parseInsertSliceOp(OpAsmParser &parser, OperationState &result) {
                              result.operands))
     return failure();
 
-  // Deduce operand_segment_sizes from the number of the operands.
+  // Deduce operandSegmentSizes from the number of the operands.
   auto operandSegmentSizesAttrName =
       OpT::getOperandSegmentSizesAttrName(result.name);
   result.addAttribute(
@@ -1373,7 +1377,7 @@ template <class OpT>
 void printInsertSliceOp(OpAsmPrinter &printer, OpT insertSliceOp) {
   printer << " ";
   printer << insertSliceOp.getOperation()->getOperands();
-  // "operand_segment_sizes" can be deduced, so we don't print it.
+  // "operandSegmentSizes" can be deduced, so we don't print it.
   printer.printOptionalAttrDict(
       insertSliceOp->getAttrs(),
       {insertSliceOp.getOperandSegmentSizesAttrName()});
@@ -1533,13 +1537,15 @@ struct CanonicalizeConvertFromView
     Operation *arg = op->getOperand(0).getDefiningOp();
     if (!arg)
       return mlir::failure();
+    auto convert = dyn_cast<ConvertLayoutOp>(arg);
+    if (!convert)
+      return failure();
+    if (isExpensiveView(convert.getOperand().getType(), op.getType()))
+      return failure();
     // view(convert) -> view
-    if (auto convert = dyn_cast<ConvertLayoutOp>(arg)) {
-      rewriter.replaceOpWithNewOp<triton::ViewOp>(
-          op, op->getResult(0).getType(), convert.getOperand());
-      return mlir::success();
-    }
-    return mlir::failure();
+    rewriter.replaceOpWithNewOp<triton::ViewOp>(op, op->getResult(0).getType(),
+                                                convert.getOperand());
+    return mlir::success();
   }
 };
 
@@ -1584,6 +1590,8 @@ struct CanonicalizeConvertFromConvert
       return mlir::failure();
     // cvt(view) -> view
     if (auto view = dyn_cast<triton::ViewOp>(arg)) {
+      if (isExpensiveView(view.getOperand().getType(), op.getType()))
+        return failure();
       rewriter.replaceOpWithNewOp<triton::ViewOp>(
           op, op->getResult(0).getType(), view.getResult());
       return mlir::success();

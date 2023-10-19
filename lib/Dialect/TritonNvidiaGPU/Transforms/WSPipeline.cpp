@@ -259,7 +259,7 @@ scf::ForOp createNewMathLoop(scf::ForOp forOp, int numStages,
 
   // 3. create newLoopArgs
   SmallVector<Value> newLoopArgs;
-  for (auto operand : forOp.getIterOperands())
+  for (auto operand : forOp.getInitArgs())
     newLoopArgs.push_back(operand);
 
   builder.setInsertionPoint(forOp);
@@ -859,6 +859,8 @@ void buildAsyncComm(const DenseMap<Operation *, SmallVector<Channel *>> &map,
               loc, dotOp.getA(), dotOp.getB(), dotOp.getC(),
               dotOp.getAllowTF32(), dotOp.getMaxNumImpreciseAcc());
       dot.replaceAllUsesWith(dotAsync.getResult());
+      builder.createWithAgentIds<triton::nvidia_gpu::DotWaitOp>(
+          loc, dotAsync.getResult(), 1);
 
       // 1. insert ConsumerReleaseOp for DotAsyncOps
       Value cond = builder.createWithAgentIds<arith::CmpIOp>(

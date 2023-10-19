@@ -860,9 +860,9 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 # ----------------
 
 
-@pytest.mark.parametrize("dtype_x, expr", [(dtype_x, expr) for dtype_x in ["float32", "float64"] for expr in ['exp', 'log', 'cos', 'sin']])
-def test_math_op(dtype_x, expr, device):
-    _test_unary(dtype_x, f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
+@pytest.mark.parametrize("dtype_x, expr, x", [(dtype_x, expr, x) for dtype_x in ["float32", "float64"] for expr in ['exp', 'log', 'cos', 'sin'] for x in ['x', '3.0']])
+def test_math_op(dtype_x, expr, device, x):
+    _test_unary(dtype_x, f'tl.{expr}({x})', f'np.{expr}({x}) ', device=device)
 
 # ----------------
 # test abs
@@ -1914,7 +1914,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
-        "max": {"int32": "arith.maxsi", "float32": "arith.maxf", "float16": "arith.maxf"},
+        "max": {"int32": "arith.maxsi", "float32": "arith.maximumf", "float16": "arith.maximumf"},
         "sum": {"int32": "arith.addi", "float32": "arith.addf", "float16": "arith.addf"}
     }[reduce_op][dtype_str]
     numpy_op = {
@@ -3073,6 +3073,20 @@ def test_constexpr_scalar_shape(device):
     kernel[(1,)](x_tri, 32)
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256) % 8)
 
+
+@triton.jit
+def static_assert_func():
+    tl.static_assert(tl.constexpr(False), f"Assert is firing because the constexpr progation did not work properly")
+
+
+def test_constexpr_propagation():
+    @triton.jit
+    def _kernel(COND: tl.constexpr):
+        NEW_COND = COND
+        if NEW_COND:
+            static_assert_func()
+    _kernel[(1,)](False)
+
 # -------------
 # test call
 # -------------
@@ -3917,3 +3931,22 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
         torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     else:
         torch.testing.assert_close(ref_out, C)
+
+# -----------------------
+# test enable_fp_fusion
+# -----------------------
+
+
+@pytest.mark.parametrize("enable_fp_fusion", [False, True])
+def test_enable_fp_fusion(enable_fp_fusion):
+    # Sequential multiply add can be fused by backend
+    @triton.jit
+    def mul_add(data):
+        ptrs = data + tl.arange(0, 128)
+        tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
+
+    data = torch.randn((128,), device='cuda', dtype=torch.float32)
+    h = mul_add[(1,)](data, enable_fp_fusion=enable_fp_fusion)
+
+    found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+    assert found_fma == enable_fp_fusion

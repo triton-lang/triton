@@ -344,8 +344,15 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     }
     return true;
   }
+  if (auto view = dyn_cast<triton::ViewOp>(op)) {
+    auto viewDstType = view.getType().cast<RankedTensorType>();
+    RankedTensorType newDstType = RankedTensorType::get(
+        viewDstType.getShape(), viewDstType.getElementType(), targetEncoding);
+    return !triton::gpu::isExpensiveView(view.getOperand().getType(),
+                                         newDstType);
+  }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::ViewOp>(op);
+             triton::MakeRangeOp, triton::SplatOp>(op);
 }
 
 //
