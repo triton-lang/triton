@@ -15,9 +15,9 @@ def kernel_device_assert(X, Y, BLOCK: tl.constexpr):
 
 
 @triton.jit
-def kernel_device_assert_scalar(X, Y, BLOCK: tl.constexpr):
+def kernel_assert_passes(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
-    # Trivial assert
+    # Trivial assert, should not be an error.
     tl.device_assert(0 == 0, "x != 0")
     tl.store(Y + tl.arange(0, BLOCK), x)
 
@@ -49,7 +49,9 @@ def test_assert(func: str):
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if func == "device_assert":
         kernel_device_assert[(1,)](x, y, BLOCK=shape[0])
-        kernel_device_assert_scalar[(1,)](x, y, BLOCK=shape[0])
+    if func == "device_assert_passes":
+        # Assert passes; no error.
+        kernel_assert_passes[(1,)](x, y, BLOCK=shape[0])
     elif func == "no_debug":
         # TRITON_DEBUG=1 can override the debug flag
         kernel_device_assert_no_debug[(1,)](x, y, BLOCK=shape[0])
@@ -57,6 +59,19 @@ def test_assert(func: str):
         kernel_assert[(1,)](x, y, BLOCK=shape[0])
     elif func == "static_assert":
         kernel_static_assert[(1,)](x, y, BLOCK=shape[0])
+    elif func == "double_assert":
+        # Launching a different kernel after the first one asserted used to
+        # segfault.  What seems to have happened is:
+        #  - The first kernel is enqueued but doesn't run yet.
+        #  - We go to launch the second kernel.  Because this is the first time
+        #    we're running it, we have to load the kernel into the GPU.
+        #  - Loading the kernel takes some time, during which the first launch
+        #    completes.
+        #  - Now the GPU is in an error state.  We need to detect this inside
+        #    the kernel-launch/loading code and bail out properly.  If we don't,
+        #    we segfault.
+        kernel_device_assert[(1,)](x, y, BLOCK=shape[0])
+        kernel_assert_passes[(1,)](x, y, BLOCK=shape[0])
     assert_close(y, x)
 
 
