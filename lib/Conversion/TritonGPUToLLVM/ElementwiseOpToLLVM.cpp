@@ -120,7 +120,7 @@ static const std::string Bf16_to_Fp8E5M2(bool hasNativeFP) {
           "mov.b32 {a0, a1}, $1;                   \n"
           "cvt.f32.bf16 b0, a0;                    \n"
           "cvt.f32.bf16 b1, a1;                    \n"
-          "cvt.rn.satfinite.e5m2x2.f32 $0, b0, b1; \n"
+          "cvt.rn.satfinite.e5m2x2.f32 $0, b1, b0; \n"
           "}";
   }
   return ret;
@@ -248,7 +248,7 @@ static const std::string Bf16_to_Fp8E4M3Nv =
     "mov.b32 {a0, a1}, $1;                   \n"
     "cvt.f32.bf16 b0, a0;                    \n"
     "cvt.f32.bf16 b1, a1;                    \n"
-    "cvt.rn.satfinite.e4m3x2.f32 $0, b0, b1; \n"
+    "cvt.rn.satfinite.e4m3x2.f32 $0, b1, b0; \n"
     "}";
 
 /* ----- Packed integer to BF16 ------ */
