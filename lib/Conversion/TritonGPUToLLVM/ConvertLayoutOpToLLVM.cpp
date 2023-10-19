@@ -643,7 +643,7 @@ private:
                          inNumCTAsEachRep, multiDimRepId, inVec, paddedRepShape,
                          origRepShape, outOrd, vals, smemBase);
       } else {
-        assert(0 && "ConvertLayout with input layout not implemented");
+        llvm::report_fatal_error("ConvertLayout with input layout not implemented");
         return failure();
       }
 
@@ -677,7 +677,7 @@ private:
                          paddedRepShape, origRepShape, outOrd, outVals,
                          smemBase);
       } else {
-        assert(0 && "ConvertLayout with output layout not implemented");
+        llvm::report_fatal_error("ConvertLayout with output layout not implemented");
         return failure();
       }
     }

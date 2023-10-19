@@ -984,7 +984,7 @@ struct FDivOpConversion
     } else if (64 == bitwidth) {
       fdiv.o("rn").o("f64");
     } else {
-      assert(0 && bitwidth && "not supported");
+      llvm::report_fatal_error("Unsupported bitwidth");
     }
 
     auto res = ptxBuilder.newOperand(bitwidth == 32 ? "=r" : "=l");

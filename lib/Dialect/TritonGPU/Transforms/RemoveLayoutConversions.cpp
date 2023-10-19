@@ -695,7 +695,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
       map(oldResult, newResult);
     return newOp;
   }
-  assert(0 && "unexpected op in rewrite");
+  llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
 
