@@ -1344,7 +1344,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     if dtype_z.startswith('bfloat'):
         z_tri = torch.empty((size,), dtype=getattr(torch, dtype_z), device=device)
     elif dtype_z.startswith('float8'):
-        z_tri = torch.empty((size,), dtype=torch.float, device=device)
+        z_tri = torch.empty((size,), dtype=torch.half, device=device).to(dtype=getattr(torch, dtype_z))
     else:
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
     kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, num_warps=1, num_ctas=num_ctas)
