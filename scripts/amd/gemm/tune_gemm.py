@@ -45,10 +45,7 @@ def get_full_tuning_space():
 def prune_configs(M, N, K, configs):
     pruned_configs = []
 
-    ## TODO: improve how we deal with mfma16 vs mfma32
-    ## after it becomes a tuning parameter
-    mfma_type = os.getenv('MFMA_TYPE')
-    if mfma_type == '16':
+    if M < 32 or N < 32:
         mfma = 16
     else:
         mfma = 32
