@@ -1329,8 +1329,11 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         if dtype_z in uint_dtypes:
             x = np.absolute(x)
         x_tri = to_triton(x, device=device)
-
+    if 'float' in dtype_z and 'float' in dtype_x:
+        # make sure we use values that can be represented in both types
+        x_tri = x_tri.to(getattr(torch, dtype_z)).to(getattr(torch, dtype_x))
     # triton kernel
+
     @triton.jit
     def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr):
         x_ptr = X + tl.arange(0, SIZE)
