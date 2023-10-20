@@ -16,6 +16,7 @@ class TritonGPUOptimizeThreadLocalityPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     mod.walk([&](triton::ReduceOp reduce) -> void {
+      return;
       OpBuilder builder(reduce);
       reduce.dump();
       auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
