@@ -549,11 +549,13 @@ public:
     if (!encoding)
       // encoding not available
       return resultVals;
-    triton::gpu::BlockedEncodingAttr blockedEncoding =
-        encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
-    if (!blockedEncoding)
-      // encoding is not blocked
+    if (!encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>() &&
+        !encoding.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
+      // TODO: constraining the ecndoing type here is necessary
+      // for avoiding crashes in the triton::gpu::getElemsPerThread
+      // call below happening in the test_core::test_fp8_dot_acc
       return resultVals;
+    }
 
     SmallVector<unsigned> elemsPerThread =
         triton::gpu::getElemsPerThread(rtType);
@@ -564,7 +566,8 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    ArrayRef<unsigned> sizePerThread = blockedEncoding.getSizePerThread();
+    SmallVector<unsigned> sizePerThread =
+        triton::gpu::getSizePerThread(encoding);
     if (rank != sizePerThread.size())
       return resultVals;
 
