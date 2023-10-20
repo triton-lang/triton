@@ -64,16 +64,23 @@ static const std::string Fp8E5M2_to_Bf16(bool hasNativeFP) {
           "lop3.b32 $1, b1, 0x80008000, a1, 0xf8;   \n" // (restore sign)
           "}";
   } else {
-    ret = "{                                       \n"
-          ".reg .b32 a;                            \n"
-          ".reg .f16 a<2>;                         \n"
-          ".reg .b16 b<2>;                         \n"
-          "cvt.rn.f16x2.e5m2x2 a, $1;              \n"
-          "mov.b32 {a0, a1}, a;                    \n"
-          "cvt.bf16.f16 b0, a0;                    \n"
-          "cvt.bf16.f16 b1, a1;                    \n"
-          "mov.b32 $0, {b0, b1};                   \n"
-          "}";
+    ret =
+        "{                                       \n"
+        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
+        ".reg .b32 e112;                        \n"
+        "mov.u32 e112, 0x77807780;              \n" // 2**112 represented as
+                                                    // bf16x2
+        "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
+        "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
+        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
+        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
+        "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
+        "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
+        "lop3.b32 b0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
+        "lop3.b32 b1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
+        "mul.rn.bf16x2 $0, b0, e112;            \n" // b0.exp += 2**7-2**4
+        "mul.rn.bf16x2 $1, b1, e112;            \n" // exponent compensate = 112
+        "}";
   }
   return ret;
 }
@@ -129,7 +136,7 @@ static const std::string Bf16_to_Fp8E5M2(bool hasNativeFP) {
           "mov.b32 {a0, a1}, $1;                   \n"
           "cvt.f32.bf16 b0, a0;                    \n"
           "cvt.f32.bf16 b1, a1;                    \n"
-          "cvt.rn.satfinite.e5m2x2.f32 $0, b0, b1; \n"
+          "cvt.rn.satfinite.e5m2x2.f32 $0, b1, b0; \n"
           "}";
   }
   return ret;
@@ -257,7 +264,7 @@ static const std::string Bf16_to_Fp8E4M3Nv =
     "mov.b32 {a0, a1}, $1;                   \n"
     "cvt.f32.bf16 b0, a0;                    \n"
     "cvt.f32.bf16 b1, a1;                    \n"
-    "cvt.rn.satfinite.e4m3x2.f32 $0, b0, b1; \n"
+    "cvt.rn.satfinite.e4m3x2.f32 $0, b1, b0; \n"
     "}";
 
 /* ----- Packed integer to BF16 ------ */
@@ -677,7 +684,7 @@ struct FpToFpOpConversion
     int inVecWidthBits = 32;
     int outVecWidthBits = 32;
     if (srcTy.isFloat8E4M3FNUZ() ||
-        (computeCapability >= 90 && srcTy.isFloat8E5M2())) {
+        (computeCapability >= 90 && srcTy.isFloat8E5M2() && dstTy.isF16())) {
       inVecWidthBits = 16;
       outVecWidthBits = 32;
     }
@@ -717,7 +724,9 @@ struct FpToFpOpConversion
     if (srcElementType.isFloat8E4M3FNUZ() ||
         dstElementType.isFloat8E4M3FNUZ() ||
         (computeCapability >= 90 &&
-         (srcElementType.isFloat8E5M2() || dstElementType.isFloat8E5M2()))) {
+         ((srcElementType.isFloat8E5M2() &&
+           (dstElementType.isF16() || dstElementType.isF32())) ||
+          dstElementType.isFloat8E5M2()))) {
       numElements = 2;
     }
     bool useFP16IntermediateSrc =
@@ -725,9 +734,9 @@ struct FpToFpOpConversion
         !(computeCapability >= 90 &&
           (dstElementType.isFloat8E4M3FNUZ() || dstElementType.isFloat8E5M2()));
     bool isDstFP32 = dstElementType.isF32();
-    auto cvtFunc =
-        getConversionFunc(useFP16IntermediateSrc ? f16_ty : srcElementType,
-                          isDstFP32 ? f16_ty : dstElementType);
+    Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
+    Type dstType = isDstFP32 ? f16_ty : dstElementType;
+    auto cvtFunc = getConversionFunc(srcType, dstType);
     SmallVector<Value> inVals;
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
@@ -735,8 +744,7 @@ struct FpToFpOpConversion
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
         v = convertFp32ToFp16(loc, rewriter, v);
-    inVals.resize(numElements,
-                  undef(typeConverter->convertType(srcElementType)));
+    inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
