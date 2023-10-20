@@ -545,6 +545,15 @@ public:
     if (!rtType)
       // the result must be a tensor
       return resultVals;
+    Attribute encoding = rtType.getEncoding();
+    if (!encoding)
+      // encoding not available
+      return resultVals;
+    triton::gpu::BlockedEncodingAttr blockedEncoding =
+        encoding.dyn_cast<triton::gpu::BlockedEncodingAttr>();
+    if (!blockedEncoding)
+      // encoding is not blocked
+      return resultVals;
 
     SmallVector<unsigned> elemsPerThread =
         triton::gpu::getElemsPerThread(rtType);
@@ -555,11 +564,23 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
+    ArrayRef<unsigned> sizePerThread = blockedEncoding.getSizePerThread();
+    if (rank != sizePerThread.size())
+      return resultVals;
+
     SmallVector<int64_t> constancy = axisInfo->getConstancy();
     if (rank != constancy.size())
       return resultVals;
     bool hasConstancy = false;
     for (int i = 0; i < rank; ++i) {
+      if (constancy[i] > sizePerThread[i]) {
+        if (constancy[i] % sizePerThread[i] != 0)
+          // constancy is not evenly covered by sizePerThread
+          return resultVals;
+        // can't move the values across different
+        // "sizePerThread"-sized blocks
+        constancy[i] = sizePerThread[i];
+      }
       if (elemsPerThread[i] < 1 || constancy[i] < 1)
         return resultVals;
       if (!(elemsPerThread[i] % constancy[i] == 0 ||
