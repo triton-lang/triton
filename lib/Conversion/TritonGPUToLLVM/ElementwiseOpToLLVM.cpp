@@ -599,26 +599,19 @@ public:
       return resultVals;
 
     if (rank > 1) {
-      // maybe reorder shape and constancy based on the axis order
+      // reorder the shape and constancy vectors by the axis order:
+      // from the fastest-changing to the smallest-changing axis
       SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
       if (rank != order.size())
         return resultVals;
-      SmallVector<unsigned> elemsPerThreadReordered(rank, 0);
-      SmallVector<int64_t> constancyReordered(rank, 0);
-      for (int i = 0; i < rank; i++) {
-        // new axis order: from the slowest-
-        // to the fastest-changing axis
-        unsigned pos = rank - order[i] - 1;
-        elemsPerThreadReordered[pos] = elemsPerThread[i];
-        constancyReordered[pos] = constancy[i];
-      }
-      elemsPerThread = elemsPerThreadReordered;
-      constancy = constancyReordered;
+      ArrayRef<unsigned> orderRef(order);
+      elemsPerThread = reorder(ArrayRef<unsigned>(elemsPerThread), orderRef);
+      constancy = reorder(ArrayRef<int64_t>(constancy), orderRef);
     }
 
     SmallVector<unsigned> strides(rank, 1);
-    for (int i = rank - 2; i >= 0; i--) {
-      strides[i] = strides[i + 1] * elemsPerThread[i + 1];
+    for (int i = 1; i < rank; ++i) {
+      strides[i] = strides[i - 1] * elemsPerThread[i - 1];
     }
     SmallVector<Value> dedupResultVals;
     dedupResultVals.reserve(resultVals.size());
@@ -628,7 +621,7 @@ public:
       // points to the reused value in the original resultsVal
       int orig_idx = i;
       int dedup_idx = 0;
-      for (int j = rank - 1; j >= 0; j--) {
+      for (int j = 0; j < rank; ++j) {
         int coord_j = orig_idx % elemsPerThread[j];
         dedup_idx += (coord_j / constancy[j] * constancy[j]) * strides[j];
         orig_idx /= elemsPerThread[j];
