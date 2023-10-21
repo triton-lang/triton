@@ -31,7 +31,7 @@ cd ..
 pip3 install expecttest psutil
 
 # torchbench
-if [ "$MODEL_SPEC" == "torchbench" ] || [ "$MODEL_SPEC" == "all" ]; then
+if [ "$MODEL_SPEC" == "torchbench" ] || [ "$MODEL_SPEC" != "all" ]; then
 	# clean up old torchbench
 	rm -rf benchmark
 	pip3 install pyyaml
@@ -42,7 +42,7 @@ if [ "$MODEL_SPEC" == "torchbench" ] || [ "$MODEL_SPEC" == "all" ]; then
 fi 
 
 # timm
-if [ "$MODEL_SPEC" == "timm_models" ] || [ "$MODEL_SPEC" == "all" ]; then
+if [ "$MODEL_SPEC" == "timm_models" ] || [ "$MODEL_SPEC" != "all" ]; then
 	# clean up old timm
 	rm -rf pytorch-image-models
 	git clone https://github.com/huggingface/pytorch-image-models.git
