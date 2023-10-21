@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v2
       #- name: Packages
       #  run: |
-      #    ./.github/workflows/torchinductor/scripts/install_torchinductor.sh
+      #    ./.github/workflows/torch-inductor/scripts/install_torchinductor.sh
       - name: Environment
         run: |
           source /opt/torchinductor_venv/bin/activate
@@ -36,4 +36,4 @@ jobs:
       # Runs too long time
       #- name: Accuracy
       #  run: |
-      #    ./.github/workflows/torchinductor/scripts/run_torchinductor_acc.sh
+      #    ./.github/workflows/torch-inductor/scripts/run_torchinductor_acc.sh

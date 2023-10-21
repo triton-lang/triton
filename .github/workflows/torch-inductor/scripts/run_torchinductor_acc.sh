@@ -2,7 +2,7 @@
 
 # remember where we started
 ROOT="$(pwd)"
-INDUCTOR="$ROOT"/.github/workflows/torchinductor
+INDUCTOR="$ROOT"/.github/workflows/torch-inductor
 
 # shellcheck source=/dev/null
 source /opt/torchinductor_venv/bin/activate
