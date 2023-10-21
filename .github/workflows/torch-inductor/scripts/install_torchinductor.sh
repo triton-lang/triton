@@ -9,7 +9,7 @@ python3 -m venv /opt/torchinductor_venv
 # shellcheck source=/dev/null
 source /opt/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
-source ./.github/workflows/torchinductor/scripts/common.sh
+source ./.github/workflows/torch-inductor/scripts/common.sh
 
 # pytorch nightly
 pip3 install --force-reinstall --pre torch torchtext torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118
