@@ -598,6 +598,24 @@ public:
       // nothing to deduplicate
       return resultVals;
 
+    if (rank > 1) {
+      // maybe reorder shape and constancy based on the axis order
+      SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
+      if (rank != order.size())
+        return resultVals;
+      SmallVector<unsigned> elemsPerThreadReordered(rank, 0);
+      SmallVector<int64_t> constancyReordered(rank, 0);
+      for (int i = 0; i < rank; i++) {
+        // new axis order: from the slowest-
+        // to the fastest-changing axis
+        unsigned pos = rank - order[i] - 1;
+        elemsPerThreadReordered[pos] = elemsPerThread[i];
+        constancyReordered[pos] = constancy[i];
+      }
+      elemsPerThread = elemsPerThreadReordered;
+      constancy = constancyReordered;
+    }
+
     SmallVector<unsigned> strides(rank, 1);
     for (int i = rank - 2; i >= 0; i--) {
       strides[i] = strides[i + 1] * elemsPerThread[i + 1];
