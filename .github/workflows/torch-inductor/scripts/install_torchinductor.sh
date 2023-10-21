@@ -28,7 +28,9 @@ git submodule update --init --recursive
 cd ..
 
 # required packages
-pip3 install expecttest psutil
+sudo apt-get install --yes libpango-1.0-0
+pip3 install --upgrade pip
+pip3 install expecttest psutil lightning-utilities pyre_extensions
 
 # torchbench
 if [ "$MODEL_SPEC" == "torchbench" ] || [ "$MODEL_SPEC" != "all" ]; then
