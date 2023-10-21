@@ -15,9 +15,11 @@ source /opt/torchinductor_venv/bin/activate
 source ./.github/workflows/torch-inductor/scripts/common.sh
 
 # pytorch nightly
-pip3 install --force-reinstall --pre torch torchtext torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu118
+pip3 install --force-reinstall --pre torch torchtext torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 # pytorch source to get torchbench for dynamo
 cd /opt || exit
+# cleanup old pytorch
+rm -rf pytorch
 git clone --recursive https://github.com/pytorch/pytorch
 cd pytorch || exit
 # if you are updating an existing checkout
@@ -30,6 +32,8 @@ pip3 install expecttest psutil
 
 # torchbench
 if [ "$MODEL_SPEC" == "torchbench" ] || [ "$MODEL_SPEC" == "all" ]; then
+	# clean up old torchbench
+	rm -rf benchmark
 	pip3 install pyyaml
 	git clone https://github.com/pytorch/benchmark.git
 	cd benchmark || exit
@@ -39,6 +43,8 @@ fi
 
 # timm
 if [ "$MODEL_SPEC" == "timm_models" ] || [ "$MODEL_SPEC" == "all" ]; then
+	# clean up old timm
+	rm -rf pytorch-image-models
 	git clone https://github.com/huggingface/pytorch-image-models.git
 	cd pytorch-image-models || exit
 	pip3 install -e .
