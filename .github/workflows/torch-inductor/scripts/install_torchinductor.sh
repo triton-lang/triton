@@ -15,7 +15,7 @@ source /opt/torchinductor_venv/bin/activate
 source ./.github/workflows/torch-inductor/scripts/common.sh
 
 # pytorch nightly
-pip3 install --force-reinstall --pre torch torchtext torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cu121
+pip3 install --force-reinstall --pre torch torchtext torchvision torchaudio torchrec --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 # pytorch source to get torchbench for dynamo
 cd /opt || exit
 # cleanup old pytorch
