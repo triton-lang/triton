@@ -23,16 +23,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      #- name: Packages
-      #  run: |
-      #    ./.github/workflows/torch-inductor/scripts/install_torchinductor.sh
+      - name: Packages
+        run: |
+          ./.github/workflows/torch-inductor/scripts/install_torchinductor.sh torchbench
       - name: Environment
         run: |
           source /opt/torchinductor_venv/bin/activate
           ./.github/workflows/torch-inductor/scripts/install_triton.sh
       - name: Performance
         run: |
-          ./.github/workflows/torch-inductor/scripts/run_torchinductor_perf.sh
+          ./.github/workflows/torch-inductor/scripts/run_torchinductor_perf.sh torchbench
       # Runs too long time
       #- name: Accuracy
       #  run: |
