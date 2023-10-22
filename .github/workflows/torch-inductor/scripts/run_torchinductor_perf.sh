@@ -44,6 +44,9 @@ for model in "${MODELS[@]}"; do
     --output "$BASE_TEST_REPORTS_DIR"/"$model".csv
 done
 
+# uninstall pytorch-triton
+pip3 uninstall pytorch-triton -y
+
 cd "$ROOT" || exit
 for model in "${MODELS[@]}"; do
   if [ "$model" != "$MODEL_SPEC" ] && [ "$MODEL_SPEC" != "all" ]; then
