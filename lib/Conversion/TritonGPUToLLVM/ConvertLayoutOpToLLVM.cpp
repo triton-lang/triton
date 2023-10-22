@@ -1042,7 +1042,7 @@ private:
     }
     return res;
   }
-}; // namespace triton::gpu::ConvertLayoutOp>
+};
 
 void populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
