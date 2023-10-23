@@ -196,7 +196,7 @@ class cast_matmul(torch.autograd.Function):
         """
         dot: matmul(a,b)
         """
-        ctx.save_for_backward(a, b, dot_out_dtype)
+        ctx.save_for_backward(a, b)
         ctx.a_requires_grad = a.requires_grad
         ctx.b_requires_grad = b.requires_grad
 
@@ -205,10 +205,10 @@ class cast_matmul(torch.autograd.Function):
 
 
 input_dtypes = [torch.float32, torch.float16,]
-out_dtypes = ["float16", "int8", "int32"]
+out_dtypes = ["float16"]
 if torch.cuda.is_bf16_supported():
     input_dtypes.append(torch.bfloat16)
-    out_dtypes.append("bfloat16")
+    # out_dtypes.append("bfloat16") # TODO: maybe tl.dot can support bfloat16
 # product w and x dtype: 3x3 = 9 cases
 
 
