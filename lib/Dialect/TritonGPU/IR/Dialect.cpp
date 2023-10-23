@@ -50,7 +50,7 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     return dotLayout.getTotalElemsPerThread(shape, eltTy);
   } else {
-    assert(0 && "getElemsPerThread not implemented");
+    llvm::report_fatal_error("getElemsPerThread not implemented");
     return 0;
   }
 }
@@ -64,7 +64,7 @@ SmallVector<unsigned> getElemsPerThread(Attribute layout,
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
     return mmaLayout.getElemsPerThread(shape, eltTy);
   } else {
-    assert(0 && "getElemsPerThread not implemented");
+    llvm::report_fatal_error("getElemsPerThread not implemented");
     return SmallVector<unsigned>();
   }
 }
@@ -109,7 +109,7 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
       threadsPerWarp[i] *= parentThreadsPerWarp[sliceLayout.getDim()];
     return threadsPerWarp;
   }
-  assert(0 && "getThreadsPerWarp not implemented");
+  llvm::report_fatal_error("getThreadsPerWarp not implemented");
   return {};
 }
 
@@ -155,7 +155,7 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
       warpsPerCTA[i] *= parentWarpsPerCTA[sliceLayout.getDim()];
     return warpsPerCTA;
   }
-  assert(0 && "getWarpsPerCTA not implemented");
+  llvm::report_fatal_error("getWarpsPerCTA not implemented");
   return {};
 }
 
@@ -215,16 +215,17 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
       } else if (opIdx == 1) {
         return {4, 1};
       } else {
-        assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+        llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
         return {};
       }
     } else {
-      assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
-                  "supported yet");
+      llvm::report_fatal_error(
+          "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+          "supported yet");
       return {};
     }
   } else {
-    assert(0 && "getSizePerThread not implemented");
+    llvm::report_fatal_error("getSizePerThread not implemented");
     return {};
   }
 }
@@ -276,9 +277,9 @@ SmallVector<unsigned> getThreadsPerCTA(Attribute layout) {
       threads = {8 * mmaLayout.getWarpsPerCTA()[0],
                  4 * mmaLayout.getWarpsPerCTA()[1]};
     } else
-      assert(0 && "Unimplemented usage of MmaEncodingAttr");
+      llvm::report_fatal_error("Unimplemented usage of MmaEncodingAttr");
   } else {
-    assert(0 && "Unimplemented usage of getThreadsPerCTA");
+    llvm::report_fatal_error("Unimplemented usage of getThreadsPerCTA");
   }
 
   return threads;
@@ -312,7 +313,7 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
       return {16 * mmaLayout.getWarpsPerCTA()[0],
               instrShape[1] * mmaLayout.getWarpsPerCTA()[1]};
     }
-    assert(0 && "Unexpected MMA layout version found");
+    llvm::report_fatal_error("Unexpected MMA layout version found");
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto parentLayout = dotLayout.getParent();
     assert(parentLayout && "DotOperandEncodingAttr must have a parent");
@@ -327,16 +328,21 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout,
       } else if (opIdx == 1) {
         return {16, parentShapePerCTATile[1]};
       } else {
-        assert(0 && "DotOperandEncodingAttr opIdx must be 0 or 1");
+        llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
       }
     } else {
-      assert(0 && "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
-                  "supported yet");
+      llvm::report_fatal_error(
+          "DotOperandEncodingAttr non-MmaEncodingAttr parent not "
+          "supported yet");
     }
   } else {
-    assert(0 && "Unimplemented usage of getShapePerCTATile");
+    llvm::report_fatal_error("Unimplemented usage of getShapePerCTATile");
   }
   return shape;
+}
+
+bool isExpensiveView(Type srcType, Type dstType) {
+  return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
 }
 
 namespace {
@@ -385,7 +391,7 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     return SmallVector<unsigned>(sharedLayout.getOrder().begin(),
                                  sharedLayout.getOrder().end());
   } else {
-    assert(0 && "Unimplemented usage of getOrder");
+    llvm::report_fatal_error("Unimplemented usage of getOrder");
   }
   return {};
 };
@@ -406,7 +412,7 @@ CTALayoutAttr getCTALayout(Attribute layout) {
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
     return sharedLayout.getCTALayout();
   else
-    assert(0 && "Unimplemented usage of getCTALayout");
+    llvm::report_fatal_error("Unimplemented usage of getCTALayout");
   return {};
 }
 
@@ -434,7 +440,8 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
      * in the branch where layout is an instance of SliceEncodingAttr. This is
      * inconvenient but safe.
      */
-    assert(0 && "getCTAsPerCGA for SliceEncodingAttr is not well-defined");
+    llvm::report_fatal_error(
+        "getCTAsPerCGA for SliceEncodingAttr is not well-defined");
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>())
     ref = mmaLayout.getCTALayout().getCTAsPerCGA();
   else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
@@ -442,7 +449,7 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
     ref = sharedLayout.getCTALayout().getCTAsPerCGA();
   else
-    assert(0 && "Unimplemented usage of getCTAsPerCGA");
+    llvm::report_fatal_error("Unimplemented usage of getCTAsPerCGA");
   return SmallVector<unsigned>(ref.begin(), ref.end());
 }
 
@@ -488,7 +495,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     ref = sharedLayout.getCTALayout().getCTAOrder();
   } else {
-    assert(0 && "Unimplemented usage of getCTAOrder");
+    llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
   }
   return SmallVector<unsigned>(ref.begin(), ref.end());
 }
@@ -537,9 +544,9 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
   else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
     return getNumWarpsPerCTA(dotLayout.getParent());
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
-    assert(0 && "Cannot get numWarps from SharedEncodingAttr");
+    llvm::report_fatal_error("Cannot get numWarps from SharedEncodingAttr");
   else
-    assert(0 && "Unimplemented usage of getNumWarpsPerCTA");
+    llvm::report_fatal_error("Unimplemented usage of getNumWarpsPerCTA");
   return product<unsigned>(warpsPerCTA);
 }
 
@@ -556,7 +563,7 @@ unsigned getNumCTAs(Attribute layout) {
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
     CTAsPerCGA = sharedLayout.getCTALayout().getCTAsPerCGA();
   else
-    assert(0 && "Unimplemented usage of getNumCTAs");
+    llvm::report_fatal_error("Unimplemented usage of getNumCTAs");
   return product<unsigned>(CTAsPerCGA);
 }
 
@@ -1533,13 +1540,15 @@ struct CanonicalizeConvertFromView
     Operation *arg = op->getOperand(0).getDefiningOp();
     if (!arg)
       return mlir::failure();
+    auto convert = dyn_cast<ConvertLayoutOp>(arg);
+    if (!convert)
+      return failure();
+    if (isExpensiveView(convert.getOperand().getType(), op.getType()))
+      return failure();
     // view(convert) -> view
-    if (auto convert = dyn_cast<ConvertLayoutOp>(arg)) {
-      rewriter.replaceOpWithNewOp<triton::ViewOp>(
-          op, op->getResult(0).getType(), convert.getOperand());
-      return mlir::success();
-    }
-    return mlir::failure();
+    rewriter.replaceOpWithNewOp<triton::ViewOp>(op, op->getResult(0).getType(),
+                                                convert.getOperand());
+    return mlir::success();
   }
 };
 
@@ -1584,6 +1593,8 @@ struct CanonicalizeConvertFromConvert
       return mlir::failure();
     // cvt(view) -> view
     if (auto view = dyn_cast<triton::ViewOp>(arg)) {
+      if (isExpensiveView(view.getOperand().getType(), op.getType()))
+        return failure();
       rewriter.replaceOpWithNewOp<triton::ViewOp>(
           op, op->getResult(0).getType(), view.getResult());
       return mlir::success();
