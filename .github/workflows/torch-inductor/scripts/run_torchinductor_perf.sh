@@ -32,6 +32,7 @@ for model in "${MODELS[@]}"; do
 done
 
 # install pytorch-triton
+pip3 uninstall triton -y
 pip3 install --pre torch --extra-index-url https://download.pytorch.org/whl/nightly/cu121
 
 echo "Running with pytorch-triton"
