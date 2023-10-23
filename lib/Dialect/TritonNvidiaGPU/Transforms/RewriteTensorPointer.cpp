@@ -98,13 +98,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, int computeCapability) {
   return !(boxDimSwizzle && strideDivisible && enableTMA);
 }
 
-// TODO: When encoding exists use triton::gpu::CmpIOp as arith::CmpIOp doesn't
-// play well with encoding attributes. Move back to arith::CmpIOp when this pass
-// moves back to triton IR level.
 Value createCmpOp(OpBuilder &builder, Location loc, RankedTensorType type,
                   arith::CmpIPredicate pred, Value lhs, Value rhs) {
-  if (type.getEncoding())
-    return builder.create<ttg::CmpIOp>(loc, type, pred, lhs, rhs);
   return builder.create<arith::CmpIOp>(loc, type, pred, lhs, rhs);
 }
 
