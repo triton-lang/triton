@@ -1,9 +1,10 @@
 name: Torchinductor
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 1 * * *"
+  workflow_run:
+    workflows: ["Wheel"]
+    types:
+      - completed
 
 jobs:
   Runner-Preparation:
