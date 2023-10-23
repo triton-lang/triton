@@ -41,7 +41,7 @@ if [ "$MODEL_SPEC" == "torchbench" ] || [ "$MODEL_SPEC" != "all" ]; then
 	cd benchmark || exit
 	python3 install.py
 	cd ..
-fi 
+fi
 
 # timm
 if [ "$MODEL_SPEC" == "timm_models" ] || [ "$MODEL_SPEC" != "all" ]; then
