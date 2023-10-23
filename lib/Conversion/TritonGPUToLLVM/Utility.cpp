@@ -260,6 +260,16 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             const std::string &clamp, Value laneId = Value()) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
+#ifdef USE_ROCM
+  //On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on 32bit/dwords
+  //so we need promote to 32 here.
+  if (bits == 8) {
+    Value i32Val = sext(i32_ty, val);
+    Value result = commonShflSync(loc, rewriter, i32Val, i, shuffleType, clamp, laneId);
+    return trunc(i8_ty, result);
+  }
+#endif
+
   if (bits == 64) {
     Type vecTy = vec_ty(f32_ty, 2);
     Value vec = bitcast(val, vecTy);
