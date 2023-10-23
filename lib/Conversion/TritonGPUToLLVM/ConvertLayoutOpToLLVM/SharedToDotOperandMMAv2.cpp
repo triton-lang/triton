@@ -422,8 +422,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
   needTrans = kOrder != order[0];
   canUseLdmatrix = elemBytes == 2 || (!needTrans);
   canUseLdmatrix = canUseLdmatrix && (kWidth == vecWidth);
-  // We may truncate from a larger data type to a small data type
-  assert(vecWidth <= kWidth);
+  // We may truncate from a larger data type to a small data type.
   if (vecWidth > kWidth)
     vecWidth = kWidth;
 
