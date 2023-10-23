@@ -1,7 +1,7 @@
 """
 issue: https://github.com/openai/triton/issues/2523
 fused type convert and matmul, base on triton matmul, the different with matmul:
-1. force C's dtype is torch.float16, dot_out_dtype is tl.float16
+1. force C's dtype=dot_out_dtype to ["float16", "int8", "int32"]
 2. accept A and B with dtype=[torch.float32, torch.float16, torch.bfloat16]
 
 """
@@ -167,9 +167,12 @@ class cast_matmul(torch.autograd.Function):
         M, K = a.shape
         _, N = b.shape
         # allocates output
+        assert dot_out_dtype in ["float16", "int8", "int32", "bfloat16"]
+        c_dtype = getattr(torch, dot_out_dtype)
+        dot_out_dtype = getattr(tl, dot_out_dtype)  # <- here force dot_out_dtype
 
-        c = torch.empty((M, N), device=device, dtype=torch.float16)
-        dot_out_dtype = tl.float16  # <- here force dot_out_dtype
+        c = torch.empty((M, N), device=device, dtype=c_dtype)
+
         ab_dtype = True
         if a.dtype in [tl.float8e4nv, tl.float8e5] and b.dtype in [tl.float8e4nv, tl.float8e5]:
             ab_dtype = False
@@ -201,18 +204,19 @@ class cast_matmul(torch.autograd.Function):
                                  fp8_fast_accum=fp8_fast_accum)
 
 
-fp32cast_to_dtypes = [torch.float32, torch.float16]
+input_dtypes = [torch.float32, torch.float16,]
+out_dtypes = ["float16", "int8", "int32"]
 if torch.cuda.is_bf16_supported():
-    fp32cast_to_dtypes.append(torch.bfloat16)
-
+    input_dtypes.append(torch.bfloat16)
+    out_dtypes.append("bfloat16")
 # product w and x dtype: 3x3 = 9 cases
 
 
 @pytest.mark.parametrize(
-    "w_dtype,x_dtype",
-    product(fp32cast_to_dtypes, fp32cast_to_dtypes)
+    "w_dtype,x_dtype,out_dtype",
+    product(input_dtypes, input_dtypes, out_dtypes)
 )
-def test_cast_matmul(w_dtype, x_dtype):
+def test_cast_matmul(w_dtype, x_dtype, out_dtype):
 
     batch, seq, hidden = 20, 64, 768
     output = 1024
@@ -223,6 +227,7 @@ def test_cast_matmul(w_dtype, x_dtype):
     w1 = torch.randn(output, hidden, device=device,
                      dtype=w_dtype,
                      requires_grad=True)
-    out_torch = F.linear(x.to(torch.float16), w1.to(torch.float16))
-    out_triton = cast_matmul.apply(x, w1.T, torch.float16)
+    torch_dtype = getattr(torch, out_dtype)
+    out_torch = F.linear(x.to(torch_dtype), w1.to(torch_dtype))
+    out_triton = cast_matmul.apply(x, w1.T, out_dtype)
     torch.testing.assert_close(out_torch, out_triton, atol=0.02, rtol=0.01)
