@@ -651,7 +651,7 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
     return true;
   if (auto externElementwiseOp = dyn_cast<triton::ExternElementwiseOp>(op))
     return externElementwiseOp.getPure();
-  if (llvm::isa<ttg::CmpIOp, ttg::CmpFOp, ttg::SelectOp>(op))
+  if (llvm::isa<arith::CmpIOp, arith::CmpFOp, arith::SelectOp>(op))
     return true;
   return false;
 }

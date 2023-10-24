@@ -74,7 +74,7 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
-  auto slices = mlir::getSlice(dotOp, {filter});
+  auto slices = multiRootGetSlice(dotOp, {filter});
   for (Operation *op : slices)
     if (isa<tt::DotOp>(op) && (op != dotOp)) {
       if (shape[0] < shapePerWarp[0] * numWarps &&
