@@ -163,14 +163,17 @@ static bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
       if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+        Attribute dstEncoding = convertOp.getResult()
+                                    .getType()
+                                    .cast<RankedTensorType>()
+                                    .getEncoding();
         if (auto mmaLayout =
-                convertOp.getResult()
-                    .getType()
-                    .cast<RankedTensorType>()
-                    .getEncoding()
-                    .dyn_cast_or_null<triton::gpu::MmaEncodingAttr>())
+                dstEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>())
           return (mmaLayout.getVersionMajor() > 1) ? true
                                                    : mmaLayout == encoding;
+        if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+          return encoding.cast<triton::gpu::MmaEncodingAttr>()
+                     .getVersionMajor() > 1;
       }
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
@@ -435,6 +438,15 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
       return rewrittenValue;
     OpBuilder rewriter(value.getContext());
     rewriter.setInsertionPointAfterValue(rewrittenValue);
+    // Workaround: The pipeliner will insert async.wait after a pipelined loop
+    // to ensure that there is no pending copies and it is safe to re-use shared
+    // memory. We shouldn't insert ops that may use shared memory in between the
+    // loop and the async.wait. This is a hack until we fix the IR
+    // representation of async wait.
+    if (Operation *op = rewrittenValue.getDefiningOp()) {
+      if (isa<triton::gpu::AsyncWaitOp>(op->getNextNode()))
+        rewriter.setInsertionPointAfter(op->getNextNode());
+    }
     auto tmpType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
     Value converted = rewriter.create<triton::gpu::ConvertLayoutOp>(
@@ -686,7 +698,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
       map(oldResult, newResult);
     return newOp;
   }
-  assert(0 && "unexpected op in rewrite");
+  llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
 

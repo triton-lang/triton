@@ -16,7 +16,7 @@ from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs,
                                    get_shared_memory_size, ir, runtime,
                                    translate_llvmir_to_ptx,
                                    translate_triton_gpu_to_llvmir)
-from ..common.backend import get_backend, path_to_ptxas
+from ..common.backend import get_backend, get_cuda_version_key, path_to_ptxas
 from ..common.build import is_hip
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
@@ -24,7 +24,7 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device,
-                           get_device_capability, version_key)
+                           get_device_capability)
 from ..tools.disasm import get_sass
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
@@ -36,6 +36,7 @@ from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
 class CudaTargetDescriptor:
     capability: int
     num_warps: int
+    enable_fp_fusion: bool
 
 
 def _is_cuda(target):
@@ -130,6 +131,7 @@ def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target,
         pm.add_tritongpu_wspipeline_pass(num_stages, num_warps, capability)
         pm.add_tritongpu_wsmutex_pass(capability)
         pm.add_tritongpu_wsmaterialization_pass(capability)
+        pm.add_licm_pass()
         pm.add_cse_pass()
     else:
         pm.add_tritongpu_pipeline_pass(num_stages, num_warps, num_ctas, capability)
@@ -194,7 +196,7 @@ def llir_to_ptx(mod: Any, target: CudaTargetDescriptor, ptx_version: int = None)
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
-    return translate_llvmir_to_ptx(mod, target.capability, ptx_version)
+    return translate_llvmir_to_ptx(mod, target.capability, ptx_version, target.enable_fp_fusion)
 
 
 def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
@@ -205,7 +207,7 @@ def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
     :return: str
     '''
     ptxas, _ = path_to_ptxas()
-    return compile_ptx_to_cubin(ptx, ptxas, target.capability)
+    return compile_ptx_to_cubin(ptx, ptxas, target.capability, target.enable_fp_fusion)
 
 
 # ------------------------------------------------------------------------------
@@ -233,7 +235,11 @@ def convert_type_repr(x):
     return x
 
 
-def make_hash(fn, target, env_vars, **kwargs):
+def make_hash(fn, target, env_vars, device_backend, **kwargs):
+    if device_backend is None:
+        version_key = get_cuda_version_key()
+    else:
+        version_key = device_backend.get_version_key()
     if isinstance(fn, JITFunction):
         configs = kwargs["configs"]
         signature = kwargs["signature"]
@@ -248,13 +254,13 @@ def make_hash(fn, target, env_vars, **kwargs):
         get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1), sorted(conf.ids_of_folded_args), sorted(conf.divisible_by_8))
         configs_key = [get_conf_key(conf) for conf in configs]
         env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
-        key = f"{fn.cache_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{target}-{env_vars_list}"
+        key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{target}-{env_vars_list}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
     ignore_version = kwargs.get('ignore_version', False)
     if (ignore_version):
         return hashlib.md5((Path(fn).read_text()).encode("utf-8")).hexdigest()
-    return hashlib.md5((Path(fn).read_text() + version_key()).encode("utf-8")).hexdigest()
+    return hashlib.md5((Path(fn).read_text() + version_key).encode("utf-8")).hexdigest()
 
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
@@ -370,6 +376,7 @@ def compile(fn, **kwargs):
     assert num_warps > 0 and (num_warps & (num_warps - 1)) == 0, "num_warps must be a power of 2"
     num_ctas = kwargs.get("num_ctas", 1)
     num_stages = kwargs.get("num_stages", get_arch_default_num_stages(device_type, capability=capability))
+    enable_fp_fusion = kwargs.get("enable_fp_fusion", True)
     # TODO[shuhaoj]: Default should be to enable warp specialization once possible
     enable_warp_specialization = kwargs.get("enable_warp_specialization", False)
     # TODO[shuhaoj]: persistent can be decoupled with warp specialization
@@ -392,7 +399,7 @@ def compile(fn, **kwargs):
     # build architecture descriptor
     if device_type == "cuda":
         _device_backend = get_backend(device_type)
-        target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps)
+        target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps, enable_fp_fusion=enable_fp_fusion)
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
@@ -449,11 +456,11 @@ def compile(fn, **kwargs):
         first_stage = list(stages.keys()).index(ir_name)
 
     # create cache manager
-    fn_cache_manager = get_cache_manager(make_hash(fn, target, get_env_vars(), **kwargs))
+    fn_cache_manager = get_cache_manager(make_hash(fn, target, get_env_vars(), _device_backend, **kwargs))
     # managers used to dump and override IR for debugging
     enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
-    fn_override_manager = get_override_manager(make_hash(fn, target, get_env_vars(), **kwargs, ignore_version=True))
-    fn_dump_manager = get_dump_manager(make_hash(fn, target, get_env_vars(), **kwargs, ignore_version=True))
+    fn_override_manager = get_override_manager(make_hash(fn, target, get_env_vars(), _device_backend, **kwargs, ignore_version=True))
+    fn_dump_manager = get_dump_manager(make_hash(fn, target, get_env_vars(), _device_backend, **kwargs, ignore_version=True))
 
     # determine name and extension type of provided function
     if isinstance(fn, JITFunction):

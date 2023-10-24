@@ -43,8 +43,8 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     ref_dq, q.grad = q.grad.clone(), None
     # # triton implementation
     tri_out = triton.ops.attention(q, k, v, causal, sm_scale, seq_par)
-    # print(ref_out)
-    # print(tri_out)
+    # temporary env var control begin
+    os.putenv("ENABLE_TMA", "0")
     tri_out.backward(dout)
     tri_dv, v.grad = v.grad.clone(), None
     tri_dk, k.grad = k.grad.clone(), None
@@ -55,3 +55,5 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     torch.testing.assert_close(ref_dv, tri_dv, atol=atol, rtol=0)
     torch.testing.assert_close(ref_dk, tri_dk, atol=atol, rtol=0)
     torch.testing.assert_close(ref_dq, tri_dq, atol=atol, rtol=0)
+    # temporary env var control end
+    os.putenv("ENABLE_TMA", enable_tma)

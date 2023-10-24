@@ -860,9 +860,9 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 # ----------------
 
 
-@pytest.mark.parametrize("dtype_x, expr", [(dtype_x, expr) for dtype_x in ["float32", "float64"] for expr in ['exp', 'log', 'cos', 'sin']])
-def test_math_op(dtype_x, expr, device):
-    _test_unary(dtype_x, f'tl.{expr}(x)', f'np.{expr}(x) ', device=device)
+@pytest.mark.parametrize("dtype_x, expr, x", [(dtype_x, expr, x) for dtype_x in ["float32", "float64"] for expr in ['exp', 'log', 'cos', 'sin'] for x in ['x', '3.0']])
+def test_math_op(dtype_x, expr, device, x):
+    _test_unary(dtype_x, f'tl.{expr}({x})', f'np.{expr}({x}) ', device=device)
 
 # ----------------
 # test abs
@@ -1329,8 +1329,11 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         if dtype_z in uint_dtypes:
             x = np.absolute(x)
         x_tri = to_triton(x, device=device)
-
+    if 'float' in dtype_z and 'float' in dtype_x:
+        # make sure we use values that can be represented in both types
+        x_tri = x_tri.to(getattr(torch, dtype_z)).to(getattr(torch, dtype_x))
     # triton kernel
+
     @triton.jit
     def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr):
         x_ptr = X + tl.arange(0, SIZE)
@@ -1344,7 +1347,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     if dtype_z.startswith('bfloat'):
         z_tri = torch.empty((size,), dtype=getattr(torch, dtype_z), device=device)
     elif dtype_z.startswith('float8'):
-        z_tri = torch.empty((size,), dtype=torch.float, device=device)
+        z_tri = torch.empty((size,), dtype=torch.half, device=device).to(dtype=getattr(torch, dtype_z))
     else:
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
     kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, num_warps=1, num_ctas=num_ctas)
@@ -1914,7 +1917,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
-        "max": {"int32": "arith.maxsi", "float32": "arith.maxf", "float16": "arith.maxf"},
+        "max": {"int32": "arith.maxsi", "float32": "arith.maximumf", "float16": "arith.maximumf"},
         "sum": {"int32": "arith.addi", "float32": "arith.addf", "float16": "arith.addf"}
     }[reduce_op][dtype_str]
     numpy_op = {
@@ -2128,7 +2131,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
         tt.reduce.return %13 : i32"""
     elif op == "max":
         op_str = f"""
-        %13 = "{GPU_DIALECT}.cmpi"(%arg2, %arg3) <{{predicate = 4 : i64}}> : (i32, i32) -> i1
+        %13 = arith.cmpi "sgt", %arg2, %arg3 : i32
         %14 = arith.select %13, %arg2, %arg3 : i32
         tt.reduce.return %14 : i32"""
     ir = f"""
@@ -3073,6 +3076,20 @@ def test_constexpr_scalar_shape(device):
     kernel[(1,)](x_tri, 32)
     np.testing.assert_equal(to_numpy(x_tri), np.arange(0, 256) % 8)
 
+
+@triton.jit
+def static_assert_func():
+    tl.static_assert(tl.constexpr(False), f"Assert is firing because the constexpr progation did not work properly")
+
+
+def test_constexpr_propagation():
+    @triton.jit
+    def _kernel(COND: tl.constexpr):
+        NEW_COND = COND
+        if NEW_COND:
+            static_assert_func()
+    _kernel[(1,)](False)
+
 # -------------
 # test call
 # -------------
@@ -3917,3 +3934,22 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
         torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     else:
         torch.testing.assert_close(ref_out, C)
+
+# -----------------------
+# test enable_fp_fusion
+# -----------------------
+
+
+@pytest.mark.parametrize("enable_fp_fusion", [False, True])
+def test_enable_fp_fusion(enable_fp_fusion):
+    # Sequential multiply add can be fused by backend
+    @triton.jit
+    def mul_add(data):
+        ptrs = data + tl.arange(0, 128)
+        tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
+
+    data = torch.randn((128,), device='cuda', dtype=torch.float32)
+    h = mul_add[(1,)](data, enable_fp_fusion=enable_fp_fusion)
+
+    found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+    assert found_fma == enable_fp_fusion

@@ -5,19 +5,15 @@ import functools
 import hashlib
 import inspect
 import os
-import subprocess
 import textwrap
 from collections import defaultdict, namedtuple
 from typing import (Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast,
                     overload)
 
 from .._C.libtriton.triton import TMAInfos
-from ..common.backend import get_backend, path_to_ptxas
+from ..common.backend import get_backend, get_cuda_version_key
 from ..language.core import dtype
 from .interpreter import InterpretedFunction
-
-TRITON_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TRITON_VERSION = "2.1.0"
 
 
 def get_cuda_stream(idx=None):
@@ -97,38 +93,6 @@ class DependenciesFinder(ast.NodeVisitor):
 # -----------------------------------------------------------------------------
 # JITFunction
 # -----------------------------------------------------------------------------
-
-
-@functools.lru_cache()
-def version_key():
-    import pkgutil
-    contents = []
-    # frontend
-    with open(__file__, "rb") as f:
-        contents += [hashlib.sha1(f.read()).hexdigest()]
-    # compiler
-    compiler_path = os.path.join(TRITON_PATH, 'compiler')
-    for lib in pkgutil.iter_modules([compiler_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha1(f.read()).hexdigest()]
-    # backend
-    libtriton_hash = hashlib.sha1()
-    with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
-        while True:
-            chunk = f.read(1024 ** 2)
-            if not chunk:
-                break
-            libtriton_hash.update(chunk)
-    contents.append(libtriton_hash.hexdigest())
-    # language
-    language_path = os.path.join(TRITON_PATH, 'language')
-    for lib in pkgutil.iter_modules([language_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha1(f.read()).hexdigest()]
-    # ptxas version
-    ptxas = path_to_ptxas()[0]
-    ptxas_version = hashlib.sha1(subprocess.check_output([ptxas, "--version"])).hexdigest()
-    return '-'.join(TRITON_VERSION) + '-' + ptxas_version + '-' + '-'.join(contents)
 
 
 def _normalize_ty(ty) -> str:
@@ -275,13 +239,13 @@ class JITFunction(KernelInterface[T]):
         constants = dict(zip(self.constexprs, constexpr_key))
         return constants
 
-    def _call_hook(self, key, signature, device, constants, num_warps, num_ctas, num_stages, enable_warp_specialization, extern_libs, configs):
+    def _call_hook(self, key, signature, device, constants, num_warps, num_ctas, num_stages, enable_warp_specialization, enable_fp_fusion, extern_libs, configs):
         if JITFunction.cache_hook is None:
             return False
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ', '.join([f'{name}: {ty}' for name, ty in zip(self.arg_names, key[1])])
-        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_warp_specialization={enable_warp_specialization}]({arg_reprs})"
+        repr = f"{name}[num_warps={num_warps}, num_ctas={num_ctas}, num_stages={num_stages}, enable_warp_specialization={enable_warp_specialization}, enable_fp_fusion={enable_fp_fusion}]({arg_reprs})"
         key = str(key)
 
         class LegacyCompiler:
@@ -291,7 +255,7 @@ class JITFunction(KernelInterface[T]):
                 pass
 
         kwargs = dict(signature=signature, device=device, constants=constants,
-                      num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, enable_warp_specialization=enable_warp_specialization, extern_libs=extern_libs,
+                      num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, enable_warp_specialization=enable_warp_specialization, enable_fp_fusion=enable_fp_fusion, extern_libs=extern_libs,
                       configs=configs)
 
         return JITFunction.cache_hook(key=key, repr=repr, fn=LegacyCompiler(module, name), compile={
@@ -345,7 +309,7 @@ class JITFunction(KernelInterface[T]):
         def regular_args_v(args_proxy):
             return [args_proxy[arg_name] for arg_name in regular_args]
 
-        def launcher_body(args_proxy, grid, num_warps, num_ctas, num_stages, enable_warp_specialization, extern_libs, stream, warmup, device, device_type):
+        def launcher_body(args_proxy, grid, num_warps, num_ctas, num_stages, enable_warp_specialization, enable_fp_fusion, extern_libs, stream, warmup, device, device_type):
             from ..compiler import (CompiledKernel, compile,
                                     get_arch_default_num_stages,
                                     get_arch_default_num_warps)
@@ -396,7 +360,11 @@ class JITFunction(KernelInterface[T]):
             if num_stages is None:
                 num_stages = get_arch_default_num_stages(device_type)
 
-            key = (version_key(), sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, enable_warp_specialization, self.debug)
+            if device_type in ['cuda']:
+                version_key = get_cuda_version_key()
+            else:
+                version_key = device_backend.get_version_key()
+            key = (version_key, sig_key, constexpr_key, spec_key, num_warps, num_ctas, num_stages, enable_warp_specialization, enable_fp_fusion, self.debug)
             if extern_libs is not None:
                 key = (key, tuple(extern_libs.items()))
 
@@ -424,8 +392,8 @@ class JITFunction(KernelInterface[T]):
                 for i, arg in constants.items():
                     if callable(arg):
                         raise TypeError(f"Callable constexpr at index {i} is not supported")
-                if not self._call_hook(key, signature, device, constants, num_warps, num_ctas, num_stages, enable_warp_specialization, extern_libs, configs):
-                    bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, enable_warp_specialization=enable_warp_specialization, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
+                if not self._call_hook(key, signature, device, constants, num_warps, num_ctas, num_stages, enable_warp_specialization, enable_fp_fusion, extern_libs, configs):
+                    bin = compile(self, signature=signature, device=device, constants=constants, num_warps=num_warps, num_ctas=num_ctas, num_stages=num_stages, enable_warp_specialization=enable_warp_specialization, enable_fp_fusion=enable_fp_fusion, extern_libs=extern_libs, configs=configs, debug=self.debug, device_type=device_type)
                     # Create tensormaps and append to args
                     args = bin.assemble_tensormap_to_arg(args)
                     if not warmup:
@@ -440,8 +408,8 @@ class JITFunction(KernelInterface[T]):
         args_signature = args_signature + ', ' if len(args_signature) > 0 else ''
         src = f"""
 import triton
-def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, enable_warp_specialization=False, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
-    return launcher_body({{{args_map}}}, grid, num_warps, num_ctas, num_stages, enable_warp_specialization, extern_libs, stream, warmup, device, device_type)
+def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, num_stages=None, enable_warp_specialization=False, enable_fp_fusion=True, extern_libs=None, stream=None, warmup=False, device=None, device_type=None):
+    return launcher_body({{{args_map}}}, grid, num_warps, num_ctas, num_stages, enable_warp_specialization, enable_fp_fusion, extern_libs, stream, warmup, device, device_type)
 """
         scope = {"launcher_body": launcher_body}
         exec(src, scope)
@@ -492,7 +460,7 @@ def {self.fn.__name__}({args_signature}grid=None, num_warps=None, num_ctas=1, nu
         if self.hash is None:
             dependencies_finder = DependenciesFinder(globals=self.__globals__, src=self.src)
             dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret + version_key()
+            self.hash = dependencies_finder.ret
         return self.hash
 
     def warmup(self, *args, **kwargs):
