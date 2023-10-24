@@ -12,8 +12,7 @@ import torch
 import torch.nn.functional as F
 
 import triton.language as tl
-from triton import Config, autotune, cdiv, heuristics, jit
-from triton.ops.matmul_perf_model import early_config_prune, estimate_matmul_time
+from triton import cdiv, jit
 
 _ordered_datatypes = [torch.float16, torch.bfloat16, torch.float32]
 
@@ -32,60 +31,6 @@ def get_higher_dtype(a, b):
             return a
 
 
-def init_to_zero(name):
-    return lambda nargs: nargs[name].zero_()
-
-
-def get_configs_io_bound():
-    configs = []
-    for num_stages in [2, 3, 4, 5, 6]:
-        for block_m in [16, 32]:
-            for block_k in [32, 64]:
-                for block_n in [32, 64, 128, 256]:
-                    num_warps = 2 if block_n <= 64 else 4
-                    configs.append(
-                        Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': 1},
-                               num_stages=num_stages, num_warps=num_warps))
-                    # split_k
-                    for split_k in [2, 4, 8, 16]:
-                        configs.append(Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': split_k},
-                                              num_stages=num_stages, num_warps=num_warps, pre_hook=init_to_zero('C')))
-    return configs
-
-
-@autotune(
-    configs=[
-        # basic configs for compute-bound matmuls
-        Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
-        Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
-        Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
-        # good for int8
-        Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
-        Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
-        Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
-        Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
-    ] + get_configs_io_bound(),
-    key=['M', 'N', 'K'],
-    prune_configs_by={
-        'early_config_prune': early_config_prune,
-        'perf_model': estimate_matmul_time,
-        'top_k': 10
-    },
-)
-@heuristics({
-    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
-})
 @jit
 def matmul_kernel(A, B, C, M, N, K,
                   stride_am, stride_ak,
@@ -149,61 +94,6 @@ def matmul_kernel(A, B, C, M, N, K,
         tl.atomic_add(C, acc, mask=mask)
 
 
-class cast_matmul(torch.autograd.Function):
-    kernel = matmul_kernel
-
-    _locks = {}
-
-    @staticmethod
-    def _call(a, b, dot_out_dtype, allow_tf32=True, fp8_fast_accum=True):
-        device = a.device
-        # handle non-contiguous inputs if necessary
-        if a.stride(0) > 1 and a.stride(1) > 1:
-            a = a.contiguous()
-        if b.stride(0) > 1 and b.stride(1) > 1:
-            b = b.contiguous()
-        # checks constraints
-        assert a.shape[1] == b.shape[0], "incompatible dimensions"
-        M, K = a.shape
-        _, N = b.shape
-        # allocates output
-        assert dot_out_dtype in ["float16", "int8", "int32", "bfloat16"]
-        c_dtype = getattr(torch, dot_out_dtype)
-        dot_out_dtype = getattr(tl, dot_out_dtype)  # <- here force dot_out_dtype
-
-        c = torch.empty((M, N), device=device, dtype=c_dtype)
-
-        ab_dtype = True
-        if a.dtype in [tl.float8e4nv, tl.float8e5] and b.dtype in [tl.float8e4nv, tl.float8e5]:
-            ab_dtype = False
-        if a.dtype in [torch.int8] and b.dtype in [torch.int8]:
-            ab_dtype = False
-        # launch kernel
-        grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
-        matmul_kernel[grid](a, b, c, M, N, K,
-                            a.stride(0), a.stride(1),
-                            b.stride(0), b.stride(1),
-                            c.stride(0), c.stride(1),
-                            dot_out_dtype=dot_out_dtype,
-                            allow_tf32=allow_tf32,
-                            fp8_fast_accum=fp8_fast_accum,
-                            GROUP_M=8, AB_DTYPE=ab_dtype)
-
-        return c
-
-    @staticmethod
-    def forward(ctx, a, b, dot_out_dtype=None, allow_tf32=True, fp8_fast_accum=True):
-        """
-        dot: matmul(a,b)
-        """
-        ctx.save_for_backward(a, b)
-        ctx.a_requires_grad = a.requires_grad
-        ctx.b_requires_grad = b.requires_grad
-
-        return cast_matmul._call(a, b, dot_out_dtype=dot_out_dtype, allow_tf32=allow_tf32,
-                                 fp8_fast_accum=fp8_fast_accum)
-
-
 input_dtypes = [torch.float32, torch.float16,]
 out_dtypes = ["float16"]
 if torch.cuda.is_bf16_supported():
@@ -221,13 +111,42 @@ def test_cast_matmul(w_dtype, x_dtype, out_dtype):
     batch, seq, hidden = 20, 64, 768
     output = 1024
     device = torch.cuda.current_device()
-    x = torch.randn(batch * seq, hidden, device=device,
+    a = torch.randn(batch * seq, hidden, device=device,
                     dtype=x_dtype,
                     requires_grad=True)
-    w1 = torch.randn(output, hidden, device=device,
+    b = torch.randn(output, hidden, device=device,
                      dtype=w_dtype,
                      requires_grad=True)
     torch_dtype = getattr(torch, out_dtype)
-    out_torch = F.linear(x.to(torch_dtype), w1.to(torch_dtype))
-    out_triton = cast_matmul.apply(x, w1.T, out_dtype)
+    out_torch = F.linear(a.to(torch_dtype), b.to(torch_dtype))
+
+    c_dtype = getattr(torch, dot_out_dtype)
+    dot_out_dtype = getattr(tl, dot_out_dtype)  # <- here force dot_out_dtype
+    M, K = a.shape
+    _, N = b.shape
+    
+    out_triton = torch.empty((M, N), device=device, dtype=c_dtype)
+
+    ab_dtype = True
+    allow_tf32 = True
+    fp8_fast_accum = True
+    # launch kernel
+    grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
+    BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K = 16, 32, 16,1
+    EVEN_K = K % (BLOCK_K * SPLIT_K) == 0
+    matmul_kernel[grid](a, b, out_triton, M, N, K,
+                        a.stride(0), a.stride(1),
+                        b.stride(0), b.stride(1),
+                        out_triton.stride(0), out_triton.stride(1),
+                        dot_out_dtype=dot_out_dtype,
+                        allow_tf32=allow_tf32,
+                        fp8_fast_accum=fp8_fast_accum,
+                        GROUP_M=8, AB_DTYPE=ab_dtype,
+                        BLOCK_M=BLOCK_M,
+                        BLOCK_N=BLOCK_N,
+                        BLOCK_K=BLOCK_K,
+                        SPLIT_K=SPLIT_K,
+                        EVEN_K=EVEN_K,
+                        )
+
     torch.testing.assert_close(out_torch, out_triton, atol=0.02, rtol=0.01)
