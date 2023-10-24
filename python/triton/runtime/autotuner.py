@@ -96,7 +96,11 @@ class Autotuner(KernelInterface):
             for name in self.arg_names:
                 if name in all_args:
                     _args.append(all_args[name])
-            key = tuple(_args[i] for i in self.key_idx)
+            key = [_args[i] for i in self.key_idx]
+            for arg in _args:
+                if hasattr(arg, "dtype"):
+                    key.append(str(arg.dtype))
+            key = tuple(key)
             if key not in self.cache:
                 # prune configs
                 pruned_configs = self.prune_configs(kwargs)
