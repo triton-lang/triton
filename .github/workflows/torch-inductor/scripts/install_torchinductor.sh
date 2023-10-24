@@ -28,7 +28,8 @@ git submodule update --init --recursive
 cd ..
 
 # required packages
-sudo apt-get install --yes libpango-1.0-0
+# https://github.com/pytorch/benchmark/blob/main/docker/gcp-a100-runner-dind.dockerfile#L17
+sudo apt-get install --yes libpango-1.0-0 libpangoft2-1.0-0
 pip3 install --upgrade pip
 pip3 install expecttest psutil lightning-utilities pyre_extensions
 
