@@ -322,8 +322,8 @@ class Mark:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
         df = df[x_names + bench.line_names]
         if diff_col and df.shape[1] == 2:
-            col0,col1= df.columns.tolist()
-            df['Diff'] =  df[col1] - df[col0]
+            col0, col1 = df.columns.tolist()
+            df['Diff'] = df[col1] - df[col0]
 
         if print_data:
             print(bench.plot_name + ':')
@@ -351,6 +351,7 @@ class Mark:
             else:
                 return result_dfs
         return None
+
 
 def perf_report(benchmarks):
     """
