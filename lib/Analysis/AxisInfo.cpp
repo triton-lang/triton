@@ -635,10 +635,6 @@ public:
   }
 
 private:
-  static arith::CmpIPredicate getPredicate(triton::gpu::CmpIOp op) {
-    return op.getPredicate();
-  }
-
   static arith::CmpIPredicate getPredicate(arith::CmpIOp op) {
     return op.getPredicate();
   }
@@ -917,13 +913,11 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<BroadcastOpAxisInfoVisitor>();
   visitors.append<SplatOpAxisInfoVisitor>();
   visitors.append<ExpandDimsOpAxisInfoVisitor>();
-  visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>,
-                  CmpOpAxisInfoVisitor<triton::gpu::CmpIOp>>();
+  visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>>();
   visitors.append<LogicalOpAxisInfoVisitor<arith::AndIOp>,
                   LogicalOpAxisInfoVisitor<arith::OrIOp>,
                   LogicalOpAxisInfoVisitor<arith::XOrIOp>>();
-  visitors.append<SelectOpAxisInfoVisitor<mlir::arith::SelectOp>,
-                  SelectOpAxisInfoVisitor<triton::gpu::SelectOp>>();
+  visitors.append<SelectOpAxisInfoVisitor<mlir::arith::SelectOp>>();
   visitors.append<ShLIOpAxisInfoVisitor, ShROpAxisInfoVisitor<arith::ShRUIOp>,
                   ShROpAxisInfoVisitor<arith::ShRSIOp>>();
   visitors.append<MaxMinOpAxisInfoVisitor<arith::MaxSIOp>,
