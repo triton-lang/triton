@@ -16,8 +16,39 @@ class TritonGPUOptimizeThreadLocalityPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     DenseSet<triton::ReduceOp> reduceOps;
-    mod.walk(
-        [&](triton::ReduceOp reduce) -> void { reduceOps.insert(reduce); });
+    mod.walk([&](triton::ReduceOp reduce) -> void {
+      auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
+      auto rank = srcType.getShape().size();
+      auto srcEncoding = srcType.getEncoding();
+      if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank == 2))
+        return;
+      if (!reduce->hasOneUse())
+        return;
+      Operation *user = (reduce->getUses().begin())->getOwner();
+      if (!user->hasOneUse())
+        return;
+      OpOperand &yieldOpOperand = *(user->getUses().begin());
+      auto yieldOp = dyn_cast<scf::YieldOp>(yieldOpOperand.getOwner());
+      if (!yieldOp)
+        return;
+      auto operandNumber = yieldOpOperand.getOperandNumber();
+      Block *block = reduce->getBlock();
+      Operation *parentOp = block->getParentOp();
+      auto forOp = dyn_cast<scf::ForOp>(parentOp);
+      if (!forOp)
+        return;
+      auto argNum = yieldOpOperand.getOperandNumber();
+      auto oldAccum = forOp.getInitArgs()[argNum];
+      auto cstOp = dyn_cast<arith::ConstantOp>(oldAccum.getDefiningOp());
+      if (!cstOp)
+        return;
+      auto oldAccumValue = cstOp.getValue();
+      auto denseAttr = oldAccumValue.dyn_cast<DenseFPElementsAttr>();
+      if (!(denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero()))
+        return;
+      reduceOps.insert(reduce);
+    });
+
     for (auto reduce : reduceOps) {
       OpBuilder builder(reduce);
       auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
@@ -64,10 +95,11 @@ class TritonGPUOptimizeThreadLocalityPass
       // create newAccum initialization
       auto newAccum =
           createAccum(builder, oldAccum, viewOpTensorShape, slice2d);
-      // create new loop
+      // create new loop by copying the old for op signature and appending
+      // newAccum to the block arguments
       auto newLoop = replaceForOpWithNewSignature(
           builder, forOp, ValueRange{newAccum->getResult(0)});
-      // create new reduce
+      // create thread local reduction (also adds viewOps)
       auto newReduce = createReduce(builder, reduce, viewOpTensorType);
 
       // create new accum update
@@ -75,7 +107,7 @@ class TritonGPUOptimizeThreadLocalityPass
       // create new yield
       auto newYield = createYield(builder, newLoop, oldYield,
                                   newUpdate->getResult(0), blockArgNum);
-      // Add one more reduce after loop
+      // create post loop reduction on the original reduce axis
       auto newReduce2 = createPostLoopReduce(builder, newLoop, reduce);
 
       // Replace loop user with new reduce
@@ -95,7 +127,6 @@ private:
       IRMapping mapping;
       mapping.map(loopUser->getOperands()[0], newReduce2->getResult(0));
       auto newCvt = builder.clone(*loopUser, mapping);
-      // Replace uses of loopUser with finalOp
       loopUser->replaceAllUsesWith(newCvt);
       loopUser->erase();
     } else {
@@ -108,7 +139,6 @@ private:
       IRMapping mapping;
       mapping.map(operand, newCvt->getResult(0));
       auto newUser = builder.clone(*loopUser, mapping);
-      // Replace uses of loopUser with finalOp
       loopUser->replaceAllUsesWith(newUser);
       loopUser->erase();
     }
@@ -148,8 +178,6 @@ private:
     mapping.map(oldUpdate->getOperand(0), newArg);
     mapping.map(oldUpdate->getOperand(1), newReduce->getResult(0));
     auto newUpdate = cloneWithInferType(builder, oldUpdate, mapping);
-    // auto newUpdate = builder.create<arith::AddFOp>(reduce.getLoc(), newArg,
-    //                                                newReduce->getResult(0));
     return newUpdate;
   }
 
