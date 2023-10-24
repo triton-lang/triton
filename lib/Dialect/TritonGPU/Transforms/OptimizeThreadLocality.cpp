@@ -44,6 +44,9 @@ class TritonGPUOptimizeThreadLocalityPass
         return;
       auto oldAccumValue = cstOp.getValue();
       auto denseAttr = oldAccumValue.dyn_cast<DenseFPElementsAttr>();
+      // TODO: support non-zero splat by initializing the new accumulator
+      // with a neutral value (based on the reduction) then incorporating the
+      // splat value to the result (after the loop)
       if (!(denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero()))
         return;
       reduceOps.insert(reduce);
