@@ -521,8 +521,10 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             valVec = bitcast(valVec, resElemTy);
           }
         }
-        if (aElemTy == i8_ty)
+        if (aElemTy == i8_ty && numOfElems == 4)
           valVec = bitcast(valVec, i32_ty);
+        if (aElemTy == i8_ty && numOfElems == 8)
+          valVec = bitcast(valVec, i64_ty);
         ha.push_back(valVec);
       }
     }
@@ -563,8 +565,10 @@ Value loadA(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             valVec = bitcast(valVec, resElemTy);
           }
         }
-        if (aElemTy == i8_ty)
+        if (aElemTy == i8_ty && numOfElems == 4)
           valVec = bitcast(valVec, i32_ty);
+        if (aElemTy == i8_ty && numOfElems == 8)
+          valVec = bitcast(valVec, i64_ty);
         ha.push_back(valVec);
       }
     }
@@ -667,8 +671,10 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             valVec = bitcast(valVec, resElemTy);
           }
         }
-        if (bElemTy == i8_ty)
+        if (bElemTy == i8_ty && numOfElems == 4)
           valVec = bitcast(valVec, i32_ty);
+        if (bElemTy == i8_ty && numOfElems == 8)
+          valVec = bitcast(valVec, i64_ty);
         hb.push_back(valVec);
       }
     }
@@ -707,8 +713,10 @@ Value loadB(ConversionPatternRewriter &rewriter, Location loc, Value thread,
             valVec = bitcast(valVec, resElemTy);
           }
         }
-        if (bElemTy == i8_ty)
+        if (bElemTy == i8_ty && numOfElems == 4)
           valVec = bitcast(valVec, i32_ty);
+        if (bElemTy == i8_ty && numOfElems == 8)
+          valVec = bitcast(valVec, i64_ty);
         hb.push_back(valVec);
       }
     }

@@ -1046,10 +1046,23 @@ private:
                          .cast<RankedTensorType>()
                          .getEncoding()
                          .dyn_cast<MfmaEncodingAttr>()) {
-        if (AElType.isBF16() || AElType.isF16() || AElType.isF32() ||
-            AElType.isInteger(8))
+        Type BElType =
+            dotOp.getB().getType().cast<RankedTensorType>().getElementType();
+
+        auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
+                                    BElType.getIntOrFloatBitWidth());
+
+        // TODO check mfma tensor core version compatibility
+        if (maxBitWidth == 8)
           return;
-        promoteType = builder.getF16Type();
+
+        if (AElType == BElType)
+          return;
+
+        if (maxBitWidth < 16)
+          promoteType = builder.getF16Type();
+        else if (maxBitWidth <= 32)
+          promoteType = builder.getF32Type();
 #endif
       } else {
         // FMA case.
