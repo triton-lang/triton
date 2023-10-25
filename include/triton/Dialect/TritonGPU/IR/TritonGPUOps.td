@@ -85,54 +85,6 @@ def TTG_AsyncBulkCommitGroupOp : TTG_Op<"async_bulk_commit_group"> {
   }];
 }
 
-
-// Port Arith_CmpIOp & Arith_CmpFOp & Std_SelectOp to TritonGPU.
-// This is needed because these ops don't
-// handle encodings
-// e.g., https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Arith/IR/ArithOps.td#L111
-def TTG_CmpIOp : TTG_Op<"cmpi", [Pure, Elementwise,
-                                 SameOperandsAndResultShape,
-                                 SameOperandsAndResultEncoding]> {
-  let summary = "integer comparison operation";
-
-  let description = [{}];
-
-  let arguments = (ins Arith_CmpIPredicateAttr:$predicate,
-                       TT_IntLike:$lhs,
-                       TT_IntLike:$rhs);
-
-  let results = (outs TT_BoolLike:$result);
-}
-
-def TTG_CmpFOp : TTG_Op<"cmpf", [Pure, Elementwise,
-                                 SameOperandsAndResultShape,
-                                 SameOperandsAndResultEncoding]> {
-  let summary = "floating-point comparison operation";
-
-  let description = [{}];
-
-  let arguments = (ins Arith_CmpFPredicateAttr:$predicate,
-                       TT_FloatLike:$lhs,
-                       TT_FloatLike:$rhs);
-
-  let results = (outs TT_BoolLike:$result);
-}
-
-// TODO: migrate to arith::SelectOp on LLVM16
-def TTG_SelectOp : TTG_Op<"select", [Pure, Elementwise,
-                                     SameOperandsAndResultShape,
-                                     SameOperandsAndResultEncoding]> {
-  let summary = "select operation";
-
-  let description = [{}];
-
-  let arguments = (ins TT_BoolLike:$condition,
-                       TT_Tensor:$true_value,
-                       TT_Tensor:$false_value);
-
-  let results = (outs TT_Type:$result);
-}
-
 // TODO[goostavz]: extract a base class for InsertSlice & InsertSliceAsync once the op definition is verified
 def TTG_InsertSliceOp : TTG_Op<"insert_slice",
                                [AttrSizedOperandSegments,
