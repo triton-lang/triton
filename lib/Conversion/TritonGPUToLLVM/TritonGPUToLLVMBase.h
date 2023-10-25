@@ -179,10 +179,10 @@ public:
   // Key: {layout, shape, withCTAOffset}
   struct IndexCacheInfo {
     DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
-        *baseIndexCache;
+        *baseIndexCache = nullptr;
     DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
-             CacheKeyDenseMapInfo> *indexCache;
-    OpBuilder::InsertPoint *indexInsertPoint;
+             CacheKeyDenseMapInfo> *indexCache = nullptr;
+    OpBuilder::InsertPoint *indexInsertPoint = nullptr;
   };
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
@@ -778,7 +778,7 @@ public:
             emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
       } else {
         llvm_unreachable(
-            "emitIndices for layouts other than blocked & slice not "
+            "emitIndices for layouts other than blocked, mma, and slice not "
             "implemented yet");
       }
       if (cache) {
