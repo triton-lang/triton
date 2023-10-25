@@ -272,6 +272,20 @@ class CMakeBuild(build_ext):
                            "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld",
                            "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld"]
 
+        # Note that asan doesn't work with binaries that use the GPU, so this is
+        # only useful for tools like triton-opt that don't run code on the GPU.
+        #
+        # I tried and gave up getting msan to work.  It seems that libstdc++'s
+        # std::string does not play nicely with clang's msan (I didn't try
+        # gcc's).  I was unable to configure clang to ignore the error, and I
+        # also wasn't able to get libc++ to work, but that doesn't mean it's
+        # impossible. :)
+        if check_env_flag("TRITON_BUILD_WITH_ASAN"):
+            cmake_args += [
+                "-DCMAKE_C_FLAGS=-fsanitize=address",
+                "-DCMAKE_CXX_FLAGS=-fsanitize=address",
+            ]
+
         if check_env_flag("TRITON_BUILD_WITH_CCACHE"):
             cmake_args += [
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",

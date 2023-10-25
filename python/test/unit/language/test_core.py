@@ -2131,7 +2131,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
         tt.reduce.return %13 : i32"""
     elif op == "max":
         op_str = f"""
-        %13 = "{GPU_DIALECT}.cmpi"(%arg2, %arg3) <{{predicate = 4 : i64}}> : (i32, i32) -> i1
+        %13 = arith.cmpi "sgt", %arg2, %arg3 : i32
         %14 = arith.select %13, %arg2, %arg3 : i32
         tt.reduce.return %14 : i32"""
     ir = f"""

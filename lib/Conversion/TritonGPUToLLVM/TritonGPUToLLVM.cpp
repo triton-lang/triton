@@ -196,7 +196,7 @@ struct PrintOpConversion
 
   static void llPrintf(StringRef msg, ValueRange args,
                        ConversionPatternRewriter &rewriter) {
-    assert(!msg.empty() && "printf with empty string not support");
+    assert(!msg.empty() && "printf with empty string not supported");
     Type int8Ptr = ptr_ty(i8_ty);
 
     auto *ctx = rewriter.getContext();
@@ -684,29 +684,6 @@ struct AsyncBulkCommitGroupOpConversion
     return success();
   }
 };
-
-namespace mlir {
-namespace LLVM {
-
-void vprintf(StringRef msg, ValueRange args,
-             ConversionPatternRewriter &rewriter) {
-  PrintOpConversion::llPrintf(msg, args, rewriter);
-}
-
-void vprintf_array(Value thread, ArrayRef<Value> arr, std::string info,
-                   std::string elem_repr, ConversionPatternRewriter &builder) {
-  std::string fmt = info + " t-%d ";
-  std::vector<Value> new_arr({thread});
-  for (int i = 0; i < arr.size(); ++i) {
-    fmt += elem_repr + ((i == arr.size() - 1) ? "" : ", ");
-    new_arr.push_back(arr[i]);
-  }
-
-  vprintf(fmt, new_arr, builder);
-}
-
-} // namespace LLVM
-} // namespace mlir
 
 void populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
