@@ -1,4 +1,4 @@
-name: Integration Tests (Third Party)
+name: Integration Tests
 
 on:
   workflow_dispatch:
