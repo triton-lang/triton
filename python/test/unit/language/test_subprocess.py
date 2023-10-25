@@ -1,6 +1,8 @@
+import itertools
 import os
 import subprocess
 import sys
+from collections import Counter
 
 import pytest
 
@@ -14,26 +16,53 @@ nested_types = [(caller, callee) for caller in ["true", "false", "none"] for cal
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
 
 
+# TODO: Print with multiple operands
 @pytest.mark.parametrize("func_type, data_type",
-                         [("device_print", data_type) for data_type in torch_types] + [("print", "int32"), ("static_print", "int32"), ("no_arg_print", "int32")])
+                         [("device_print", data_type) for data_type in torch_types] + [
+                             ("print", "int32"),
+                             ("static_print", "int32"),
+                             ("no_arg_print", "int32"),
+                             ("device_print_large", "int32"),
+                             ("print_multiple_args", "int32"),
+                             ("device_print_multiple_args", "int32"),
+                         ])
 def test_print(func_type: str, data_type: str):
     proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE, shell=False)
     outs, _ = proc.communicate()
-    outs = outs.split()
-    new_lines = set()
-    for line in outs:
-        try:
-            value = line
-            if func_type != "static_print":
-                value = int(float(line))
-            new_lines.add(value)
-        except Exception as e:
-            print(e)
-    if func_type != "static_print" and func_type != "no_arg_print":
+    outs = [line for line in outs.decode("UTF-8").split("\n") if line]
+
+    # Format is
+    #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>
+    expected_lines = Counter()
+    if func_type == "print" or func_type == "device_print":
         for i in range(128):
-            assert i in new_lines
-    else:
-        assert len(new_lines) == 1
+            line = f"pid (0, 0, 0) idx ({i:3}) x: {i}"
+            if data_type.startswith("float"):
+                line += ".000000"
+            expected_lines[line] = 1
+    elif func_type == "static_print":
+        expected_lines[" int32[constexpr[128]]"] = 1
+    elif func_type == "no_arg_print":
+        expected_lines["pid (0, 0, 0) idx (): 0"] = 128
+    elif func_type == "device_print_large":
+        for i, j, k in itertools.product(range(2), range(64), range(128)):
+            expected_lines[f"pid (0, {i}, 0) idx ({j:2}, {k:3}) x: 1"] = 1
+    elif func_type == "print_multiple_args" or func_type == "device_print_multiple_args":
+        for i in range(128):
+            expected_lines[f"pid (0, 0, 0) idx ({i:3}): (operand 0) {i}"] = 1
+            expected_lines[f"pid (0, 0, 0) idx ({i:3}): (operand 1) 1"] = 1
+
+    actual_lines = Counter()
+    for line in outs:
+        actual_lines[line] += 1
+
+    diff = Counter(actual_lines)
+    diff.subtract(expected_lines)
+    for line, delta in diff.items():
+        if delta == 0:
+            continue
+        print(f'Expected line "{line}" {expected_lines[line]} time(s), but saw {actual_lines[line]} time(s)')
+    assert all(delta == 0 for delta in diff.values())
 
 
 @pytest.mark.parametrize("func_type", assert_types)
