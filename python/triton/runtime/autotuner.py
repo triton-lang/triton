@@ -45,7 +45,6 @@ class Autotuner(KernelInterface):
         if reset_to_zero is not None:
             self.reset_idx = [arg_names.index(k) for k in reset_to_zero]
         self.restore_idx = []
-        self.restore_copies = []
         if restore_value is not None:
             self.restore_idx = [arg_names.index(k) for k in restore_value]
         
@@ -57,7 +56,6 @@ class Autotuner(KernelInterface):
                 for i in self.reset_idx:
                     args[i].zero_()
                 if not reset_only:
-                    self.restore_copies = []
                     self.restore_copies = [args[i].clone() for i in self.restore_idx]
             self.pre_hook = _pre_hook
         if len(self.restore_idx) > 0:
@@ -257,7 +255,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
         'early_config_prune'(optional): a function used to do early prune (eg, num_stages). It takes configs:List[Config] as its input, and returns pruned configs.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
-    :param restore_value: a list of argument names whose value will be restore after evaluating any configs.
+    :param restore_value: a list of argument names whose value will be restored after evaluating any configs.
     :type restore_value: list[str]
     :param warmup: Warmup time (in ms) to pass to benchmarking, defaults to 25.
     :type warmup: int
