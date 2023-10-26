@@ -33,12 +33,22 @@ def compare(baseline: dict, new: dict, threshold: float,
             print(f"New benchmark {key} not found in baseline")
         baseline_latency = baseline[key].latency
         new_latency = new[key].latency
+        if baseline_latency == 0:
+            print(f"Baseline latency for {key} is 0")
+            continue
+        elif new_latency == 0:
+            print(f"New latency for {key} is 0")
+            continue
+
         if new_latency < baseline_latency * (1 - threshold):
             print(
                 f"New benchmark {key} is faster than baseline: {new_latency} vs {baseline_latency}")
         elif new_latency > baseline_latency * (1 + threshold):
             print(
                 f"New benchmark {key} is slower than baseline: {new_latency} vs {baseline_latency}")
+        else:
+            print(
+                f"New benchmark {key} is within threshold: {new_latency} vs {baseline_latency}")
         baseline_geomean *= baseline[key].speedup
         new_geomean *= new[key].speedup
 
@@ -46,7 +56,7 @@ def compare(baseline: dict, new: dict, threshold: float,
     new_geomean = new_geomean ** (1 / len(new))
     print(f"Baseline geomean: {baseline_geomean}")
     print(f"New geomean: {new_geomean}")
-    assert new_geomean > baseline_geomean * (1 - geomean_threshold), \
+    assert new_geomean >= baseline_geomean * (1 - geomean_threshold), \
         f"New geomean is slower than baseline: {new_geomean} vs {baseline_geomean}"
 
 
