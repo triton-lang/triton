@@ -19,6 +19,6 @@ Recording link [here](https://youtu.be/KZAzpKx1ebI)
    - Please refer to slides for more details
    - Created a repo where you can find the middle layer
    - Available as a plugin into triton
-     
+
 3. Intel Update
    - Please refer to slides for more details
