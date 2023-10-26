@@ -2096,7 +2096,7 @@ void init_triton_translation(py::module &m) {
         std::unique_ptr<llvm::Module> module =
             llvm::parseIR(buffer->getMemBufferRef(), error, context);
         // translate module to HSACO
-        auto hsacoCode = triton::translateLLVMIRToHSACO(
+        auto hsacoCode = ::mlir::triton::translateLLVMIRToHSACO(
             *module, gfx_arch, gfx_triple, gfx_features);
         return hsacoCode;
       },

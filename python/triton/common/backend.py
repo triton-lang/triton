@@ -5,6 +5,7 @@ import importlib.util
 import os
 import re
 import subprocess
+import traceback
 from typing import Dict
 
 from ..runtime.driver import DriverBase
@@ -81,12 +82,12 @@ class BaseBackend:
 
 _backends: Dict[str, BaseBackend] = {}
 
-
+@functools.lru_cache
 def register_backend(device_type: str, backend_cls: type):
     if device_type not in _backends:
         _backends[device_type] = backend_cls.create_backend(device_type)
 
-
+@functools.lru_cache
 def get_backend(device_type: str):
     if device_type not in _backends:
         device_backend_package_name = f"...third_party.{device_type}"
@@ -94,7 +95,7 @@ def get_backend(device_type: str):
             try:
                 importlib.import_module(device_backend_package_name, package=__spec__.name)
             except Exception:
-                return None
+                traceback.print_exc()
         else:
             return None
     return _backends[device_type] if device_type in _backends else None

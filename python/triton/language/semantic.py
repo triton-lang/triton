@@ -4,6 +4,7 @@ from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
 from .._C.libtriton.triton import ir
+from ..common.build import is_hip
 from . import core as tl
 
 import triton._C.libtriton.triton as _triton

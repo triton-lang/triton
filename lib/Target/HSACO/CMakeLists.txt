@@ -5,5 +5,20 @@ add_mlir_translation_library(TritonHSACO
         Core
 
         LINK_LIBS PUBLIC
-        TritonLLVMIR
+        MLIRArithToLLVM
+        MLIRBuiltinToLLVMIRTranslation
+        MLIRExecutionEngineUtils
+        MLIRIndexToLLVM
+        MLIRIR
+        MLIRLLVMDialect
+        MLIRLLVMToLLVMIRTranslation
+        MLIRNVVMToLLVMIRTranslation
+        MLIRROCDLToLLVMIRTranslation
+        MLIRSCFToControlFlow
+        MLIRSupport
+        MLIRTargetLLVMIRExport
+        TritonGPUIR
+        TritonToTritonGPU
+        TritonGPUToLLVM
+        TritonGPUTransforms
         )

@@ -138,13 +138,13 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
     llvm::errs() << "Translate to LLVM IR failed";
   }
 
-  if (targetKind == "llvmir")
+  if (targetKind == "llvmir") {
     llvm::outs() << *llvmir << '\n';
-  else if (targetKind == "ptx")
+  } else if (targetKind == "ptx") {
     llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
                                                    ptxVersion.getValue());
-  else if (targetKind == "hsaco") {
-    auto [module, hsaco] = ::triton::translateLLVMIRToHSACO(
+  } else if (targetKind == "hsaco") {
+    auto [module, hsaco] = mlir::triton::translateLLVMIRToHSACO(
         *llvmir, GCNArch.getValue(), GCNTriple.getValue(),
         GCNFeatures.getValue());
     llvm::outs() << hsaco;
