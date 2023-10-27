@@ -365,7 +365,6 @@ scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
   rewriter.setInsertionPoint(loop);
 
   // Create a new loop before the existing one, with the extra operands.
-  // rewriter.setInsertionPoint(loop);
   auto operands = llvm::to_vector<4>(loop.getInitArgs());
   operands.append(newIterOperands.begin(), newIterOperands.end());
   scf::ForOp newLoop = rewriter.create<scf::ForOp>(

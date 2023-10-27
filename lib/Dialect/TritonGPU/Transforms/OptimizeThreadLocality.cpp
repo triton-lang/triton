@@ -24,7 +24,7 @@ class TritonGPUOptimizeThreadLocalityPass
         return;
       if (!reduce->hasOneUse())
         return;
-      Operation *user = (reduce->getUses().begin())->getOwner();
+      Operation *user = *(reduce->getUsers().begin());
       if (!user->hasOneUse())
         return;
       OpOperand &yieldOpOperand = *(user->getUses().begin());
@@ -70,8 +70,6 @@ class TritonGPUOptimizeThreadLocalityPass
           viewOpTensorShape, srcType.getElementType(), blocked3d);
       auto slice2d =
           triton::gpu::SliceEncodingAttr::get(mod.getContext(), 2, blocked3d);
-      auto slice1d = triton::gpu::SliceEncodingAttr::get(
-          mod.getContext(), reduce.getAxis(), slice2d);
       // Get forOp
       assert(reduce->hasOneUse());
       OpOperand &use = *(reduce->getUses().begin());
@@ -113,8 +111,10 @@ class TritonGPUOptimizeThreadLocalityPass
       // create post loop reduction on the original reduce axis
       auto newReduce2 = createPostLoopReduce(builder, newLoop, reduce);
 
-      // Replace loop user with new reduce
-      replaceLoopUser(builder, loopUse, newReduce2);
+      // add convert_layout to get back to original layout
+      Type destType = loopResult.getType();
+      auto cvtLayout = createConvertLayout(builder, destType, newReduce2);
+      loopUser->setOperand(loopUse.getOperandNumber(), cvtLayout->getResult(0));
 
       oldYield.erase();
       forOp.erase();
@@ -122,29 +122,12 @@ class TritonGPUOptimizeThreadLocalityPass
   };
 
 private:
-  void replaceLoopUser(OpBuilder &builder, OpOperand &loopUse,
-                       Operation *newReduce2) const {
-    Operation *loopUser = loopUse.getOwner();
-    if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(loopUser)) {
-      builder.setInsertionPointAfter(loopUser);
-      IRMapping mapping;
-      mapping.map(loopUser->getOperands()[0], newReduce2->getResult(0));
-      auto newCvt = builder.clone(*loopUser, mapping);
-      loopUser->replaceAllUsesWith(newCvt);
-      loopUser->erase();
-    } else {
-      builder.setInsertionPoint(loopUser);
-      auto operandIdx = loopUse.getOperandNumber();
-      Value operand = loopUser->getOperand(operandIdx);
-      Type destType = operand.getType();
-      auto newCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-          loopUser->getLoc(), destType, newReduce2->getResult(0));
-      IRMapping mapping;
-      mapping.map(operand, newCvt->getResult(0));
-      auto newUser = builder.clone(*loopUser, mapping);
-      loopUser->replaceAllUsesWith(newUser);
-      loopUser->erase();
-    }
+  Operation *createConvertLayout(OpBuilder &builder, Type destType,
+                                 Operation *newReduce) const {
+    builder.setInsertionPointAfter(newReduce);
+    auto newCvt = builder.create<triton::gpu::ConvertLayoutOp>(
+        newReduce->getLoc(), destType, newReduce->getResult(0));
+    return newCvt;
   }
 
   Operation *createPostLoopReduce(OpBuilder &builder, scf::ForOp &loop,
