@@ -20,6 +20,11 @@ class TritonGPUOptimizeThreadLocalityPass
       auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
       auto rank = srcType.getShape().size();
       auto srcEncoding = srcType.getEncoding();
+      auto reductionOp = getReductionOp(reduce);
+      if (!reductionOp ||
+          !isa<arith::AddFOp, arith::MaximumFOp, arith::MinimumFOp,
+               arith::MulFOp>(reductionOp.value()))
+        return;
       // TODO: relax this restriction
       if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank == 2))
         return;
@@ -42,13 +47,6 @@ class TritonGPUOptimizeThreadLocalityPass
       auto oldAccum = forOp.getInitArgs()[argNum];
       auto cstOp = dyn_cast<arith::ConstantOp>(oldAccum.getDefiningOp());
       if (!cstOp)
-        return;
-      auto oldAccumValue = cstOp.getValue();
-      auto denseAttr = oldAccumValue.dyn_cast<DenseFPElementsAttr>();
-      // TODO: support non-zero splat by initializing the new accumulator
-      // with a neutral value (based on the reduction) then incorporating the
-      // splat value to the result (after the loop)
-      if (!(denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero()))
         return;
       reduceOps.insert(reduce);
     });
@@ -75,10 +73,10 @@ class TritonGPUOptimizeThreadLocalityPass
       assert(reduce->hasOneUse());
       OpOperand &use = *(reduce->getUses().begin());
       auto operandNumber = use.getOperandNumber();
-      auto user = use.getOwner();
-      assert(user->getNumOperands() == 2);
+      auto oldUpdate = use.getOwner();
+      assert(oldUpdate->getNumOperands() == 2);
       auto accumOperandNumber = (operandNumber == 0) ? 1 : 0;
-      auto accumOperand = user->getOperand(accumOperandNumber);
+      auto accumOperand = oldUpdate->getOperand(accumOperandNumber);
       assert(accumOperand.isa<BlockArgument>());
       auto blockArg = accumOperand.dyn_cast<BlockArgument>();
       auto blockArgNum = blockArg.getArgNumber();
@@ -96,7 +94,7 @@ class TritonGPUOptimizeThreadLocalityPass
       auto oldYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
       // create newAccum initialization
       auto newAccum =
-          createAccum(builder, oldAccum, viewOpTensorShape, slice2d);
+          createAccum(builder, reduce, oldAccum, viewOpTensorShape, slice2d);
       // create new loop by copying the old for op signature and appending
       // newAccum to the block arguments
       auto newLoop = replaceForOpWithNewSignature(
@@ -105,24 +103,57 @@ class TritonGPUOptimizeThreadLocalityPass
       auto newReduce = createReduce(builder, reduce, viewOpTensorType);
 
       // create new accum update
-      auto newUpdate = createUpdate(builder, newLoop, newReduce, user);
+      auto newUpdate = createUpdate(builder, newLoop, newReduce, oldUpdate);
       // create new yield
       auto newYield = createYield(builder, newLoop, oldYield,
                                   newUpdate->getResult(0), blockArgNum);
       // create post loop reduction on the original reduce axis
       auto newReduce2 = createPostLoopReduce(builder, newLoop, reduce);
-
-      // add convert_layout to get back to original layout
+      // add convert_layout to get back to original layout, the result layout
+      // should now match the layout of the old accumulator (%cst)
       Type destType = loopResult.getType();
       auto cvtLayout = createConvertLayout(builder, destType, newReduce2);
-      loopUser->setOperand(loopUse.getOperandNumber(), cvtLayout->getResult(0));
+      // incorporate the original accumulator value into the final result
+      auto finalOp = incorporateOriginalAccumulatorValue(builder, oldUpdate,
+                                                         cvtLayout, oldAccum);
+      // Replace the old loop user with the final result
+      loopUser->setOperand(loopUse.getOperandNumber(), finalOp->getResult(0));
 
+      // cleanup
       oldYield.erase();
       forOp.erase();
     }
   };
 
 private:
+  std::optional<Operation *> getReductionOp(triton::ReduceOp reduce) const {
+    auto numRegions = reduce->getNumRegions();
+    if (numRegions != 1)
+      return std::nullopt;
+    Region &region = reduce->getRegion(0);
+    auto numBlocks = region.getBlocks().size();
+    if (numBlocks != 1)
+      return std::nullopt;
+    Block &block = region.front();
+    auto blockWithoutTerminator = block.without_terminator();
+    auto blockSizeWithoutTerminator = std::distance(
+        blockWithoutTerminator.begin(), blockWithoutTerminator.end());
+    if (blockSizeWithoutTerminator != 1)
+      return std::nullopt;
+    Operation *op = &block.front();
+    return std::optional<Operation *>(op);
+  }
+  Operation *incorporateOriginalAccumulatorValue(OpBuilder &builder,
+                                                 Operation *oldUpdate,
+                                                 Operation *cvtLayout,
+                                                 Value oldAccum) const {
+    builder.setInsertionPointAfter(cvtLayout);
+    IRMapping mapping;
+    mapping.map(oldUpdate->getOperand(0), cvtLayout->getResult(0));
+    mapping.map(oldUpdate->getOperand(1), oldAccum);
+    auto finalOp = cloneWithInferType(builder, &(*oldUpdate), mapping);
+    return finalOp;
+  }
   Operation *createConvertLayout(OpBuilder &builder, Type destType,
                                  Operation *newReduce) const {
     builder.setInsertionPointAfter(newReduce);
@@ -197,19 +228,24 @@ private:
     return newReduce;
   }
 
-  Operation *createAccum(OpBuilder &builder, Value &oldAccum,
-                         SmallVector<int64_t> &shape,
+  Operation *createAccum(OpBuilder &builder, triton::ReduceOp reduce,
+                         Value &oldAccum, SmallVector<int64_t> &shape,
                          Attribute &slice2d) const {
     // Drop the last dimension (thread locality dimension)
     SmallVector<int64_t> accumShape(shape.begin(), shape.end() - 1);
+    auto elemType =
+        oldAccum.getType().cast<RankedTensorType>().getElementType();
     // Create tensor type for the new accumulator
-    auto accumType = RankedTensorType::get(
-        accumShape,
-        oldAccum.getType().cast<RankedTensorType>().getElementType(), slice2d);
+    auto accumType = RankedTensorType::get(accumShape, elemType, slice2d);
     // Create new accumulator
     builder.setInsertionPointAfter(oldAccum.getDefiningOp());
-    auto newAccum = builder.create<arith::ConstantOp>(
-        oldAccum.getLoc(), accumType, builder.getZeroAttr(accumType));
+    auto reductionOp = getReductionOp(reduce);
+    assert(reductionOp && "Processing a reduce that is not supported!");
+    auto neutralVal = mlir::arith::getNeutralElement(reductionOp.value());
+    assert(neutralVal && "Could not find neutral value for reduction op!");
+    auto denseAttr = DenseElementsAttr::get(accumType, neutralVal.value());
+    auto newAccum = builder.create<arith::ConstantOp>(oldAccum.getLoc(),
+                                                      accumType, denseAttr);
     return newAccum;
   }
 
