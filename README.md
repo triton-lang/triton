@@ -108,6 +108,21 @@ arbitrary LLVM version.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
 
+- vscode intellisense has some difficulty figuring out how to build Triton's C++
+  (probably because, in our build, users don't invoke cmake directly, but
+  instead use setup.py).  Teach vscode how to compile Triton as follows.
+
+    - Do a local build.
+    - Get the full path to the `compile_commands.json` file produced by the build:
+      `find python/build -name 'compile_commands.json | xargs readlink -f'`
+    - In vscode, install the
+      [C/C++
+      extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
+      then open the command palette (`Shift + Command + P` on Mac, or `Shift +
+      Ctrl + P` on Windows/Linux) and open `C/C++: Edit Configurations (UI)`.
+    - Open "Advanced Settings" and paste the full path to
+      `compile_commands.json` into the "Compile Commands" textbox.
+
 # Running tests
 
 There currently isn't a turnkey way to run all the Triton tests, but you can
