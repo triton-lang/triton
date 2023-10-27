@@ -108,7 +108,7 @@ def get_backend(device_type: str):
 def _path_to_binary(binary: str):
     base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
     paths = [
-        os.environ.get("TRITON_PTXAS_PATH", ""),
+        os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
         os.path.join(base_dir, "third_party", "cuda", "bin", binary)
     ]
 
@@ -174,6 +174,10 @@ def get_cuda_version_key():
     global _cached_cuda_version_key
     if _cached_cuda_version_key is None:
         key = compute_core_version_key()
-        ptxas = path_to_ptxas()[0]
-        _cached_cuda_version_key = key + '-' + hashlib.sha1(subprocess.check_output([ptxas, "--version"])).hexdigest()
+        try:
+            ptxas = path_to_ptxas()[0]
+            ptxas_version = subprocess.check_output([ptxas, "--version"])
+        except RuntimeError:
+            ptxas_version = b"NO_PTXAS"
+        _cached_cuda_version_key = key + '-' + hashlib.sha1(ptxas_version).hexdigest()
     return _cached_cuda_version_key
