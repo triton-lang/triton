@@ -20,6 +20,7 @@ class TritonGPUOptimizeThreadLocalityPass
       auto srcType = reduce.getOperands()[0].getType().cast<RankedTensorType>();
       auto rank = srcType.getShape().size();
       auto srcEncoding = srcType.getEncoding();
+      // TODO: relax this restriction
       if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank == 2))
         return;
       if (!reduce->hasOneUse())
