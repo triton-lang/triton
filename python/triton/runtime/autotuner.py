@@ -39,7 +39,7 @@ class Autotuner(KernelInterface):
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = {}
         self.arg_names = arg_names
-        
+
         # Reset to zero or restore values
         self.reset_idx = []
         if reset_to_zero is not None:
@@ -47,7 +47,7 @@ class Autotuner(KernelInterface):
         self.restore_idx = []
         if restore_value is not None:
             self.restore_idx = [arg_names.index(k) for k in restore_value]
-        
+
         # Hook to reset or restore for required tensors
         self.pre_hook = lambda args, reset_only=False: 0
         self.post_hook = lambda args: 0
@@ -74,7 +74,7 @@ class Autotuner(KernelInterface):
             perf_model, top_k, early_config_prune = None, None, None
         self.perf_model, self.configs_top_k = perf_model, top_k
         self.early_config_prune = early_config_prune
-    
+
         self.fn = fn
         self.warmup = warmup
         self.rep = rep
