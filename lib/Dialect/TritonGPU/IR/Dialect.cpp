@@ -147,8 +147,10 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parent = sliceLayout.getParent();
     auto parentWarpsPerCTA = getWarpsPerCTA(parent);
-    assert(parentWarpsPerCTA.size() == 2 &&
-           "getWarpsPerCTA only implemented for 2D slice layout");
+    assert(parentWarpsPerCTA.size() == 2 ||
+           parentWarpsPerCTA[sliceLayout.getDim()] == 1 &&
+               "getWarpsPerCTA only implemented for 2D slice layout or the "
+               "slice dim must have 1 warp in the parent layout");
     SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
     warpsPerCTA.erase(warpsPerCTA.begin() + sliceLayout.getDim());
     for (unsigned i = 0; i < warpsPerCTA.size(); i++)
