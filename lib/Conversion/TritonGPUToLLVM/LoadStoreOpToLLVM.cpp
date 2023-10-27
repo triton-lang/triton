@@ -28,7 +28,7 @@ static CUtensorMapDataType getCUtensorMapDataType(Type ty) {
     return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
   } else if (ty.isF32()) {
     return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
-  } else if (ty.isFloat8E5M2()) {
+  } else if (ty.isFloat8E5M2() || ty.isFloat8E4M3FN() || ty.isFloat8E4M3FNUZ() || ty.isFloat8E4M3B11FNUZ()) {
     return CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_UINT8;
   } else {
     llvm::report_fatal_error("Unsupported elemTy for InsertSliceAsyncV2Op");
