@@ -28,6 +28,12 @@ class TritonGPUOptimizeThreadLocalityPass
       // TODO: relax this restriction
       if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank == 2))
         return;
+      auto elemsPerThread =
+          triton::gpu::getElemsPerThread(srcType)[reduce.getAxis()];
+      // Not worth applying this optimization if there is only one element per
+      // thread on the reduction axis
+      if (elemsPerThread == 1)
+        return;
       if (!reduce->hasOneUse())
         return;
       Operation *user = *(reduce->getUsers().begin());
