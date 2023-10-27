@@ -877,6 +877,11 @@ private:
       return -1 -
              op.getValue().dyn_cast<IntegerAttr>().getValue().getZExtValue();
     }
+    if (!isa<BlockArgument>(v) &&
+        !isa<mlir::UnrealizedConversionCastOp, arith::ExtSIOp>(
+            v.getDefiningOp()))
+      llvm::report_fatal_error(
+          "Operand of `MakeTensorPtrOp` is not the function's argument");
     if (v.getDefiningOp() &&
         isa<mlir::UnrealizedConversionCastOp>(v.getDefiningOp())) {
       return getArgIdx(v.getDefiningOp()->getOperand(0));
@@ -1771,6 +1776,11 @@ private:
       return -1 -
              op.getValue().dyn_cast<IntegerAttr>().getValue().getZExtValue();
     }
+    if (!isa<BlockArgument>(v) &&
+        !isa<mlir::UnrealizedConversionCastOp, arith::ExtSIOp>(
+            v.getDefiningOp()))
+      llvm::report_fatal_error(
+          "Operand of `MakeTensorPtrOp` is not the function's argument");
     if (v.getDefiningOp() &&
         isa<mlir::UnrealizedConversionCastOp>(v.getDefiningOp())) {
       return getArgIdx(v.getDefiningOp()->getOperand(0));
