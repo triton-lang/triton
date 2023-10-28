@@ -80,9 +80,7 @@ def _fwd_kernel(
         # -- compute qk ---
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         if IS_CAUSAL:
-            qk = tl.where(
-                offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf")
-            )
+            qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
         qk += tl.dot(q, k, allow_tf32=True)
         # -- compute scaling constant ---
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
@@ -196,9 +194,7 @@ def _bwd_kernel_one_col_block(
         # recompute p = softmax(qk, dim=-1).T
         # NOTE: `do` is pre-divided by `l`; no normalization here
         if CAUSAL:
-            qk = tl.where(
-                offs_m_curr[:, None] >= (offs_n[None, :]), float(0.0), float("-inf")
-            )
+            qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), float(0.0), float("-inf"))
         else:
             qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, tl.trans(k))
@@ -385,9 +381,7 @@ class _attention(torch.autograd.Function):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
-            raise RuntimeError(
-                "Flash attention currently only supported for compute capability >= 80"
-            )
+            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
         BLOCK_M = 128
         BLOCK_N = 64
         # shape constraints
@@ -396,9 +390,7 @@ class _attention(torch.autograd.Function):
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
         grid = (cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
-        L = torch.empty(
-            (q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32
-        )
+        L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         num_warps = 4 if Lk <= 64 else 8
         _fwd_kernel[grid](
             # fmt: off
