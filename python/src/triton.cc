@@ -763,7 +763,7 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, mlir::Type type) -> mlir::Value {
              if (auto floatTy = type.dyn_cast<mlir::FloatType>())
                return self.create<mlir::arith::ConstantFloatOp>(
-                   mlir::APFloat(floatTy.getFloatSemantics(), 0), floatTy);
+                   -mlir::APFloat(floatTy.getFloatSemantics(), 0), floatTy);
              else if (auto intTy = type.dyn_cast<mlir::IntegerType>())
                return self.create<mlir::arith::ConstantIntOp>(0, intTy);
              else

@@ -155,8 +155,8 @@ private:
                                                  Value oldAccum) const {
     builder.setInsertionPointAfter(cvtLayout);
     IRMapping mapping;
-    mapping.map(oldUpdate->getOperand(0), cvtLayout->getResult(0));
-    mapping.map(oldUpdate->getOperand(1), oldAccum);
+    mapping.map(oldUpdate->getOperand(0), oldAccum);
+    mapping.map(oldUpdate->getOperand(1), cvtLayout->getResult(0));
     auto finalOp = cloneWithInferType(builder, &(*oldUpdate), mapping);
     return finalOp;
   }
