@@ -16,6 +16,7 @@ from .. import language as tl
 
 @jit
 def _fwd_kernel(
+    # fmt: off
     Q, K, V, sm_scale,
     L,
     Out,
@@ -28,6 +29,7 @@ def _fwd_kernel(
     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
     IS_CAUSAL: tl.constexpr,
+    # fmt: on
 ):
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
@@ -40,7 +42,7 @@ def _fwd_kernel(
         strides=(stride_kk, stride_kn),
         offsets=(0, vk_offset),
         block_shape=(BLOCK_DMODEL, BLOCK_N),
-        order=(0, 1)
+        order=(0, 1),
     )
     V_block_ptr = tl.make_block_ptr(
         base=V,
@@ -48,7 +50,7 @@ def _fwd_kernel(
         strides=(stride_vn, stride_vk),
         offsets=(vk_offset, 0),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
-        order=(1, 0)
+        order=(1, 0),
     )
     # initialize offsets
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -78,7 +80,9 @@ def _fwd_kernel(
         # -- compute qk ---
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         if IS_CAUSAL:
-            qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+            qk = tl.where(
+                offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf")
+            )
         qk += tl.dot(q, k, allow_tf32=True)
         # -- compute scaling constant ---
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
@@ -104,7 +108,7 @@ def _fwd_kernel(
         strides=(stride_om, stride_on),
         offsets=(vk_offset + start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
+        order=(1, 0),
     )
     # O_ptrs = Out + qvk_offset + offs_m[:, None] * stride_qm + offs_k[None, :] * stride_qk
     tl.store(O_block_ptr, acc.to(K.dtype.element_ty))
@@ -112,9 +116,11 @@ def _fwd_kernel(
 
 @jit
 def _bwd_preprocess(
-    Out, DO,
+    Out,
+    DO,
     Delta,
-    BLOCK_M: tl.constexpr, D_HEAD: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    D_HEAD: tl.constexpr,
 ):
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     off_n = tl.arange(0, D_HEAD)
@@ -129,6 +135,7 @@ def _bwd_preprocess(
 
 @jit
 def _bwd_kernel_one_col_block(
+    # fmt: off
     Q, K, V, sm_scale, qk_scale,
     Out, DO,
     DQ, DK, DV,
@@ -146,6 +153,7 @@ def _bwd_kernel_one_col_block(
     SEQUENCE_PARALLEL: tl.constexpr,
     CAUSAL: tl.constexpr,
     MMA_V3: tl.constexpr
+    # fmt: on
 ):
     if CAUSAL:
         lo = start_n * BLOCK_M
@@ -153,7 +161,7 @@ def _bwd_kernel_one_col_block(
         lo = 0
 
     Q_offset = (off_z * stride_qz + off_h * stride_qh) // stride_qm
-    DQ_offset = (off_z * stride_qz + off_h * stride_qh)
+    DQ_offset = off_z * stride_qz + off_h * stride_qh
     K_offset = (off_z * stride_kz + off_h * stride_kh) // stride_kn
     V_offset = (off_z * stride_vz + off_h * stride_vh) // stride_vn
     if SEQUENCE_PARALLEL:
@@ -188,7 +196,9 @@ def _bwd_kernel_one_col_block(
         # recompute p = softmax(qk, dim=-1).T
         # NOTE: `do` is pre-divided by `l`; no normalization here
         if CAUSAL:
-            qk = tl.where(offs_m_curr[:, None] >= (offs_n[None, :]), float(0.), float("-inf"))
+            qk = tl.where(
+                offs_m_curr[:, None] >= (offs_n[None, :]), float(0.0), float("-inf")
+            )
         else:
             qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, tl.trans(k))
@@ -260,7 +270,7 @@ def _bwd_kernel(
         strides=(stride_qm, stride_qk),
         offsets=(0, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
+        order=(1, 0),
     )
     K_block_ptr = tl.make_block_ptr(
         base=K,
@@ -268,7 +278,7 @@ def _bwd_kernel(
         strides=(stride_kn, stride_kk),
         offsets=(0, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
+        order=(1, 0),
     )
     V_block_ptr = tl.make_block_ptr(
         base=V,
@@ -276,7 +286,7 @@ def _bwd_kernel(
         strides=(stride_vn, stride_vk),
         offsets=(0, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
+        order=(1, 0),
     )
     DO_block_ptr = tl.make_block_ptr(
         base=DO,
@@ -284,7 +294,7 @@ def _bwd_kernel(
         strides=(stride_qm, stride_qk),
         offsets=(0, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
+        order=(1, 0),
     )
     if SEQUENCE_PARALLEL:
         DQ_block_ptr = tl.make_block_ptr(
@@ -293,7 +303,7 @@ def _bwd_kernel(
             strides=(stride_qm, stride_qk),
             offsets=(0, 0),
             block_shape=(BLOCK_M, BLOCK_DMODEL),
-            order=(1, 0)
+            order=(1, 0),
         )
     else:
         DQ_block_ptr = tl.make_block_ptr(
@@ -302,7 +312,7 @@ def _bwd_kernel(
             strides=(stride_qm, stride_qk),
             offsets=(0, 0),
             block_shape=(BLOCK_M, BLOCK_DMODEL),
-            order=(1, 0)
+            order=(1, 0),
         )
 
     DK_block_ptr = tl.make_block_ptr(
@@ -311,7 +321,7 @@ def _bwd_kernel(
         strides=(stride_kn, stride_kk),
         offsets=(0, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
+        order=(1, 0),
     )
     DV_block_ptr = tl.make_block_ptr(
         base=DV,
@@ -319,13 +329,14 @@ def _bwd_kernel(
         strides=(stride_vn, stride_vk),
         offsets=(0, 0),
         block_shape=(BLOCK_M, BLOCK_DMODEL),
-        order=(1, 0)
+        order=(1, 0),
     )
 
     num_block_n = tl.cdiv(N_CTX, BLOCK_N)
     if not SEQUENCE_PARALLEL:
         for start_n in range(0, num_block_n):
             _bwd_kernel_one_col_block(
+                # fmt: off
                 Q, K, V, sm_scale, qk_scale, Out, DO,
                 DQ, DK, DV,
                 L,
@@ -342,10 +353,12 @@ def _bwd_kernel(
                 SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,
                 CAUSAL=CAUSAL,
                 MMA_V3=MMA_V3
+                # fmt: on
             )
     else:
         start_n = tl.program_id(1)
         _bwd_kernel_one_col_block(
+            # fmt: off
             Q, K, V, sm_scale, qk_scale, Out, DO,
             DQ, DK, DV,
             L,
@@ -362,17 +375,19 @@ def _bwd_kernel(
             SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,
             CAUSAL=CAUSAL,
             MMA_V3=MMA_V3
+            # fmt: on
         )
 
 
 class _attention(torch.autograd.Function):
-
     @staticmethod
     def forward(ctx, q, k, v, causal, sm_scale, sequence_parallel=False):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
-            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
+            raise RuntimeError(
+                "Flash attention currently only supported for compute capability >= 80"
+            )
         BLOCK_M = 128
         BLOCK_N = 64
         # shape constraints
@@ -381,9 +396,12 @@ class _attention(torch.autograd.Function):
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
         grid = (cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
-        L = torch.empty((q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        L = torch.empty(
+            (q.shape[0] * q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32
+        )
         num_warps = 4 if Lk <= 64 else 8
         _fwd_kernel[grid](
+            # fmt: off
             q, k, v, sm_scale,
             L,
             o,
@@ -396,7 +414,9 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,
             IS_CAUSAL=causal,
             num_warps=num_warps,
-            num_stages=4)
+            num_stages=4,
+            # fmt: on
+        )
 
         ctx.save_for_backward(q, k, v, o, L)
         ctx.grid = grid
@@ -424,12 +444,15 @@ class _attention(torch.autograd.Function):
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
         delta = torch.empty_like(L)
-        _bwd_preprocess[(cdiv(q.shape[2], BLOCK) * ctx.grid[1], )](
-            o, do,
+        _bwd_preprocess[(cdiv(q.shape[2], BLOCK) * ctx.grid[1],)](
+            o,
+            do,
             delta,
-            BLOCK_M=BLOCK, D_HEAD=ctx.BLOCK_DMODEL,
+            BLOCK_M=BLOCK,
+            D_HEAD=ctx.BLOCK_DMODEL,
         )
         _bwd_kernel[(ctx.grid[1], cdiv(seq_len_kv, BLOCK) if sequence_parallel else 1)](
+            # fmt: off
             q, k, v, ctx.sm_scale,
             o, do,
             dq, dk, dv,
@@ -448,6 +471,7 @@ class _attention(torch.autograd.Function):
             MMA_V3=MMA_V3,
             num_warps=8,
             num_stages=1,
+            # fmt: on
         )
 
         if len(dq.shape) == 5:
