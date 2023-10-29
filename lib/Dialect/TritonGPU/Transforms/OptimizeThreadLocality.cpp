@@ -26,7 +26,7 @@ class TritonGPUOptimizeThreadLocalityPass
                arith::MulFOp>(reductionOp.value()))
         return;
       // TODO: relax this restriction
-      if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank == 2))
+      if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>()))
         return;
       auto elemsPerThread =
           triton::gpu::getElemsPerThread(srcType)[reduce.getAxis()];
@@ -73,8 +73,8 @@ class TritonGPUOptimizeThreadLocalityPass
       auto viewOpTensorShape = getThreadLocalityOptimizedShape(reduce);
       auto viewOpTensorType = RankedTensorType::get(
           viewOpTensorShape, srcType.getElementType(), blocked3d);
-      auto slice2d =
-          triton::gpu::SliceEncodingAttr::get(mod.getContext(), 2, blocked3d);
+      auto slice2d = triton::gpu::SliceEncodingAttr::get(mod.getContext(), rank,
+                                                         blocked3d);
       // Get forOp
       assert(reduce->hasOneUse());
       OpOperand &use = *(reduce->getUses().begin());
@@ -279,13 +279,13 @@ private:
     sizePerThread3d[reduce.getAxis()] = 1;
     auto threadsPerWarp3d = insertValue(blocked.getThreadsPerWarp(), rank, 1);
     auto warsPerCTA3d = insertValue(blocked.getWarpsPerCTA(), rank, 1);
-    auto order3d = insertValue(blocked.getOrder(), 0, 2);
+    auto order3d = insertValue(blocked.getOrder(), 0, rank);
     auto ctasPerCGA3d =
         insertValue(blocked.getCTALayout().getCTAsPerCGA(), rank, 1);
     auto ctasSplitNum3d =
         insertValue(blocked.getCTALayout().getCTASplitNum(), rank, 1);
     auto ctaOrder3d =
-        insertValue(blocked.getCTALayout().getCTAOrder(), rank, 2);
+        insertValue(blocked.getCTALayout().getCTAOrder(), rank, rank);
     auto ctaLayout3d = triton::gpu::CTALayoutAttr::get(
         reduce.getContext(), ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
     auto blocked3d = triton::gpu::BlockedEncodingAttr::get(
