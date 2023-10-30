@@ -1460,9 +1460,8 @@ void init_triton_ir(py::module &&m) {
                                   .cast<mlir::triton::PointerType>();
                dstType = ptrType.getPointeeType();
              }
-             return self.create<mlir::triton::AtomicRMWOp>(dstType, rmwOp, ptr,
-                                                           val, mask, sem,
-                                                           scope);
+             return self.create<mlir::triton::AtomicRMWOp>(
+                 dstType, rmwOp, ptr, val, mask, sem, scope);
            })
       // External
       .def("create_extern_elementwise",
