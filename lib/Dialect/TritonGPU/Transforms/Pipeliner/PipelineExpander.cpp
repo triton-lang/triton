@@ -59,7 +59,7 @@ protected:
   bool dynamicLoop;
   triton::PipeliningOption::AnnotationlFnType annotateFn = nullptr;
   bool peelEpilogue;
-  triton::PipeliningOption::PredicateOpFn predicateFn = nullptr;
+  triton::PipeliningOption::PredicateOpFnType predicateFn = nullptr;
 
   // When peeling the kernel we generate several version of each value for
   // different stage of the prologue. This map tracks the mapping between
