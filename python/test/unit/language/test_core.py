@@ -3179,7 +3179,7 @@ def test_if(if_type, device):
         if IfType == "if":
             if pid % 2 == 0:
                 tl.store(Ret, tl.load(XTrue))
-            else:
+            elif 0 != pid % 2:
                 tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_exp_dynamic":
             tl.store(Ret, tl.load(XTrue)) if pid % 2 == 0 else tl.store(Ret, tl.load(XFalse))
