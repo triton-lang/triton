@@ -242,7 +242,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [SameOperandsAndResultShape,
 
     let arguments = (ins TT_AtomicRMWAttr:$atomic_rmw_op, TT_PtrLike:$ptr,
                          TT_Type:$val, Optional<TT_BoolLike>:$mask,
-                         TT_MemSemanticAttr:$sem);
+                         TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
 
     let results = (outs TT_Type:$result);
 }
@@ -264,7 +264,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead]>,
     }];
 
     let arguments = (ins TT_PtrLike:$ptr, TT_Type:$cmp, TT_Type:$val,
-                     TT_MemSemanticAttr:$sem);
+                     TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
 
     let results = (outs TT_Type:$result);
 }
