@@ -47,17 +47,17 @@ class FileCacheManager(CacheManager):
     def __init__(self, key, override=False, dump=False):
         self.key = key
         self.lock_path = None
-        if (dump):
+        if dump:
             self.cache_dir = default_dump_dir()
             self.cache_dir = os.path.join(self.cache_dir, self.key)
             self.lock_path = os.path.join(self.cache_dir, "lock")
             os.makedirs(self.cache_dir, exist_ok=True)
-        elif (override):
+        elif override:
             self.cache_dir = default_override_dir()
             self.cache_dir = os.path.join(self.cache_dir, self.key)
         else:
             # create cache directory if it doesn't exist
-            self.cache_dir = os.getenv('TRITON_CACHE_DIR', "").strip() or default_cache_dir()
+            self.cache_dir = os.getenv("TRITON_CACHE_DIR", "").strip() or default_cache_dir()
             if self.cache_dir:
                 self.cache_dir = os.path.join(self.cache_dir, self.key)
                 self.lock_path = os.path.join(self.cache_dir, "lock")
@@ -141,6 +141,7 @@ def get_cache_manager(key) -> CacheManager:
 
     if user_cache_manager is not None and user_cache_manager != __cache_cls_nme:
         import importlib
+
         module_path, clz_nme = user_cache_manager.split(":")
         module = importlib.import_module(module_path)
         __cache_cls = getattr(module, clz_nme)
