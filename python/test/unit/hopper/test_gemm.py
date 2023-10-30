@@ -339,6 +339,9 @@ def test_gemm(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, M, N, K, TRANS_A, 
         '16-32-64-8-2-256-256-256-True',
     ]:
         pytest.skip('Known legacy issue, ldmatrix can only support x4')
+    enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
+    if NUM_CTAS > 1 and enable_tma in ["on", "true", "1"]:
+        pytest.skip('multi-CTA with TMA not supported in MaterializeLoadStore')
 
     M = BLOCK_M if M is None else M
     N = BLOCK_N if N is None else N
