@@ -62,6 +62,11 @@ def kernel_no_arg_print():
     print("", tl.program_id(0))
 
 
+@triton.jit
+def kernel_print_no_arg():
+    print("no arg")
+
+
 def test_print(func: str, data_type: str):
     shape = (128, )
     x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda').to(getattr(torch, data_type))
@@ -80,10 +85,12 @@ def test_print(func: str, data_type: str):
         kernel_static_print[(1,)](x, y, BLOCK=shape[0], PLACEHOLDER=uuid.uuid4())
     elif func == "no_arg_print":
         kernel_no_arg_print[(1,)](num_warps=4)
+    elif func == "print_no_arg":
+        kernel_print_no_arg[(1,)](num_warps=4)
     else:
         assert f"Unknown kernel: {func}"
 
-    if func != "no_arg_print" and func != "device_print_large" and \
+    if func != "print_no_arg" and func != "no_arg_print" and func != "device_print_large" and \
        func != "print_multiple_args" and func != "device_print_multiple_args":
         assert_close(y, x)
 

@@ -1579,9 +1579,9 @@ def debug_barrier(builder: ir.builder) -> tl.tensor:
 def device_print(prefix: str, args: List[tl.tensor], builder: ir.builder) -> tl.tensor:
     # It makes sense visually for prefix to end in ": "; make it so.  Also,
     # non-empty prefixes should start with " ".
-    if not prefix.endswith(" "):
+    if not prefix.endswith(" ") and args:
         prefix += " "
-    if not prefix.endswith(": "):
+    if not prefix.endswith(": ") and args:
         prefix = prefix[:-1] + ": "
     if len(prefix) > 2 and not prefix.startswith(" "):
         prefix = " " + prefix
