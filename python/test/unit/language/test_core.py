@@ -3177,16 +3177,16 @@ def test_if(if_type, device):
         pid = tl.program_id(0)
         cond = tl.load(Cond)
         if IfType == "if":
-            if pid % 2 == 0:
+            if pid % 2 == 0:  # eq
                 tl.store(Ret, tl.load(XTrue))
-            elif 0 != pid % 2:
+            elif 1 == pid % 2:  # req
                 tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_exp_dynamic":
             tl.store(Ret, tl.load(XTrue)) if pid % 2 == 0 else tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_exp_static":
             tl.store(Ret, tl.load(XTrue)) if BoolVar else tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_and_dynamic":
-            if BoolVar and 0 == pid % 2:
+            if BoolVar and (1 != pid % 2 and pid % 2 != 1):  # rne and ne
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))
