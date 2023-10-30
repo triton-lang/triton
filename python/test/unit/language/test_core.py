@@ -3356,10 +3356,10 @@ def test_inline_asm_with_pointers(num_ctas, device):
     def kernel(X, Y, BLOCK: tl.constexpr):
         x_ptrs = X + tl.arange(0, BLOCK)
         y_ptrs = Y + tl.arange(0, BLOCK)
-        tl.inline_asm_elementwise("ld.global.b32 $0, [$1]; \
+        tl.inline_asm_elementwise("ld.global.b8 $0, [$1]; \
                                    shl.b32 $0, $0, 3; \
-                                   st.global.b32 [$2], $0;",
-                                  "=r,l,l", [x_ptrs, y_ptrs], dtype=tl.int8, is_pure=False, pack=4)
+                                   st.global.b8 [$2], $0;",
+                                  "=r,l,l", [x_ptrs, y_ptrs], dtype=tl.int8, is_pure=False, pack=1)
 
     shape = (512,)
     rs = RandomState(17)
