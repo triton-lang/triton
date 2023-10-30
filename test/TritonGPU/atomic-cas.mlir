@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu 2>&1 | FileCheck %s --check-prefix=GPU
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu -convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=LLVM
 
-// GPU: %9 = "tt.atomic_cas"(%8, %cst_0, %cst) <{sem = 4 : i32, scope = 2 : i32}> : (tensor<2x!tt.ptr<i64, 1>, #blocked>, tensor<2xi64, #blocked>, tensor<2xi64, #blocked>) -> tensor<2xi64, #blocked>
+// GPU: %9 = "tt.atomic_cas"(%8, %cst_0, %cst) <{scope = 2 : i32, sem = 4 : i32}> : (tensor<2x!tt.ptr<i64, 1>, #blocked>, tensor<2xi64, #blocked>, tensor<2xi64, #blocked>) -> tensor<2xi64, #blocked>
 // LLVM: llvm.inline_asm {{.*}} "mov.u64 $0, 0x0;\0A\09@$4 atom.global.acq_rel.cta.cas.b64 $0, [ $1 + 0 ], $2, $3;", "=l,l,l,l,b"
 
 module {
