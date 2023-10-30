@@ -3186,7 +3186,7 @@ def test_if(if_type, device):
         elif IfType == "if_exp_static":
             tl.store(Ret, tl.load(XTrue)) if BoolVar else tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_and_dynamic":
-            if BoolVar and pid % 2 == 0:
+            if BoolVar and 0 == pid % 2:
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))
