@@ -1,2 +1,5 @@
 [flake8]
-ignore = E501,E701,E731
+# W503 (linebreak occurred before binary operator) seems to be enabled by
+# default, even though it goes against pep8 and is incompatible with W504
+# (linebreak occurred *after* binary operator).  Disable it.
+ignore = E501,E701,E731,W503
