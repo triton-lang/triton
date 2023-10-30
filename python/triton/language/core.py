@@ -721,9 +721,19 @@ class tensor:
         return semantic.equal(self, other, _builder)
 
     @builtin
+    def __req__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.equal(other, self, _builder)
+
+    @builtin
     def __ne__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.not_equal(self, other, _builder)
+
+    @builtin
+    def __rne__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.not_equal(other, self, _builder)
 
     @builtin
     def logical_and(self, other, _builder=None):

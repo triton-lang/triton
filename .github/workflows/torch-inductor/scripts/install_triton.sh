@@ -6,7 +6,7 @@ ROOT="$(pwd)"
 # shellcheck source=/dev/null
 source /opt/torchinductor_venv/bin/activate
 # shellcheck source=/dev/null
-source ./.github/workflows/torchinductor/scripts/common.sh
+source ./.github/workflows/torch-inductor/scripts/common.sh
 
 # build our own triton
 cd python || exit

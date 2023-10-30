@@ -133,7 +133,7 @@ jobs:
       if: matrix.config.target-os == 'centos'
       run: |
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
-          -f llvm-build/.github/workflows/Dockerfile .
+          -f llvm-build/.github/workflows/llvm-build/Dockerfile .
 
         # Create temporary container to copy cache and installed artifacts.
         CONTAINER_ID=$(docker create llvm-build)

@@ -165,7 +165,7 @@ flash_attention_data = {
         (4, 48, 4096, 64, False, False, 'forward', 'bfloat16'): 0.266,
         (4, 48, 1024, 16, False, False, 'forward', 'float32'): 0.098,
         (4, 48, 4096, 64, False, False, 'backward', 'float16'): 0.159,
-        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.136,
+        (4, 48, 4096, 64, False, False, 'backward', 'bfloat16'): 0.159,
         (4, 48, 1024, 16, False, False, 'backward', 'float32'): 0.088,
     }
 }
