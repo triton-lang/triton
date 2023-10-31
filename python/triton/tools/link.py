@@ -42,7 +42,6 @@ class HeaderParser:
         self.kernels = defaultdict(list)
 
     def extract_linker_meta(self, header: str):
-
         for ln in header.splitlines():
             if ln.startswith("//"):
                 m = self.linker_directives.match(ln)
@@ -76,7 +75,7 @@ class HeaderParser:
         m = self.c_sig.findall(c_sig)
         if len(m):
             tys, args = [], []
-            for (ty, arg_name) in m:
+            for ty, arg_name in m:
                 tys.append(ty)
                 args.append(arg_name)
             return tys, args
@@ -84,7 +83,7 @@ class HeaderParser:
         raise LinkerError(f"{c_sig} is not a valid argument signature")
 
     def _match_suffix(self, suffix: str, c_sig: str):
-        args = c_sig.split(',')
+        args = c_sig.split(",")
         s2i = {"c": 1, "d": 16}
         num_specs = 0
         sizes = []
@@ -110,7 +109,7 @@ class HeaderParser:
         if name in self.kernels:
             last: KernelLinkerMeta = self.kernels[name][-1]
 
-            for (cur, new_) in zip(last.arg_ctypes, ker.arg_ctypes):
+            for cur, new_ in zip(last.arg_ctypes, ker.arg_ctypes):
                 if cur != new_:
                     raise LinkerError(
                         f"Mismatched signature for kernel {name}: \n\texisting sig is: {','.join(last.arg_ctypes)}\n\tcurrent is: {','.join(ker.arg_ctypes)}"
@@ -161,13 +160,17 @@ def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
 def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        src += f"CUresult {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, {gen_signature(meta)});\n"
+        src += (
+            f"CUresult {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, {gen_signature(meta)});\n"
+        )
     src += "\n"
 
     src += f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{"
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        cond_fn = lambda val, hint: f"({val} % {hint} == 0)" if hint == 16 else f"({val} == {hint})" if hint == 1 else None
+        cond_fn = (
+            lambda val, hint: f"({val} % {hint} == 0)" if hint == 16 else f"({val} == {hint})" if hint == 1 else None
+        )
         conds = " && ".join([cond_fn(val, hint) for val, hint in zip(meta.arg_names, meta.sizes) if hint is not None])
         src += f"  if ({conds})\n"
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]

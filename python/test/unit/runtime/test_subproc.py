@@ -17,7 +17,9 @@ def reset_tmp_dir():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"])
+instance_descriptor = namedtuple(
+    "instance_descriptor", ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"]
+)
 
 
 def compile_fn(config, cc):
@@ -25,6 +27,7 @@ def compile_fn(config, cc):
     def kernel_sub(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
         tl.store(o + idx, tl.load(a + idx) - tl.load(b + idx) * 777)
+
     triton.compile(
         fn=kernel_sub,
         signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
@@ -41,10 +44,8 @@ def test_compile_in_subproc() -> None:
     cc = major * 10 + minor
     config = instance_descriptor(tuple(range(4)), (), (), ())
 
-    multiprocessing.set_start_method('fork')
-    proc = multiprocessing.Process(
-        target=compile_fn,
-        args=(config, cc))
+    multiprocessing.set_start_method("fork")
+    proc = multiprocessing.Process(target=compile_fn, args=(config, cc))
     proc.start()
     proc.join()
     assert proc.exitcode == 0
@@ -74,10 +75,8 @@ def test_compile_in_forked_subproc() -> None:
     cc = major * 10 + minor
     config = instance_descriptor(tuple(range(1)), (), (), ())
 
-    assert multiprocessing.get_start_method() == 'fork'
-    proc = multiprocessing.Process(
-        target=compile_fn_dot,
-        args=(config, cc))
+    assert multiprocessing.get_start_method() == "fork"
+    proc = multiprocessing.Process(target=compile_fn_dot, args=(config, cc))
     proc.start()
     proc.join()
     assert proc.exitcode == 0

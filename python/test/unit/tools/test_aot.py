@@ -59,7 +59,7 @@ def kernel(C, A, B, M, N, K,
   tl.store(c_ptrs, c)
 """
 
-test_utils_src = '''
+test_utils_src = """
 #include <cuda.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -93,23 +93,18 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
         index++;
     }
     fclose(file);
-}'''
+}"""
 
 
 def gen_kernel_library(dir, libname):
     c_files = glob.glob(os.path.join(dir, "*.c"))
-    subprocess.run(["gcc"] + c_files + ["-I", cuda_include_dir(),
-                                        "-c", "-fPIC"],
-                   check=True, cwd=dir)
+    subprocess.run(["gcc"] + c_files + ["-I", cuda_include_dir(), "-c", "-fPIC"], check=True, cwd=dir)
     o_files = glob.glob(os.path.join(dir, "*.o"))
-    subprocess.run(["gcc"] + o_files + ["-shared",
-                                        "-o", libname,
-                                        "-L", libcuda_dirs()[0]],
-                   check=True, cwd=dir)
+    subprocess.run(["gcc"] + o_files + ["-shared", "-o", libname, "-L", libcuda_dirs()[0]], check=True, cwd=dir)
 
 
 def gen_test_bin(dir, M, N, K, exe="test", algo_id=0):
-    test_src = f'''
+    test_src = f"""
 int main(int argc, char **argv) {{
   int M = {M}, N = {N}, K = {K};
 
@@ -165,17 +160,30 @@ int main(int argc, char **argv) {{
   cuMemFree(C);
   cuCtxDestroy(ctx);
 }}
-'''
+"""
     src = test_utils_src + test_src
     with open(os.path.join(dir, "test.c"), "w") as file:
         file.write(src)
-    subprocess.run(["gcc"] + ["test.c",
-                              "-I", cuda_include_dir(),
-                              "-L", libcuda_dirs()[0],
-                              "-l", "cuda",
-                              "-L", dir,
-                              "-l", "kernel",
-                              "-o", exe], check=True, cwd=dir)
+    subprocess.run(
+        ["gcc"]
+        + [
+            "test.c",
+            "-I",
+            cuda_include_dir(),
+            "-L",
+            libcuda_dirs()[0],
+            "-l",
+            "cuda",
+            "-L",
+            dir,
+            "-l",
+            "kernel",
+            "-o",
+            exe,
+        ],
+        check=True,
+        cwd=dir,
+    )
 
 
 def write_triton_kernels(dir, src, util_src):
@@ -196,10 +204,30 @@ def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints):
     # compile all desired configs
     for ha in ha_hb_hints:
         for hb in ha_hb_hints:
-            sig = f'*fp32:16, *{dtype}:16, *{dtype}:16, i32, i32, i32, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}'
+            sig = f"*fp32:16, *{dtype}:16, *{dtype}:16, i32, i32, i32, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}"
             name = f"matmul_{dtype}"
-            grid = f'M/{BM}, N/{BN}, 1'
-            subprocess.run([sys.executable, compiler_path, "-n", "kernel", "--signature", sig, "--out-name", name, "-o", name, "-w", "1", "-g", grid, kernel_path], check=True, cwd=dir)
+            grid = f"M/{BM}, N/{BN}, 1"
+            subprocess.run(
+                [
+                    sys.executable,
+                    compiler_path,
+                    "-n",
+                    "kernel",
+                    "--signature",
+                    sig,
+                    "--out-name",
+                    name,
+                    "-o",
+                    name,
+                    "-w",
+                    "1",
+                    "-g",
+                    grid,
+                    kernel_path,
+                ],
+                check=True,
+                cwd=dir,
+            )
 
 
 def link_aot_kernels(dir):
@@ -225,7 +253,6 @@ def test_compile_link_matmul():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-
         dtype = "fp16"
         BM, BN, BK = 16, 16, 16
 
@@ -250,7 +277,7 @@ def test_compile_link_matmul():
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
         c_tri = c.reshape((M, N)).view(np.float32)
         c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
-        np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.)
+        np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
 def test_launcher_has_no_available_kernel():
@@ -275,7 +302,9 @@ def test_launcher_has_no_available_kernel():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir
-        result = subprocess.run(["./test", a_path, b_path, c_path], env=env, cwd=tmp_dir, capture_output=True, text=True)
+        result = subprocess.run(
+            ["./test", a_path, b_path, c_path], env=env, cwd=tmp_dir, capture_output=True, text=True
+        )
 
         # It should fail since the launcher requires all the strides be 1 while they are not.
         assert result.returncode == -6
@@ -286,7 +315,6 @@ def test_compile_link_autotune_matmul():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-
         dtype = "fp16"
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)

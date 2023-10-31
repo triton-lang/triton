@@ -9,7 +9,6 @@ import triton.ops
 
 
 def f8_to_f16(x, dtype):
-
     @triton.jit
     def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
         pid = tl.program_id(0)
@@ -19,7 +18,7 @@ def f8_to_f16(x, dtype):
         tl.store(Y + offs, x, mask=mask)
 
     ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
-    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']),)
+    grid = lambda META: (triton.cdiv(x.numel(), META["BLOCK_SIZE"]),)
     dtype = getattr(tl, dtype)
     kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
     return ret
@@ -63,7 +62,10 @@ def f8_to_f16(x, dtype):
                 (128, 128, 32, 1, 4, 2, 107, 233, 128, AT, BT, DTYPE, DTYPE, True, True),
                 (128, 128, 32, 1, 4, 2, 107, 233, 83, AT, BT, DTYPE, DTYPE, True, True),
                 (128, 256, 64, 1, 8, 3, 256, 512, 160, AT, BT, DTYPE, DTYPE, True, True),
-            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]
+            ]
+            for DTYPE in ["float16", "bfloat16", "float32"]
+            for AT in [False, True]
+            for BT in [False, True]
         ],
         # n-stage
         *[
@@ -73,7 +75,11 @@ def f8_to_f16(x, dtype):
                 (128, 64, 16, 1, 4, STAGES, 256, 128, 80, AT, BT, DTYPE, DTYPE, True, True),
                 (256, 128, 32, 1, 8, STAGES, 512, 256, 160, AT, BT, DTYPE, DTYPE, True, True),
                 (128, 128, 32, 1, 4, STAGES, 256, 256, 160, AT, BT, DTYPE, DTYPE, True, True),
-            ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in [4]
+            ]
+            for DTYPE in ["float16", "bfloat16", "float32"]
+            for AT in [False, True]
+            for BT in [False, True]
+            for STAGES in [4]
         ],
         # mixed-precision
         *[
@@ -81,17 +87,23 @@ def f8_to_f16(x, dtype):
                 (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM),
                 (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM),
                 (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM),
-            ] for ADTYPE, BDTYPE in [("float8e4nv", "float8e5"),
-                                     ("float8e4nv", "float8e4nv"),
-                                     ("float8e5", "float8e4nv"),
-                                     ("float8e5", "float8e5"),
-                                     ("float8e4b15", "float8e4b15"),
-                                     ("float8e4nv", "float16"),
-                                     ("float16", "float8e5"),
-                                     ("float16", "float32"),
-                                     ("float32", "float16"),
-                                     ("bfloat16", "float32"),
-                                     ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True] for FASTACCUM in [True, False]
+            ]
+            for ADTYPE, BDTYPE in [
+                ("float8e4nv", "float8e5"),
+                ("float8e4nv", "float8e4nv"),
+                ("float8e5", "float8e4nv"),
+                ("float8e5", "float8e5"),
+                ("float8e4b15", "float8e4b15"),
+                ("float8e4nv", "float16"),
+                ("float16", "float8e5"),
+                ("float16", "float32"),
+                ("float32", "float16"),
+                ("bfloat16", "float32"),
+                ("float32", "bfloat16"),
+            ]
+            for AT in [False, True]
+            for BT in [False, True]
+            for FASTACCUM in [True, False]
         ],
         # mixed-precision block layout
         *[
@@ -99,16 +111,23 @@ def f8_to_f16(x, dtype):
                 (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True),
                 (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True),
                 (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE, False, True),
-            ] for ADTYPE, BDTYPE in [("float8e4nv", "float16"),
-                                     ("float16", "float8e5"),
-                                     ("float16", "float32"),
-                                     ("float32", "float16"),
-                                     ("bfloat16", "float32"),
-                                     ("float32", "bfloat16")] for AT in [False, True] for BT in [False, True]
+            ]
+            for ADTYPE, BDTYPE in [
+                ("float8e4nv", "float16"),
+                ("float16", "float8e5"),
+                ("float16", "float32"),
+                ("float32", "float16"),
+                ("bfloat16", "float32"),
+                ("float32", "bfloat16"),
+            ]
+            for AT in [False, True]
+            for BT in [False, True]
         ],
     ),
 )
-def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, ALLOW_TF32, F8_FASTACCUM):
+def test_op(
+    BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, ALLOW_TF32, F8_FASTACCUM
+):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
@@ -120,8 +139,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
-    kwargs = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
-    pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs['C'].zero_()
+    kwargs = {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "BLOCK_K": BLOCK_K, "SPLIT_K": SPLIT_K}
+    pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs["C"].zero_()
     configs = [triton.Config(kwargs=kwargs, num_warps=NWARP, num_stages=NSTAGE, pre_hook=pre_hook)]
     kernel = triton.ops._matmul.kernel
     kernel.configs = configs
@@ -138,8 +157,8 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         return x
 
     def init_input(m, n, dtype):
-        if 'float8' in dtype:
-            ewidth = {'float8e4b15': 4, 'float8e4nv': 4, 'float8e5': 5}[dtype]
+        if "float8" in dtype:
+            ewidth = {"float8e4b15": 4, "float8e4nv": 4, "float8e5": 5}[dtype]
             sign = torch.randint(2, size=(m, n), device="cuda", dtype=torch.int8) * 128
             val = torch.randint(2**3 - 1, size=(m, n), device="cuda", dtype=torch.int8) << 7 - ewidth
             return sign | val
@@ -147,7 +166,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             return torch.randint(-128, 127, (m, n), device="cuda", dtype=torch.int8)
         dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dtype]
         exponents = torch.randint(-10, 0, size=(m, n))
-        ret = (2. ** exponents).to(dtype).to("cuda")
+        ret = (2.0**exponents).to(dtype).to("cuda")
         return ret
 
     # allocate/transpose inputs

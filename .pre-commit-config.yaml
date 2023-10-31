@@ -25,10 +25,10 @@ repos:
     hooks:
       - id: ruff-format
         # Keep this in sync with the autopep8/isort/flake8 exclusions below.
-        files: '^python/triton/runtime/.*'
+        files: '^python/.*'
         stages: [commit, push, manual]
       - id: ruff
-        files: '^python/triton/runtime/.*'
+        files: '^python/.*'
         args: ["--fix", "--line-length", "120"]
         stages: [commit, push, manual]
 
@@ -36,14 +36,14 @@ repos:
     rev: 5.12.0
     hooks:
       - id: isort
-        exclude: '^python/triton/runtime/.*'
+        exclude: '^python/.*'
         stages: [commit, push, manual]
 
   - repo: https://github.com/pre-commit/mirrors-autopep8
     rev: v1.6.0
     hooks:
       - id: autopep8
-        exclude: '^python/triton/runtime/.*'
+        exclude: '^python/.*'
         args: ["-i"]
         stages: [commit, push, manual]
   - repo: https://github.com/pycqa/flake8
@@ -60,7 +60,7 @@ repos:
         stages: [commit, push, manual]
         exclude: |
           (?x)(
-            ^python/triton/runtime/.*|
+            ^python/.*|
             ^test/|
             ^docs/conf.py$
           )

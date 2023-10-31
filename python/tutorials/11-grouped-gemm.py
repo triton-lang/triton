@@ -1,4 +1,3 @@
-
 """
 Group GEMM
 ============================
@@ -37,38 +36,38 @@ import triton.language as tl
     configs=[
         triton.Config(
             {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 32,
-                'NUM_SM': 84,
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 128,
+                "BLOCK_SIZE_K": 32,
+                "NUM_SM": 84,
             }
         ),
         triton.Config(
             {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 32,
-                'NUM_SM': 128,
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 128,
+                "BLOCK_SIZE_K": 32,
+                "NUM_SM": 128,
             }
         ),
         triton.Config(
             {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 64,
-                'BLOCK_SIZE_K': 32,
-                'NUM_SM': 84,
+                "BLOCK_SIZE_M": 64,
+                "BLOCK_SIZE_N": 64,
+                "BLOCK_SIZE_K": 32,
+                "NUM_SM": 84,
             }
         ),
         triton.Config(
             {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 64,
-                'BLOCK_SIZE_K': 32,
-                'NUM_SM': 128,
+                "BLOCK_SIZE_M": 64,
+                "BLOCK_SIZE_N": 64,
+                "BLOCK_SIZE_K": 32,
+                "NUM_SM": 128,
             }
         ),
     ],
-    key=['group_size'],
+    key=["group_size"],
 )
 @triton.jit
 def grouped_matmul_kernel(
@@ -102,9 +101,7 @@ def grouped_matmul_kernel(
         num_n_tiles = tl.cdiv(gn, BLOCK_SIZE_N)
         num_tiles = num_m_tiles * num_n_tiles
         # iterate through the tiles in the current gemm problem
-        while (
-            tile_idx >= last_problem_end and tile_idx < last_problem_end + num_tiles
-        ):
+        while tile_idx >= last_problem_end and tile_idx < last_problem_end + num_tiles:
             # pick up a tile from the current gemm problem
             k = gk
             lda = tl.load(g_lds + g * 3)
@@ -124,9 +121,7 @@ def grouped_matmul_kernel(
             offs_k = tl.arange(0, BLOCK_SIZE_K)
             a_ptrs = a_ptr + offs_am[:, None] * lda + offs_k[None, :]
             b_ptrs = b_ptr + offs_k[:, None] * ldb + offs_bn[None, :]
-            accumulator = tl.zeros(
-                (BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32
-            )
+            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
             for kk in range(0, tl.cdiv(k, BLOCK_SIZE_K)):
                 # hint to Triton compiler to do proper loop pipelining
                 tl.multiple_of(a_ptrs, [16, 16])
@@ -154,7 +149,7 @@ def grouped_matmul_kernel(
 
 
 def group_gemm_fn(group_A, group_B):
-    device = torch.device('cuda')
+    device = torch.device("cuda")
     assert len(group_A) == len(group_B)
     group_size = len(group_A)
 
@@ -174,7 +169,7 @@ def group_gemm_fn(group_A, group_B):
         group_C.append(C)
         A_addrs.append(A.data_ptr())
         B_addrs.append(B.data_ptr())
-        C_addrs .append(C.data_ptr())
+        C_addrs.append(C.data_ptr())
         g_sizes += [M, N, K]
         g_lds += [A.stride(0), B.stride(0), C.stride(0)]
 
@@ -182,14 +177,10 @@ def group_gemm_fn(group_A, group_B):
     d_a_ptrs = torch.tensor(A_addrs, device=device)
     d_b_ptrs = torch.tensor(B_addrs, device=device)
     d_c_ptrs = torch.tensor(C_addrs, device=device)
-    d_g_sizes = torch.tensor(
-        g_sizes, dtype=torch.int32, device=device
-    )
-    d_g_lds = torch.tensor(
-        g_lds, dtype=torch.int32, device=device
-    )
+    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=device)
+    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=device)
     # we use a fixed number of CTA, and it's auto-tunable
-    grid = lambda META: (META['NUM_SM'],)
+    grid = lambda META: (META["NUM_SM"],)
     grouped_matmul_kernel[grid](
         d_a_ptrs,
         d_b_ptrs,
@@ -227,7 +218,7 @@ for i in range(group_size):
 
 # only launch the kernel, no tensor preparation here to remove all overhead
 def triton_perf_fn(a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size):
-    grid = lambda META: (META['NUM_SM'],)
+    grid = lambda META: (META["NUM_SM"],)
     grouped_matmul_kernel[grid](
         a_ptrs,
         b_ptrs,
@@ -246,16 +237,16 @@ def torch_perf_fn(group_A, group_B):
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['N'],
-        x_vals=[2 ** i for i in range(7, 11)],  # different possible values for `x_name`
-        line_arg='provider',
+        x_names=["N"],
+        x_vals=[2**i for i in range(7, 11)],  # different possible values for `x_name`
+        line_arg="provider",
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['cublas', 'triton'],
+        line_vals=["cublas", "triton"],
         # label name for the lines
         line_names=["cuBLAS", "Triton"],
         # line styles
-        styles=[('green', '-'), ('blue', '-')],
+        styles=[("green", "-"), ("blue", "-")],
         ylabel="runtime(ms)",  # label name for the y-axis
         plot_name="group-gemm-performance",
         # name for the plot. Used also as a file name for saving the plot.
@@ -281,7 +272,7 @@ def benchmark(N, provider):
         group_C.append(C)
         A_addrs.append(A.data_ptr())
         B_addrs.append(B.data_ptr())
-        C_addrs .append(C.data_ptr())
+        C_addrs.append(C.data_ptr())
         g_sizes += [N, N, N]
         g_lds += [N, N, N]
 
@@ -292,10 +283,12 @@ def benchmark(N, provider):
     d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device="cuda")
 
     quantiles = [0.5, 0.2, 0.8]
-    if provider == 'cublas':
+    if provider == "cublas":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
-    if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size), quantiles=quantiles)
+    if provider == "triton":
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            lambda: triton_perf_fn(d_a_ptrs, d_b_ptrs, d_c_ptrs, d_g_sizes, d_g_lds, group_size), quantiles=quantiles
+        )
     return ms, max_ms, min_ms
 
 

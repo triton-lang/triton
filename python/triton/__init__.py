@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '2.1.0'
+__version__ = "2.1.0"
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -50,6 +50,7 @@ __all__ = [
 # misc. utilities that  don't fit well
 # into any specific module
 # -------------------------------------
+
 
 def cdiv(x: int, y: int):
     return (x + y - 1) // y

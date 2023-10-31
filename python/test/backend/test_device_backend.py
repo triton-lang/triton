@@ -13,8 +13,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import (BaseBackend, compute_core_version_key,
-                                   register_backend)
+from triton.common.backend import BaseBackend, compute_core_version_key, register_backend
 from triton.common.build import quiet
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
@@ -22,8 +21,8 @@ from triton.runtime.driver import DriverBase
 
 
 def build_for_backend(name, src, srcdir):
-    suffix = sysconfig.get_config_var('EXT_SUFFIX')
-    so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
+    suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    so = os.path.join(srcdir, "{name}{suffix}".format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
     cc = os.environ.get("CC")
     if cc is None:
@@ -34,14 +33,14 @@ def build_for_backend(name, src, srcdir):
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10
-    if hasattr(sysconfig, 'get_default_scheme'):
+    if hasattr(sysconfig, "get_default_scheme"):
         scheme = sysconfig.get_default_scheme()
     else:
         scheme = sysconfig._get_default_scheme()
     # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
     # path changes to include 'local'. This change is required to use triton with system-wide python.
-    if scheme == 'posix_local':
-        scheme = 'posix_prefix'
+    if scheme == "posix_local":
+        scheme = "posix_prefix"
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
     ret = subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
@@ -57,19 +56,19 @@ def build_for_backend(name, src, srcdir):
     # create extension module
     ext = setuptools.Extension(
         name=name,
-        language='c',
+        language="c",
         sources=[src],
         include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3'],
+        extra_compile_args=extra_compile_args + ["-O3"],
         extra_link_args=extra_link_args,
         library_dirs=library_dirs,
         libraries=libraries,
     )
     # build extension module
-    args = ['build_ext']
-    args.append('--build-temp=' + srcdir)
-    args.append('--build-lib=' + srcdir)
-    args.append('-q')
+    args = ["build_ext"]
+    args.append("--build-temp=" + srcdir)
+    args.append("--build-lib=" + srcdir)
+    args.append("-q")
     args = dict(
         name=name,
         ext_modules=[ext],
@@ -82,7 +81,7 @@ def build_for_backend(name, src, srcdir):
 
 class ExtensionUtils:
     def __new__(cls):
-        if not hasattr(cls, 'instance'):
+        if not hasattr(cls, "instance"):
             cls.instance = super(ExtensionUtils, cls).__new__(cls)
         return cls.instance
 
@@ -102,6 +101,7 @@ class ExtensionUtils:
                 with open(so, "rb") as f:
                     cache_path = cache.put(f.read(), fname, binary=True)
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("ext_utils", cache_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -111,7 +111,7 @@ class ExtensionUtils:
 
 class ExtensionDriver(DriverBase):
     def __new__(cls):
-        if not hasattr(cls, 'instance'):
+        if not hasattr(cls, "instance"):
             cls.instance = super(ExtensionDriver, cls).__new__(cls)
         return cls.instance
 

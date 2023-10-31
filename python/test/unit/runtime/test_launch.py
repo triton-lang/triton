@@ -1,4 +1,5 @@
 import gc
+
 # import importlib
 # import os
 # import sys
@@ -16,7 +17,6 @@ import triton.language as tl
 
 
 def test_memory_leak() -> None:
-
     @triton.jit
     def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
         xnumel = 10
@@ -29,8 +29,8 @@ def test_memory_leak() -> None:
 
     tracemalloc.start()
     try:
-        inp = torch.randn(10, device='cuda')
-        out = torch.randn(10, device='cuda')
+        inp = torch.randn(10, device="cuda")
+        out = torch.randn(10, device="cuda")
         kernel[(10,)](inp, out, 10, XBLOCK=16)
         gc.collect()
         begin, _ = tracemalloc.get_traced_memory()

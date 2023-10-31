@@ -13,8 +13,8 @@ def num_warps(N):
     return 16
 
 
-@heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
-@heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
+@heuristics({"num_warps": lambda nargs: num_warps(nargs["N"])})
+@heuristics({"BLOCK": lambda nargs: next_power_of_2(nargs["N"])})
 @jit
 def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
@@ -25,7 +25,7 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     WRIT_PROBS = PROBS + row * N + cols
     READ_PROBS = PROBS + row * N + idx
     # write-back negative log-probs
-    logits = tl.load(LOGITS, mask=cols < N, other=-float('inf'))
+    logits = tl.load(LOGITS, mask=cols < N, other=-float("inf"))
     logits = logits.to(tl.float32)
     logits = logits - tl.max(logits, 0)
     probs = tl.log(tl.sum(tl.exp(logits), 0)) - logits
@@ -38,8 +38,8 @@ def _forward(LOGITS, PROBS, IDX, LOSS, N, BLOCK: tl.constexpr):
     tl.store(LOSS + row, probs)
 
 
-@heuristics({'num_warps': lambda nargs: num_warps(nargs['N'])})
-@heuristics({'BLOCK': lambda nargs: next_power_of_2(nargs['N'])})
+@heuristics({"num_warps": lambda nargs: num_warps(nargs["N"])})
+@heuristics({"BLOCK": lambda nargs: next_power_of_2(nargs["N"])})
 @jit
 def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     row = tl.program_id(0)
@@ -49,7 +49,7 @@ def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     PROBS = PROBS + row * N + cols
     # We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
     # and we have -log(p[k]) stored in PROBS, so this is easy
-    probs = -tl.load(PROBS, mask=cols < N, other=float('inf'))
+    probs = -tl.load(PROBS, mask=cols < N, other=float("inf"))
     probs = tl.exp(probs.to(tl.float32))
     delta = cols == idx
     # write result in-place in PROBS
@@ -62,14 +62,14 @@ class _cross_entropy(torch.autograd.Function):
     @classmethod
     def forward(cls, ctx, logits, indices):
         # make sure we can use triton
-        assert (indices.dtype == torch.int64), "Indices are expected to be of type long."
+        assert indices.dtype == torch.int64, "Indices are expected to be of type long."
         # make kernel
         device, dtype = logits.device, logits.dtype
         n_cols = logits.shape[-1]
         # run the kernel
         result = torch.empty_like(indices, dtype=dtype, device=device)
         neg_logprobs = torch.empty_like(logits, dtype=dtype, device=device)
-        grid = lambda opt: (logits.numel() // n_cols, )
+        grid = lambda opt: (logits.numel() // n_cols,)
         _forward[grid](logits, neg_logprobs, indices, result, n_cols)
         # save for backward
         ctx.save_for_backward(neg_logprobs, indices)
@@ -87,7 +87,7 @@ class _cross_entropy(torch.autograd.Function):
         # run the kernel
         # neg_logprobs will be modified in place to become our gradient:
         n_cols = neg_logprobs.shape[-1]
-        grid = lambda opt: (neg_logprobs.numel() // n_cols, )
+        grid = lambda opt: (neg_logprobs.numel() // n_cols,)
         _backward[grid](neg_logprobs, indices, dneg_logprobs, n_cols)
         return neg_logprobs, None
 
