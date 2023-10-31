@@ -22,6 +22,7 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
                              ("print", "int32"),
                              ("static_print", "int32"),
                              ("no_arg_print", "int32"),
+                             ("print_no_arg", "int32"),
                              ("device_print_large", "int32"),
                              ("print_multiple_args", "int32"),
                              ("device_print_multiple_args", "int32"),
@@ -44,6 +45,8 @@ def test_print(func_type: str, data_type: str):
         expected_lines[" int32[constexpr[128]]"] = 1
     elif func_type == "no_arg_print":
         expected_lines["pid (0, 0, 0) idx (): 0"] = 128
+    elif func_type == "print_no_arg":
+        expected_lines["pid (0, 0, 0) no arg"] = 128
     elif func_type == "device_print_large":
         for i, j, k in itertools.product(range(2), range(64), range(128)):
             expected_lines[f"pid (0, {i}, 0) idx ({j:2}, {k:3}) x: 1"] = 1
