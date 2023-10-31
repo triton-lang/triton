@@ -111,6 +111,9 @@ bool isExpensiveLoadOrStore(Operation *op);
 
 bool canFoldIntoConversion(Operation *op, Attribute targetEncoding);
 
+scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
+                                        ValueRange newIterOperands);
+
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
 
