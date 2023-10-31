@@ -347,9 +347,9 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
                 numpy_expr,
                 device=device,
                 num_ctas=num_ctas)
-    elif (op in ('%', '/') and
-          ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
-           (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
+    elif (op in ('%', '/')
+          and ((dtype_x in int_dtypes and dtype_y in uint_dtypes) or
+               (dtype_x in uint_dtypes and dtype_y in int_dtypes))):
         with pytest.raises(triton.CompilationError) as exc_info:
             _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
         assert re.match('Cannot use .* because they have different signedness', str(exc_info.value.__cause__))
@@ -387,8 +387,8 @@ def test_addptr(dtype, order, device):
 
 
 @pytest.mark.parametrize("dtype_x, dtype_y",
-                         [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes] +
-                         [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes]
+                         [(dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes]
+                         + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes]
                          )
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_floordiv(dtype_x, dtype_y, num_ctas, device):
@@ -544,15 +544,15 @@ ops = ['==', '!=', '>', '<', '>=', '<=']
                              for op in ops
                              for dtype_x in dtypes
                              for dtype_y in dtypes
-                         ] +
+                         ]
                          # NaNs
-                         [('float32', 'float32', op, mode_x, mode_y)
+                         + [('float32', 'float32', op, mode_x, mode_y)
                              for op in ops
                              for mode_x, mode_y in [('nan', 'real'),
                                                     ('real', 'nan'),
                                                     ('nan', 'nan')]
 
-                          ])
+                            ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, num_ctas, device):
     expr = f'x {op} y'
@@ -2308,26 +2308,26 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
                           for in_dtype, out_dtype in [('float16', 'float16'),
                                                       ('float16', 'float32'),
                                                       ('float32', 'float32')]
-                          if not (allow_tf32 and (in_dtype in ['float16']))] +
+                          if not (allow_tf32 and (in_dtype in ['float16']))]
 
-                         [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype)
-                          for shape_nw in [[128, 256, 32, 8],
-                                           [128, 16, 32, 4],
-                                           [32, 128, 64, 4],
-                                           [128, 128, 64, 4],
-                                           [64, 128, 128, 4],
-                                           [32, 128, 64, 2],
-                                           [64, 64, 32, 4],
-                                           [32, 32, 128, 16],
-                                           [128, 128, 64, 2],
-                                           [64, 128, 128, 2]]
-                          for allow_tf32 in [True]
-                          for col_a in [True, False]
-                          for col_b in [True, False]
-                          for in_dtype, out_dtype in [('int8', 'int8'),
-                                                      ('float16', 'float16'),
-                                                      ('float16', 'float32'),
-                                                      ('float32', 'float32')]] +
+                         + [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype)
+                            for shape_nw in [[128, 256, 32, 8],
+                                             [128, 16, 32, 4],
+                                             [32, 128, 64, 4],
+                                             [128, 128, 64, 4],
+                                             [64, 128, 128, 4],
+                                             [32, 128, 64, 2],
+                                             [64, 64, 32, 4],
+                                             [32, 32, 128, 16],
+                                             [128, 128, 64, 2],
+                                             [64, 128, 128, 2]]
+                             for allow_tf32 in [True]
+                            for col_a in [True, False]
+                            for col_b in [True, False]
+                            for in_dtype, out_dtype in [('int8', 'int8'),
+                                                        ('float16', 'float16'),
+                                                        ('float16', 'float32'),
+                                                        ('float32', 'float32')]] +
 
                          [(64, 64, 64, 4, col_a, col_b, 'none', False, 'float32', 'float32')
                           for col_a in [True, False] for col_b in [True, False]])
