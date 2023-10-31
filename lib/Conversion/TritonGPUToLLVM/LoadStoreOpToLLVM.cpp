@@ -1006,7 +1006,8 @@ struct AtomicCASOpConversion
       std::string semStr;
       llvm::raw_string_ostream os(semStr);
       os << op.getSem();
-      atom.global().o(semStr).o("cas").o(sTy);
+      auto scope = stringifyMemSyncScope(op.getScope()).str();
+      atom.global().o(semStr).o(scope).o("cas").o(sTy);
       atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
 
       if (TensorTy) {
@@ -1129,7 +1130,8 @@ struct AtomicRMWOpConversion
       auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
       auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
 
-      auto &atom = ptxBuilderAtomicRMW.create<>("atom")->global().o("gpu");
+      auto scope = stringifyMemSyncScope(op.getScope()).str();
+      auto &atom = ptxBuilderAtomicRMW.create<>("atom")->global().o(scope);
       auto rmwOp = stringifyRMWOp(atomicRmwAttr).str();
       auto sBits = std::to_string(valueElemNBits);
       switch (atomicRmwAttr) {
