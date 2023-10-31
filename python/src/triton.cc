@@ -1,4 +1,4 @@
-#include <mutex>
+﻿#include <mutex>
 #include <stack>
 #include <unordered_map>
 
@@ -1662,6 +1662,10 @@ void init_triton_ir(py::module &&m) {
       .def("add_tritongpu_coalesce_pass",
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUCoalescePass());
+           })
+      .def("add_tritongpu_optimize_thread_locality_pass",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createTritonGPUOptimizeThreadLocalityPass());
            })
       .def("add_symbol_dce_pass",
            [](mlir::PassManager &self) {
