@@ -722,7 +722,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %43 = tt.broadcast %41 : (tensor<1x64xi1, #blocked4>) -> tensor<64x64xi1, #blocked4>
     %44 = arith.andi %42, %43 : tensor<64x64xi1, #blocked4>
     %45 = triton_gpu.convert_layout %14#0 : (tensor<64x64xf32, #mma>) -> tensor<64x64xf32, #blocked4>
-    "tt.atomic_cas"(%arg100, %c0_i32, %c1_i32) {sem = 1 : i32}: (!tt.ptr<i32, 1>, i32, i32) -> i32
+    "tt.atomic_cas"(%arg100, %c0_i32, %c1_i32) {sem = 1 : i32, scope = 1 : i32}: (!tt.ptr<i32, 1>, i32, i32) -> i32
     %46 = tt.load %35, %44 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x64xf32, #blocked4>
     %47 = arith.addf %45, %46 : tensor<64x64xf32, #blocked4>
     tt.store %35, %47, %44 {cache = 1 : i32, evict = 1 : i32} : tensor<64x64xf32, #blocked4>

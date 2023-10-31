@@ -2,7 +2,8 @@
 
 # remember where we started
 ROOT="$(pwd)"
-INDUCTOR="$ROOT"/.github/workflows/torchinductor
+INDUCTOR="$ROOT"/.github/workflows/torch-inductor
+MODEL_SPEC=$1
 
 # shellcheck source=/dev/null
 source /opt/torchinductor_venv/bin/activate
@@ -14,19 +15,46 @@ sudo nvidia-smi -i 0 -pm 1
 sudo nvidia-smi -i 0 --lock-gpu-clocks=1350,1350
 
 cd "$PYTORCH_DIR" || exit
-TEST_REPORTS_DIR=$TEST_REPORTS_DIR/perf
-mkdir -p "$TEST_REPORTS_DIR"
+TRITON_TEST_REPORTS_DIR=$TEST_REPORTS_DIR/perf
+BASE_TEST_REPORTS_DIR=$TEST_REPORTS_DIR/acc
+mkdir -p "$TRITON_TEST_REPORTS_DIR"
+mkdir -p "$BASE_TEST_REPORTS_DIR"
 
+
+echo "Running with Triton Nightly"
 for model in "${MODELS[@]}"; do
+  if [ "$model" != "$MODEL_SPEC" ] && [ "$MODEL_SPEC" != "all" ]; then
+    continue
+  fi
   echo "Running performance test for $model"
-  python3 benchmarks/dynamo/"$model".py --ci --training --performance --disable-cudagraphs\
-    --device cuda --inductor --amp --output "$TEST_REPORTS_DIR"/"$model".csv
+  python3 benchmarks/dynamo/"$model".py --float32 -dcuda --training --inductor --performance \
+    --output "$TRITON_TEST_REPORTS_DIR"/"$model".csv
 done
+
+# install pytorch-triton
+pip3 uninstall triton -y
+pip3 install --pre torch --extra-index-url https://download.pytorch.org/whl/nightly/cu121
+
+echo "Running with pytorch-triton"
+for model in "${MODELS[@]}"; do
+  if [ "$model" != "$MODEL_SPEC" ] && [ "$MODEL_SPEC" != "all" ]; then
+    continue
+  fi
+  echo "Running performance test for $model"
+  python3 benchmarks/dynamo/"$model".py --float32 -dcuda --training --inductor --performance \
+    --output "$BASE_TEST_REPORTS_DIR"/"$model".csv
+done
+
+# uninstall pytorch-triton
+pip3 uninstall pytorch-triton -y
 
 cd "$ROOT" || exit
 for model in "${MODELS[@]}"; do
+  if [ "$model" != "$MODEL_SPEC" ] && [ "$MODEL_SPEC" != "all" ]; then
+    continue
+  fi
   echo "Checking performance test for $model"
-  python3 "$INDUCTOR"/scripts/check_perf.py --new "$TEST_REPORTS_DIR"/"$model".csv --baseline "$INDUCTOR"/data/"$model".csv
+  python3 "$INDUCTOR"/scripts/check_perf.py --new "$TRITON_TEST_REPORTS_DIR"/"$model".csv --baseline "$BASE_TEST_REPORTS_DIR"/"$model".csv
   EXIT_STATUS=$?
   if [ "$EXIT_STATUS" -ne 0 ]; then
     echo "Performance test for $model failed"

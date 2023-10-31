@@ -9,7 +9,6 @@ from .cache import get_cache_manager
 
 
 class DriverBase(metaclass=abc.ABCMeta):
-
     CUDA = 0
     HIP = 1
 
@@ -19,15 +18,16 @@ class DriverBase(metaclass=abc.ABCMeta):
 
     def __init__(self) -> None:
         pass
+
+
 # -----------------------------
 # CUDA
 # -----------------------------
 
 
 class CudaUtils(object):
-
     def __new__(cls):
-        if not hasattr(cls, 'instance'):
+        if not hasattr(cls, "instance"):
             cls.instance = super(CudaUtils, cls).__new__(cls)
         return cls.instance
 
@@ -47,6 +47,7 @@ class CudaUtils(object):
                 with open(so, "rb") as f:
                     cache_path = cache.put(f.read(), fname, binary=True)
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("cuda_utils", cache_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -64,15 +65,15 @@ class CudaUtils(object):
 
 
 class CudaDriver(DriverBase):
-
     def __new__(cls):
-        if not hasattr(cls, 'instance'):
+        if not hasattr(cls, "instance"):
             cls.instance = super(CudaDriver, cls).__new__(cls)
         return cls.instance
 
     def __init__(self):
         self.utils = CudaUtils()
         self.backend = self.CUDA
+
 
 # -----------------------------
 # HIP
@@ -81,7 +82,7 @@ class CudaDriver(DriverBase):
 
 class HIPUtils(object):
     def __new__(cls):
-        if not hasattr(cls, 'instance'):
+        if not hasattr(cls, "instance"):
             cls.instance = super(HIPUtils, cls).__new__(cls)
         return cls.instance
 
@@ -101,6 +102,7 @@ class HIPUtils(object):
                 with open(so, "rb") as f:
                     cache_path = cache.put(f.read(), fname, binary=True)
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("hip_utils", cache_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -109,9 +111,8 @@ class HIPUtils(object):
 
 
 class HIPDriver(DriverBase):
-
     def __new__(cls):
-        if not hasattr(cls, 'instance'):
+        if not hasattr(cls, "instance"):
             cls.instance = super(HIPDriver, cls).__new__(cls)
         return cls.instance
 
@@ -121,15 +122,15 @@ class HIPDriver(DriverBase):
 
 
 class UnsupportedDriver(DriverBase):
-
     def __new__(cls):
-        if not hasattr(cls, 'instance'):
+        if not hasattr(cls, "instance"):
             cls.instance = super(UnsupportedDriver, cls).__new__(cls)
         return cls.instance
 
     def __init__(self):
         self.utils = None
         self.backend = None
+
 
 # -----------------------------
 # Driver
@@ -150,7 +151,7 @@ class LazyProxy:
         return getattr(self._obj, name)
 
     def __setattr__(self, name, value):
-        if name in ['_init_fn', '_obj']:
+        if name in ["_init_fn", "_obj"]:
             super().__setattr__(name, value)
         else:
             self._initialize_obj()
@@ -172,6 +173,7 @@ class LazyProxy:
 
 def initialize_driver():
     import torch
+
     if torch.version.hip is not None:
         return HIPDriver()
     elif torch.cuda.is_available():

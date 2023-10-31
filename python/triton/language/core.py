@@ -721,9 +721,19 @@ class tensor:
         return semantic.equal(self, other, _builder)
 
     @builtin
+    def __req__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.equal(other, self, _builder)
+
+    @builtin
     def __ne__(self, other, _builder=None):
         other = _to_tensor(other, _builder)
         return semantic.not_equal(self, other, _builder)
+
+    @builtin
+    def __rne__(self, other, _builder=None):
+        other = _to_tensor(other, _builder)
+        return semantic.not_equal(other, self, _builder)
 
     @builtin
     def logical_and(self, other, _builder=None):
@@ -1156,6 +1166,9 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
     :param sem: Memory semantics to use ("ACQUIRE_RELEASE" (default),
         "ACQUIRE", "RELEASE", or "RELAXED")
     :type sem: str
+    :param scope: Scope of threads that observe synchronizing effect of the
+        atomic operation ("GPU" (default), "CTA", or "SYSTEM")
+    :type scope: str
     """
         func.__doc__ = docstr
         return func
@@ -1165,67 +1178,75 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 
 @builtin
 @_add_atomic_docstr("compare-and-swap", has_cmp=True)
-def atomic_cas(pointer, cmp, val, sem=None, _builder=None):
+def atomic_cas(pointer, cmp, val, sem=None, scope=None, _builder=None):
     cmp = _to_tensor(cmp, _builder)
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
-    return semantic.atomic_cas(pointer, cmp, val, sem, _builder)
+    scope = _constexpr_to_value(scope)
+    return semantic.atomic_cas(pointer, cmp, val, sem, scope, _builder)
 
 
 @builtin
 @_add_atomic_docstr("exchange")
-def atomic_xchg(pointer, val, mask=None, sem=None, _builder=None):
+def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
-    return semantic.atomic_xchg(pointer, val, mask, sem, _builder)
+    scope = _constexpr_to_value(scope)
+    return semantic.atomic_xchg(pointer, val, mask, sem, scope, _builder)
 
 
 @builtin
 @_add_atomic_docstr("add")
-def atomic_add(pointer, val, mask=None, sem=None, _builder=None):
+def atomic_add(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
-    return semantic.atomic_add(pointer, val, mask, sem, _builder)
+    scope = _constexpr_to_value(scope)
+    return semantic.atomic_add(pointer, val, mask, sem, scope, _builder)
 
 
 @builtin
 @_add_atomic_docstr("max")
-def atomic_max(pointer, val, mask=None, sem=None, _builder=None):
+def atomic_max(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
-    return semantic.atomic_max(pointer, val, mask, sem, _builder)
+    scope = _constexpr_to_value(scope)
+    return semantic.atomic_max(pointer, val, mask, sem, scope, _builder)
 
 
 @builtin
 @_add_atomic_docstr("min")
-def atomic_min(pointer, val, mask=None, sem=None, _builder=None):
+def atomic_min(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
-    return semantic.atomic_min(pointer, val, mask, sem, _builder)
+    scope = _constexpr_to_value(scope)
+    return semantic.atomic_min(pointer, val, mask, sem, scope, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical and")
-def atomic_and(pointer, val, mask=None, sem=None, _builder=None):
+def atomic_and(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
-    return semantic.atomic_and(pointer, val, mask, sem, _builder)
+    scope = _constexpr_to_value(scope)
+    return semantic.atomic_and(pointer, val, mask, sem, scope, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical or")
-def atomic_or(pointer, val, mask=None, sem=None, _builder=None):
+def atomic_or(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
-    return semantic.atomic_or(pointer, val, mask, sem, _builder)
+    scope = _constexpr_to_value(scope)
+    return semantic.atomic_or(pointer, val, mask, sem, scope, _builder)
 
 
 @builtin
 @_add_atomic_docstr("logical xor")
-def atomic_xor(pointer, val, mask=None, sem=None, _builder=None):
+def atomic_xor(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
     sem = _constexpr_to_value(sem)
-    return semantic.atomic_xor(pointer, val, mask, sem, _builder)
+    scope = _constexpr_to_value(scope)
+    return semantic.atomic_xor(pointer, val, mask, sem, scope, _builder)
 
 
 # -----------------------
