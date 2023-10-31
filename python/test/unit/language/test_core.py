@@ -1894,6 +1894,7 @@ def test_locality(op, BLOCK_N, N, num_pid_n):
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device="cuda")
     y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device="cuda")
     h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N)
+    assert h.asm['ttgir'].count('"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
     y_ref = numpy_op(x.cpu().numpy(), axis=1, keepdims=True)
     y_tri = numpy_op(y.cpu().numpy(), axis=1, keepdims=True)
     np.testing.assert_allclose(y_tri, y_ref, rtol=0.01, atol=1e-3)
