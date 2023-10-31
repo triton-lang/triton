@@ -572,6 +572,7 @@ class JITFunction(KernelInterface[T]):
         self.module = fn.__module__
         self.version = version
         self.signature = inspect.signature(fn)
+        self.do_not_specialize = do_not_specialize
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
