@@ -1855,86 +1855,48 @@ scan_layouts = [
 ]
 
 
-def test_locality():
-    ir = """
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#blocked3d = #triton_gpu.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0], CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [0, 1, 2]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-  tt.func public @kernel_0d1d2de(%arg0: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
-    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #triton_gpu.slice<{dim = 2, parent = #blocked3d}>>
-    %c32_i32 = arith.constant 32 : i32
-    %c128_i32 = arith.constant 128 : i32
-    %c127_i32 = arith.constant 127 : i32
-    %0 = tt.get_program_id x : i32
-    %1 = tt.get_program_id y : i32
-    %2 = tt.get_num_programs {axis = 1 : i32} : i32
-    %3 = arith.muli %0, %c32_i32 : i32
-    %4 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
-    %5 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #blocked1>
-    %6 = tt.splat %3 : (i32) -> tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
-    %7 = tt.splat %3 : (i32) -> tensor<32xi32, #blocked1>
-    %8 = arith.addi %6, %4 : tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
-    %9 = arith.addi %7, %5 : tensor<32xi32, #blocked1>
-    %10 = arith.addi %arg2, %c127_i32 : i32
-    %11 = arith.divsi %10, %c128_i32 : i32
-    %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
-    %13 = tt.expand_dims %8 {axis = 1 : i32} : (tensor<32xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<32x1xi32, #blocked>
-    %14 = tt.splat %arg2 : (i32) -> tensor<32x1xi32, #blocked>
-    %15 = arith.muli %13, %14 : tensor<32x1xi32, #blocked>
-    %16 = tt.splat %arg0 : (!tt.ptr<f32, 1>) -> tensor<32x1x!tt.ptr<f32, 1>, #blocked>
-    %17 = tt.addptr %16, %15 : tensor<32x1x!tt.ptr<f32, 1>, #blocked>, tensor<32x1xi32, #blocked>
-    %18 = tt.broadcast %17 : (tensor<32x1x!tt.ptr<f32, 1>, #blocked>) -> tensor<32x128x!tt.ptr<f32, 1>, #blocked>
-    %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32x32xf32, #triton_gpu.slice<{dim = 2, parent = #blocked3d}>>)  : i32 {
-      %27 = arith.muli %arg3, %c128_i32 : i32
-      %28 = tt.splat %27 : (i32) -> tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
-      %29 = arith.addi %28, %12 : tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
-      %30 = tt.expand_dims %29 {axis = 0 : i32} : (tensor<128xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>) -> tensor<1x128xi32, #blocked>
-      %31 = tt.broadcast %30 : (tensor<1x128xi32, #blocked>) -> tensor<32x128xi32, #blocked>
-      %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32, 1>, #blocked>, tensor<32x128xi32, #blocked>
-      %33 = tt.load %32 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x128xf32, #blocked>
-      %331 = tt.view %33 : (tensor<32x128xf32, #blocked>) -> tensor<32x32x4xf32, #blocked3d>
-      %34 = "tt.reduce"(%331) <{axis = 2 : i32}> ({
-      ^bb0(%arg5: f32, %arg6: f32):
-        %36 = arith.addf %arg5, %arg6 : f32
-        tt.reduce.return %36 : f32
-      }) : (tensor<32x32x4xf32, #blocked3d>) -> tensor<32x32xf32, #triton_gpu.slice<{dim = 2, parent = #blocked3d}>>
-      %35 = arith.addf %arg4, %34 : tensor<32x32xf32, #triton_gpu.slice<{dim = 2, parent = #blocked3d}>>
-      scf.yield %35 : tensor<32x32xf32, #triton_gpu.slice<{dim = 2, parent = #blocked3d}>>
-    }
-    %191 = "tt.reduce"(%19) <{axis = 1 : i32}> ({
-      ^bb0(%arg5: f32, %arg6: f32):
-        %36 = arith.addf %arg5, %arg6 : f32
-        tt.reduce.return %36 : f32
-      }) : (tensor<32x32xf32, #triton_gpu.slice<{dim = 2, parent = #blocked3d}>>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #triton_gpu.slice<{dim = 2, parent = #blocked3d}>}>>
-    %20 = tt.splat %2 : (i32) -> tensor<32xi32, #blocked1>
-    %21 = arith.muli %9, %20 : tensor<32xi32, #blocked1>
-    %22 = tt.splat %arg1 : (!tt.ptr<f32, 1>) -> tensor<32x!tt.ptr<f32, 1>, #blocked1>
-    %23 = tt.addptr %22, %21 : tensor<32x!tt.ptr<f32, 1>, #blocked1>, tensor<32xi32, #blocked1>
-    %24 = tt.splat %1 : (i32) -> tensor<32xi32, #blocked1>
-    %25 = tt.addptr %23, %24 : tensor<32x!tt.ptr<f32, 1>, #blocked1>, tensor<32xi32, #blocked1>
-    %26 = triton_gpu.convert_layout %191 : (tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #triton_gpu.slice<{dim = 2, parent = #blocked3d}>}>>) -> tensor<32xf32, #blocked1>
-    tt.store %25, %26 {cache = 1 : i32, evict = 1 : i32} : tensor<32xf32, #blocked1>
-    tt.return
-  }
-}
-"""
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
-        f.write(ir)
-        f.flush()
-        kernel = triton.compile(f.name)
+@pytest.mark.parametrize("op", ['sum', 'max', 'min'])
+@pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
+@pytest.mark.parametrize("N", [512, 1024, 2048])
+@pytest.mark.parametrize("num_pid_n", [2, 4])
+def test_locality(op, BLOCK_N, N, num_pid_n):
+    @triton.jit
+    def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+        start_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        num_pid_n = tl.num_programs(1)
+        local = INITIALIZE_PATCH
+        off_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        for start_n in range(pid_n, tl.cdiv(N, BLOCK_N), num_pid_n):
+            off_n = start_n * BLOCK_N + tl.arange(0, BLOCK_N)
+            Xs = X + off_m[:, None] * N + off_n[None, :]
+            x = tl.load(Xs)
+            local = ACCUMULATE_PATCH
+        tl.store(Y + off_m * num_pid_n + pid_n, local)
+    initialize_patch = {
+        'sum': 'tl.zeros([BLOCK_M], dtype=tl.float32)',
+        'max': 'tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)',
+        'min': 'tl.full([BLOCK_M], float("inf"), dtype=tl.float32)',
+    }[op]
+    reduce_patch = {
+        'sum': 'local + tl.sum(x, axis=1)',
+        'max': 'tl.maximum(local, tl.max(x, axis=1))',
+        'min': 'tl.minimum(local, tl.min(x, axis=1))',
+    }[op]
+    numpy_op = {
+        'sum': np.sum,
+        'max': np.max,
+        'min': np.min,
+    }[op]
+    kernel = patch_kernel(kernel, {'ACCUMULATE_PATCH': reduce_patch, 'INITIALIZE_PATCH': initialize_patch})
     torch.manual_seed(0)
     BLOCK_M = 32
-    BLOCK_N = 128
-    num_pid_n = 2
-    N = 1024
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device="cuda")
-    y = torch.zeros((BLOCK_M, num_pid_n), dtype=torch.float32, device="cuda")
-    h = kernel[(1, num_pid_n, 1)](x, y, N)
-    y_ref = np.sum(x.cpu().numpy(), axis=1, keepdims=True)
-    y_tri = np.sum(y.cpu().numpy(), axis=1, keepdims=True)
-    np.testing.assert_allclose(y_tri, y_ref, rtol=0.01, atol=1e-2)
+    y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device="cuda")
+    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N)
+    y_ref = numpy_op(x.cpu().numpy(), axis=1, keepdims=True)
+    y_tri = numpy_op(y.cpu().numpy(), axis=1, keepdims=True)
+    np.testing.assert_allclose(y_tri, y_ref, rtol=0.01, atol=1e-3)
 
 
 @pytest.mark.parametrize("M, N", [[32, 16], [32, 32], [32, 64], [64, 32]])
