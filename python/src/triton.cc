@@ -1,4 +1,4 @@
-﻿#include <mutex>
+#include <mutex>
 #include <stack>
 #include <unordered_map>
 
@@ -226,6 +226,12 @@ void init_triton_ir(py::module &&m) {
       .value("ACQUIRE", mlir::triton::MemSemantic::ACQUIRE)
       .value("RELEASE", mlir::triton::MemSemantic::RELEASE)
       .value("RELAXED", mlir::triton::MemSemantic::RELAXED)
+      .export_values();
+
+  py::enum_<mlir::triton::MemSyncScope>(m, "MEM_SYNC_SCOPE", py::module_local())
+      .value("GPU", mlir::triton::MemSyncScope::GPU)
+      .value("CTA", mlir::triton::MemSyncScope::CTA)
+      .value("SYSTEM", mlir::triton::MemSyncScope::SYSTEM)
       .export_values();
 
   py::enum_<mlir::triton::EvictionPolicy>(m, "EVICTION_POLICY",
@@ -1418,7 +1424,8 @@ void init_triton_ir(py::module &&m) {
       // // atomic
       .def("create_atomic_cas",
            [](TritonOpBuilder &self, mlir::Value &ptr, mlir::Value &cmp,
-              mlir::Value &val, mlir::triton::MemSemantic sem) -> mlir::Value {
+              mlir::Value &val, mlir::triton::MemSemantic sem,
+              mlir::triton::MemSyncScope scope) -> mlir::Value {
              mlir::Type dstType;
              if (auto srcTensorType =
                      ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
@@ -1433,12 +1440,13 @@ void init_triton_ir(py::module &&m) {
                dstType = ptrType.getPointeeType();
              }
              return self.create<mlir::triton::AtomicCASOp>(dstType, ptr, cmp,
-                                                           val, sem);
+                                                           val, sem, scope);
            })
       .def("create_atomic_rmw",
            [](TritonOpBuilder &self, mlir::triton::RMWOp rmwOp,
               mlir::Value &ptr, mlir::Value &val, mlir::Value &mask,
-              mlir::triton::MemSemantic sem) -> mlir::Value {
+              mlir::triton::MemSemantic sem,
+              mlir::triton::MemSyncScope scope) -> mlir::Value {
              mlir::Type dstType;
              if (auto srcTensorType =
                      ptr.getType().dyn_cast<mlir::RankedTensorType>()) {
@@ -1452,8 +1460,8 @@ void init_triton_ir(py::module &&m) {
                                   .cast<mlir::triton::PointerType>();
                dstType = ptrType.getPointeeType();
              }
-             return self.create<mlir::triton::AtomicRMWOp>(dstType, rmwOp, ptr,
-                                                           val, mask, sem);
+             return self.create<mlir::triton::AtomicRMWOp>(
+                 dstType, rmwOp, ptr, val, mask, sem, scope);
            })
       // External
       .def("create_extern_elementwise",

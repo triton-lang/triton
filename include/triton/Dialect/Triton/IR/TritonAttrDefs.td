@@ -66,6 +66,16 @@ def TT_AtomicRMWAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+def TT_MemSyncScopeAttr : I32EnumAttr<
+    "MemSyncScope", "",
+    [
+      I32EnumAttrCase<"GPU", 1, "gpu">,
+      I32EnumAttrCase<"CTA", 2, "cta">,
+      I32EnumAttrCase<"SYSTEM", 3, "sys">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 // Program ID dimensions.
 def TT_ProgramDim : I32EnumAttr<
     "ProgramIDDim", "",
