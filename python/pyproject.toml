@@ -12,4 +12,4 @@ max_line_length = 88
 line-length = 120
 
 [tool.ruff.lint]
-ignore = ["E501", "E701", "E731"]
+ignore = ["E501", "E701", "E731", "E741"]
