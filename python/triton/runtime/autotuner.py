@@ -25,7 +25,18 @@ class OutOfResources(Exception):
 
 
 class Autotuner(KernelInterface):
-    def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by: Dict = None, warmup=25, rep=100):
+    def __init__(
+        self,
+        fn,
+        arg_names,
+        configs,
+        key,
+        reset_to_zero,
+        restore_value,
+        prune_configs_by: Dict = None,
+        warmup=25,
+        rep=100,
+    ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -52,17 +63,21 @@ class Autotuner(KernelInterface):
         self.pre_hook = lambda args, reset_only=False: 0
         self.post_hook = lambda args: 0
         if len(self.reset_idx) > 0 or len(self.restore_idx) > 0:
+
             def _pre_hook(args, reset_only=False):
                 for i in self.reset_idx:
                     args[i].zero_()
                 if not reset_only:
                     self.restore_copies = [args[i].clone() for i in self.restore_idx]
+
             self.pre_hook = _pre_hook
         if len(self.restore_idx) > 0:
+
             def _post_hook(args):
                 for i, j in enumerate(self.restore_idx):
                     args[j].copy_(self.restore_copies[i])
                 self.restore_copies = []
+
             self.post_hook = _post_hook
 
         # Prune configs
