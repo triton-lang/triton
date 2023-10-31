@@ -24,16 +24,16 @@ class ComparisonResult:
 
 def listFilesWithExtension(path: str, extension: str) -> List[str]:
     """
-        Returns a list of files in the given path with the given extension
-        The files are returned with their full path
+    Returns a list of files in the given path with the given extension
+    The files are returned with their full path
     """
-    files = glob.glob(os.path.join(path, f'*.{extension}'))
+    files = glob.glob(os.path.join(path, f"*.{extension}"))
     return files
 
 
 def getFileWithExtension(path: str, ext: str) -> Optional[str]:
     """
-        Returns a single file in the given path with the given extension
+    Returns a single file in the given path with the given extension
     """
     # get all files in directory with extension
     files = listFilesWithExtension(path, ext)
@@ -49,18 +49,18 @@ def getFileWithExtension(path: str, ext: str) -> Optional[str]:
 
 def loadYamlFile(filePath: str) -> List[Dict[str, str]]:
     """
-        Loads a yaml file and returns its content as a list of dictionaries
+    Loads a yaml file and returns its content as a list of dictionaries
     """
-    with open(filePath, 'r') as file:
+    with open(filePath, "r") as file:
         content = yaml.safe_load(file)
     return content
 
 
 def compareFiles(file1: str, file2: str) -> bool:
     """
-        Compares two files and returns True if they are the same, False otherwise
+    Compares two files and returns True if they are the same, False otherwise
     """
-    with open(file1, 'rb') as f1, open(file2, 'rb') as f2:
+    with open(file1, "rb") as f1, open(file2, "rb") as f2:
         content1 = f1.read()
         content2 = f2.read()
 
@@ -68,9 +68,9 @@ def compareFiles(file1: str, file2: str) -> bool:
 
 
 def diffFiles(file1, file2):
-    with open(file1, 'r') as f1:
+    with open(file1, "r") as f1:
         file1_lines = f1.readlines()
-    with open(file2, 'r') as f2:
+    with open(file2, "r") as f2:
         file2_lines = f2.readlines()
 
     diff = list(difflib.unified_diff(file1_lines, file2_lines, file1, file2))
@@ -79,9 +79,9 @@ def diffFiles(file1, file2):
 
 def getFileVec(path: str) -> List[Tuple[str, str]]:
     """
-        Returns a list of tuples (extension, file) for the given path (note: the path includes the hash)
-        The returned list must have extensions (json, ttir, ttgir)
-        in this particular order, unless a file with a certain extension does not exist
+    Returns a list of tuples (extension, file) for the given path (note: the path includes the hash)
+    The returned list must have extensions (json, ttir, ttgir)
+    in this particular order, unless a file with a certain extension does not exist
     """
     vec = []
     for ext in ["json", "ttir", "ttgir"]:
@@ -93,9 +93,9 @@ def getFileVec(path: str) -> List[Tuple[str, str]]:
 
 def getNameToHashesDict(path: str) -> Dict[str, List[str]]:
     """
-        Returns a dictionary that maps kernel names to a list of hashes that have the same kernel name
-        in the given path
-        Note: the hashes must have a json file and either a ttir or ttgir file, otherwise they are ignored
+    Returns a dictionary that maps kernel names to a list of hashes that have the same kernel name
+    in the given path
+    Note: the hashes must have a json file and either a ttir or ttgir file, otherwise they are ignored
     """
     nameToHashes = {}
     for hash in os.listdir(path):
@@ -108,7 +108,7 @@ def getNameToHashesDict(path: str) -> Dict[str, List[str]]:
             continue
         jsonFile = fileVec[0][1]
         # load json file
-        with open(jsonFile, 'r') as file:
+        with open(jsonFile, "r") as file:
             content = yaml.safe_load(file)
             # get name
             name = content["name"]
@@ -118,11 +118,11 @@ def getNameToHashesDict(path: str) -> Dict[str, List[str]]:
 
 def doFilesMatch(path1: str, path2: str) -> bool:
     """
-        Returns True if the files in the given paths match, False otherwise
-        The files are considered to match if:
-        1. The number of files in both paths match
-        2. The json files match
-        3. Both paths have a ttir that match, if a ttir does not exist, the ttgir file must exist and match
+    Returns True if the files in the given paths match, False otherwise
+    The files are considered to match if:
+    1. The number of files in both paths match
+    2. The json files match
+    3. Both paths have a ttir that match, if a ttir does not exist, the ttgir file must exist and match
     """
     filesVec1 = getFileVec(path1)
     filesVec2 = getFileVec(path2)
@@ -142,10 +142,12 @@ def doFilesMatch(path1: str, path2: str) -> bool:
     return True
 
 
-def compareMatchingFiles(name: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]], args) -> ComparisonResult:
+def compareMatchingFiles(
+    name: str, nameToHashes1: Dict[str, List[str]], nameToHashes2: Dict[str, List[str]], args
+) -> ComparisonResult:
     """
-        Compare files with the given name in all hashes in both paths
-        Return the first mismatching files as a tuple (file1, file2), otherwise, return an empty tuple
+    Compare files with the given name in all hashes in both paths
+    Return the first mismatching files as a tuple (file1, file2), otherwise, return an empty tuple
     """
     hashes1 = nameToHashes1.get(name, [])
     hashes2 = nameToHashes2.get(name, [])
@@ -175,9 +177,9 @@ def compareMatchingFiles(name: str, nameToHashes1: Dict[str, List[str]], nameToH
 
 def dumpResults(results: List[ComparisonResult], fileName: str):
     """
-        Dumps the results to the given file
+    Dumps the results to the given file
     """
-    with open(fileName, 'w') as file:
+    with open(fileName, "w") as file:
         for result in results:
             file.write(str(result) + "\n")
             file.write("Diffs:\n")
@@ -192,8 +194,8 @@ def dumpResults(results: List[ComparisonResult], fileName: str):
 
 def main(args) -> bool:
     """
-        Iterates over all kernels in the given yaml file and compares them
-        in the given paths
+    Iterates over all kernels in the given yaml file and compares them
+    in the given paths
     """
     if args.path1 == args.path2:
         print("Cannot compare files in the same directory!")

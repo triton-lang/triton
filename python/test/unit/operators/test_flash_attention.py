@@ -5,28 +5,26 @@ import triton
 import triton.ops
 
 
-@pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [(2, 4, 512, 16),
-                                                 (2, 4, 512, 32),
-                                                 (2, 4, 512, 64),
-                                                 (2, 4, 512, 128)])
-@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
-@pytest.mark.parametrize('causal', [True, False])
-@pytest.mark.parametrize('seq_par', [True, False])
+@pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [(2, 4, 512, 16), (2, 4, 512, 32), (2, 4, 512, 64), (2, 4, 512, 128)])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("causal", [True, False])
+@pytest.mark.parametrize("seq_par", [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
     import os
-    enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
+
+    enable_tma = os.environ.get("ENABLE_TMA", "not found").lower()
     if enable_tma in ["on", "true", "1"]:
         if dtype == torch.bfloat16:
-            pytest.skip('bfloat16 tma not support currently')
+            pytest.skip("bfloat16 tma not support currently")
 
     capability = torch.cuda.get_device_capability()
-    interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]
+    interpreter = os.environ.get("TRITON_INTERPRET", "not found") in ["on", "true", "1"]
     if not interpreter and capability[0] < 8:
         pytest.skip("Flash attention only supported for compute capability >= 80")
     torch.manual_seed(20)
-    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0., std=0.5).requires_grad_()
+    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_()
+    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_()
+    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_()
     sm_scale = 0.5
     dout = torch.randn_like(q)
     # reference implementation
@@ -57,35 +55,42 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func
+
     HAS_FLASH = True
 except BaseException:
     HAS_FLASH = False
 
 BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
 # vary seq length for fixed head and batch=4
-configs = [triton.testing.Benchmark(
-    x_names=['N_CTX'],
-    x_vals=[2**i for i in range(10, 14)],
-    line_arg='provider',
-    line_vals=['triton'] + (['flash'] if HAS_FLASH else []),
-    line_names=['Triton'] + (['Flash'] if HAS_FLASH else []),
-    styles=[('red', '-'), ('blue', '-')],
-    ylabel='ms',
-    plot_name=f'fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-{casual}-{seq_par}',
-    args={
-        'H': N_HEADS,
-        'BATCH': BATCH,
-        'D_HEAD': D_HEAD,
-        'dtype': torch.float16,
-        'mode': mode,
-        'casual': casual,
-        'seq_par': seq_par}
-) for mode in ['fwd', 'bwd'] for casual in [True, False] for seq_par in [True, False]]
+configs = [
+    triton.testing.Benchmark(
+        x_names=["N_CTX"],
+        x_vals=[2**i for i in range(10, 14)],
+        line_arg="provider",
+        line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
+        line_names=["Triton"] + (["Flash"] if HAS_FLASH else []),
+        styles=[("red", "-"), ("blue", "-")],
+        ylabel="ms",
+        plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-{casual}-{seq_par}",
+        args={
+            "H": N_HEADS,
+            "BATCH": BATCH,
+            "D_HEAD": D_HEAD,
+            "dtype": torch.float16,
+            "mode": mode,
+            "casual": casual,
+            "seq_par": seq_par,
+        },
+    )
+    for mode in ["fwd", "bwd"]
+    for casual in [True, False]
+    for seq_par in [True, False]
+]
 
 
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, casual, seq_par, provider, dtype=torch.float16, device="cuda"):
-    assert mode in ['fwd', 'bwd']
+    assert mode in ["fwd", "bwd"]
     warmup = 25
     rep = 100
     sm_scale = 1.3
@@ -94,7 +99,7 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, casual, seq_par, provid
     v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=True)
     if provider == "triton":
         fn = lambda: triton.ops.attention(q, k, v, casual, sm_scale, seq_par)
-        if mode == 'bwd':
+        if mode == "bwd":
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
@@ -102,11 +107,10 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, casual, seq_par, provid
         return ms
     if provider == "flash":
         lengths = torch.full((BATCH,), fill_value=N_CTX, device=device)
-        cu_seqlens = torch.zeros(
-            (BATCH + 1,), device=device, dtype=torch.int32)
+        cu_seqlens = torch.zeros((BATCH + 1,), device=device, dtype=torch.int32)
         cu_seqlens[1:] = lengths.cumsum(0)
         fn = lambda: flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=sm_scale, causal=casual)
-        if mode == 'bwd':
+        if mode == "bwd":
             o = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)

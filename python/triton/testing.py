@@ -10,16 +10,17 @@ from ._C.libtriton.triton import runtime
 
 
 def nvsmi(attrs):
-    attrs = ','.join(attrs)
-    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
+    attrs = ",".join(attrs)
+    cmd = ["nvidia-smi", "-i", "0", "--query-gpu=" + attrs, "--format=csv,noheader,nounits"]
     out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(',')
+    ret = out.decode(sys.stdout.encoding).split(",")
     ret = [int(x) for x in ret]
     return ret
 
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
     import torch
+
     """
     Benchmark the runtime of the provided function.
 
@@ -78,12 +79,10 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
     return torch.mean(torch.tensor(ret)).item()
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
-             quantiles=None,
-             fast_flush=True,
-             return_mode="mean"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean"):
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
+
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -109,9 +108,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
+        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device="cuda")
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device='cuda')
+        cache = torch.empty(int(256e6), dtype=torch.int8, device="cuda")
 
     # Estimate the runtime of the function
     start_event = torch.cuda.Event(enable_timing=True)
@@ -157,7 +156,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None,
     return getattr(torch, return_mode)(times).item()
 
 
-def assert_close(x, y, atol=None, rtol=None, err_msg=''):
+def assert_close(x, y, atol=None, rtol=None, err_msg=""):
     import numpy as np
     import torch
 
@@ -172,7 +171,7 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     atol = atol(x.dtype) if callable(atol) else atol
     # relative tolerance hook
     if rtol is None:
-        rtol = 0.
+        rtol = 0.0
     rtol = rtol(x.dtype) if callable(rtol) else rtol
     # we use numpy instead of pytorch
     # as it seems more memory efficient
@@ -191,7 +190,7 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
         np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
         return
     if not np.allclose(x, y, atol=atol, rtol=rtol):
-        raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
+        raise AssertionError(f"{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})")
 
 
 class Benchmark:
@@ -208,8 +207,8 @@ class Benchmark:
         line_names: List[str],
         plot_name: str,
         args: Dict[str, Any],
-        xlabel: str = '',
-        ylabel: str = '',
+        xlabel: str = "",
+        ylabel: str = "",
         x_log: bool = False,
         y_log: bool = False,
         color=None,
@@ -270,9 +269,10 @@ class Mark:
 
         import matplotlib.pyplot as plt
         import pandas as pd
+
         y_mean = bench.line_names
-        y_min = [f'{x}-min' for x in bench.line_names]
-        y_max = [f'{x}-max' for x in bench.line_names]
+        y_min = [f"{x}-min" for x in bench.line_names]
+        y_max = [f"{x}-max" for x in bench.line_names]
         x_names = list(bench.x_names)
         df = pd.DataFrame(columns=x_names + y_mean + y_min + y_max)
         for x in bench.x_vals:
@@ -302,7 +302,7 @@ class Mark:
             # Plot first x value on x axis if there are multiple.
             first_x = x_names[0]
             for i, y in enumerate(bench.line_names):
-                y_min, y_max = df[y + '-min'], df[y + '-max']
+                y_min, y_max = df[y + "-min"], df[y + "-max"]
                 col = bench.styles[i][0] if bench.styles else None
                 sty = bench.styles[i][1] if bench.styles else None
                 ax.plot(df[first_x], df[y], label=y, color=col, ls=sty)
@@ -323,16 +323,16 @@ class Mark:
         df = df[x_names + bench.line_names]
         if diff_col and df.shape[1] == 2:
             col0, col1 = df.columns.tolist()
-            df['Diff'] = df[col1] - df[col0]
+            df["Diff"] = df[col1] - df[col0]
 
         if print_data:
-            print(bench.plot_name + ':')
+            print(bench.plot_name + ":")
             print(df)
         if save_path:
-            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format='%.1f', index=False)
+            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format="%.1f", index=False)
         return df
 
-    def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
+    def run(self, show_plots=False, print_data=False, save_path="", return_df=False, **kwargs):
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
@@ -342,7 +342,7 @@ class Mark:
         for bench in benchmarks:
             result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
             if save_path:
-                html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
+                html.write(f'<image src="{bench.plot_name}.png"/>\n')
         if save_path:
             html.write("</body></html>\n")
         if return_df:
@@ -365,10 +365,11 @@ def perf_report(benchmarks):
 
 
 def get_dram_gbps(backend=None, device=None):
-    ''' return DRAM bandwidth in GB/s '''
+    """return DRAM bandwidth in GB/s"""
     import torch
 
     from .runtime import driver
+
     if not backend:
         backend = runtime.backend.CUDA
     if not device:
@@ -383,6 +384,7 @@ def get_max_tensorcore_tflops(dtype, clock_rate, backend=None, device=None):
     import torch
 
     from .runtime import driver
+
     if not backend:
         backend = runtime.backend.CUDA
     if not device:
@@ -405,6 +407,7 @@ def get_max_tensorcore_tflops(dtype, clock_rate, backend=None, device=None):
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
 
+
 # create decorator that wraps test function into
 # a cuda-memcheck system call
 
@@ -414,21 +417,24 @@ def cuda_memcheck(**target_kwargs):
         @functools.wraps(test_fn)
         def wrapper(*args, **kwargs):
             import psutil
+
             ppid_name = psutil.Process(os.getppid()).name()
             run_cuda_memcheck = target_kwargs.items() <= kwargs.items()
             if run_cuda_memcheck and ppid_name != "cuda-memcheck":
                 path = os.path.realpath(test_fn.__globals__["__file__"])
                 # get path of current file
                 env = {"PATH": os.environ["PATH"], "PYTORCH_NO_CUDA_MEMORY_CACHING": "1"}
-                assert 'request' in kwargs, "memcheck'ed test must have a (possibly unused) `request` fixture"
-                test_id = kwargs['request'].node.callspec.id
+                assert "request" in kwargs, "memcheck'ed test must have a (possibly unused) `request` fixture"
+                test_id = kwargs["request"].node.callspec.id
                 cmd = f"{path}::{test_fn.__name__}[{test_id}]"
                 out = subprocess.run(["cuda-memcheck", "pytest", "-vs", cmd], capture_output=True, env=env)
                 assert out.returncode == 0, "cuda-memcheck returned an error: bounds checking failed"
                 assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
             else:
                 test_fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -469,6 +475,7 @@ def get_max_simd_tflops(dtype, clock_rate, backend=None, device=None):
     import torch
 
     from .runtime import driver
+
     if not backend:
         backend = runtime.backend.CUDA
     if not device:

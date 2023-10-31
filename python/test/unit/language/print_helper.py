@@ -68,8 +68,8 @@ def kernel_print_no_arg():
 
 
 def test_print(func: str, data_type: str):
-    shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda').to(getattr(torch, data_type))
+    shape = (128,)
+    x = torch.arange(0, shape[0], dtype=torch.int32, device="cuda").to(getattr(torch, data_type))
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if func == "device_print":
         kernel_device_print[(1,)](x, y, BLOCK=shape[0])
@@ -90,8 +90,13 @@ def test_print(func: str, data_type: str):
     else:
         assert f"Unknown kernel: {func}"
 
-    if func != "print_no_arg" and func != "no_arg_print" and func != "device_print_large" and \
-       func != "print_multiple_args" and func != "device_print_multiple_args":
+    if (
+        func != "print_no_arg"
+        and func != "no_arg_print"
+        and func != "device_print_large"
+        and func != "print_multiple_args"
+        and func != "device_print_multiple_args"
+    ):
         assert_close(y, x)
 
 

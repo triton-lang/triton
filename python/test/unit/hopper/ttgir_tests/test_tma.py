@@ -28,10 +28,13 @@ from torch.testing import assert_close
 import triton
 
 
-@pytest.mark.parametrize('TTGIR,TRANS_A,TRANS_B', [
-    # TODO: uncomment when it's done
-    # ["wgmma_tma_64_64_16_f16.ttgir", False, True],
-])
+@pytest.mark.parametrize(
+    "TTGIR,TRANS_A,TRANS_B",
+    [
+        # TODO: uncomment when it's done
+        # ["wgmma_tma_64_64_16_f16.ttgir", False, True],
+    ],
+)
 def test_tma_wgmma_64_64_16_f16(TTGIR, TRANS_A, TRANS_B):
     capability = torch.cuda.get_device_capability()
     if capability[0] < 9:
@@ -40,31 +43,34 @@ def test_tma_wgmma_64_64_16_f16(TTGIR, TRANS_A, TRANS_B):
     SIZE_M = 64
     SIZE_N = 64
     SIZE_K = 16
-    if (TRANS_A):
-        a = torch.randn((SIZE_K, SIZE_M), device='cuda', dtype=torch.float16).T
+    if TRANS_A:
+        a = torch.randn((SIZE_K, SIZE_M), device="cuda", dtype=torch.float16).T
     else:
-        a = torch.randn((SIZE_M, SIZE_K), device='cuda', dtype=torch.float16)
+        a = torch.randn((SIZE_M, SIZE_K), device="cuda", dtype=torch.float16)
 
-    if (TRANS_B):
-        b = torch.randn((SIZE_N, SIZE_K), device='cuda', dtype=torch.float16).T
+    if TRANS_B:
+        b = torch.randn((SIZE_N, SIZE_K), device="cuda", dtype=torch.float16).T
     else:
-        b = torch.randn((SIZE_K, SIZE_N), device='cuda', dtype=torch.float16)
+        b = torch.randn((SIZE_K, SIZE_N), device="cuda", dtype=torch.float16)
 
     c = torch.empty((SIZE_M, SIZE_N), device=a.device, dtype=torch.float32)
 
     ttgir_path = os.path.dirname(__file__) + "/" + TTGIR
     kernel = triton.compile(ttgir_path)
-    kernel[(1, 1, 1)](a.data_ptr(), b.data_ptr(), c.data_ptr(),
-                      SIZE_M, SIZE_N, SIZE_K,
-                      a.stride(0), a.stride(1),
-                      b.stride(0), b.stride(1),
-                      c.stride(0))
+    kernel[(1, 1, 1)](
+        a.data_ptr(),
+        b.data_ptr(),
+        c.data_ptr(),
+        SIZE_M,
+        SIZE_N,
+        SIZE_K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        c.stride(0),
+    )
 
     golden = torch.matmul(a, b)
     torch.set_printoptions(profile="full", sci_mode=False)
-    assert_close(
-        c,
-        golden,
-        rtol=1e-2,
-        atol=1e-3,
-        check_dtype=False)
+    assert_close(c, golden, rtol=1e-2, atol=1e-3, check_dtype=False)

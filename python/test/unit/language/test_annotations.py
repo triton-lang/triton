@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import torch
@@ -8,7 +7,6 @@ import triton.language as tl
 
 
 def test_annotations(device):
-
     @triton.jit
     def _kernel(X: torch.Tensor, N: int, BLOCK_SIZE: tl.constexpr):
         pass

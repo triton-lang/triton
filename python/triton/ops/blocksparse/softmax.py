@@ -19,9 +19,16 @@ def num_warps(n):
 
 @jit
 def _blocksparse_softmax_fwd(
-    Out, A, stride_xz, LUT,
-    R, extent, stride_zr, stride_hr,  # relative attention
-    scale, is_causal,
+    Out,
+    A,
+    stride_xz,
+    LUT,
+    R,
+    extent,
+    stride_zr,
+    stride_hr,  # relative attention
+    scale,
+    is_causal,
     ROW_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     IS_DENSE: tl.constexpr,
@@ -74,12 +81,19 @@ def _blocksparse_softmax_fwd(
 
 @jit
 def _blocksparse_softmax_bwd(
-    DA, stride_zdx,
-    DOut, stride_zdout,
-    Out, stride_zout,
+    DA,
+    stride_zdx,
+    DOut,
+    stride_zdout,
+    Out,
+    stride_zout,
     scale,
     LUT,
-    DR, extent, stride_zr, stride_hr, stride_er,
+    DR,
+    extent,
+    stride_zr,
+    stride_hr,
+    stride_er,
     is_causal,
     ROW_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
@@ -116,7 +130,7 @@ def _blocksparse_softmax_bwd(
     dout = tl.load(DOuts + lane_n, mask=mask, other=0.0)
     dout = dout.to(tl.float32)
     # compute
-    a = tl.where((ns > m) & is_causal & (a == a), 0., a)
+    a = tl.where((ns > m) & is_causal & (a == a), 0.0, a)
     da = a * (dout - tl.sum(a * dout, 0))
     # apply relative attention
     if DR is not None:
@@ -151,10 +165,7 @@ class _softmax(torch.autograd.Function):
         return lut, int(total_sizes.max())
 
     @staticmethod
-    def forward(
-        ctx, a, scale, rel_logits, is_causal,
-        spdims, block, lut, maxlut, is_dense
-    ):
+    def forward(ctx, a, scale, rel_logits, is_causal, spdims, block, lut, maxlut, is_dense):
         if scale is not None and isinstance(scale, torch.Tensor):
             assert scale.device.type == "cpu"
             scale = scale.item()
@@ -165,14 +176,20 @@ class _softmax(torch.autograd.Function):
         # enqueue kernel
         out = torch.empty_like(a)
         _blocksparse_softmax_fwd[grid](
-            out, a, a.stride(0), lut,
-            rel_logits, rel_shape[-1], rel_strides[0], rel_strides[1],  # relative attn
+            out,
+            a,
+            a.stride(0),
+            lut,
+            rel_logits,
+            rel_shape[-1],
+            rel_strides[0],
+            rel_strides[1],  # relative attn
             scale,
             is_causal,
             BLOCK_SIZE=block,
             ROW_SIZE=next_power_of_2(maxlut),
             IS_DENSE=is_dense,
-            num_warps=num_warps(maxlut)
+            num_warps=num_warps(maxlut),
         )
         # save to context
         # ctx.mark_dirty(x)
@@ -201,25 +218,26 @@ class _softmax(torch.autograd.Function):
         grid = (ctx.spdims[0], ctx.spdims[1] * ctx.block, M)
         da = torch.empty_like(dout)
         _blocksparse_softmax_bwd[grid](
-            da, da.stride(0),
-            dout, dout.stride(0),
-            out, out.stride(0),
+            da,
+            da.stride(0),
+            dout,
+            dout.stride(0),
+            out,
+            out.stride(0),
             ctx.scale,
             lut,
-            dr, ctx.rel_shape[-1], ctx.rel_strides[0], ctx.rel_strides[1], ctx.rel_strides[2],
+            dr,
+            ctx.rel_shape[-1],
+            ctx.rel_strides[0],
+            ctx.rel_strides[1],
+            ctx.rel_strides[2],
             ctx.is_causal,
             BLOCK_SIZE=ctx.block,
             ROW_SIZE=next_power_of_2(ctx.maxlut),
             IS_DENSE=ctx.is_dense,
-            num_warps=num_warps(ctx.maxlut)
+            num_warps=num_warps(ctx.maxlut),
         )
-        return (da, None, None, dr, None,
-                None, None, None, None, None,
-                None,
-                None, None, None,
-                None,
-                None, None, None
-                )
+        return (da, None, None, dr, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
 
 
 class softmax:
@@ -234,7 +252,14 @@ class softmax:
         if rel_logits is not None and rel_logits.dtype != a.dtype:
             raise ValueError(f"relative position embedding must be {a.dtype}")
         a = _softmax.apply(
-            a, scale, rel_logits, is_causal,
-            self.spdims, self.block, self.lut, self.maxlut, self.is_dense,
+            a,
+            scale,
+            rel_logits,
+            is_causal,
+            self.spdims,
+            self.block,
+            self.lut,
+            self.maxlut,
+            self.is_dense,
         )
         return a

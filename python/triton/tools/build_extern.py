@@ -19,14 +19,14 @@ class Symbol:
         arg_names: List[str],
         arg_types: List[str],
     ) -> None:
-        '''
+        """
         A symbol is a function declaration.
         :param name: name of the symbol
         :param op_name: name of the operation
         :param ret_type: return type of the operation
         :param arg_names: names of the arguments
         :param arg_types: types of the arguments
-        '''
+        """
         self._name = name
         self._op_name = op_name
         self._ret_type = ret_type
@@ -95,12 +95,12 @@ class ExternLibrary(ABC):
         format: bool = True,
         grouping: bool = True,
     ) -> None:
-        '''
+        """
         Abstract class for extern library.
         :param name: name of the library
         :param path: path of the library
         :param format: whether to format the generated stub file
-        '''
+        """
         self._name = name
         self._path = path
         self._symbols = {}
@@ -141,8 +141,7 @@ class ExternLibrary(ABC):
             f.write(file_str)
             f.close()
             if self._format:
-                subprocess.Popen(["autopep8", "-a", "-r", "-i", output_file],
-                                 stdout=subprocess.PIPE).communicate()
+                subprocess.Popen(["autopep8", "-a", "-r", "-i", output_file], stdout=subprocess.PIPE).communicate()
                 subprocess.Popen(["isort", output_file], stdout=subprocess.PIPE).communicate()
 
 
@@ -150,10 +149,10 @@ class Libdevice(ExternLibrary):
     _symbol_groups: Dict[str, List[Symbol]]
 
     def __init__(self, path) -> None:
-        '''
+        """
         Constructor for Libdevice.
         :param path: path of the libdevice library
-        '''
+        """
         super().__init__("libdevice", path)
         self._symbol_groups = {}
         self.is_pure = True
@@ -176,7 +175,7 @@ class Libdevice(ExternLibrary):
         func_strs = func_str.split("(")
         func_name = func_strs[0].replace("@", "")
         op_name = func_name.replace("__nv_", "")
-        if 'ieee' in op_name:
+        if "ieee" in op_name:
             return None
         # Get arg_types
         arg_strs = func_strs[1].split(",")
@@ -186,7 +185,7 @@ class Libdevice(ExternLibrary):
             arg_type = convert_type(arg_str.split()[0])
             if arg_type is None:
                 return None
-            arg_name = 'arg' + str(i)
+            arg_name = "arg" + str(i)
             arg_types.append(arg_type)
             arg_names.append(arg_name)
         if op_name == "sad":
@@ -208,56 +207,161 @@ class Libdevice(ExternLibrary):
 
         # Group functions together by renaming.
         renaming = {
-            'llabs': 'abs', 'acosf': 'acos', 'acoshf': 'acosh',
-            'dadd_rd': 'add_rd', 'fadd_rd': 'add_rd', 'dadd_rn': 'add_rn',
-            'fadd_rn': 'add_rn', 'dadd_ru': 'add_ru', 'fadd_ru': 'add_ru',
-            'dadd_rz': 'add_rz', 'fadd_rz': 'add_rz', 'asinf': 'asin',
-            'asinhf': 'asinh', 'atanf': 'atan', 'atan2f': 'atan2',
-            'atanhf': 'atanh', 'brevll': 'brev', 'cbrtf': 'cbrt',
-            'ceilf': 'ceil', 'clzll': 'clz', 'copysignf': 'copysign',
-            'cosf': 'cos', 'coshf': 'cosh', 'cospif': 'cospi',
-            'cyl_bessel_i0f': 'cyl_bessel_i0', 'cyl_bessel_i1f': 'cyl_bessel_i1',
-            'fdiv_rd': 'div_rd', 'ddiv_rd': 'div_rd', 'fdiv_rn': 'div_rn',
-            'ddiv_rn': 'div_rn', 'fdiv_ru': 'div_ru', 'ddiv_ru': 'div_ru',
-            'fdiv_rz': 'div_rz', 'ddiv_rz': 'div_rz', 'erff': 'erf',
-            'erfcf': 'erfc', 'erfcinvf': 'erfcinv', 'erfcxf': 'erfcx',
-            'erfinvf': 'erfinv', 'expf': 'exp', 'exp10f': 'exp10',
-            'exp2f': 'exp2', 'expm1f': 'expm1', 'fabsf': 'abs',
-            'fabs': 'abs', 'fast_fdividef': 'fast_dividef',
-            'fdimf': 'fdim', 'ffsll': 'ffs', 'floorf': 'floor',
-            'fmaf': 'fma', 'fmaf_rd': 'fma_rd', 'fmaf_rn': 'fma_rn',
-            'fmaf_ru': 'fma_ru', 'fmaf_rz': 'fma_rz', 'fmodf': 'fmod',
-            'uhadd': 'hadd', 'hypotf': 'hypot', 'ilogbf': 'ilogb',
-            'isinff': 'isinf', 'isinfd': 'isinf', 'isnanf': 'isnan',
-            'isnand': 'isnan', 'j0f': 'j0', 'j1f': 'j1', 'jnf': 'jn',
-            'ldexpf': 'ldexp', 'lgammaf': 'lgamma', 'llrintf': 'llrint',
-            'llroundf': 'llround', 'logf': 'log', 'log10f': 'log10',
-            'log1pf': 'log1p', 'log2f': 'log2', 'logbf': 'logb',
-            'umax': 'max', 'llmax': 'max', 'ullmax': 'max', 'fmaxf': 'max',
-            'fmax': 'max', 'umin': 'min', 'llmin': 'min', 'ullmin': 'min',
-            'fminf': 'min', 'fmin': 'min', 'dmul_rd': 'mul_rd', 'fmul_rd': 'mul_rd',
-            'dmul_rn': 'mul_rn', 'fmul_rn': 'mul_rn', 'dmul_ru': 'mul_ru',
-            'fmul_ru': 'mul_ru', 'dmul_rz': 'mul_rz', 'fmul_rz': 'mul_rz',
-            'umul24': 'mul24', 'umulhi': 'mulhi', 'mul64hi': 'mulhi',
-            'umul64hi': 'mulhi', 'nearbyintf': 'nearbyint', 'nextafterf': 'nextafter',
-            'norm3df': 'norm3d', 'norm4df': 'norm4d', 'normcdff': 'normcdf',
-            'normcdfinvf': 'normcdfinv', 'popcll': 'popc', 'powif': 'pow', 'powi': 'pow',
-            'powf': 'pow', 'rcbrtf': 'rcbrt', 'frcp_rd': 'rcp_rd', 'drcp_rd': 'rcp_rd',
-            'frcp_rn': 'rcp_rn', 'drcp_rn': 'rcp_rn', 'frcp_ru': 'rcp_ru',
-            'drcp_ru': 'rcp_ru', 'frcp_rz': 'rcp_rz', 'drcp_rz': 'rcp_rz',
-            'remainderf': 'remainder', 'urhadd': 'rhadd', 'rhypotf': 'rhypot',
-            'rintf': 'rint', 'rnorm3df': 'rnorm3d', 'rnorm4df': 'rnorm4d',
-            'roundf': 'round', 'rsqrtf': 'rsqrt', 'frsqrt_rn': 'rsqrt_rn',
-            'usad': 'sad', 'scalbnf': 'scalbn', 'signbitf': 'signbit',
-            'signbitd': 'signbit', 'sinf': 'sin', 'sinhf': 'sinh',
-            'sinpif': 'sinpi', 'sqrtf': 'sqrt', 'fsqrt_rd': 'sqrt_rd',
-            'dsqrt_rd': 'sqrt_rd', 'fsqrt_rn': 'sqrt_rn', 'dsqrt_rn': 'sqrt_rn',
-            'fsqrt_ru': 'sqrt_ru', 'dsqrt_ru': 'sqrt_ru', 'fsqrt_rz': 'sqrt_rz',
-            'dsqrt_rz': 'sqrt_rz', 'fsub_rd': 'sub_rd', 'dsub_rd': 'sub_rd',
-            'fsub_rn': 'sub_rn', 'dsub_rn': 'sub_rn', 'fsub_ru': 'sub_ru',
-            'dsub_ru': 'sub_ru', 'fsub_rz': 'sub_rz', 'dsub_rz': 'sub_rz',
-            'tanf': 'tan', 'tanhf': 'tanh', 'tgammaf': 'tgamma', 'truncf': 'trunc',
-            'y0f': 'y0', 'y1f': 'y1', 'ynf': 'yn'
+            "llabs": "abs",
+            "acosf": "acos",
+            "acoshf": "acosh",
+            "dadd_rd": "add_rd",
+            "fadd_rd": "add_rd",
+            "dadd_rn": "add_rn",
+            "fadd_rn": "add_rn",
+            "dadd_ru": "add_ru",
+            "fadd_ru": "add_ru",
+            "dadd_rz": "add_rz",
+            "fadd_rz": "add_rz",
+            "asinf": "asin",
+            "asinhf": "asinh",
+            "atanf": "atan",
+            "atan2f": "atan2",
+            "atanhf": "atanh",
+            "brevll": "brev",
+            "cbrtf": "cbrt",
+            "ceilf": "ceil",
+            "clzll": "clz",
+            "copysignf": "copysign",
+            "cosf": "cos",
+            "coshf": "cosh",
+            "cospif": "cospi",
+            "cyl_bessel_i0f": "cyl_bessel_i0",
+            "cyl_bessel_i1f": "cyl_bessel_i1",
+            "fdiv_rd": "div_rd",
+            "ddiv_rd": "div_rd",
+            "fdiv_rn": "div_rn",
+            "ddiv_rn": "div_rn",
+            "fdiv_ru": "div_ru",
+            "ddiv_ru": "div_ru",
+            "fdiv_rz": "div_rz",
+            "ddiv_rz": "div_rz",
+            "erff": "erf",
+            "erfcf": "erfc",
+            "erfcinvf": "erfcinv",
+            "erfcxf": "erfcx",
+            "erfinvf": "erfinv",
+            "expf": "exp",
+            "exp10f": "exp10",
+            "exp2f": "exp2",
+            "expm1f": "expm1",
+            "fabsf": "abs",
+            "fabs": "abs",
+            "fast_fdividef": "fast_dividef",
+            "fdimf": "fdim",
+            "ffsll": "ffs",
+            "floorf": "floor",
+            "fmaf": "fma",
+            "fmaf_rd": "fma_rd",
+            "fmaf_rn": "fma_rn",
+            "fmaf_ru": "fma_ru",
+            "fmaf_rz": "fma_rz",
+            "fmodf": "fmod",
+            "uhadd": "hadd",
+            "hypotf": "hypot",
+            "ilogbf": "ilogb",
+            "isinff": "isinf",
+            "isinfd": "isinf",
+            "isnanf": "isnan",
+            "isnand": "isnan",
+            "j0f": "j0",
+            "j1f": "j1",
+            "jnf": "jn",
+            "ldexpf": "ldexp",
+            "lgammaf": "lgamma",
+            "llrintf": "llrint",
+            "llroundf": "llround",
+            "logf": "log",
+            "log10f": "log10",
+            "log1pf": "log1p",
+            "log2f": "log2",
+            "logbf": "logb",
+            "umax": "max",
+            "llmax": "max",
+            "ullmax": "max",
+            "fmaxf": "max",
+            "fmax": "max",
+            "umin": "min",
+            "llmin": "min",
+            "ullmin": "min",
+            "fminf": "min",
+            "fmin": "min",
+            "dmul_rd": "mul_rd",
+            "fmul_rd": "mul_rd",
+            "dmul_rn": "mul_rn",
+            "fmul_rn": "mul_rn",
+            "dmul_ru": "mul_ru",
+            "fmul_ru": "mul_ru",
+            "dmul_rz": "mul_rz",
+            "fmul_rz": "mul_rz",
+            "umul24": "mul24",
+            "umulhi": "mulhi",
+            "mul64hi": "mulhi",
+            "umul64hi": "mulhi",
+            "nearbyintf": "nearbyint",
+            "nextafterf": "nextafter",
+            "norm3df": "norm3d",
+            "norm4df": "norm4d",
+            "normcdff": "normcdf",
+            "normcdfinvf": "normcdfinv",
+            "popcll": "popc",
+            "powif": "pow",
+            "powi": "pow",
+            "powf": "pow",
+            "rcbrtf": "rcbrt",
+            "frcp_rd": "rcp_rd",
+            "drcp_rd": "rcp_rd",
+            "frcp_rn": "rcp_rn",
+            "drcp_rn": "rcp_rn",
+            "frcp_ru": "rcp_ru",
+            "drcp_ru": "rcp_ru",
+            "frcp_rz": "rcp_rz",
+            "drcp_rz": "rcp_rz",
+            "remainderf": "remainder",
+            "urhadd": "rhadd",
+            "rhypotf": "rhypot",
+            "rintf": "rint",
+            "rnorm3df": "rnorm3d",
+            "rnorm4df": "rnorm4d",
+            "roundf": "round",
+            "rsqrtf": "rsqrt",
+            "frsqrt_rn": "rsqrt_rn",
+            "usad": "sad",
+            "scalbnf": "scalbn",
+            "signbitf": "signbit",
+            "signbitd": "signbit",
+            "sinf": "sin",
+            "sinhf": "sinh",
+            "sinpif": "sinpi",
+            "sqrtf": "sqrt",
+            "fsqrt_rd": "sqrt_rd",
+            "dsqrt_rd": "sqrt_rd",
+            "fsqrt_rn": "sqrt_rn",
+            "dsqrt_rn": "sqrt_rn",
+            "fsqrt_ru": "sqrt_ru",
+            "dsqrt_ru": "sqrt_ru",
+            "fsqrt_rz": "sqrt_rz",
+            "dsqrt_rz": "sqrt_rz",
+            "fsub_rd": "sub_rd",
+            "dsub_rd": "sub_rd",
+            "fsub_rn": "sub_rn",
+            "dsub_rn": "sub_rn",
+            "fsub_ru": "sub_ru",
+            "dsub_ru": "sub_ru",
+            "fsub_rz": "sub_rz",
+            "dsub_rz": "sub_rz",
+            "tanf": "tan",
+            "tanhf": "tanh",
+            "tgammaf": "tgamma",
+            "truncf": "trunc",
+            "y0f": "y0",
+            "y1f": "y1",
+            "ynf": "yn",
         }
 
         for symbol in self._symbols.values():
@@ -296,12 +400,14 @@ class Libdevice(ExternLibrary):
         header_str += "@functools.lru_cache()\n"
         header_str += "def libdevice_path():\n"
         header_str += "    import torch\n"
-        header_str += "    third_party_dir =  os.path.join(os.path.dirname(os.path.abspath(__file__)), \"..\", \"third_party\")\n"
+        header_str += (
+            '    third_party_dir =  os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "third_party")\n'
+        )
         header_str += "    if torch.version.hip is None:\n"
-        header_str += "        default = os.path.join(third_party_dir, \"cuda\", \"lib\", \"libdevice.10.bc\")\n"
+        header_str += '        default = os.path.join(third_party_dir, "cuda", "lib", "libdevice.10.bc")\n'
         header_str += "    else:\n"
         header_str += "        default = ''\n"
-        header_str += "    return os.getenv(\"TRITON_LIBDEVICE_PATH\", default)\n"
+        header_str += '    return os.getenv("TRITON_LIBDEVICE_PATH", default)\n'
         func_str = ""
         for symbols in self._symbol_groups.values():
             func_str += "@core.extern\n"
@@ -310,7 +416,7 @@ class Libdevice(ExternLibrary):
                 func_name_str += f"{arg_name}, "
             func_name_str += "_builder=None):\n"
 
-            return_str = f"\treturn core.extern_elementwise(\"{self._name}\", libdevice_path(), ["
+            return_str = f'\treturn core.extern_elementwise("{self._name}", libdevice_path(), ['
             for arg_name in symbols[0].arg_names:
                 return_str += f"{arg_name}, "
             return_str += "], \n"
@@ -321,7 +427,7 @@ class Libdevice(ExternLibrary):
                 for arg_type in symbol.arg_types:
                     arg_type_symbol_dict_str += f'core.dtype("{arg_type}"),'
                 ret_type = f'core.dtype("{symbol.ret_type}")'
-                arg_type_symbol_dict_str += "): (\"" + symbol.name + "\", " + ret_type + "),\n"
+                arg_type_symbol_dict_str += '): ("' + symbol.name + '", ' + ret_type + "),\n"
             arg_type_symbol_dict_str += "}"
 
             return_str += arg_type_symbol_dict_str
@@ -339,16 +445,15 @@ class LLVMDisassembler:
     _ll_file: str
 
     def __init__(self, path) -> None:
-        '''
+        """
         Invoke llvm-dis to disassemble the given file.
         :param path: path to llvm-dis
-        '''
+        """
         self._path = path
         self._ll_file = "/tmp/extern_lib.ll"
 
     def disasm(self, lib_path: str) -> None:
-        subprocess.Popen([self._path, lib_path, "-o", self.ll_file],
-                         stdout=subprocess.PIPE).communicate()
+        subprocess.Popen([self._path, lib_path, "-o", self.ll_file], stdout=subprocess.PIPE).communicate()
 
     @property
     def ll_file(self) -> str:
@@ -368,13 +473,13 @@ def build(
     lib_name: str,
     output_dir: str,
 ) -> None:
-    '''
-      Interface function to build the library file.
-      :param llvm_dis_path: path to the llvm-dis binary
-      :param lib_path: path to the external library file
-      :param lib_name: name of the library
-      :param output_dir: path to the output directory
-    '''
+    """
+    Interface function to build the library file.
+    :param llvm_dis_path: path to the llvm-dis binary
+    :param lib_path: path to the external library file
+    :param lib_name: name of the library
+    :param output_dir: path to the output directory
+    """
     if lib_name == "libdevice":
         extern_lib = Libdevice(lib_path)
     else:

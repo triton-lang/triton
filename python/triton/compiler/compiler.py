@@ -11,25 +11,32 @@ from typing import Any
 
 from dataclasses import dataclass
 
-from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs,
-                                   compile_ptx_to_cubin, get_env_vars, get_num_warps,
-                                   get_shared_memory_size, ir, runtime,
-                                   translate_llvmir_to_ptx,
-                                   translate_triton_gpu_to_llvmir)
+from .._C.libtriton.triton import (
+    ClusterInfo,
+    TMAInfos,
+    add_external_libs,
+    compile_ptx_to_cubin,
+    get_env_vars,
+    get_num_warps,
+    get_shared_memory_size,
+    ir,
+    runtime,
+    translate_llvmir_to_ptx,
+    translate_triton_gpu_to_llvmir,
+)
 from ..common.backend import get_backend, get_cuda_version_key, path_to_ptxas
 from ..common.build import is_hip
+
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
-from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device,
-                           get_device_capability)
+from ..runtime.jit import JITFunction, get_cuda_stream, get_current_device, get_device_capability
 from ..tools.disasm import get_sass
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
-from .utils import (InfoFromBackendForTensorMap, TensorMapManager,
-                    get_ids_of_tensormaps, parse_tma_info)
+from .utils import InfoFromBackendForTensorMap, TensorMapManager, get_ids_of_tensormaps, parse_tma_info
 
 
 @dataclass
@@ -94,8 +101,17 @@ def ttir_to_ttgir(mod, num_warps, num_ctas, target):
     return mod
 
 
-def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target,
-                   cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue):
+def optimize_ttgir(
+    mod,
+    num_stages,
+    num_warps,
+    num_ctas,
+    target,
+    cluster_info,
+    enable_warp_specialization,
+    enable_persistent,
+    optimize_epilogue,
+):
     is_cuda = _is_cuda(target)
     if is_cuda:
         capability = target.capability
@@ -171,13 +187,14 @@ def ttgir_to_llir(mod, extern_libs, target, tma_infos):
 
 # PTX translation
 
+
 @functools.lru_cache()
 def ptx_get_version(cuda_version) -> int:
-    '''
+    """
     Get the highest PTX version supported by the current CUDA driver.
-    '''
+    """
     assert isinstance(cuda_version, str)
-    major, minor = map(int, cuda_version.split('.'))
+    major, minor = map(int, cuda_version.split("."))
     if major == 12:
         return 80 + minor
     if major == 11:
@@ -188,11 +205,11 @@ def ptx_get_version(cuda_version) -> int:
 
 
 def llir_to_ptx(mod: Any, target: CudaTargetDescriptor, ptx_version: int = None) -> str:
-    '''
+    """
     Translate TritonGPU module to PTX code.
     :param mod: a TritonGPU dialect module
     :return: PTX code
-    '''
+    """
     if ptx_version is None:
         _, cuda_version = path_to_ptxas()
         ptx_version = ptx_get_version(cuda_version)
@@ -200,12 +217,12 @@ def llir_to_ptx(mod: Any, target: CudaTargetDescriptor, ptx_version: int = None)
 
 
 def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
-    '''
+    """
     Compile TritonGPU module to cubin.
     :param ptx: ptx code
     :param compute_capability: compute capability
     :return: str
-    '''
+    """
     ptxas, _ = path_to_ptxas()
     return compile_ptx_to_cubin(ptx, ptxas, target.capability, target.enable_fp_fusion)
 
@@ -214,13 +231,13 @@ def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
 # compiler
 # ------------------------------------------------------------------------------
 def get_kernel_name(src: str, pattern: str) -> str:
-    '''
+    """
     Get kernel name from PTX code.
     This Kernel name is required when launching the kernel.
-    '''
+    """
     # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
     assert src
-    for line in src.split('\n'):
+    for line in src.split("\n"):
         line = line.strip()
         if line.startswith(pattern):
             return line.split()[-1]
@@ -229,9 +246,9 @@ def get_kernel_name(src: str, pattern: str) -> str:
 def convert_type_repr(x):
     # Currently we only capture the pointer type and assume the pointer is on global memory.
     # TODO: Capture and support shared memory space
-    match = re.search(r'!tt\.ptr<([^,]+)', x)
+    match = re.search(r"!tt\.ptr<([^,]+)", x)
     if match is not None:
-        return '*' + convert_type_repr(match.group(1))
+        return "*" + convert_type_repr(match.group(1))
     return x
 
 
@@ -251,14 +268,19 @@ def make_hash(fn, target, env_vars, device_backend, **kwargs):
         enable_persistent = kwargs.get("enable_persistent", False)
         debug = kwargs.get("debug", False)
         # Get unique key for the compiled code
-        get_conf_key = lambda conf: (sorted(conf.divisible_by_16), sorted(conf.equal_to_1), sorted(conf.ids_of_folded_args), sorted(conf.divisible_by_8))
+        get_conf_key = lambda conf: (
+            sorted(conf.divisible_by_16),
+            sorted(conf.equal_to_1),
+            sorted(conf.ids_of_folded_args),
+            sorted(conf.divisible_by_8),
+        )
         configs_key = [get_conf_key(conf) for conf in configs]
         env_vars_list = [f"{env_vars[k]}" for k in sorted(env_vars.keys())]
         key = f"{fn.cache_key}-{version_key}-{''.join(signature.values())}-{configs_key}-{constants}-{num_warps}-{num_stages}-{num_ctas}-{num_stages}-{enable_warp_specialization}-{enable_persistent}-{debug}-{target}-{env_vars_list}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
     assert isinstance(fn, str)
-    ignore_version = kwargs.get('ignore_version', False)
-    if (ignore_version):
+    ignore_version = kwargs.get("ignore_version", False)
+    if ignore_version:
         return hashlib.md5((Path(fn).read_text()).encode("utf-8")).hexdigest()
     return hashlib.md5((Path(fn).read_text() + version_key).encode("utf-8")).hexdigest()
 
@@ -283,7 +305,7 @@ prototype_pattern = {
 #   [^,\s<]+: One or more characters that are not a comma, whitespace, or the < symbol.
 #   |: OR
 #   <[^>]+>: A string that starts with < and ends with >, containing any characters except > in between.
-mlir_arg_type_pattern = r'%\w+: ((?:[^,\s<]+|<[^>]+>)+),?'
+mlir_arg_type_pattern = r"%\w+: ((?:[^,\s<]+|<[^>]+>)+),?"
 ptx_arg_type_pattern = r"\.param\s+\.(\w+)"
 arg_type_pattern = {
     "ttir": mlir_arg_type_pattern,
@@ -303,6 +325,7 @@ def _get_jsonable_constants(constants):
             return True
         except (TypeError, OverflowError):
             return False
+
     serialized_constants = {}
     for constant in constants:
         if _is_jsonable(constants[constant]):
@@ -317,7 +340,11 @@ def parse_mlir_module(path, context):
     return module
 
 
-instance_descriptor = namedtuple("instance_descriptor", ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"], defaults=[set(), set(), set(), set()])
+instance_descriptor = namedtuple(
+    "instance_descriptor",
+    ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"],
+    defaults=[set(), set(), set(), set()],
+)
 
 
 def get_cuda_capability(capability):
@@ -352,11 +379,8 @@ def get_arch_default_num_stages(device_type, capability=None):
 
 
 def add_cuda_stages(target, extern_libs, stages):
-
-    stages["ptx"] = (lambda path: Path(path).read_text(),
-                     lambda src: llir_to_ptx(src, target))
-    stages["cubin"] = (lambda path: Path(path).read_bytes(),
-                       lambda src: ptx_to_cubin(src, target))
+    stages["ptx"] = (lambda path: Path(path).read_text(), lambda src: llir_to_ptx(src, target))
+    stages["cubin"] = (lambda path: Path(path).read_bytes(), lambda src: ptx_to_cubin(src, target))
 
 
 def compile(fn, **kwargs):
@@ -387,7 +411,7 @@ def compile(fn, **kwargs):
     debug = kwargs.get("debug", False)
     # Flag to control whether to store mma layout directly
     optimize_epilogue = False
-    if os.environ.get('OPTIMIZE_EPILOGUE', '') == '1':
+    if os.environ.get("OPTIMIZE_EPILOGUE", "") == "1":
         optimize_epilogue = True
     #
     cluster_info = ClusterInfo()
@@ -399,7 +423,9 @@ def compile(fn, **kwargs):
     # build architecture descriptor
     if device_type == "cuda":
         _device_backend = get_backend(device_type)
-        target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps, enable_fp_fusion=enable_fp_fusion)
+        target = CudaTargetDescriptor(
+            capability=get_cuda_capability(capability), num_warps=num_warps, enable_fp_fusion=enable_fp_fusion
+        )
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
@@ -407,13 +433,31 @@ def compile(fn, **kwargs):
     # build compilation stages
     stages = dict()
     stages["ast"] = (lambda path: fn, None)
-    stages["ttir"] = (lambda path: parse_mlir_module(path, context),
-                      lambda src: optimize_ttir(ast_to_ttir(src, signature, configs[0], constants, debug=debug, target=target), target))
+    stages["ttir"] = (
+        lambda path: parse_mlir_module(path, context),
+        lambda src: optimize_ttir(
+            ast_to_ttir(src, signature, configs[0], constants, debug=debug, target=target), target
+        ),
+    )
     if is_cuda:
-        stages["ttgir"] = (lambda path: parse_mlir_module(path, context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, num_warps, num_ctas, target), num_stages, num_warps, num_ctas, target, cluster_info, enable_warp_specialization, enable_persistent, optimize_epilogue))
-        stages["llir"] = (lambda path: Path(path).read_text(),
-                          lambda src: ttgir_to_llir(src, extern_libs, target, tma_infos))
+        stages["ttgir"] = (
+            lambda path: parse_mlir_module(path, context),
+            lambda src: optimize_ttgir(
+                ttir_to_ttgir(src, num_warps, num_ctas, target),
+                num_stages,
+                num_warps,
+                num_ctas,
+                target,
+                cluster_info,
+                enable_warp_specialization,
+                enable_persistent,
+                optimize_epilogue,
+            ),
+        )
+        stages["llir"] = (
+            lambda path: Path(path).read_text(),
+            lambda src: ttgir_to_llir(src, extern_libs, target, tma_infos),
+        )
         add_cuda_stages(target, extern_libs, stages)
     elif device_type == "hip":
         _device_backend.add_stages(target, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
@@ -442,14 +486,17 @@ def compile(fn, **kwargs):
         _, ir_name = os.path.basename(fn).split(".")
         src = Path(fn).read_text()
         import re
+
         match = re.search(prototype_pattern[ir_name], src, re.MULTILINE)
         # TODO: support function attributes at group 3 (e.g., device function)
         name, signature = match.group(1), match.group(2)
         types = re.findall(arg_type_pattern[ir_name], signature)
-        if ir_name == 'ttgir':
+        if ir_name == "ttgir":
             num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
             assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
-            assert "num_warps" not in kwargs or int(num_warps_matches[0]) == num_warps, "num_warps in ttgir does not match num_warps in compile"
+            assert (
+                "num_warps" not in kwargs or int(num_warps_matches[0]) == num_warps
+            ), "num_warps in ttgir does not match num_warps in compile"
             num_warps = int(num_warps_matches[0])
         param_tys = [convert_type_repr(ty) for ty in types]
         signature = {k: v for k, v in enumerate(param_tys)}
@@ -459,8 +506,12 @@ def compile(fn, **kwargs):
     fn_cache_manager = get_cache_manager(make_hash(fn, target, get_env_vars(), _device_backend, **kwargs))
     # managers used to dump and override IR for debugging
     enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
-    fn_override_manager = get_override_manager(make_hash(fn, target, get_env_vars(), _device_backend, **kwargs, ignore_version=True))
-    fn_dump_manager = get_dump_manager(make_hash(fn, target, get_env_vars(), _device_backend, **kwargs, ignore_version=True))
+    fn_override_manager = get_override_manager(
+        make_hash(fn, target, get_env_vars(), _device_backend, **kwargs, ignore_version=True)
+    )
+    fn_dump_manager = get_dump_manager(
+        make_hash(fn, target, get_env_vars(), _device_backend, **kwargs, ignore_version=True)
+    )
 
     # determine name and extension type of provided function
     if isinstance(fn, JITFunction):
@@ -473,27 +524,26 @@ def compile(fn, **kwargs):
     metadata_filename = f"{name}.json"
 
     # The group is addressed by the metadata
-    metadata_group = fn_cache_manager.get_group(
-        metadata_filename
-    ) or {}
+    metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
 
     metadata_path = metadata_group.get(metadata_filename)
 
     if metadata_path is not None:
         with open(metadata_path) as f:
             metadata = json.load(f)
-            if 'tensormaps_info' in metadata:
-                metadata['tensormaps_info'] = [
-                    InfoFromBackendForTensorMap(e) for e in metadata['tensormaps_info']]
+            if "tensormaps_info" in metadata:
+                metadata["tensormaps_info"] = [InfoFromBackendForTensorMap(e) for e in metadata["tensormaps_info"]]
     else:
-        metadata = {"num_warps": num_warps,
-                    "num_ctas": num_ctas,
-                    "num_stages": num_stages,
-                    "enable_warp_specialization": enable_warp_specialization,
-                    "enable_persistent": enable_persistent,
-                    "constants": _get_jsonable_constants(constants),
-                    "debug": debug,
-                    "target": target, }
+        metadata = {
+            "num_warps": num_warps,
+            "num_ctas": num_ctas,
+            "num_stages": num_stages,
+            "enable_warp_specialization": enable_warp_specialization,
+            "enable_persistent": enable_persistent,
+            "constants": _get_jsonable_constants(constants),
+            "debug": debug,
+            "target": target,
+        }
         metadata.update(get_env_vars())
         if ext == "ptx":
             assert "shared" in kwargs, "ptx compilation must provide shared memory size"
@@ -522,7 +572,7 @@ def compile(fn, **kwargs):
                 else:
                     metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
                     fn_dump_manager.put(next_module, ir_filename)
-                    if (enable_override and fn_override_manager.has_file(ir_filename)):
+                    if enable_override and fn_override_manager.has_file(ir_filename):
                         print(f"\nOverriding kernel with file {ir_filename}")
                         full_name = fn_override_manager.get_file(ir_filename)
                         next_module = parse(full_name)
@@ -555,9 +605,9 @@ def compile(fn, **kwargs):
                 if metadata["enable_warp_specialization"]:
                     metadata["num_warps"] = get_num_warps(next_module)
         if ir_name == "ptx":
-            metadata["name"] = get_kernel_name(next_module, pattern='// .globl')
+            metadata["name"] = get_kernel_name(next_module, pattern="// .globl")
         if ir_name == "amdgcn":
-            metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
+            metadata["name"] = get_kernel_name(next_module[0], pattern=".globl")
             asm["hsaco_path"] = next_module[1]
         if not is_cuda and not is_hip():
             _device_backend.add_meta_info(ir_name, module, next_module, metadata, asm)
@@ -565,10 +615,7 @@ def compile(fn, **kwargs):
 
     ids_of_folded_args = tuple([int(k) for k in configs[0].ids_of_folded_args]) if isinstance(fn, JITFunction) else ()
     if "clusterDims" not in metadata:
-        metadata["clusterDims"] = [
-            cluster_info.clusterDimX,
-            cluster_info.clusterDimY,
-            cluster_info.clusterDimZ]
+        metadata["clusterDims"] = [cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ]
 
     if len(tma_infos) > 0:
         metadata["tensormaps_info"] = parse_tma_info(tma_infos, ids_of_folded_args)
@@ -582,7 +629,11 @@ def compile(fn, **kwargs):
         fn.tensormaps_info = metadata["tensormaps_info"]
 
     ids_of_const_exprs = tuple(fn.constexprs) if isinstance(fn, JITFunction) else ()
-    ids = {"ids_of_tensormaps": ids_of_tensormaps, "ids_of_folded_args": ids_of_folded_args, "ids_of_const_exprs": ids_of_const_exprs}
+    ids = {
+        "ids_of_tensormaps": ids_of_tensormaps,
+        "ids_of_folded_args": ids_of_folded_args,
+        "ids_of_const_exprs": ids_of_const_exprs,
+    }
     # cache manager
     if is_cuda:
         so_path = make_stub(name, signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
@@ -590,7 +641,9 @@ def compile(fn, **kwargs):
         so_path = _device_backend.make_launcher_stub(name, signature, constants, ids)
     # write-back metadata, if it didn't come from the cache
     if metadata_path is None:
-        metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename, binary=False)
+        metadata_group[metadata_filename] = fn_cache_manager.put(
+            json.dumps(metadata, default=vars), metadata_filename, binary=False
+        )
     fn_cache_manager.put_group(metadata_filename, metadata_group)
 
     # return handle to compiled kernel
@@ -598,7 +651,6 @@ def compile(fn, **kwargs):
 
 
 class CompiledKernel:
-
     # Hooks for external tools to monitor the execution of triton kernels
     launch_enter_hook = None
     launch_exit_hook = None
@@ -607,6 +659,7 @@ class CompiledKernel:
     def __init__(self, fn, so_path, metadata, asm):
         # initialize launcher
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
         mod = importlib.util.module_from_spec(spec)
         self.fn = fn
@@ -638,10 +691,7 @@ class CompiledKernel:
 
         if self.device_type in ["cuda"]:
             device = get_current_device()
-            bin_path = {
-                driver.HIP: "hsaco_path",
-                driver.CUDA: "cubin"
-            }[driver.backend]
+            bin_path = {driver.HIP: "hsaco_path", driver.CUDA: "cubin"}[driver.backend]
             max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
             fn_load_binary = driver.utils.load_binary
         else:
@@ -662,16 +712,16 @@ class CompiledKernel:
         self.cu_function = func
 
     def __getattribute__(self, name):
-        if name == 'c_wrapper':
+        if name == "c_wrapper":
             self._init_handles()
         return super().__getattribute__(name)
 
     # capture args and expand args with cutensormap*
     def assemble_tensormap_to_arg(self, args):
         args_with_tma = list(args)
-        if hasattr(self, 'tensormaps_info'):
+        if hasattr(self, "tensormaps_info"):
             # tuple for hashable
-            args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
+            args_ptr = tuple([arg.data_ptr() if hasattr(arg, "data_ptr") else arg for arg in args])
             for i, e in enumerate(self.tensormaps_info):
                 args_with_tma.append(CompiledKernel.tensormap_manager[(e, args_ptr)])
         return args_with_tma
@@ -686,7 +736,22 @@ class CompiledKernel:
                     stream = get_cuda_stream()
                 else:
                     stream = get_backend(self.device_type).get_stream(None)
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.clusterDims[0],
-                           self.clusterDims[1], self.clusterDims[2], self.shared, stream, self.cu_function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
+            self.c_wrapper(
+                grid[0],
+                grid[1],
+                grid[2],
+                self.num_warps,
+                self.num_ctas,
+                self.clusterDims[0],
+                self.clusterDims[1],
+                self.clusterDims[2],
+                self.shared,
+                stream,
+                self.cu_function,
+                CompiledKernel.launch_enter_hook,
+                CompiledKernel.launch_exit_hook,
+                self,
+                *args_expand,
+            )
+
         return runner

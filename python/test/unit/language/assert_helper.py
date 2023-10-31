@@ -44,8 +44,8 @@ def kernel_static_assert(X, Y, BLOCK: tl.constexpr):
 
 
 def test_assert(func: str):
-    shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda')
+    shape = (128,)
+    x = torch.arange(0, shape[0], dtype=torch.int32, device="cuda")
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if func == "device_assert":
         kernel_device_assert[(1,)](x, y, BLOCK=shape[0])
@@ -127,8 +127,8 @@ def kernel_device_assert_nested_false(X, Y, BLOCK: tl.constexpr, jit_debug: tl.c
 
 
 def test_assert_nested(caller: str, callee: str):
-    shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda')
+    shape = (128,)
+    x = torch.arange(0, shape[0], dtype=torch.int32, device="cuda")
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     if caller == "none":
         kernel_device_assert_nested[(1,)](x, y, BLOCK=shape[0], jit_debug=callee)

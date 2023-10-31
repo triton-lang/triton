@@ -8,7 +8,7 @@ from typing import Callable, List, Sequence, TypeVar
 from .._C.libtriton.triton import ir
 from . import semantic
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 TRITON_MAX_TENSOR_NUMEL = 131072
 
@@ -43,24 +43,21 @@ def _to_tensor(x, builder):
         return tensor(builder.get_int1(x), int1)
     # Note: compile-time const integers are represented by unsigned values
     elif isinstance(x, int):
-        if -2**31 <= x < 2**31:
+        if -(2**31) <= x < 2**31:
             return tensor(builder.get_int32(x), int32)
         elif 2**31 <= x < 2**32:
             return tensor(builder.get_int32(x), uint32)
-        elif -2**63 <= x < 2**63:
+        elif -(2**63) <= x < 2**63:
             return tensor(builder.get_int64(x), int64)
         elif 2**63 <= x < 2**64:
             return tensor(builder.get_int64(x), uint64)
         else:
-            raise RuntimeError(f'Nonrepresentable integer {x}.')
+            raise RuntimeError(f"Nonrepresentable integer {x}.")
     elif isinstance(x, float):
-        min_float32 = 2 ** -126
+        min_float32 = 2**-126
         max_float32 = (2 - 2**-23) * 2**127
-        abs_x = __builtins__['abs'](x)
-        if abs_x == float("inf") or\
-           abs_x == 0.0 or \
-           x != x or \
-           min_float32 <= abs_x <= max_float32:
+        abs_x = __builtins__["abs"](x)
+        if abs_x == float("inf") or abs_x == 0.0 or x != x or min_float32 <= abs_x <= max_float32:
             return tensor(builder.get_fp32(x), float32)
         else:
             return tensor(builder.get_fp64(x), float64)
@@ -73,11 +70,11 @@ def _to_tensor(x, builder):
 
 
 class dtype:
-    SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
-    UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4b15x4', 'fp8e4nv', 'fp8e5', 'fp16', 'bf16', 'fp32', 'fp64']
-    STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
-    OTHER_TYPES = ['void']
+    SINT_TYPES = ["int8", "int16", "int32", "int64"]
+    UINT_TYPES = ["int1", "uint8", "uint16", "uint32", "uint64"]
+    FP_TYPES = ["fp8e4b15", "fp8e4b15x4", "fp8e4nv", "fp8e5", "fp16", "bf16", "fp32", "fp64"]
+    STANDARD_FP_TYPES = ["fp16", "bf16", "fp32", "fp64"]
+    OTHER_TYPES = ["void"]
 
     class SIGNEDNESS(Enum):
         SIGNED = 0
@@ -88,103 +85,103 @@ class dtype:
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
+            self.int_bitwidth = int(name.split("int")[-1])
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.UINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
+            self.int_bitwidth = int(name.split("int")[-1])
             self.primitive_bitwidth = self.int_bitwidth
         elif name in dtype.FP_TYPES:
-            if name == 'fp8e4b15':
+            if name == "fp8e4b15":
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
-            elif name == 'fp8e4b15x4':
+            elif name == "fp8e4b15x4":
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
-            elif name == 'fp8e4nv':
+            elif name == "fp8e4nv":
                 self.fp_mantissa_width = 3
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 7
-            elif name == 'fp8e5':
+            elif name == "fp8e5":
                 self.fp_mantissa_width = 2
                 self.primitive_bitwidth = 8
                 self.exponent_bias = 15
-            elif name == 'fp16':
+            elif name == "fp16":
                 self.fp_mantissa_width = 10
                 self.primitive_bitwidth = 16
                 self.exponent_bias = 15
-            elif name == 'bf16':
+            elif name == "bf16":
                 self.fp_mantissa_width = 7
                 self.primitive_bitwidth = 16
                 self.exponent_bias = 127
-            elif name == 'fp32':
+            elif name == "fp32":
                 self.fp_mantissa_width = 23
                 self.primitive_bitwidth = 32
                 self.exponent_bias = 127
-            elif name == 'fp64':
+            elif name == "fp64":
                 self.fp_mantissa_width = 53
                 self.primitive_bitwidth = 64
                 self.exponent_bias = 1023
             else:
-                raise RuntimeError(f'Unsupported floating-point type {name}')
-        elif name == 'void':
+                raise RuntimeError(f"Unsupported floating-point type {name}")
+        elif name == "void":
             self.primitive_bitwidth = 0
 
     def is_fp8(self):
-        return 'fp8' in self.name
+        return "fp8" in self.name
 
     def is_fp8e4nv(self):
-        return self.name == 'fp8e4nv'
+        return self.name == "fp8e4nv"
 
     def is_fp8e4b15(self):
-        return self.name == 'fp8e4b15'
+        return self.name == "fp8e4b15"
 
     def is_fp8e4b15x4(self):
-        return self.name == 'fp8e4b15x4'
+        return self.name == "fp8e4b15x4"
 
     def is_fp8e5(self):
-        return self.name == 'fp8e5'
+        return self.name == "fp8e5"
 
     def is_fp16(self):
-        return self.name == 'fp16'
+        return self.name == "fp16"
 
     def is_bf16(self):
-        return self.name == 'bf16'
+        return self.name == "bf16"
 
     def is_fp32(self):
-        return self.name == 'fp32'
+        return self.name == "fp32"
 
     def is_fp64(self):
-        return self.name == 'fp64'
+        return self.name == "fp64"
 
     def is_int1(self):
-        return self.name == 'int1'
+        return self.name == "int1"
 
     def is_int8(self):
-        return self.name == 'int8'
+        return self.name == "int8"
 
     def is_int16(self):
-        return self.name == 'int16'
+        return self.name == "int16"
 
     def is_int32(self):
-        return self.name == 'int32'
+        return self.name == "int32"
 
     def is_int64(self):
-        return self.name == 'int64'
+        return self.name == "int64"
 
     def is_uint8(self):
-        return self.name == 'uint8'
+        return self.name == "uint8"
 
     def is_uint16(self):
-        return self.name == 'uint16'
+        return self.name == "uint16"
 
     def is_uint32(self):
-        return self.name == 'uint32'
+        return self.name == "uint32"
 
     def is_uint64(self):
-        return self.name == 'uint64'
+        return self.name == "uint64"
 
     def is_floating(self):
         return self.name in dtype.FP_TYPES
@@ -236,35 +233,35 @@ class dtype:
         return self
 
     def to_ir(self, builder: ir.builder) -> ir.type:
-        if self.name == 'void':
+        if self.name == "void":
             return builder.get_void_ty()
-        elif self.name == 'int1':
+        elif self.name == "int1":
             return builder.get_int1_ty()
-        elif self.name in ('int8', 'uint8'):
+        elif self.name in ("int8", "uint8"):
             return builder.get_int8_ty()
-        elif self.name in ('int16', 'uint16'):
+        elif self.name in ("int16", "uint16"):
             return builder.get_int16_ty()
-        elif self.name in ('int32', 'uint32'):
+        elif self.name in ("int32", "uint32"):
             return builder.get_int32_ty()
-        elif self.name in ('int64', 'uint64'):
+        elif self.name in ("int64", "uint64"):
             return builder.get_int64_ty()
-        elif self.name == 'fp8e5':
+        elif self.name == "fp8e5":
             return builder.get_fp8e5_ty()
-        elif self.name == 'fp8e4nv':
+        elif self.name == "fp8e4nv":
             return builder.get_fp8e4nv_ty()
-        elif self.name == 'fp8e4b15':
+        elif self.name == "fp8e4b15":
             return builder.get_fp8e4b15_ty()
-        elif self.name == 'fp8e4b15x4':
+        elif self.name == "fp8e4b15x4":
             return builder.get_fp8e4b15x4_ty()
-        elif self.name == 'fp16':
+        elif self.name == "fp16":
             return builder.get_half_ty()
-        elif self.name == 'bf16':
+        elif self.name == "bf16":
             return builder.get_bf16_ty()
-        elif self.name == 'fp32':
+        elif self.name == "fp32":
             return builder.get_float_ty()
-        elif self.name == 'fp64':
+        elif self.name == "fp64":
             return builder.get_double_ty()
-        raise ValueError(f'fail to convert {self} to ir type')
+        raise ValueError(f"fail to convert {self} to ir type")
 
     def __str__(self):
         return self.name
@@ -275,13 +272,13 @@ class dtype:
         return self.name
 
     def __repr__(self):
-        return f'triton.language.{str(self)}'
+        return f"triton.language.{str(self)}"
 
 
 class pointer_type(dtype):
     def __init__(self, element_ty: dtype, address_space: int = 1):
         if not isinstance(element_ty, dtype):
-            raise TypeError('element_ty is a {type(element_ty).__name__}.')
+            raise TypeError("element_ty is a {type(element_ty).__name__}.")
         self.element_ty = element_ty
         self.address_space = address_space
 
@@ -291,7 +288,7 @@ class pointer_type(dtype):
         return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
 
     def __str__(self):
-        return f'pointer<{self.element_ty}>'
+        return f"pointer<{self.element_ty}>"
 
     def __repr__(self):
         return self.__str__()
@@ -321,7 +318,7 @@ class block_type(dtype):
 
         # shape can be empty ([]) when an input is a 0D tensor.
         if not shape:
-            raise TypeError('0d block_type is forbidden')
+            raise TypeError("0d block_type is forbidden")
         if isinstance(shape[0], constexpr):
             shape = [s.value for s in shape]
 
@@ -338,7 +335,7 @@ class block_type(dtype):
         return builder.get_block_ty(self.element_ty.to_ir(builder), self.shape)
 
     def __str__(self):
-        return f'<{self.shape}, {self.element_ty}>'
+        return f"<{self.shape}, {self.element_ty}>"
 
     def __repr__(self):
         return self.__str__()
@@ -368,7 +365,7 @@ class function_type(dtype):
         self.param_types = param_types
 
     def __str__(self):
-        return f'fn ({self.param_types}) -> {self.ret_types}'
+        return f"fn ({self.param_types}) -> {self.ret_types}"
 
     def to_ir(self, builder: ir.builder):
         ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
@@ -377,24 +374,24 @@ class function_type(dtype):
 
 
 # scalar types
-void = dtype('void')
-int1 = dtype('int1')
-int8 = dtype('int8')
-int16 = dtype('int16')
-int32 = dtype('int32')
-int64 = dtype('int64')
-uint8 = dtype('uint8')
-uint16 = dtype('uint16')
-uint32 = dtype('uint32')
-uint64 = dtype('uint64')
-float8e5 = dtype('fp8e5')
-float8e4nv = dtype('fp8e4nv')
-float8e4b15 = dtype('fp8e4b15')
-float8e4b15x4 = dtype('fp8e4b15x4')
-float16 = dtype('fp16')
-bfloat16 = dtype('bf16')
-float32 = dtype('fp32')
-float64 = dtype('fp64')
+void = dtype("void")
+int1 = dtype("int1")
+int8 = dtype("int8")
+int16 = dtype("int16")
+int32 = dtype("int32")
+int64 = dtype("int64")
+uint8 = dtype("uint8")
+uint16 = dtype("uint16")
+uint32 = dtype("uint32")
+uint64 = dtype("uint64")
+float8e5 = dtype("fp8e5")
+float8e4nv = dtype("fp8e4nv")
+float8e4b15 = dtype("fp8e4b15")
+float8e4b15x4 = dtype("fp8e4b15x4")
+float16 = dtype("fp16")
+bfloat16 = dtype("bf16")
+float32 = dtype("fp32")
+float64 = dtype("fp64")
 # pointer types
 pi32_t = pointer_type(int32)
 
@@ -511,7 +508,7 @@ class constexpr:
         return constexpr(~self.value)
 
     def __pow__(self, other):
-        return constexpr(self.value ** other.value)
+        return constexpr(self.value**other.value)
 
     def __rshift__(self, other):
         return constexpr(self.value >> other.value)
@@ -543,7 +540,7 @@ class tensor:
 
     def __str__(self) -> str:
         # ex. "float32[16, 32]"
-        return str(self.dtype) + '[' + ', '.join(str(s) for s in self.shape) + ']'
+        return str(self.dtype) + "[" + ", ".join(str(s) for s in self.shape) + "]"
 
     @builtin
     def __add__(self, other, _builder=None):
@@ -993,6 +990,7 @@ def expand_dims(input, axis, _builder=None):
         ret = semantic.expand_dims(ret, a, _builder)
     return ret
 
+
 # -----------------------
 # Linear Algebra
 # -----------------------
@@ -1022,8 +1020,17 @@ def dot(input, other, acc=None, allow_tf32=True, max_num_imprecise_acc=None, out
 
 
 @builtin
-def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option="", cache_modifier="",
-         eviction_policy="", volatile=False, _builder=None):
+def load(
+    pointer,
+    mask=None,
+    other=None,
+    boundary_check=tuple(),
+    padding_option="",
+    cache_modifier="",
+    eviction_policy="",
+    volatile=False,
+    _builder=None,
+):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
         (1) `pointer` could be a single element pointer, then a scalar will be loaded
@@ -1069,8 +1076,9 @@ def load(pointer, mask=None, other=None, boundary_check=tuple(), padding_option=
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
-    return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
-                         volatile, _builder)
+    return semantic.load(
+        pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy, volatile, _builder
+    )
 
 
 @builtin
@@ -1141,13 +1149,13 @@ def advance(base: tensor, offsets, _builder=None):
     """
     return semantic.advance(base, offsets, _builder)
 
+
 # -----------------------
 # Atomic Memory Operations
 # -----------------------
 
 
 def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
-
     def _decorator(func: T) -> T:
         docstr = f"""
     Performs an atomic {name} at the memory location specified by :code:`pointer`.
@@ -1242,6 +1250,7 @@ def atomic_xor(pointer, val, mask=None, sem=None, _builder=None):
 # Conditioning
 # -----------------------
 
+
 @builtin
 def where(condition, x, y, _builder=None):
     """
@@ -1268,6 +1277,7 @@ def where(condition, x, y, _builder=None):
 # -----------------------
 # Math
 # -----------------------
+
 
 @builtin
 def umulhi(x, y, _builder=None):
@@ -1302,7 +1312,6 @@ def fdiv(x, y, ieee_rounding=False, _builder=None):
 
 
 def _add_math_1arg_docstr(name: str) -> Callable[[T], T]:
-
     def _decorator(func: T) -> T:
         docstr = """
     Computes the element-wise {name} of :code:`x`.
@@ -1362,8 +1371,8 @@ def abs(x, _builder=None):
 # Reductions
 # -----------------------
 
-def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
 
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
     def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
@@ -1400,8 +1409,7 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
 
     """
     if isinstance(input, tensor):
-        return reduce((input,), axis, combine_fn,
-                      _builder=_builder, _generator=_generator)[0]
+        return reduce((input,), axis, combine_fn, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1411,14 +1419,14 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
         with _insertion_guard(_builder):
             param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
             block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty)
-                    for i, ty in enumerate(prototype.param_types)]
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]
             else:
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
+
     if axis is not None:
         axis = _constexpr_to_value(axis)
     return semantic.reduction(input, axis, make_combine_region, _builder)
@@ -1448,8 +1456,7 @@ def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None
         index = expand_dims(index, axes_to_expand, _builder=_builder)
         index = broadcast_to(index, input.shape, _builder=_builder)
 
-    rvalue, rindices = reduce((input, index), axis, combine_fn,
-                              _builder=_builder, _generator=_generator)
+    rvalue, rindices = reduce((input, index), axis, combine_fn, _builder=_builder, _generator=_generator)
     return rvalue, rindices
 
 
@@ -1457,8 +1464,8 @@ def _reduce_with_indices(input, axis, combine_fn, _builder=None, _generator=None
 # Scans
 # -----------------------
 
-def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
 
+def _add_scan_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
     def _decorator(func: T) -> T:
         docstr = """
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
@@ -1481,8 +1488,7 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
 
     """
     if isinstance(input, tensor):
-        return associative_scan((input,), axis, combine_fn,
-                                _builder=_builder, _generator=_generator)[0]
+        return associative_scan((input,), axis, combine_fn, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(scan_op):
         in_scalar_tys = [t.type.scalar for t in input]
@@ -1492,16 +1498,17 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
         with _insertion_guard(_builder):
             param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
             block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty)
-                    for i, ty in enumerate(prototype.param_types)]
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]
             else:
                 handles = [r.handle for r in results]
             _builder.create_scan_ret(*handles)
+
     axis = _constexpr_to_value(axis)
     return semantic.associative_scan(input, axis, make_combine_region, _builder)
+
 
 # -----------------------
 # Compiler Hint Ops
@@ -1510,9 +1517,9 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
 
 @builtin
 def debug_barrier(_builder=None):
-    '''
+    """
     Insert a barrier to synchronize all threads in a block.
-    '''
+    """
     return semantic.debug_barrier(_builder)
 
 
@@ -1565,6 +1572,8 @@ def max_constancy(input, values, _builder=None):
             raise TypeError(f"values element {i} must have type `constexpr[int]`, got `constexpr[{type(d.value)}]")
     values = [x.value for x in values]
     return semantic.max_constancy(input, values)
+
+
 # -----------------------
 # Debugging functions
 # -----------------------
@@ -1572,7 +1581,7 @@ def max_constancy(input, values, _builder=None):
 
 @builtin
 def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=False, _builder=None):
-    '''
+    """
     Print the values at compile time.  The parameters are the same as the builtin :code:`print`.
 
     NOTE: Calling the Python builtin :code:`print` is not the same as calling this, it instead maps to :code:`device_print`,
@@ -1582,13 +1591,13 @@ def static_print(*values, sep: str = " ", end: str = "\n", file=None, flush=Fals
     .. code-block:: python
 
         tl.static_print(f"{BLOCK_SIZE=}")
-    '''
+    """
     pass
 
 
 @builtin
 def static_assert(cond, msg="", _builder=None):
-    '''
+    """
     Assert the condition at compile time.  Does not require that the :code:`TRITON_DEBUG` environment variable
     is set.
 
@@ -1596,13 +1605,13 @@ def static_assert(cond, msg="", _builder=None):
     .. code-block:: python
 
         tl.static_assert(BLOCK_SIZE == 1024)
-    '''
+    """
     pass
 
 
 @builtin
 def device_print(prefix, *args, _builder=None):
-    '''
+    """
     Print the values at runtime from the device.  String formatting does not work for runtime values, so you should
     provide the values you want to print as arguments.  The first value must be a string, all following values must
     be scalars or tensors.
@@ -1618,8 +1627,9 @@ def device_print(prefix, *args, _builder=None):
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
-    '''
+    """
     import string
+
     prefix = _constexpr_to_value(prefix)
     assert isinstance(prefix, str), f"{prefix} is not string"
     b_ascii = True
@@ -1636,7 +1646,7 @@ def device_print(prefix, *args, _builder=None):
 
 @builtin
 def device_assert(cond, msg="", _builder=None):
-    '''
+    """
     Assert the condition at runtime from the device.  Requires that the environment variable :code:`TRITON_DEBUG`
     is set to a value besides :code:`0` in order for this to have any effect.
 
@@ -1652,9 +1662,10 @@ def device_assert(cond, msg="", _builder=None):
 
     :param cond: the condition to assert. This is required to be a boolean tensor.
     :param msg: the message to print if the assertion fails. This is required to be a string literal.
-    '''
+    """
     msg = _constexpr_to_value(msg)
     import inspect
+
     frame = inspect.currentframe()
     module = inspect.getmodule(frame)
     # The triton function module doesn't have the name attribute.
@@ -1663,8 +1674,8 @@ def device_assert(cond, msg="", _builder=None):
         frame = frame.f_back
         module = inspect.getmodule(frame)
     lineno = 0
-    func_name = 'unknown'
-    file_name = 'unknown'
+    func_name = "unknown"
+    file_name = "unknown"
     if frame is not None:
         func_name = frame.f_code.co_name
         file_name = frame.f_back.f_code.co_filename
@@ -1677,17 +1688,17 @@ def device_assert(cond, msg="", _builder=None):
 
 @builtin
 def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pure: bool, pack: int, _builder=None):
-    '''
-        Execute the inline assembly to a packed of elements of the tensor
-        :param asm: assembly to be inlined, it has to match the target assembly format
-        :param constraints: string representing the mapping of operands to register
-        :param args: the arguments of the operation
-        :param dtype: the element type of the returned variable
-        :param is_pure: whether the operation is pure
-        :param pack: the number of elements to be processed by one instance of inline assembly
-        :param _builder: the builder
-        :return: the return value of the function
-    '''
+    """
+    Execute the inline assembly to a packed of elements of the tensor
+    :param asm: assembly to be inlined, it has to match the target assembly format
+    :param constraints: string representing the mapping of operands to register
+    :param args: the arguments of the operation
+    :param dtype: the element type of the returned variable
+    :param is_pure: whether the operation is pure
+    :param pack: the number of elements to be processed by one instance of inline assembly
+    :param _builder: the builder
+    :return: the return value of the function
+    """
     dispatch_args = args.copy()
     asm = _constexpr_to_value(asm)
     constraints = _constexpr_to_value(constraints)
@@ -1705,11 +1716,13 @@ def inline_asm_elementwise(asm: str, constraints: str, args: list, dtype, is_pur
         # Get the broadcast shape over all the arguments
         for i, item in enumerate(dispatch_args):
             _, broadcast_arg = semantic.binary_op_type_checking_impl(
-                item, broadcast_arg, _builder, arithmetic_check=False)
+                item, broadcast_arg, _builder, arithmetic_check=False
+            )
         # Change the shape of each argument based on the broadcast shape
         for i in range(len(dispatch_args)):
             dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=False)
+                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=False
+            )
         ret_shape = broadcast_arg.shape
         res_ty = block_type(dtype, ret_shape)
     call = _builder.create_inline_asm(asm, constraints, [t.handle for t in args], res_ty.to_ir(_builder), is_pure, pack)
@@ -1766,25 +1779,34 @@ class static_range:
 # Extern functions
 # -----------------------
 
-def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple, is_pure: bool, _builder=None):
-    '''
-        Dispatch a function to a library
-        :param func: the function to dispatch
-        :param lib_name: the name of the library
-        :param lib_path: the path of the library
-        :param args: the arguments of the function
-        :param arg_type_symbol_dict: the type of the arguments
-        :param ret_shape: the shape of the return value
-        :param _builder: the builder
-        :return: the return value of the function
-    '''
+
+def dispatch(
+    func,
+    lib_name: str,
+    lib_path: str,
+    args: list,
+    arg_type_symbol_dict: dict,
+    ret_shape: tuple,
+    is_pure: bool,
+    _builder=None,
+):
+    """
+    Dispatch a function to a library
+    :param func: the function to dispatch
+    :param lib_name: the name of the library
+    :param lib_path: the path of the library
+    :param args: the arguments of the function
+    :param arg_type_symbol_dict: the type of the arguments
+    :param ret_shape: the shape of the return value
+    :param _builder: the builder
+    :return: the return value of the function
+    """
     if len(arg_type_symbol_dict) == 0:
         raise ValueError("arg_type_symbol_dict is empty")
 
     num_args = len(list(arg_type_symbol_dict.keys())[0])
     if len(args) != num_args:
-        raise ValueError(f"length of input args does not match."
-                         f"Expect {len(args)}, got {num_args}")
+        raise ValueError(f"length of input args does not match." f"Expect {len(args)}, got {num_args}")
 
     arg_types = []
     arg_list = []
@@ -1798,8 +1820,9 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
     arg_types = tuple(arg_types)
 
     if arg_types not in arg_type_symbol_dict:
-        raise ValueError(f"input arg type does not match."
-                         f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types}")
+        raise ValueError(
+            f"input arg type does not match." f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types}"
+        )
     else:
         symbol = arg_type_symbol_dict[arg_types][0]
         ret_type = arg_type_symbol_dict[arg_types][1]
@@ -1808,17 +1831,19 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(_builder), is_pure), ret_type)
 
 
-def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, is_pure: bool, _builder=None):
-    '''
-        Dispatch an elementwise function to a library
-        :param lib_name: the name of the library
-        :param lib_path: the path of the library
-        :param args: the arguments of the function
-        :param arg_type_symbol_dict: the type of the arguments
-        :param is_pure: whether the function is pure
-        :param _builder: the builder
-        :return: the return value of the function
-    '''
+def extern_elementwise(
+    lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, is_pure: bool, _builder=None
+):
+    """
+    Dispatch an elementwise function to a library
+    :param lib_name: the name of the library
+    :param lib_path: the path of the library
+    :param args: the arguments of the function
+    :param arg_type_symbol_dict: the type of the arguments
+    :param is_pure: whether the function is pure
+    :param _builder: the builder
+    :return: the return value of the function
+    """
     dispatch_args = args.copy()
     all_scalar = True
     ret_shape = None
@@ -1838,11 +1863,13 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
         # Get the broadcast shape over all the arguments
         for i, item in enumerate(dispatch_args):
             _, broadcast_arg = semantic.binary_op_type_checking_impl(
-                item, broadcast_arg, _builder, arithmetic_check=arithmetic_check)
+                item, broadcast_arg, _builder, arithmetic_check=arithmetic_check
+            )
         # Change the shape of each argument based on the broadcast shape
         for i in range(len(dispatch_args)):
             dispatch_args[i], _ = semantic.binary_op_type_checking_impl(
-                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=arithmetic_check)
+                dispatch_args[i], broadcast_arg, _builder, arithmetic_check=arithmetic_check
+            )
         if not all_scalar:
             ret_shape = broadcast_arg.shape
     func = getattr(_builder, "create_extern_elementwise")
@@ -1850,12 +1877,12 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
 
 
 def binary_op_type_legalization(lhs, rhs, builder):
-    '''
-        Convert both operands to a single common type
-        :param lhs: the left operand
-        :param rhs: the right operand
-        :param builder: the builder
-    '''
+    """
+    Convert both operands to a single common type
+    :param lhs: the left operand
+    :param rhs: the right operand
+    :param builder: the builder
+    """
     return semantic.binary_op_type_checking_impl(lhs, rhs, builder)
 
 

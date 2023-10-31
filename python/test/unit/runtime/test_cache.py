@@ -51,19 +51,19 @@ def apply_src_change(target, old, new):
 
 def test_nochange():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, 'i + 1', 'i + 1')
+    updated = apply_src_change(kernel, "i + 1", "i + 1")
     assert baseline == updated
 
 
 def test_toplevel_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, 'i + 1', 'i + 2')
+    updated = apply_src_change(kernel, "i + 1", "i + 2")
     assert baseline != updated
 
 
 def test_nested1_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(function_1, 'i + 1', 'i + 2')
+    updated = apply_src_change(function_1, "i + 1", "i + 2")
     assert baseline != updated
 
 
@@ -80,26 +80,28 @@ def test_reuse():
     def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
+
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device="cuda")
     for i in range(10):
         kernel[(1,)](x, 1, BLOCK=1024)
     assert counter == 1
 
 
-@pytest.mark.parametrize('mode', ['enable', 'disable'])
+@pytest.mark.parametrize("mode", ["enable", "disable"])
 def test_specialize(mode):
     counter = 0
 
     def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
+
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
-    function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 4, 'disable': 1}[mode]
+    x = torch.empty(1, dtype=torch.int32, device="cuda")
+    function = {"enable": kernel, "disable": kernel_nospec}[mode]
+    target = {"enable": 4, "disable": 1}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1,)](x, i, BLOCK=512)
     assert counter == target
@@ -110,7 +112,7 @@ def test_annotation():
     def kernel(X, i: tl.int32):
         tl.store(X, i)
 
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device="cuda")
 
     device = torch.cuda.current_device()
     kernel[(1,)](x, 1)
@@ -125,16 +127,16 @@ def test_constexpr_not_callable() -> None:
     def kernel(X, c: tl.constexpr):
         tl.store(X, 2)
 
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device="cuda")
     error = False
     try:
-        kernel[(1, )](x, c="str")
+        kernel[(1,)](x, c="str")
     except BaseException:
         error = True
     assert error is False
     # try and catch
     try:
-        kernel[(1, )](x, c=tl.abs)
+        kernel[(1,)](x, c=tl.abs)
     except BaseException:
         error = True
     assert error is True
@@ -144,8 +146,7 @@ def test_jit_warmup_cache() -> None:
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
-        tl.store(o + idx,
-                 tl.load(a + idx) + tl.load(b + idx))
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     args = [
         torch.randn(32, dtype=torch.float32, device="cuda"),
@@ -168,8 +169,7 @@ def test_jit_debug() -> None:
     def kernel_add(a, b, o, N: tl.constexpr):
         idx = tl.arange(0, N)
         tl.device_assert(idx < 32, "idx < 32")
-        tl.store(o + idx,
-                 tl.load(a + idx) + tl.load(b + idx))
+        tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     device = torch.cuda.current_device()
     assert len(kernel_add.cache[device]) == 0
@@ -182,7 +182,7 @@ def test_jit_debug() -> None:
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
     assert len(kernel_add.cache[device]) == 3
     bins = list(kernel_add.cache[device].values())
-    assert bins[2].asm['ttir'] != bins[1].asm['ttir']
+    assert bins[2].asm["ttir"] != bins[1].asm["ttir"]
 
 
 @triton.jit
@@ -201,7 +201,7 @@ def test_jit_noinline() -> None:
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
     assert len(kernel_add_device.cache[device]) == 1
     bins = list(kernel_add_device.cache[device].values())
-    inline_ttir = bins[0].asm['ttir']
+    inline_ttir = bins[0].asm["ttir"]
     add_fn.noinline = True
     add_fn.hash = None
     kernel_add_device.hash = None
@@ -209,7 +209,7 @@ def test_jit_noinline() -> None:
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1,))
     assert len(kernel_add_device.cache[device]) == 1
     bins = list(kernel_add_device.cache[device].values())
-    noinline_ttir = bins[0].asm['ttir']
+    noinline_ttir = bins[0].asm["ttir"]
     assert inline_ttir != noinline_ttir
 
 

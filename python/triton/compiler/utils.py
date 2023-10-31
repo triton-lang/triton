@@ -29,7 +29,7 @@ def generate_cu_signature(constants, signature, ids):
     num_regular_signatures = max(signature.keys()) + 1 if len(signature) > 0 else 0
     if ids["ids_of_tensormaps"] is not None:
         for i, _ in enumerate(ids["ids_of_tensormaps"]):
-            signature[num_regular_signatures + i] = '*CUtensorMap'
+            signature[num_regular_signatures + i] = "*CUtensorMap"
     return signature, num_regular_signatures
 
 
@@ -134,18 +134,18 @@ class InfoFromBackendForTensorMap:
 
     # dict could be from cached metadata json
     def _extract_info_from_dict(self, infos: dict):
-        self.tensorDataType = infos['tensorDataType']
-        self.tensorRank = infos['tensorRank']
-        self.globalAddressArgIdx = infos['globalAddressArgIdx']
-        self.globalStridesArgIdx = infos['globalStridesArgIdx']
-        self.globalDimsArgIdx = infos['globalDimsArgIdx']
-        self.boxDims = infos['boxDims']
-        self.elementStrides = infos['elementStrides']
-        self.interleave = infos['interleave']
-        self.swizzle = infos['swizzle']
-        self.l2Promotion = infos['l2Promotion']
-        self.oobFill = infos['oobFill']
-        self.TMADescArgIdx = infos['TMADescArgIdx']
+        self.tensorDataType = infos["tensorDataType"]
+        self.tensorRank = infos["tensorRank"]
+        self.globalAddressArgIdx = infos["globalAddressArgIdx"]
+        self.globalStridesArgIdx = infos["globalStridesArgIdx"]
+        self.globalDimsArgIdx = infos["globalDimsArgIdx"]
+        self.boxDims = infos["boxDims"]
+        self.elementStrides = infos["elementStrides"]
+        self.interleave = infos["interleave"]
+        self.swizzle = infos["swizzle"]
+        self.l2Promotion = infos["l2Promotion"]
+        self.oobFill = infos["oobFill"]
+        self.TMADescArgIdx = infos["TMADescArgIdx"]
 
     def get_address_tma_mapping(self):
         return {self.globalAddressArgIdx: self.TMADescArgIdx + len(self.ids_of_folded_args)}
@@ -158,19 +158,21 @@ class InfoFromBackendForTensorMap:
 
     # dtype:cuda.CUtensorMapDataType | int
     def bytes_from_type(self, dtype):
-        return {driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT8"]: 1,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT16"]: 2,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT32"]: 4,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_INT32"]: 4,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT64"]: 8,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_INT64"]: 8,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT16"]: 2,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT32"]: 4,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT64"]: 8,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_BFLOAT16"]: 2,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ"]: 4,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_TFLOAT32"]: 4,
-                driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ"]: 4}[dtype]
+        return {
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT8"]: 1,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT16"]: 2,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT32"]: 4,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_INT32"]: 4,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_UINT64"]: 8,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_INT64"]: 8,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT16"]: 2,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT32"]: 4,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT64"]: 8,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_BFLOAT16"]: 2,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_FLOAT32_FTZ"]: 4,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_TFLOAT32"]: 4,
+            driver.utils.CUtensorMapDataType["CU_TENSOR_MAP_DATA_TYPE_TFLOAT32_FTZ"]: 4,
+        }[dtype]
 
     def getTensorMapDataType(self):
         return self.tensorDataType
@@ -259,19 +261,58 @@ class InfoFromBackendForTensorMap:
             self.getInterleave(),
             self.getSwizzle(),
             self.getL2Promotion(),
-            self.getOobFill()
+            self.getOobFill(),
         )
 
     # make hashable to use as partial key in cache
     def __hash__(self):
-        return hash((self.ids_of_folded_args, self.globalAddressArgIdx, tuple(self.globalDimsArgIdx), tuple(self.globalStridesArgIdx), self.tensorDataType,
-                    self.tensorRank, tuple(self.boxDims), tuple(self.elementStrides), self.interleave, self.swizzle, self.l2Promotion, self.oobFill))
+        return hash(
+            (
+                self.ids_of_folded_args,
+                self.globalAddressArgIdx,
+                tuple(self.globalDimsArgIdx),
+                tuple(self.globalStridesArgIdx),
+                self.tensorDataType,
+                self.tensorRank,
+                tuple(self.boxDims),
+                tuple(self.elementStrides),
+                self.interleave,
+                self.swizzle,
+                self.l2Promotion,
+                self.oobFill,
+            )
+        )
 
     def __eq__(self, other):
         if not isinstance(other, self.__class__):
             return False
-        return (self.ids_of_folded_args, self.globalAddressArgIdx, self.globalDimsArgIdx, self.globalStridesArgIdx, self.tensorDataType, self.tensorRank, self.boxDims, self.elementStrides, self.interleave, self.swizzle, self.l2Promotion, self.oobFill) == (
-            other.ids_of_folded_args, other.globalAddressArgIdx, other.globalDimsArgIdx, other.globalStridesArgIdx, other.tensorDataType, other.tensorRank, other.boxDims, other.elementStrides, other.interleave, other.swizzle, other.l2Promotion, other.oobFill)
+        return (
+            self.ids_of_folded_args,
+            self.globalAddressArgIdx,
+            self.globalDimsArgIdx,
+            self.globalStridesArgIdx,
+            self.tensorDataType,
+            self.tensorRank,
+            self.boxDims,
+            self.elementStrides,
+            self.interleave,
+            self.swizzle,
+            self.l2Promotion,
+            self.oobFill,
+        ) == (
+            other.ids_of_folded_args,
+            other.globalAddressArgIdx,
+            other.globalDimsArgIdx,
+            other.globalStridesArgIdx,
+            other.tensorDataType,
+            other.tensorRank,
+            other.boxDims,
+            other.elementStrides,
+            other.interleave,
+            other.swizzle,
+            other.l2Promotion,
+            other.oobFill,
+        )
 
 
 class TensorMapManager:
@@ -286,8 +327,7 @@ class TensorMapManager:
             t_tensormap = e.tensormap(args)
             TENSORMAP_SIZE_IN_BYTES = 128
             t_tensormap_device = driver.utils.cuMemAlloc(TENSORMAP_SIZE_IN_BYTES)
-            driver.utils.cuMemcpyHtoD(
-                t_tensormap_device, t_tensormap, TENSORMAP_SIZE_IN_BYTES)
+            driver.utils.cuMemcpyHtoD(t_tensormap_device, t_tensormap, TENSORMAP_SIZE_IN_BYTES)
             self.tensormaps_device[key] = t_tensormap_device
             return int(self.tensormaps_device[key])
 

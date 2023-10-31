@@ -6,9 +6,19 @@ import triton.language as tl
 
 
 def test_normalization_with_remat():
-
     @triton.jit
-    def triton_(in_out_ptr0, in_out_ptr1, in_ptr0, in_ptr1, in_ptr2, in_ptr3, xnumel, rnumel, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
+    def triton_(
+        in_out_ptr0,
+        in_out_ptr1,
+        in_ptr0,
+        in_ptr1,
+        in_ptr2,
+        in_ptr3,
+        xnumel,
+        rnumel,
+        XBLOCK: tl.constexpr,
+        RBLOCK: tl.constexpr,
+    ):
         xnumel = 512
         rnumel = 4096
         xoffset = tl.program_id(0) * XBLOCK
@@ -26,7 +36,7 @@ def test_normalization_with_remat():
             rindex = roffset + rbase
             rmask = rindex < rnumel
             r2 = rindex
-            tmp0 = tl.load(in_out_ptr0 + (r2 + (4096 * x3)), rmask & xmask, eviction_policy='evict_last', other=0)
+            tmp0 = tl.load(in_out_ptr0 + (r2 + (4096 * x3)), rmask & xmask, eviction_policy="evict_last", other=0)
             tmp2 = tmp0 - tmp1
             tmp4 = 1e-05
             tmp5 = tmp3 + tmp4
@@ -57,14 +67,13 @@ def test_normalization_with_remat():
 
 
 def test_avg_pool_bw():
-
     @triton.jit
     def triton_(in_ptr0, out_ptr0, XBLOCK: tl.constexpr):
         xoffset = tl.program_id(0) * XBLOCK
         xindex = xoffset + tl.arange(0, XBLOCK)[:]
         x1 = (xindex // 8) % 8
         x0 = xindex % 8
-        x2 = (xindex // 64)
+        x2 = xindex // 64
         x5 = xindex
         tmp0 = (-1) + x1
         tmp1 = (-1) + x0
@@ -170,8 +179,8 @@ def test_scan2d_broadcast(RBLOCK, num_warps):
         tl.store(out_ptr + xindex * RBLOCK + rindex, scan)
 
     XBLOCK = 4
-    input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device='cuda')
-    output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device='cuda')
+    input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device="cuda")
+    output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device="cuda")
     fn[(1,)](input, output, XBLOCK, RBLOCK, num_warps=num_warps)
     ref = input.cumsum(1).broadcast_to((XBLOCK, RBLOCK))
     torch.testing.assert_close(output, ref)
