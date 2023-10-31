@@ -26,7 +26,7 @@ class TritonGPUOptimizeThreadLocalityPass
                arith::MulFOp>(reductionOp.value()))
         return;
       // TODO: relax this restriction
-      if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>()))
+      if (!(srcEncoding.isa<triton::gpu::BlockedEncodingAttr>() && rank > 1))
         return;
       auto elemsPerThread =
           triton::gpu::getElemsPerThread(srcType)[reduce.getAxis()];
