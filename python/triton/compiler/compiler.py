@@ -360,7 +360,7 @@ def get_cuda_capability(capability):
 
 @functools.lru_cache
 def get_arch_default_num_warps(device_type):
-    if device_type in ["cuda"]:
+    if device_type in ["cuda", "hip"]:
         num_warps = 4
     else:
         _device_backend = get_backend(device_type)

@@ -401,7 +401,7 @@ struct ConvertTritonGPUToLLVM
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect>();
+                    NVVM::NVVMDialect, ROCDL::ROCDLDialect>();
   }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,

@@ -1334,19 +1334,6 @@ def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
         return False
     return True
 
-def gpu_has_mfma() -> bool:
-    if not is_hip():
-        return False
-    return True  # mfma supported in ['gfx908', 'gfx90a']
-
-
-def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
-    if not gpu_has_mfma():
-        return False
-    # TODO: Add check for configurations and types.
-    return True
-
-
 def dot(lhs: tl.tensor,
         rhs: tl.tensor,
         acc: tl.tensor,
