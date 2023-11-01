@@ -1172,10 +1172,12 @@ module attributes {"triton_gpu.num-warps" = 2 : i32} {
 
 // CHECK-LABEL: reduce_cvt2
 // Match the reduction
+// CHECK-NOT: triton_gpu.convert_layout
 // CHECK: tt.reduce
 // CHECK-SAME: axis = 1
-// CHECK: (tensor<1x256xf32, #blocked>) -> tensor<1xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+// CHECK: (tensor<1x256xf32, #{{.*}}>) -> tensor<1xf32, #triton_gpu.slice<{dim = 1, parent = #{{.*}}}>>
 // CHECK: triton_gpu.convert_layout
+// CHECK: tt.expand_dims
 // CHECK-NOT: triton_gpu.convert_layout
 // CHECK: tt.return
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>

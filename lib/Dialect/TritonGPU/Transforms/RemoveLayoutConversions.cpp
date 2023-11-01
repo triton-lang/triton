@@ -995,9 +995,16 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
   if (targetType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return;
 
+#ifndef USE_ROCM
   auto isExtOp = [](Operation *op) {
     return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp>(op);
   };
+#else
+  auto isExtOp = [](Operation *op) {
+    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp,
+              triton::BroadcastOp, triton::ExpandDimsOp>(op);
+  };
+#endif
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
@@ -1016,8 +1023,11 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
     if (isExtOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
+      std::optional<Attribute> srcEncoding = inferSrcEncoding(op, layout[v]);
+      if (!srcEncoding)
+        return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), layout[v], tempSlice, tempLayout);
+          op->getOperand(0), *srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {
@@ -1035,12 +1045,14 @@ static void hoistConvertOnTopOfExt(ConvertLayoutOp convertOp) {
 
   if (extOp == nullptr)
     return;
+  std::optional<Attribute> srcEncoding =
+       inferSrcEncoding(extOp, layout[extOp->getResult(0)]);
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOp);
   auto tensorType = extOp->getOperand(0).getType().cast<RankedTensorType>();
   auto newType =
       RankedTensorType::get(tensorType.getShape(), tensorType.getElementType(),
-                            layout[extOp->getResult(0)]);
+                            *srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOp->getOperand(0));
   IRMapping mapping;
