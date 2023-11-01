@@ -18,6 +18,10 @@ def is_hip():
 
 @functools.lru_cache()
 def libcuda_dirs():
+    env_libcuda_dir = os.getenv("LIBCUDA_DIR")
+    if env_libcuda_dir:
+        return [env_libcuda_dir]
+
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
     # each line looks like the following:
     # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
