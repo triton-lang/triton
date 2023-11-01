@@ -1,6 +1,5 @@
 # flake8: noqa: F821,F841
 import itertools
-import os
 import re
 from typing import Optional, Union
 
@@ -10,7 +9,6 @@ import torch
 from numpy.random import RandomState
 
 import triton
-import triton._C.libtriton.triton as _triton
 import triton.language as tl
 from triton.common.build import is_hip
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
@@ -443,44 +441,6 @@ def test_unsigned_name_mangling(device='cuda'):
     assert (expect[1] == to_numpy(actual[1])).all()
 
 
-def test_unsigned_name_mangling(device):
-    # Test that uint32 and int32 are mangled differently by the compiler
-    SIZE = 128
-    # define the kernel / launch-grid
-
-    @triton.jit
-    def kernel(O1, O2, X, Y, SIZE: tl.constexpr):
-        off = tl.arange(0, SIZE)
-        x = tl.load(X + off)
-        y = tl.load(Y + off)
-        out1 = tl.abs(x)  # uint32 -> nop
-        out2 = tl.abs(-y)  # int32 -> should have an effect
-        tl.store(O1 + off, out1)
-        tl.store(O2 + off, out2)
-
-    dtype_x = 'uint32'
-    dtype_y = 'int32'
-    # inputs
-    rs = RandomState(17)
-    x = numpy_random(SIZE, dtype_str=dtype_x, rs=rs)
-    y = numpy_random(SIZE, dtype_str=dtype_y, rs=rs)
-    # reference result
-    expect = (np.abs(x), np.abs(-y))
-    # triton result
-    x_tri = to_triton(x, device=device, dst_type=dtype_x)
-    y_tri = to_triton(y, device=device, dst_type=dtype_y)
-    actual = tuple(
-        to_triton(np.empty_like(e), device=device)
-        for e in expect
-    )
-    kernel[(1, )](actual[0], actual[1], x_tri, y_tri, SIZE=SIZE, num_warps=4)
-
-    # Bitwise op, so expect exact equality
-    assert (expect[0] == to_numpy(actual[0])).all()
-    assert (expect[1] == to_numpy(actual[1])).all()
-
-
-# ---------------
 # test bitwise ops
 # ---------------
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [
@@ -1597,7 +1557,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
     if is_hip():
-        pytest.skip(f"test_reduce1d not supported on HIP")
+        pytest.skip("test_reduce1d not supported on HIP")
 
     # triton kernel
     @triton.jit
@@ -1698,7 +1658,7 @@ def test_reduce(op, dtype_str, shape, axis, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
     if is_hip():
-        pytest.skip(f"test_reduce2d not supported on HIP")
+        pytest.skip("test_reduce2d not supported on HIP")
     # triton kernel
 
     @triton.jit
@@ -1853,6 +1813,51 @@ scan_layouts = [
     BlockedLayout([2, 2], [4, 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([2, 2], [8, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
 ]
+
+
+@pytest.mark.parametrize("op", ['sum', 'max', 'min'])
+@pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
+@pytest.mark.parametrize("N", [512, 1024, 2048])
+@pytest.mark.parametrize("num_pid_n", [2, 4])
+def test_locality(op, BLOCK_N, N, num_pid_n):
+    @triton.jit
+    def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+        start_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        num_pid_n = tl.num_programs(1)
+        local = INITIALIZE_PATCH
+        off_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        for start_n in range(pid_n, tl.cdiv(N, BLOCK_N), num_pid_n):
+            off_n = start_n * BLOCK_N + tl.arange(0, BLOCK_N)
+            Xs = X + off_m[:, None] * N + off_n[None, :]
+            x = tl.load(Xs)
+            local = ACCUMULATE_PATCH
+        tl.store(Y + off_m * num_pid_n + pid_n, local)
+    initialize_patch = {
+        'sum': 'tl.zeros([BLOCK_M], dtype=tl.float32)',
+        'max': 'tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)',
+        'min': 'tl.full([BLOCK_M], float("inf"), dtype=tl.float32)',
+    }[op]
+    reduce_patch = {
+        'sum': 'local + tl.sum(x, axis=1)',
+        'max': 'tl.maximum(local, tl.max(x, axis=1))',
+        'min': 'tl.minimum(local, tl.min(x, axis=1))',
+    }[op]
+    numpy_op = {
+        'sum': np.sum,
+        'max': np.max,
+        'min': np.min,
+    }[op]
+    kernel = patch_kernel(kernel, {'ACCUMULATE_PATCH': reduce_patch, 'INITIALIZE_PATCH': initialize_patch})
+    torch.manual_seed(0)
+    BLOCK_M = 32
+    x = torch.randn((BLOCK_M, N), dtype=torch.float32, device="cuda")
+    y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device="cuda")
+    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N)
+    assert h.asm['ttgir'].count('"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
+    y_ref = numpy_op(x.cpu().numpy(), axis=1, keepdims=True)
+    y_tri = numpy_op(y.cpu().numpy(), axis=1, keepdims=True)
+    np.testing.assert_allclose(y_tri, y_ref, rtol=0.01, atol=1e-3)
 
 
 @pytest.mark.parametrize("M, N", [[32, 16], [32, 32], [32, 64], [64, 32]])
@@ -2145,11 +2150,11 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
 
     op_str = ""
     if op == "sum":
-        op_str = f"""
+        op_str = """
         %13 = arith.addi %arg2, %arg3 : i32
         tt.reduce.return %13 : i32"""
     elif op == "max":
-        op_str = f"""
+        op_str = """
         %13 = arith.cmpi "sgt", %arg2, %arg3 : i32
         %14 = arith.select %13, %arg2, %arg3 : i32
         tt.reduce.return %14 : i32"""
@@ -2245,7 +2250,7 @@ def test_generic_reduction(device):
 def test_permute(dtype_str, shape, perm, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
     if is_hip():
-        pytest.skip(f"test_permute is not supported in HIP")
+        pytest.skip("test_permute is not supported in HIP")
 
     # triton kernel
     @triton.jit
@@ -2483,7 +2488,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             end = ptx.find("cvt.rn.f16.f32")
             red_code = ptx[start:end]
             assert len(red_code) > 0
-            import os
 
             # skip this check on hopper because there are some functions whose name contain "shared" in ptx.
             # TODO: we should eliminate these unused functions in ptx code.
@@ -2594,7 +2598,6 @@ def test_dot_mulbroadcastred(in_dtype, device):
     # as the loaded value is in rowmajor. But MMAv3 requires it's second
     # operand is in colmajor because transpose is not supported for MMAv3
     # with float32 input.
-    import os
     if capability[0] >= 9:
         assert "triton_gpu.async_wait {num = 1 : i32}" in h.asm['ttgir']
     else:
@@ -3098,7 +3101,7 @@ def test_constexpr_scalar_shape(device):
 
 @triton.jit
 def static_assert_func():
-    tl.static_assert(tl.constexpr(False), f"Assert is firing because the constexpr progation did not work properly")
+    tl.static_assert(tl.constexpr(False), "Assert is firing because the constexpr progation did not work properly")
 
 
 def test_constexpr_propagation():
@@ -3260,7 +3263,7 @@ def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
         y_ref = x * pow(2, 2)
     elif expr == 'math.pow_dtype':
         x = np.abs(x)
-        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.math.pow(x, 0.5)'})
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
         y_ref = np.power(x, 0.5)
     elif expr == 'math.pow':
         # numpy does not allow negative factors in power, so we use abs()
@@ -3625,7 +3628,7 @@ def test_while(device):
     assert out_j[0] == bound[0]
 
 
-def test_while(device):
+def test_while2(device):
     @triton.jit
     def nested_while(data, countPtr):
         for i in range(10):
