@@ -16,6 +16,9 @@
 // -Support dynamic loops and predicate operations in the prologue.
 // -Support for non-index type for induction variable.
 // -Support source with distance of 1 used multiple stages later.
+// -Fix bug when a value yield is used outside the loop and the value def is not
+// in the last stage. If we are not peeling the epilgue we need to remap the
+// output correctly.
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -508,9 +511,30 @@ LogicalResult LoopPipelinerInternal::createKernel(
   // We create a mapping between original values and the associated loop
   // returned values that will be needed by the epilogue.
   llvm::SmallVector<Value> yieldOperands;
-  for (Value retVal : forOp.getBody()->getTerminator()->getOperands()) {
-    yieldOperands.push_back(mapping.lookupOrDefault(retVal));
+  for (OpOperand &yielOperand :
+       forOp.getBody()->getTerminator()->getOpOperands()) {
+    Value source = mapping.lookupOrDefault(yielOperand.get());
+    // When we don't peel the epilogue the yield value is used outside the loop
+    // we need to make sure we return the version from numStages - defStage.
+    if (!peelEpilogue &&
+        !forOp.getResult(yielOperand.getOperandNumber()).use_empty()) {
+      auto [def, distance] = getDefiningOpAndDistance(yielOperand.get());
+      if (def) {
+        auto defStage = stages.find(def);
+        if (defStage != stages.end()) {
+          Value pred = predicates[defStage->second];
+          if (pred) {
+            source = rewriter.create<arith::SelectOp>(
+                pred.getLoc(), pred, source,
+                newForOp.getBody()
+                    ->getArguments()[yielOperand.getOperandNumber() + 1]);
+          }
+        }
+      }
+    }
+    yieldOperands.push_back(source);
   }
+
   for (auto &it : crossStageValues) {
     int64_t version = maxStage - it.second.lastUseStage + 1;
     unsigned numVersionReturned = it.second.lastUseStage - it.second.defStage;

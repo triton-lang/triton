@@ -16,6 +16,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 // TODO: We can extra some helpers into common utilities once we add more
 // schedules.
@@ -32,8 +33,7 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   yieldOp->erase();
 }
 
-/// Create an async load equivalent to the given load.
-static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
                             bool insertWait, Value insertIdx,
                             Value extractIdx) {
   OpBuilder builder(forOp);
@@ -71,6 +71,89 @@ static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   appendToYield(forOp, {insertOp});
 }
 
+static void createTMALoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+                          bool insertWait, Value insertIdx, Value extractIdx,
+                          Value phase) {
+  OpBuilder builder(forOp);
+  Location loc = loadOp.getLoc();
+  auto CTALayout = ttg::CTALayoutAttr::get(loadOp.getContext(),
+                                           /*CTAsPerCGA*/ {1},
+                                           /*CTASplitNum*/ {1},
+                                           /*CTAOrder*/ {0});
+  auto sharedEncoding = ttg::SharedEncodingAttr::get(loadOp.getContext(), 1, 1,
+                                                     1, {0}, CTALayout, false);
+  int64_t numBuffers = alloc.getType().cast<RankedTensorType>().getShape()[0];
+  auto mBarriersTy = RankedTensorType::get(
+      {numBuffers}, builder.getIntegerType(64), sharedEncoding);
+  // Allocate an array of mbarrier objects outside the loop.
+  Value barrierArray =
+      builder.create<ttng::AllocMBarrierOp>(loc, mBarriersTy, 1);
+  // extract the barrier and emit arriver/copy/wait/extract code sequence.
+  builder.setInsertionPoint(loadOp);
+  auto mBarTy = tt::PointerType::get(builder.getIntegerType(64), 3);
+  Value barrier = builder.create<ttng::ExtractMBarrierOp>(
+      loc, mBarTy, barrierArray, insertIdx);
+  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  Value threadId = builder.create<ttng::GetThreadIdOp>(loc);
+  Value pred = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                             threadId, zero);
+
+  auto loadTy = loadOp.getType().dyn_cast<RankedTensorType>();
+  auto loadShape = loadTy.getShape();
+  auto CTASplitNum = ttg::getCTASplitNum(loadTy.getEncoding());
+  auto shapePerSlice = ttg::getShapePerCTA(CTASplitNum, loadShape);
+  auto elemTy = loadTy.getElementType();
+  unsigned elems = std::accumulate(shapePerSlice.begin(), shapePerSlice.end(),
+                                   1, std::multiplies{});
+  elems *= (elemTy.getIntOrFloatBitWidth() / 8);
+  builder.create<ttng::MBarrierArriveOp>(loc, barrier, pred,
+                                         /*remoteCtaId*/ nullptr,
+                                         /*trackAsyncOp*/ false, elems);
+  auto allocType = alloc.getType().cast<RankedTensorType>();
+  auto insertOp = builder.create<ttng::InsertSliceAsyncV2Op>(
+      loc, allocType, loadOp.getPtr(), alloc,
+      /*index*/ insertIdx, barrier, loadOp.getMask(), loadOp.getOther(),
+      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
+      /*axis*/ 0);
+
+  RankedTensorType sliceType = RankedTensorType::get(
+      {allocType.getShape()[1], allocType.getShape()[2]},
+      allocType.getElementType(), allocType.getEncoding());
+  auto extract = builder.create<mlir::triton::gpu::ExtractSliceOp>(
+      loc, sliceType, insertOp.getResult(),
+      SmallVector<OpFoldResult>{extractIdx, int_attr(0), int_attr(0)},
+      SmallVector<OpFoldResult>{int_attr(1), int_attr(sliceType.getShape()[0]),
+                                int_attr(sliceType.getShape()[1])},
+      SmallVector<OpFoldResult>{int_attr(1), int_attr(1), int_attr(1)});
+
+  Value barrierWait = builder.create<ttng::ExtractMBarrierOp>(
+      loc, mBarTy, barrierArray, extractIdx);
+  builder.create<ttng::MBarrierWaitOp>(loc, barrierWait, phase);
+
+  Operation *user = *loadOp.getResult().getUsers().begin();
+  auto convertLayout = llvm::cast<ttg::ConvertLayoutOp>(user);
+  auto newCvt = builder.create<ttg::ConvertLayoutOp>(
+      convertLayout->getLoc(), convertLayout.getType(), extract.getResult());
+  convertLayout->replaceAllUsesWith(newCvt->getResults());
+  convertLayout->erase();
+  loadOp.erase();
+
+  // Fix up the yield op.
+  appendToYield(forOp, {insertOp});
+}
+
+/// Create an async load equivalent to the given load.
+static void createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+                            bool insertWait, Value insertIdx, Value extractIdx,
+                            Value phase) {
+  if (isLoadFromTensorPtr(loadOp)) {
+    createTMALoad(forOp, loadOp, alloc, insertWait, insertIdx, extractIdx,
+                  phase);
+  } else {
+    createAsyncCopy(forOp, loadOp, alloc, insertWait, insertIdx, extractIdx);
+  }
+}
+
 // Return the transitive use of the load which is a dot operand.
 static Value loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
   // We only pipeline loads that have one covert_layout (to dot_op) use
@@ -96,11 +179,12 @@ static Value loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
 
   if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
     if (auto tensorType =
-            convertLayout.getResult().getType().dyn_cast<RankedTensorType>())
+            convertLayout.getResult().getType().dyn_cast<RankedTensorType>()) {
       if (auto dotOpEnc = tensorType.getEncoding()
                               .dyn_cast<ttg::DotOperandEncodingAttr>()) {
         return convertLayout.getResult();
       }
+    }
   } else if (preUse && isa<tt::DotOp>(use)) {
     // for MMAv3 whose dot take SharedEncoding as operands directly
     Operation *post = *loadOp.getResult().getUsers().begin();
@@ -148,8 +232,8 @@ static void collectOpsToPipeline(scf::ForOp forOp,
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
       bool candidate = false;
       if (isLoadFromTensorPtr(loadOp)) {
-        // TODO: enable TMA pipelining.
-        candidate = false;
+        // Map to TMA load.
+        candidate = true;
       } else {
         auto ptr = loadOp.getPtr();
         unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
@@ -232,6 +316,7 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
     numBuffers++;
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> newOperands;
+  bool needsMbarrierPhase = false;
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
     Value dotOperand = loadOperand.dotOperand;
@@ -239,6 +324,7 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
     assert(alloc && "Failed to create alloc for the async load.");
     newOperands.push_back(alloc);
     asyncLoads.emplace_back(loadOp, alloc);
+    needsMbarrierPhase |= isLoadFromTensorPtr(loadOp);
   }
 
   OpBuilder builder(forOp);
@@ -253,6 +339,11 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
       builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
   newOperands.push_back(insertIdx);
   newOperands.push_back(extractIdx);
+  Value phase;
+  if (needsMbarrierPhase) {
+    phase = builder.create<arith::ConstantIntOp>(loc, 0, 1);
+    newOperands.push_back(phase);
+  }
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
   scf::ForOp newForOp =
@@ -280,20 +371,31 @@ static void createAsynOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
+  if (needsMbarrierPhase) {
+    phase = newForOp.getBody()->getArgument(newOperandIndex +
+                                            asyncLoads.size() + 2);
+    Value oneI1 = builder.create<arith::ConstantIntOp>(loc, 1, 1);
+    Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, oneI1);
+    phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
+  }
+
   bool firstLoad = true;
   for (AsyncLoad &asyncLoad : asyncLoads) {
     createAsyncLoad(forOp, asyncLoad.loadOp, asyncLoad.alloc, firstLoad,
-                    insertIdx, extractIdx);
+                    insertIdx, extractIdx, phase);
     firstLoad = false;
   }
+  SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
+  if (needsMbarrierPhase)
+    newYieldOperands.push_back(phase);
   // Patch the yield with the updated counters.
-  appendToYield(forOp, {insertIdx, extractIdx});
+  appendToYield(forOp, newYieldOperands);
 }
 
 // Combine the current mask with the given predicate.
-static Value getPredMask(RewriterBase &rewriter, Value src, Value currentMask,
-                         Value pred) {
-  Type maskType = tt::getI1SameShape(src.getType());
+static Value getPredMask(RewriterBase &rewriter, Type typeLike,
+                         Value currentMask, Value pred) {
+  Type maskType = tt::getI1SameShape(typeLike);
   Location loc = pred.getLoc();
   Value mask = pred;
   if (maskType.isa<RankedTensorType>()) {
@@ -317,14 +419,34 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (auto insertOp = dyn_cast<ttg::InsertSliceAsyncOp>(op)) {
     rewriter.setInsertionPoint(insertOp);
-    Value mask =
-        getPredMask(rewriter, insertOp.getSrc(), insertOp.getMask(), pred);
+    Value mask = getPredMask(rewriter, insertOp.getSrc().getType(),
+                             insertOp.getMask(), pred);
     insertOp.getMaskMutable().assign(mask);
+    return op;
+  }
+  if (auto insertOp = dyn_cast<ttng::InsertSliceAsyncV2Op>(op)) {
+    rewriter.setInsertionPoint(insertOp);
+    Value mask = getPredMask(
+        rewriter,
+        insertOp.getSrc().getType().cast<tt::PointerType>().getPointeeType(),
+        insertOp.getMask(), pred);
+    insertOp.getMaskMutable().assign(mask);
+    return op;
+  }
+  if (auto arriveOp = dyn_cast<ttng::MBarrierArriveOp>(op)) {
+    rewriter.setInsertionPoint(arriveOp);
+    Value mask = getPredMask(rewriter, rewriter.getIntegerType(1),
+                             arriveOp.getPred(), pred);
+    arriveOp.getPredMutable().assign(mask);
+    return op;
+  }
+  if (isa<ttng::MBarrierWaitOp>(op)) {
     return op;
   }
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
     rewriter.setInsertionPoint(loadOp);
-    Value mask = getPredMask(rewriter, loadOp.getPtr(), loadOp.getMask(), pred);
+    Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
+                             loadOp.getMask(), pred);
     loadOp.getMaskMutable().assign(mask);
     return op;
   }
@@ -388,16 +510,19 @@ static void addOps(scf::ForOp forOp, int stage,
 // create the schedule for a matmul loop. This is ad hoc based on how we know
 // matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
-createSchedule(scf::ForOp forOp, int numStages) {
+createSchedule(scf::ForOp forOp, int numStages, bool prefetchExtract) {
   SmallVector<Operation *> insertOps;
   SmallVector<Operation *> extractOps;
   // Find the insert/extract ops that will go respectively in stage 0 and stage
   // `numStages - 2`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp>(op))
+    if (isa<ttg::InsertSliceAsyncOp, ttg::AsyncCommitGroupOp,
+            ttng::MBarrierArriveOp, ttng::InsertSliceAsyncV2Op>(op))
       insertOps.emplace_back(&op);
-    if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
-      extractOps.emplace_back(&op);
+    if (prefetchExtract) {
+      if (isa<ttg::ExtractSliceOp, ttg::AsyncWaitOp>(op))
+        extractOps.emplace_back(&op);
+    }
   }
   DenseSet<Operation *> insertAndDeps;
   for (Operation *op : insertOps) {
@@ -471,13 +596,16 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   collectOpsToPipeline(forOp, loads, hasMMAV3);
   if (loads.empty())
     return false;
+  bool hasAsynCp = llvm::any_of(loads, [](LoadDotOperand &load) {
+    return !isLoadFromTensorPtr(load.load);
+  });
   // 2. Convert the loads into async loads and create the allocs.
   createAsynOps(forOp, loads, numStages, hasMMAV3);
 
   // 3. rewrite the loop using the given schedule, this part of the
   // transformation doesn't take any decision.
   std::vector<std::pair<Operation *, unsigned>> schedule =
-      createSchedule(forOp, numStages);
+      createSchedule(forOp, numStages, /*prefetchExtract=*/!hasMMAV3);
 
   // 4. Fill out the pipeline options.
   options.getScheduleFn =
@@ -496,11 +624,12 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
         return setWaitNum(op, part, iteration, numLoadsInStage);
       };
 
-  // Insert a wait 0 after the loop
-  OpBuilder builder(forOp);
-  builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
-
+  if (hasAsynCp) {
+    // Insert a wait 0 after the loop
+    OpBuilder builder(forOp);
+    builder.setInsertionPointAfter(forOp);
+    builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), 0);
+  }
   return true;
 }
 
