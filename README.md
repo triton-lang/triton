@@ -44,13 +44,14 @@ pip install ninja cmake wheel; # build-time dependencies
 pip install -e python
 ```
 
-Or with a virtualenv:
+Or with a virtualenv using python3.8 (the minimum Python version supported by
+Triton):
 
 ```
 git clone https://github.com/openai/triton.git;
 cd triton;
 
-python -m venv .venv --prompt triton;
+python3.8 -m venv .venv --prompt triton;
 source .venv/bin/activate;
 
 pip install ninja cmake wheel; # build-time dependencies

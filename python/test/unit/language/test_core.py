@@ -1,6 +1,7 @@
 # flake8: noqa: F821,F841
 import itertools
 import re
+import warnings
 from typing import Optional, Union
 
 import numpy as np
@@ -3930,3 +3931,105 @@ def test_enable_fp_fusion(enable_fp_fusion):
 
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
     assert found_fma == enable_fp_fusion
+
+# -----------------------
+# Test new kernel launch API
+# -----------------------
+
+
+@pytest.mark.parametrize("enable_fp_fusion", [False, True])
+def test_enable_fp_fusion_new_kernel_api(enable_fp_fusion):
+    """Check that the new kernel launch API respects the enable_fp_fusion flag."""
+    @triton.jit
+    def mul_add(data):
+        ptrs = data + tl.arange(0, 128)
+        tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
+
+    data = torch.randn((128,), device='cuda', dtype=torch.float32)
+    h = mul_add.with_flags(enable_fp_fusion=enable_fp_fusion)[(1,)](data)
+
+    found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+    assert found_fma == enable_fp_fusion
+
+
+@pytest.mark.parametrize("enable_fp_fusion", [False, True])
+def test_new_kernel_api_with_arg_matching_flag_name(enable_fp_fusion):
+    @triton.jit
+    def mul_add(enable_fp_fusion):
+        # The `data` arg to this kernel is called `enable_fp_fusion` here, to
+        # create a situation where the kernel arg has the same name as a
+        # compiler flag.
+        data = enable_fp_fusion
+        ptrs = data + tl.arange(0, 128)
+        tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
+
+    data = torch.randn((128,), device='cuda', dtype=torch.float32)
+    h = mul_add.with_flags(enable_fp_fusion=enable_fp_fusion)[(1,)](enable_fp_fusion=data)
+
+    found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+    assert found_fma == enable_fp_fusion
+
+
+def test_new_kernel_api_grid_fn_no_compiler_flags():
+    @triton.jit
+    def nop_kernel(arg1):
+        pass
+
+    # This grid function doesn't receive compiler flags, because the launch uses
+    # the new API and the grid function only has one argument.
+    grid_fn_called = 0
+
+    def grid_fn(kernel_args):
+        nonlocal grid_fn_called
+        grid_fn_called += 1
+        assert kernel_args == {"arg1": 0}
+        return (1,)
+    nop_kernel.with_flags(num_warps=16, num_stages=100)[grid_fn](arg1=0)
+    assert grid_fn_called == 1
+
+
+def test_new_kernel_api_grid_fn_compiler_flags():
+    @triton.jit
+    def nop_kernel(arg1):
+        pass
+
+    # This grid function does receive compiler flags as its second argument.
+    grid_fn_called = 0
+
+    def grid_fn(kernel_args, compiler_flags):
+        nonlocal grid_fn_called
+        grid_fn_called += 1
+        assert kernel_args == {"arg1": 2}
+        # Compiler flags with non-None default values show up here too, so we
+        # use >= instead of ==.
+        assert compiler_flags.items() >= {"num_warps": 16, "num_stages": 100}.items()
+        return (1,)
+    nop_kernel.with_flags(num_warps=16, num_stages=100)[grid_fn](arg1=2)
+    assert grid_fn_called == 1
+
+
+def test_old_kernel_api_grid_fn_compiler_flags():
+    @triton.jit
+    def nop_kernel(arg1):
+        pass
+
+    # This grid function gets compiler flags in its first (and only) argument
+    # because the launch uses the old API.
+    #
+    # TODO(jlebar): Remove this test once the old API is gone.
+    grid_fn_called = 0
+
+    def grid_fn(kernel_args):
+        nonlocal grid_fn_called
+        grid_fn_called += 1
+        assert kernel_args == {"arg1": 2, "num_warps": 16, "num_stages": 100}
+        return (1,)
+
+    with warnings.catch_warnings(record=True) as w:
+        nop_kernel[grid_fn](arg1=2, num_warps=16, num_stages=100)
+
+        # Check that this call raised a warning.
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+
+    assert grid_fn_called == 1

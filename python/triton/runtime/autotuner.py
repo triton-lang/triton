@@ -32,6 +32,7 @@ class Autotuner(KernelInterface):
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         """
+        super().__init__()
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
@@ -95,6 +96,7 @@ class Autotuner(KernelInterface):
             return [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
+        # TODO: Update this API.
         self.nargs = dict(zip(self.arg_names, args))
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
