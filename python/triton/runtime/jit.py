@@ -1,18 +1,23 @@
 from __future__ import annotations, division
 
 import ast
-import functools
 import hashlib
 import inspect
 import os
 import textwrap
 from collections import defaultdict, namedtuple
 from functools import cached_property
-from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast, overload
+from typing import Any, Callable, Generic, Optional, TypeVar, Union, cast, overload, Sequence, Tuple
+import warnings
 
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
+
+# A callable function.  In practice, this is a function wrapped by @jit.
+KernelT = TypeVar("KernelT", bound=Callable[..., Any])
+
+GridT = Union[Tuple[int], Tuple[int, int], Tuple[int, int, int]]
 
 
 def get_cuda_stream(idx=None):
@@ -46,7 +51,79 @@ def get_device_capability(idx):
     return torch.cuda.get_device_capability(idx)
 
 
-T = TypeVar("T")
+def _extract_flags(kernel_kwargs: dict[str, Any]):
+    """Removes Triton flag args from kernel_kwargs.
+
+    Returns a tuple of (flags, kernel args without flags).
+    """
+    # Don't overwrite the user's copy of kernel_kwargs.
+    kernel_kwargs = dict(kernel_kwargs)
+
+    flags = {}
+
+    def extract(name):
+        if name in kernel_kwargs:
+            flags[name] = kernel_kwargs[name]
+            del kernel_kwargs[name]
+
+    extract("num_warps")
+    extract("num_ctas")
+    extract("num_stages")
+    extract("enable_warp_specialization")
+    extract("enable_fp_fusion")
+    extract("extern_libs")
+    extract("stream")
+    extract("warmup")
+    extract("device")
+    extract("device_type")
+
+    if flags:
+        flags_str = ", ".join(f"{f}=foo" for f in flags.keys())
+        warnings.warn(
+            textwrap.dedent(
+                f"""\
+            Passing Triton compiler flags as kernel arguments is deprecated and will be removed.
+
+            Change:
+              kernel_fn[grid](kernel_arg1, kernel_arg2, ..., {flags_str}),
+            to:
+              kernel_fn.with_flags({flags_str})[grid](kernel_arg1, kernel_arg2, ...).
+            """
+            ),
+            DeprecationWarning,
+        )
+
+    return flags, kernel_kwargs
+
+
+def _reify_grid(grid: GridT, kernel_bound_args, flags, has_explicit_flags) -> Tuple[int, int, int]:
+    assert grid is not None
+    if callable(grid):
+        # Arguments are passed as a dict to `grid`, by contract.
+        if not has_explicit_flags:
+            # In the old API, the grid function gets all of the flags as
+            # a single dict.
+            grid = grid(dict(**kernel_bound_args, **flags))
+        else:
+            # In the new API, the grid function gets the kernel args as
+            # its first argument, and the compiler flags as its second
+            # argument (if the grid fn takes two args).
+            grid_fn_sig = inspect.signature(grid)
+            if len(grid_fn_sig.parameters) == 1:
+                grid = grid(dict(**kernel_bound_args))
+            elif len(grid_fn_sig.parameters) == 2:
+                grid = grid(dict(**kernel_bound_args), flags)
+            else:
+                assert False, "Grid function must take 1 or 2 arguments, namely kernel_params, compiler_flags"
+
+    grid = cast(GridT, grid)
+    grid_size = len(grid)
+    return (
+        grid[0],
+        grid[1] if grid_size > 1 else 1,
+        grid[2] if grid_size > 2 else 1,
+    )
+
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -191,19 +268,80 @@ class KernelArg:
         return (False,)
 
 
-class KernelInterface(Generic[T]):
-    run: T
+class KernelInterface(Generic[KernelT]):
+    def __init__(
+        self,
+        run_with_flags: Callable,
+        warmup_with_flags: Callable,
+        flags: dict[str, Any] | None = None,
+    ):
+        self.__run_with_flags = run_with_flags
+        self.__warmup_with_flags = warmup_with_flags
+        self.__flags = flags
 
-    def __getitem__(self, grid) -> T:
-        """
-        A JIT function is launched with: fn[grid](*args, **kwargs).
-        Hence JITFunction.__getitem__ returns a callable proxy that
-        memorizes the grid.
-        """
-        return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
+    def __getitem__(self, grid) -> KernelT:
+        def wrapper_explicit_flags(*args, **kwargs):
+            return self.__run_with_flags(grid, self.__flags, args, kwargs, has_explicit_flags=True)
+
+        def wrapper_implicit_flags(*args, **kwargs):
+            flags, kernel_kwargs = _extract_flags(kwargs)
+            return self.__run_with_flags(grid, flags, args, kernel_kwargs, has_explicit_flags=False)
+
+        # New API; call run_with_flags directly.
+        if self.__flags is not None:
+            return cast(KernelT, wrapper_explicit_flags)
+
+        # Old API; wrap run_with_flags in a wrapper that extracts flags from kwargs.
+        return cast(KernelT, wrapper_implicit_flags)
+
+    def warmup(self, *args, **kwargs):
+        # New API; call warmup_with_flags directly.
+        if self.__flags is not None:
+            return self.__warmup_with_flags(self.__flags, args, kwargs, has_explicit_flags=True)
+
+        # Old API; wrap warmup_with_flags in a wrapper that extracts flags from kwargs.
+        def wrapper(*args, **kwargs):
+            flags, kernel_kwargs = _extract_flags(kwargs)
+            return self.__warmup_with_flags(flags, args, kernel_kwargs, has_explicit_flags=False)
+
+        return cast(KernelT, wrapper)
+
+    def with_flags(
+        self,
+        num_warps: int | None = None,
+        num_ctas: int = 1,
+        num_stages: int | None = None,
+        enable_warp_specialization: bool = False,
+        enable_fp_fusion: bool = True,
+        extern_libs: dict[str, str] | None = None,
+        stream: int | None = None,
+        warmup: bool = False,
+        device: int | None = None,
+        device_type: str | None = None,
+    ) -> KernelInterface[KernelT]:
+        assert self.__flags is None, "Cannot call with_flags twice"
+
+        flags = {}
+
+        def add_to_flags(name, value):
+            if value is not None:
+                flags[name] = value
+
+        add_to_flags("num_warps", num_warps)
+        add_to_flags("num_ctas", num_ctas)
+        add_to_flags("num_stages", num_stages)
+        add_to_flags("enable_warp_specialization", enable_warp_specialization)
+        add_to_flags("enable_fp_fusion", enable_fp_fusion)
+        add_to_flags("extern_libs", extern_libs)
+        add_to_flags("stream", stream)
+        add_to_flags("warmup", warmup)
+        add_to_flags("device", device)
+        add_to_flags("device_type", device_type)
+
+        return KernelInterface(self.__run_with_flags, self.__warmup_with_flags, flags=flags)
 
 
-class JITFunction(KernelInterface[T]):
+class JITFunction(KernelInterface[KernelT]):
     # Hook for inspecting compiled functions and modules
     cache_hook = None
     divisibility = 16
@@ -383,7 +521,7 @@ class JITFunction(KernelInterface[T]):
             already_compiled=False,
         )
 
-    def _conclude_device_type(self, device_types: List[str], pinned_memory_flags: List[bool]) -> str:
+    def _conclude_device_type(self, device_types: list[str], pinned_memory_flags: list[bool]) -> str:
         device_types = [device_type for device_type in device_types if device_type != ""]
         # Return cuda if one of the input tensors is cuda
         if "cuda" in device_types:
@@ -399,31 +537,39 @@ class JITFunction(KernelInterface[T]):
 
         return device_types[0] if len(device_types) > 0 else "cuda"
 
-    def run(self, *args, **kwargs):
+    def run_with_flags(
+        self,
+        grid: GridT | None,
+        flags: dict[str, Any] | None,
+        kernel_args: Sequence[Any],
+        kernel_kwargs: dict[str, Any],
+        # If has_explicit_flags=True, this run() call was made with the new API,
+        # where compiler flags are passed using with_flags(), i.e. separately
+        # from kernel args.
+        has_explicit_flags: bool,
+    ):
+        # kernel_kwargs does not include compiler flags.  These must have
+        # already been filtered out.
         from ..compiler import CompiledKernel, compile, get_arch_default_num_stages, get_arch_default_num_warps
 
-        # Get a compiler-flags arg like `num_warps` and remove it from kwargs.
-        def get_special_arg(name: str, default=None):
-            if name not in kwargs:
-                return default
-            ret = kwargs[name]
-            del kwargs[name]
-            return ret
+        if not flags:
+            flags = {}
 
-        grid = get_special_arg("grid")
-        num_warps = get_special_arg("num_warps")
-        num_ctas = get_special_arg("num_ctas", 1)
-        num_stages = get_special_arg("num_stages")
-        enable_warp_specialization = get_special_arg("enable_warp_specialization", False)
-        enable_fp_fusion = get_special_arg("enable_fp_fusion", True)
-        extern_libs = get_special_arg("extern_libs")
-        stream = get_special_arg("stream")
-        warmup = get_special_arg("warmup", False)
-        device = get_special_arg("device")
-        device_type = get_special_arg("device_type")
+        # TODO(jlebar): Once the old API is gone, these can become assertions
+        # that each of these flags is present.
+        num_warps = flags.get("num_warps", None)
+        num_ctas = flags.get("num_ctas", 1)
+        num_stages = flags.get("num_stages", None)
+        enable_warp_specialization = flags.get("enable_warp_specialization", False)
+        enable_fp_fusion = flags.get("enable_fp_fusion", True)
+        extern_libs = flags.get("extern_libs")
+        stream = flags.get("stream")
+        warmup = flags.get("warmup", False)
+        device = flags.get("device")
+        device_type = flags.get("device_type")
 
-        # Bind the remaining arguments to `fn`.
-        bound_args = self.signature.bind(*args, **kwargs)
+        # Bind the kernel args to `fn`.
+        bound_args = self.signature.bind(*kernel_args, **kernel_kwargs)
         bound_args.apply_defaults()
 
         assert len(bound_args.arguments) == len(self.params)
@@ -436,16 +582,11 @@ class JITFunction(KernelInterface[T]):
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
 
         assert num_ctas > 0
-        assert grid is not None
-        if callable(grid):
-            # Arguments are passed as a dict to `grid`, by contract.
-            # TODO(jlebar): In the new launch API, pass the compiler flags as a
-            # second parameter to `grid`.
-            grid = grid(dict(bound_args.arguments))
-        grid_size = len(grid)
-        grid_0 = grid[0]
-        grid_1 = grid[1] if grid_size > 1 else 1
-        grid_2 = grid[2] if grid_size > 2 else 1
+
+        if not warmup:
+            assert grid is not None
+            grid_0, grid_1, grid_2 = _reify_grid(grid, bound_args.arguments, flags, has_explicit_flags)
+
         if device_type is None:
             device_types = [self._device_of(arg) for arg in non_constexpr_arg_values]
             device_types = [_device_type for _device_type in device_types if _device_type != ""]
@@ -566,6 +707,7 @@ class JITFunction(KernelInterface[T]):
         return bin
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
+        super().__init__(self.run_with_flags, self.warmup_with_flags)
         do_not_specialize = do_not_specialize if do_not_specialize else []
 
         self.fn = fn
@@ -614,8 +756,10 @@ class JITFunction(KernelInterface[T]):
             self.hash = dependencies_finder.ret
         return self.hash
 
-    def warmup(self, *args, **kwargs):
-        return self.run(*map(MockTensor.wrap_dtype, args), **kwargs, warmup=True)
+    def warmup_with_flags(self, flags: dict[str, Any], args, kwargs):
+        # TODO(jlebar): Why are we not wrapping dtype in kwargs?
+        assert flags.get("warmup", True), "Cannot call warmup_with_flags with warmup=False; that's a contradiction."
+        return self.run_with_flags(grid=None, flags={**flags, "warmup": True}, kernel_args=args, kernel_kwargs=kwargs)
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -647,7 +791,7 @@ class JITFunction(KernelInterface[T]):
 
 
 @overload
-def jit(fn: T) -> JITFunction[T]:
+def jit(fn: KernelT) -> JITFunction[KernelT]:
     ...
 
 
@@ -655,21 +799,21 @@ def jit(fn: T) -> JITFunction[T]:
 def jit(
     *,
     version=None,
-    do_not_specialize: Optional[Iterable[int]] = None,
+    do_not_specialize: Optional[Sequence[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Callable[[T], JITFunction[T]]:
+) -> Callable[[KernelT], JITFunction[KernelT]]:
     ...
 
 
 def jit(
-    fn: Optional[T] = None,
+    fn: Optional[KernelT] = None,
     *,
     version=None,
-    do_not_specialize: Optional[Iterable[int]] = None,
+    do_not_specialize: Optional[Sequence[int]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
+) -> Union[JITFunction[KernelT], Callable[[KernelT], JITFunction[KernelT]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -688,7 +832,7 @@ def jit(
     :type fn: Callable
     """
 
-    def decorator(fn: T) -> JITFunction[T]:
+    def decorator(fn: KernelT) -> JITFunction[KernelT] | InterpretedFunction[KernelT]:
         assert callable(fn)
         if os.getenv("TRITON_INTERPRET", "0") == "1":
             return InterpretedFunction(fn)
