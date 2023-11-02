@@ -2013,10 +2013,12 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 // -----
 
 //  CHECK-LABEL: copyitem
-//  CHECK: st.shared.b8
-//  CHECK: ld.shared.b8
-//  CHECK-NOT: st.shared.b1
-//  CHECK-NOT: ld.shared.b1
+//  GCN: llvm.store
+//  GCN: llvm.load
+//  PTX: st.shared.b8
+//  PTX: ld.shared.b8
+//  PTX-NOT: st.shared.b1
+//  PTX-NOT: ld.shared.b1
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @copyitem() attributes {noinline = false} {

@@ -258,6 +258,9 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Value pred) {
+#if USE_ROCM
+  return load(ptr);
+#else
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = ptr.getType().cast<LLVMPointerType>();
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
@@ -272,6 +275,7 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   auto &ld = builder.create<>("ld")->shared().b(bitwidth);
   ld(dOpr, ptrOpr).predicate(pred, "b");
   return builder.launch(rewriter, loc, elemTy);
+#endif
 }
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
