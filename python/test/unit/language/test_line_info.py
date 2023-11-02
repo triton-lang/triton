@@ -10,9 +10,7 @@ from triton.common.backend import path_to_nvdisasm
 
 
 @triton.jit
-def kernel_single(X,
-                  Y,
-                  BLOCK: tl.constexpr):
+def kernel_single(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
     tl.store(Y + tl.arange(0, BLOCK), x)
 
@@ -23,9 +21,7 @@ def device_inline(x):
 
 
 @triton.jit
-def kernel_call(X,
-                Y,
-                BLOCK: tl.constexpr):
+def kernel_call(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
     y = device_inline(x)
     tl.store(Y + tl.arange(0, BLOCK), y)
@@ -91,13 +87,13 @@ def test_line_info(func: str):
     y = torch.zeros(shape, dtype=x.dtype, device="cuda")
     kernel_info = {}
     if func == "single":
-        kernel_info = kernel_single[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_single[(1, )](x, y, BLOCK=shape[0])
     elif func == "call":
-        kernel_info = kernel_call[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_call[(1, )](x, y, BLOCK=shape[0])
     elif func == "call_noinline":
-        kernel_info = kernel_call_noinline[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_call_noinline[(1, )](x, y, BLOCK=shape[0])
     elif func == "multi_files":
-        kernel_info = kernel_multi_files[(1,)](x, y, BLOCK=shape[0])
+        kernel_info = kernel_multi_files[(1, )](x, y, BLOCK=shape[0])
 
     file_lines = extract_file_lines(kernel_info.asm["cubin"])
     if func == "single":

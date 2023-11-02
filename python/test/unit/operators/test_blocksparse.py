@@ -68,8 +68,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     b_ref = do_mask(b_ref) if is_dds else b_ref
     a_ref.retain_grad()
     b_ref.retain_grad()
-    c_ref = torch.matmul(a_ref.transpose(2, 3) if TRANS_A else a_ref,
-                         b_ref.transpose(2, 3) if TRANS_B else b_ref)
+    c_ref = torch.matmul(a_ref.transpose(2, 3) if TRANS_A else a_ref, b_ref.transpose(2, 3) if TRANS_B else b_ref)
     c_ref.backward(dc_ref)
     c_ref = do_sparsify(c_ref) if is_sdd else c_ref
     da_ref = do_sparsify(a_ref.grad) if is_dsd else a_ref.grad
@@ -172,7 +171,7 @@ def test_attention_fwd_bwd(
     value.retain_grad()
     attn_out = triton_attention(layout, block, query=query, key=key, value=value, scale=scale)
     # ad hoc loss
-    loss = (attn_out ** 2).mean()
+    loss = (attn_out**2).mean()
     loss.backward()
     grads = [query.grad, key.grad, value.grad]
 
@@ -189,7 +188,7 @@ def test_attention_fwd_bwd(
     probs = torch.softmax(scores, dim=-1)
     torch_attn_out = torch.einsum("bhst,bhtd->bhsd", probs, torch_v)
     # ad hoc loss
-    torch_loss = (torch_attn_out ** 2).mean()
+    torch_loss = (torch_attn_out**2).mean()
     torch_loss.backward()
     torch_grads = [torch_q.grad, torch_k.grad, torch_v.grad]
 
@@ -209,8 +208,10 @@ def triton_attention(
     value: torch.Tensor,
     scale: float,
 ):
-    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(layout, block, "sdd", trans_a=False, trans_b=True, device=value.device)
-    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(layout, block, "dsd", trans_a=False, trans_b=False, device=value.device)
+    sparse_dot_sdd_nt = triton.ops.blocksparse.matmul(layout, block, "sdd", trans_a=False, trans_b=True,
+                                                      device=value.device)
+    sparse_dot_dsd_nn = triton.ops.blocksparse.matmul(layout, block, "dsd", trans_a=False, trans_b=False,
+                                                      device=value.device)
     sparse_softmax = triton.ops.blocksparse.softmax(layout, block, device=value.device)
 
     w = sparse_dot_sdd_nt(query, key)

@@ -40,10 +40,13 @@ if __name__ == "__main__":
 
     # command-line arguments
     parser = ArgumentParser(description=desc)
-    parser.add_argument("path", help="Path to Python source containing desired kernel in its scope. File will be executed.")
-    parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile", required=True)
+    parser.add_argument("path",
+                        help="Path to Python source containing desired kernel in its scope. File will be executed.")
+    parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile",
+                        required=True)
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
-    parser.add_argument("--num-stages", "-ns", type=int, default=3, help="Number of stages (meta-parameter of the kernel)")
+    parser.add_argument("--num-stages", "-ns", type=int, default=3,
+                        help="Number of stages (meta-parameter of the kernel)")
     parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
@@ -104,7 +107,8 @@ if __name__ == "__main__":
     config = triton.compiler.instance_descriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
     for i in equal_to_1:
         constexprs.update({i: 1})
-    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config], num_warps=args.num_warps, num_stages=args.num_stages)
+    ccinfo = triton.compile(kernel, signature=signature, constants=constexprs, configs=[config],
+                            num_warps=args.num_warps, num_stages=args.num_stages)
     arg_names = []
     arg_types = []
     for i in signature.keys():

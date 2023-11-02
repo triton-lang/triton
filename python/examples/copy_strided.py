@@ -4,8 +4,8 @@ import triton.language as tl
 
 # triton kernel
 @triton.jit
-def kernel(X, stride_xm,
-           Z, stride_zn,
+def kernel(X, stride_xm,  #
+           Z, stride_zn,  #
            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     off_m = tl.arange(0, BLOCK_M)
     off_n = tl.arange(0, BLOCK_N)
