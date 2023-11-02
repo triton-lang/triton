@@ -50,6 +50,19 @@ def kernel_multi_files(X, Y, BLOCK: tl.constexpr):
     tl.store(Y + tl.arange(0, BLOCK), y)
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({"BLOCK": 128}, num_warps=4),
+    ],
+    key=[],
+)
+@triton.jit
+def kernel_autotune(X, Y, SIZE: tl.constexpr, BLOCK: tl.constexpr):
+    for i in range(0, SIZE, BLOCK):
+        x = tl.load(X + i + tl.arange(0, BLOCK))
+        tl.store(Y + i + tl.arange(0, BLOCK), x)
+
+
 def extract_file_lines(asm):
     nvdisasm, _ = path_to_nvdisasm()
     fd, path = tempfile.mkstemp()
@@ -76,7 +89,7 @@ def check_file_lines(file_lines, file_name, lineno):
     return False
 
 
-func_types = ["single", "call", "call_noinline", "multi_files"]
+func_types = ["single", "call", "call_noinline", "multi_files", "autotune"]
 
 
 @pytest.mark.parametrize("func", func_types)
@@ -98,6 +111,8 @@ def test_line_info(func: str):
         kernel_info = kernel_call_noinline[(1,)](x, y, BLOCK=shape[0])
     elif func == "multi_files":
         kernel_info = kernel_multi_files[(1,)](x, y, BLOCK=shape[0])
+    elif func == "autotune":
+        kernel_info = kernel_autotune[(1,)](x, y, SIZE=shape[0])
 
     file_lines = extract_file_lines(kernel_info.asm["cubin"])
     if func == "single":
@@ -118,3 +133,8 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "standard.py", 33))
         assert (check_file_lines(file_lines, "standard.py", 34))
         assert (check_file_lines(file_lines, "standard.py", 36))
+    elif func == "autotune":
+        assert (check_file_lines(file_lines, "test_line_info.py", 60))
+        assert (check_file_lines(file_lines, "test_line_info.py", 61))
+        assert (check_file_lines(file_lines, "test_line_info.py", 62))
+        assert (check_file_lines(file_lines, "test_line_info.py", 63))
