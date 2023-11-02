@@ -1421,18 +1421,37 @@ struct IndexCastOpLowering
   }
 };
 
+struct SelectOpConversion
+    : ElementwiseOpConversionBase<mlir::arith::SelectOp, SelectOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<mlir::arith::SelectOp, SelectOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(mlir::arith::SelectOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    std::array<Value, 3> llvmOperands;
+    if (operands[0].size() == 2) {
+      // Case of scalar condition with tensor operands.
+      assert(op.getCondition().getType().isInteger(1));
+      llvmOperands = {adaptor.getCondition(), operands[0][0], operands[0][1]};
+    } else {
+      llvmOperands = {operands[0][0], operands[0][1], operands[0][2]};
+    }
+    return {rewriter.create<LLVM::SelectOp>(
+        loc, llvmOperands[1].getType(), llvmOperands,
+        adaptor.getAttributes().getValue())};
+  }
+};
+
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, PatternBenefit benefit) {
-#define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
-      typeConverter, axisInfoAnalysis, benefit);
-  POPULATE_TERNARY_OP(arith::SelectOp, LLVM::SelectOp)
-#undef POPULATE_TERNARY_OP
-
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
       typeConverter, axisInfoAnalysis, benefit);
@@ -1486,6 +1505,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
+  patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
